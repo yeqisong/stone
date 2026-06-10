@@ -42,6 +42,10 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 /* ── 日历网格（保留手写） ── */
 .cal-cell{cursor:pointer;transition:all .12s}.cal-cell:hover{filter:brightness(1.15)}
 .cal-syncing{animation:pulse 1s infinite}@keyframes pulse{0%{opacity:1}50%{opacity:0.5}100%{opacity:1}}
+.my-modal{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.6);z-index:2000;display:flex;align-items:center;justify-content:center}
+.my-modal-card{background:var(--el-bg-color-overlay);border:1px solid var(--el-border-color);border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,0.5)}
+.my-modal-title{font-size:16px;font-weight:600;padding:16px 20px;border-bottom:1px solid var(--el-border-color-light)}
+.my-modal-footer{padding:12px 20px;border-top:1px solid var(--el-border-color-light);display:flex;gap:8px;justify-content:flex-end}
 
 </style>
 </head>
@@ -74,6 +78,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <el-button @click="showAdd=false">取消</el-button>
 </div></div>
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
+
 
 <div class="card"><h3>持仓明细</h3>
 
@@ -342,34 +347,35 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div class="error-state" v-if="ldErr.o"><div class="msg">{{ldErr.o}}</div></div>
 
 <!-- 编辑持仓对话框 -->
-<el-dialog v-model="showEditDialog" title="✎ 编辑持仓" width="380px" destroy-on-close @closed="editingPos=''">
-  <el-form label-width="70px">
+<div v-if="showEditDialog" class="my-modal">
+<div class="my-modal-card" style="width:400px">
+  <div class="my-modal-title">✎ 编辑持仓</div>
+  <el-form label-width="70px" style="padding:0 20px">
     <el-form-item label="数量"><el-input-number v-model="editPos.qty" :min="0" style="width:100%"></el-input-number></el-form-item>
     <el-form-item label="成本价"><el-input-number v-model="editPos.cost" :precision="2" :step="0.01" :min="0" style="width:100%"></el-input-number></el-form-item>
     <el-form-item label="备注"><el-input v-model="editPos.note" type="textarea" :rows="2"></el-input></el-form-item>
   </el-form>
-  <template #footer>
+  <div class="my-modal-footer">
     <el-button @click="showEditDialog=false">取消</el-button>
     <el-button type="primary" @click="savePosition(editingPos)">保存</el-button>
-  </template>
-</el-dialog>
-
-<!-- Element Plus 对话框 (代替自写 Modal) -->
-<el-dialog v-model="modal.show" :title="modal.icon+' '+modal.title" width="380px" :close-on-click-modal="false" destroy-on-close>
-  <div style="text-align:center;padding:8px 0">
-    <div style="font-size:48px;margin-bottom:12px">{{modal.icon}}</div>
-    <div class="msg" v-html="modal.msg" style="font-size:14px;color:var(--el-text-color-secondary);line-height:1.6"></div>
   </div>
-  <template #footer>
-    <span v-if="modal.type==='alert'">
+</div></div>
+
+<!-- 通用确认/提示对话框 -->
+<div v-if="modal.show" class="my-modal">
+<div class="my-modal-card" style="width:380px;text-align:center">
+  <div class="my-modal-title">{{modal.icon}} {{modal.title}}</div>
+  <div style="font-size:14px;color:var(--el-text-color-secondary);padding:10px 20px;line-height:1.6" v-html="modal.msg"></div>
+  <div class="my-modal-footer" style="justify-content:center">
+    <template v-if="modal.type==='alert'">
       <el-button type="primary" @click="modalClose">确 定</el-button>
-    </span>
-    <span v-if="modal.type==='confirm'">
+    </template>
+    <template v-if="modal.type==='confirm'">
       <el-button @click="modalClose">取 消</el-button>
       <el-button :type="modal.danger?'danger':'primary'" @click="modalDoConfirm">{{modal.confirmText||'确 认'}}</el-button>
-    </span>
-  </template>
-</el-dialog>
+    </template>
+  </div>
+</div></div>
 
 </template></div></div>
 
