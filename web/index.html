@@ -99,8 +99,8 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <td style="padding:6px 8px;text-align:right"><span :style="{color:p.pnl>=0?'var(--el-color-danger)':'var(--el-color-success)'}">¥{{fmt(p.pnl)}} ({{(p.pnl_pct||0)>=0?'+':''}}{{(p.pnl_pct||0).toFixed(1)}}%)</span></td>
 <td style="padding:6px 8px;font-size:11px;color:var(--el-text-color-secondary)">{{p.notes||''}}</td>
 <td style="padding:6px 8px;text-align:center;white-space:nowrap">
-<span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;background:var(--el-fill-color-lighter)" @click="startEditPos(p)" title="编辑">✎</span>
-<span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;color:var(--el-color-danger);background:var(--el-color-danger-light-9)" @click="delPosition(p.stock_code)" title="删除">✕</span>
+<span data-edit :data-code="p.stock_code" :data-qty="p.quantity" :data-cost="p.cost_price" :data-note="p.notes||''" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;background:var(--el-fill-color-lighter);color:var(--el-text-color-secondary)" title="编辑">✎</span>
+<span data-del :data-code="p.stock_code" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;color:var(--el-color-danger);background:var(--el-color-danger-light-9);margin-left:4px" title="删除">✕</span>
 </td>
 </tr>
 </tbody>
@@ -510,6 +510,23 @@ function modalShowConfirm(t,m,cb,dt){modal.show=true;modal.type='confirm';modal.
 function modalConfirmDanger(t,m,cb){modalShowConfirm(t,m,cb,true);modal.icon='⚠️';modal.confirmText='确认删除'}
 function modalClose(){modal.show=false;modal.callback=null}
 function modalDoConfirm(){if(modal.callback){var cb=modal.callback;modal.show=false;modal.callback=null;cb()}}
+// 暴露给原生 onclick 使用
+window._editPos = function(code, qty, cost, note) {
+  editingPos.value = code;
+  editPos.qty = Number(qty);
+  editPos.cost = Number(cost);
+  editPos.note = note || '';
+};
+window._delPos = function(code) {
+  modalConfirmDanger('确认删除', '确定删除该持仓？删除后数据不可恢复。', function() {
+    axios.delete(API + '/api/portfolio/' + code).then(function() {
+      loadPortfolio();
+      modalClose();
+    }).catch(function(e) {
+      modalAlert('错误', '删除失败: ' + (e.response?.data?.detail || e.message), '❌');
+    });
+  });
+};
 
 return{tab,health,ptf,sigs,stocks,stockCat,kw,sigDate,todayStr,detail,dcode,hcnt,adj,dateRange,overview,smonth,smonthLabel,cal,missingDates,dlog,todayStrategy,cfg,dsKey,prefMode,editing,editParams,showAdd,pf,editingPos,editPos,loginUser,doLogout,ld,ldErr,fmt,stars,dirName,exName,exFull,srcStr,modal,modalClose,modalDoConfirm,reloadChart,loadSettings,toggleStrategy,setPreference,saveParams,saveDsKey,loadPortfolio,loadSignals,loadStocks,showDetail,loadDataStatus,prevMonth,nextMonth,switchTab,switchCat,addPosition,startEditPos,savePosition,delPosition,calStyle,calTitle,doSyncDate,doSyncClick}
 }});
@@ -519,6 +536,22 @@ if(typeof ElementPlusIconsVue !== 'undefined'){
   for(var _k in ElementPlusIconsVue) app.component(_k, ElementPlusIconsVue[_k]);
 }
 var _app = app.mount('#app');
+// 全局事件委托：绕过 Vue 模板事件系统处理表格按钮点击
+document.addEventListener('click', function(ev) {
+  var editEl = ev.target.closest('[data-edit]');
+  var delEl = ev.target.closest('[data-del]');
+  if (editEl) {
+    ev.preventDefault(); ev.stopPropagation();
+    var ds = editEl.dataset;
+    window._editPos(ds.code, ds.qty, ds.cost, ds.note);
+    return;
+  }
+  if (delEl) {
+    ev.preventDefault(); ev.stopPropagation();
+    window._delPos(delEl.dataset.code);
+    return;
+  }
+}, true);
 </script>
 </body>
 </html>
