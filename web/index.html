@@ -42,6 +42,9 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 /* ── 日历网格（保留手写） ── */
 .cal-cell{cursor:pointer;transition:all .12s}.cal-cell:hover{filter:brightness(1.15)}
 .cal-syncing{animation:pulse 1s infinite}@keyframes pulse{0%{opacity:1}50%{opacity:0.5}100%{opacity:1}}
+.act-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;font-size:14px;background:transparent;color:var(--el-text-color-secondary);transition:all .12s}
+.act-btn:hover{background:var(--el-fill-color-light);color:var(--el-color-primary)}
+.act-btn.act-del:hover{color:var(--el-color-danger);background:var(--el-color-danger-light-9)}
 </style>
 </head>
 <body>
@@ -74,9 +77,9 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </div></div>
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
 <div class="card"><h3>持仓明细</h3>
-<el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe highlight-current-row size="small" @row-click="(r)=>editingPos!==r.stock_code?showDetail(r.stock_code):null" style="width:100%">
-<el-table-column prop="stock_code" label="代码" min-width="85"></el-table-column>
-<el-table-column prop="stock_name" label="名称" min-width="100"></el-table-column>
+<el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe size="small" style="width:100%">
+<el-table-column label="代码" min-width="85"><template #default="{row:p}"><a style="color:var(--el-color-primary);cursor:pointer;text-decoration:none" @click="showDetail(p.stock_code)">{{p.stock_code}}</a></template></el-table-column>
+<el-table-column label="名称" min-width="100"><template #default="{row:p}"><a style="cursor:pointer" @click="showDetail(p.stock_code)">{{p.stock_name}}</a></template></el-table-column>
 <el-table-column prop="quantity" label="数量" width="70" align="right"></el-table-column>
 <el-table-column label="成本" width="95" align="right"><template #default="{row:p}">¥{{(p.cost_price||0).toFixed(2)}}</template></el-table-column>
 <el-table-column label="现价" width="95" align="right"><template #default="{row:p}">¥{{(p.current_price||0).toFixed(2)}}</template></el-table-column>
@@ -87,8 +90,8 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </el-table-column>
 <el-table-column label="操作" width="65" fixed="right">
 <template #default="{row:p}">
-<el-button link size="small" @click.stop="startEditPos(p)">✎</el-button>
-<el-button type="danger" link size="small" @click.stop="delPosition(p.stock_code)">✕</el-button>
+<button class="act-btn" @click="startEditPos(p)" title="编辑">✎</button>
+<button class="act-btn act-del" @click="delPosition(p.stock_code)" title="删除">✕</button>
 </template>
 </el-table-column>
 </el-table>
@@ -227,35 +230,81 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div v-if="tab==='x'">
 <div class="loading" v-if="ld.x"><span style="font-size:24px">⏳</span><div style="margin-top:8px">加载状态数据...</div></div>
 <template v-else>
-<div class="summary" v-if="overview.total_stocks"><div class="si"><div class="v">{{fmt(overview.total_rows)}}</div><div class="l">行情总条数</div></div><div class="si"><div class="v">{{overview.total_stocks}}</div><div class="l">股票</div></div><div class="si"><div class="v">{{overview.latest_date||'-'}}</div><div class="l">最新数据</div></div><div class="si" style="border:1px solid var(--gold)"><div class="v go">{{missingDates.length}}</div><div class="l">漏数据日期</div></div></div>
-<!-- 今日策略运行状态 -->
-<div class="card" v-if="todayStrategy" :style="{borderLeft: todayStrategy.status==='ok'?'3px solid var(--el-color-danger)':'3px solid #f59e0b'}"><h3>🎯 今日策略运行 ({{todayStrategy.strategy_date||'-'}})</h3>
-<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
-<div><span style="color:var(--el-text-color-secondary)">扫描:</span> <b>{{todayStrategy.scanned||0}}</b> 只</div>
-<div><span style="color:var(--el-text-color-secondary)">信号:</span> <b>{{todayStrategy.total_signals||0}}</b></div>
-<div><span style="color:var(--el-text-color-secondary)">买入:</span> <b style="color:var(--el-color-danger)">{{todayStrategy.buy_signals||0}}</b></div>
-<div><span style="color:var(--el-text-color-secondary)">偏好:</span> {{todayStrategy.preference||'-'}}</div>
-<div><span style="color:var(--el-text-color-secondary)">耗时:</span> {{todayStrategy.elapsed_seconds||0}}s</div>
-<div><span style="color:var(--el-text-color-secondary)">执行:</span> {{todayStrategy.time||'-'}}</div>
-</div></div>
-<div class="card"><h3>📊 交易所</h3><table><thead><tr><th>交易所</th><th>最新日期</th><th>行情</th><th>股票</th></tr></thead><tbody><template v-for="(v,k) in overview.exchanges"><tr v-if="v&&v.stocks>0"><td>{{exFull(k)}}</td><td>{{v.latest_date||'-'}}</td><td>{{fmt(v.rows)}}</td><td>{{v.stocks}}</td></tr></template></tbody></table></div>
-<div class="card"><h3>📅 交易日历 & 数据完整度</h3>
-<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px"><el-button size="small" @click="prevMonth">◀</el-button><span style="font-weight:600;font-size:14px;min-width:80px;text-align:center">{{smonthLabel}}</span><el-button size="small" @click="nextMonth">▶</el-button><el-button size="small" type="primary" plain @click="smonth=(new Date()).toISOString().slice(0,7);loadDataStatus()">今天</el-button><span style="font-size:10px;color:var(--el-text-color-secondary);margin-left:8px">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日 ⚪未来</span></div>
-<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10px;color:var(--el-text-color-secondary);margin-bottom:3px"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span></div>
+<!-- 概览 -->
+<el-row :gutter="12" style="margin-bottom:12px">
+  <el-col :span="6"><el-card shadow="never"><div style="text-align:center"><div style="font-size:26px;font-weight:700">{{fmt(overview.total_rows)}}</div><div style="font-size:11px;color:var(--el-text-color-secondary)">行情总条数</div></div></el-card></el-col>
+  <el-col :span="6"><el-card shadow="never"><div style="text-align:center"><div style="font-size:26px;font-weight:700">{{overview.total_stocks}}</div><div style="font-size:11px;color:var(--el-text-color-secondary)">股票</div></div></el-card></el-col>
+  <el-col :span="6"><el-card shadow="never"><div style="text-align:center"><div style="font-size:26px;font-weight:700">{{overview.latest_date||'-'}}</div><div style="font-size:11px;color:var(--el-text-color-secondary)">最新数据</div></div></el-card></el-col>
+  <el-col :span="6"><el-card shadow="never" body-style="padding:14px"><div style="text-align:center"><div style="font-size:26px;font-weight:700;color:var(--el-color-warning)">{{missingDates.length}}</div><div style="font-size:11px;color:var(--el-text-color-secondary)">漏数据日期</div></div></el-card></el-col>
+</el-row>
+
+<!-- 今日策略 -->
+<el-card v-if="todayStrategy" shadow="never" style="margin-bottom:12px" :style="{borderLeft: todayStrategy.status==='ok'?'3px solid var(--el-color-success)':'3px solid var(--el-color-warning)'}">
+<template #header><span>🎯 今日策略运行 ({{todayStrategy.strategy_date||'-'}})</span></template>
+<el-row :gutter="16">
+  <el-col :span="4"><div style="font-size:12px;color:var(--el-text-color-secondary)">扫描</div><div style="font-size:15px;font-weight:600">{{todayStrategy.scanned||0}} 只</div></el-col>
+  <el-col :span="4"><div style="font-size:12px;color:var(--el-text-color-secondary)">信号</div><div style="font-size:15px;font-weight:600">{{todayStrategy.total_signals||0}}</div></el-col>
+  <el-col :span="4"><div style="font-size:12px;color:var(--el-text-color-secondary)">买入</div><div style="font-size:15px;font-weight:600;color:var(--el-color-danger)">{{todayStrategy.buy_signals||0}}</div></el-col>
+  <el-col :span="4"><div style="font-size:12px;color:var(--el-text-color-secondary)">偏好</div><div style="font-size:15px;font-weight:600">{{todayStrategy.preference||'-'}}</div></el-col>
+  <el-col :span="4"><div style="font-size:12px;color:var(--el-text-color-secondary)">耗时</div><div style="font-size:15px;font-weight:600">{{todayStrategy.elapsed_seconds||0}}s</div></el-col>
+  <el-col :span="4"><div style="font-size:12px;color:var(--el-text-color-secondary)">执行</div><div style="font-size:15px;font-weight:600">{{todayStrategy.time||'-'}}</div></el-col>
+</el-row>
+</el-card>
+
+<!-- 交易所 -->
+<el-card shadow="never" style="margin-bottom:12px">
+<template #header><span>📊 交易所</span></template>
+<el-table :data="Object.entries(overview.exchanges).filter(e=>e[1].stocks>0).map(e=>({key:e[0],...e[1]}))" size="small" stripe>
+<el-table-column label="交易所" width="90"><template #default="{row}">{{exFull(row.key)}}</template></el-table-column>
+<el-table-column prop="latest_date" label="最新日期" width="120"></el-table-column>
+<el-table-column label="行情" width="120"><template #default="{row}">{{fmt(row.rows)}}</template></el-table-column>
+<el-table-column prop="stocks" label="股票" width="80"></el-table-column>
+</el-table>
+</el-card>
+
+<!-- 交易日历 -->
+<el-card shadow="never" style="margin-bottom:12px">
+<template #header><span>📅 交易日历 & 数据完整度</span></template>
+<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+<el-button size="small" @click="prevMonth">◀</el-button>
+<span style="font-weight:600;font-size:14px;min-width:80px;text-align:center">{{smonthLabel}}</span>
+<el-button size="small" @click="nextMonth">▶</el-button>
+<el-button size="small" type="primary" plain @click="smonth=(new Date()).toISOString().slice(0,7);loadDataStatus()">今天</el-button>
+<span style="font-size:10px;color:var(--el-text-color-secondary);margin-left:8px">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10px;color:var(--el-text-color-secondary);margin-bottom:4px;text-align:center">
+<span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:var(--el-color-danger)">六</span><span style="color:var(--el-color-danger)">日</span>
+</div>
 <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">
-<div v-for="d in cal" :style="calStyle(d)" :title="calTitle(d)" @contextmenu.prevent="doSyncDate(d)" @click="doSyncClick(d)" :class="{'cal-cell':true,'cal-syncing':d.syncing}">{{d.day}}<div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div><div v-if="d.syncing" style="font-size:7px;color:var(--blue);margin-top:1px">⟳ 采集中</div></div></div></div>
-<div class="card" v-if="missingDates.length"><h3>⚠️ 近期数据异常</h3>
-<div style="font-size:12px;color:var(--el-text-color-secondary)">以下交易日数据不完整或完全缺失:</div>
-<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px"><span v-for="d in missingDates" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);padding:2px 8px;border-radius:4px;font-size:11px">{{d}}</span></div></div>
-<!-- 最近下载日志 -->
-<div class="card" v-if="dlog.length"><h3>📥 最近下载记录</h3>
-<div style="font-size:11px"><div v-for="l in dlog.slice(0,8)" style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--el-border-color-light);font-size:11px">
-<span style="min-width:100px;color:var(--el-text-color-secondary)">{{l.time}}</span>
-<span :style="{color:l.status==='ok'?'#10b981':l.status==='warn'?'#f59e0b':'#ef4444',fontWeight:500}">{{l.status==='ok'?'✅':l.status==='warn'?'⚠️':'❌'}}</span>
-<span style="color:var(--el-text-color-secondary)">+{{l.rows}}行</span>
-<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--el-text-color-secondary)">{{l.detail||''}}</span></div></div></div></div>
+<div v-for="d in cal" :style="calStyle(d)" :title="calTitle(d)" @contextmenu.prevent="doSyncDate(d)" @click="doSyncClick(d)" :class="{'cal-cell':true,'cal-syncing':d.syncing}">
+{{d.day}}<div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'var(--el-color-success)':d.cp.pct>=50?'var(--el-color-warning)':'var(--el-color-danger)'}">{{d.cp.pct}}%</div>
+<div v-if="d.syncing" style="font-size:7px;color:var(--el-color-primary);margin-top:1px">⟳ 采集中</div>
+</div></div>
+</el-card>
+
+<!-- 缺失日期 -->
+<el-card v-if="missingDates.length" shadow="never" style="margin-bottom:12px">
+<template #header><span>⚠️ 近期数据异常</span></template>
+<div style="font-size:12px;color:var(--el-text-color-secondary);margin-bottom:8px">以下交易日数据不完整或完全缺失（可右键点击日历日期触发重新采集）:</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<el-tag v-for="d in missingDates" :key="d" type="danger" size="small" effect="plain">{{d}}</el-tag>
+</div>
+</el-card>
+
+<!-- 下载日志 -->
+<el-card v-if="dlog.length" shadow="never" style="margin-bottom:12px">
+<template #header><span>📥 最近下载记录</span></template>
+<el-table :data="dlog.slice(0,8)" size="small" stripe>
+<el-table-column prop="time" label="时间" width="160"></el-table-column>
+<el-table-column label="状态" width="60"><template #default="{row}"><el-tag :type="row.status==='ok'?'success':row.status==='warn'?'warning':'danger'" size="small" effect="dark">{{row.status==='ok'?'✅':row.status==='warn'?'⚠️':'❌'}}</el-tag></template></el-table-column>
+<el-table-column label="行数" width="70"><template #default="{row}">+{{row.rows}}</template></el-table-column>
+<el-table-column label="详情" min-width="200"><template #default="{row}"><span style="font-size:11px;color:var(--el-text-color-secondary)">{{row.detail||''}}</span></template></el-table-column>
+</el-table>
+</el-card>
+
+</template>
 <div class="error-state" v-if="ldErr.x"><div class="msg">{{ldErr.x}}</div></div>
-</template></div>
+</div>
 
 <!-- ═══ 设置 ═══ -->
 <div v-if="tab==='o'">
@@ -385,7 +434,7 @@ async function saveDsKey(){try{await axios.post(API+'/api/settings/deepseek_key'
 function calStyle(d){if(!d.day&&d.day!==0)return{padding:'5px 3px'};var cp=d.cp,c1='transparent',c2='transparent';if(d.td&&cp){var p=cp.pct;if(p>=80)c1='rgba(16,185,129,0.12)';else if(p>=50)c1='rgba(251,191,36,0.12)';else c1='rgba(239,68,68,0.12)';if(p>=80)c2='rgba(16,185,129,0.25)';else if(p>=50)c2='rgba(251,191,36,0.2)';else c2='rgba(239,68,68,0.25)'}else if(d.td&&!cp){c1='rgba(239,68,68,0.08)';c2='rgba(239,68,68,0.2)'}return{padding:'5px 3px',borderRadius:'4px',fontSize:'10px',textAlign:'center',background:c1,color:d.td?'#fff':'#475569',border:d.td?'1px solid '+c2:'1px solid transparent',opacity:d.future?0.35:1}}
 var calTitle=function(d){if(!d.td)return d.date+' 非交易日';if(!d.cp)return d.date+' 无数据(右键采集)';return d.date+' | '+d.cp.rows+'条 ('+d.cp.pct+'%) 右键采集'}
 var doSyncDate=function(d){if(!d.td||d.syncing)return;modalShowConfirm('数据采集','确定重新采集 <b>'+d.date+'</b> 的数据？（股票+指数+ETF）',function(){d.syncing=true;axios.post('/api/data_status/sync_date',{date:d.date}).then(function(r){var tid=r.data.task_id;if(!tid)return;var iv=setInterval(function(){axios.get('/api/data_status/sync_status',{params:{task_id:tid}}).then(function(sr){var st=sr.data.task;if(!st||st.status==='running')return;d.syncing=false;clearInterval(iv);if(st.status==='completed'){loadDataStatus();modalAlert('采集完成','✅ '+d.date+'<br>新增股票: '+st.stocks_added+'行<br>指数: '+st.index_rows+'条<br>ETF: '+st.etf_rows+'条<br>共计: '+st.total_after+'行 ('+st.elapsed+'秒)','✅')}else{modalAlert('采集失败',st.error||'未知错误','❌')}})},3000)}).catch(function(e){d.syncing=false;modalAlert('启动失败',e.response?.data?.detail||e.message,'❌')})})}
-var doSyncClick=function(d){if(!d.td||d.cp)return;doSyncDate(d)}
+var doSyncClick=function(d){if(!d.td||d.syncing)return;doSyncDate(d)}
 async function loadDataStatus(){try{var r=await axios.get(API+'/api/data_status?month='+smonth.value);var d=r.data;if(d.overview)Object.assign(overview,d.overview);
 // 构建日历数组
 var arr=(d.calendar||[]).map(function(x){return{day:parseInt(x.date.slice(8)),td:x.is_trade_day,cp:x.completeness,future:new Date(x.date)>new Date(),date:x.date}});
