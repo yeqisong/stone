@@ -74,6 +74,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <el-button @click="showAdd=false">取消</el-button>
 </div></div>
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
+
 <div class="card"><h3>持仓明细</h3>
 <el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe size="small" @cell-click="handlePtfCellClick" style="width:100%">
 <el-table-column prop="stock_code" label="代码" width="90">
@@ -90,8 +91,8 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </el-table-column>
 <el-table-column label="操作" width="110" fixed="right">
 <template #default="{row}">
-<el-button size="small" @click.stop="startEditPos(row)">编辑</el-button>
-<el-button size="small" type="danger" @click.stop="delPosition(row.stock_code)">删除</el-button>
+<button onclick="window._ptfEdit(this)" :data-code="row.stock_code" :data-qty="row.quantity" :data-cost="row.cost_price" :data-note="row.notes||''" style="cursor:pointer;padding:4px 10px;border:1px solid var(--el-border-color);border-radius:4px;font-size:12px;background:var(--el-fill-color-lighter);color:var(--el-text-color-regular)">编辑</button>
+<button onclick="window._ptfDel(this)" :data-code="row.stock_code" style="cursor:pointer;padding:4px 10px;border:1px solid var(--el-color-danger);border-radius:4px;font-size:12px;color:var(--el-color-danger);background:transparent;margin-left:6px">删除</button>
 </template>
 </el-table-column>
 </el-table>
@@ -340,14 +341,14 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div class="error-state" v-if="ldErr.o"><div class="msg">{{ldErr.o}}</div></div>
 
 <!-- 编辑持仓对话框 -->
-<el-dialog v-model="editingPos" title="✎ 编辑持仓" width="380px" destroy-on-close>
+<el-dialog v-model="showEditDialog" title="✎ 编辑持仓" width="380px" destroy-on-close @closed="editingPos=''">
   <el-form label-width="70px">
     <el-form-item label="数量"><el-input-number v-model="editPos.qty" :min="0" style="width:100%"></el-input-number></el-form-item>
     <el-form-item label="成本价"><el-input-number v-model="editPos.cost" :precision="2" :step="0.01" :min="0" style="width:100%"></el-input-number></el-form-item>
     <el-form-item label="备注"><el-input v-model="editPos.note" type="textarea" :rows="2"></el-input></el-form-item>
   </el-form>
   <template #footer>
-    <el-button @click="editingPos=''">取消</el-button>
+    <el-button @click="showEditDialog=false">取消</el-button>
     <el-button type="primary" @click="savePosition(editingPos)">保存</el-button>
   </template>
 </el-dialog>
@@ -391,7 +392,7 @@ var stockCat=ref('stock'),kw=ref(''),detail=ref(null),dcode=ref(''),hcnt=ref(0),
 var dsKey=ref(''),prefMode=ref(''),cfg=reactive({strategies:[],deepseek_configured:false});
 var editing=ref(''),editParams=ref('');
 var showAdd=ref(false),pf=reactive({code:'',qty:100,cost:0,note:''});
-var editingPos=ref(''),editPos=reactive({qty:0,cost:0,note:''});
+var showEditDialog=ref(false),editingPos=ref(''),editPos=reactive({qty:0,cost:0,note:''});
 var overview=reactive({total_rows:0,total_stocks:0,latest_date:'',exchanges:{}});
 var smonth=ref(new Date().toISOString().slice(0,7));
 var cal=ref([]),missingDates=ref([]),dlog=ref([]),todayStrategy=ref(null);
@@ -412,8 +413,8 @@ function handlePtfCellClick(row, column, cell, event){
   }
 }
 async function addPosition(){if(!pf.code)return;try{await axios.post(API+'/api/portfolio',{stock_code:pf.code,quantity:pf.qty,cost_price:pf.cost,notes:pf.note});showAdd.value=false;pf.code='';pf.qty=100;pf.cost=0;pf.note='';loadPortfolio()}catch(e){modalAlert('添加失败',e.response?.data?.detail||e.message,'❌')}}
-function startEditPos(p){editingPos.value=p.stock_code;editPos.qty=p.quantity;editPos.cost=p.cost_price;editPos.note=p.notes||''}
-async function savePosition(code){try{await axios.put(API+'/api/portfolio/'+code,{quantity:editPos.qty,cost_price:editPos.cost,notes:editPos.note});editingPos.value='';loadPortfolio()}catch(e){modalAlert('保存失败',e.message,'❌')}}
+function startEditPos(p){editingPos.value=p.stock_code;editPos.qty=p.quantity;editPos.cost=p.cost_price;editPos.note=p.notes||'';showEditDialog.value=true}
+async function savePosition(code){try{await axios.put(API+'/api/portfolio/'+code,{quantity:editPos.qty,cost_price:editPos.cost,notes:editPos.note});showEditDialog.value=false;loadPortfolio()}catch(e){showEditDialog.value=false;modalAlert('保存失败',e.message,'❌')}}
 async function delPosition(code){modalConfirmDanger('确认删除','确定删除该持仓？删除后数据不可恢复。',function(){axios.delete(API+'/api/portfolio/'+code).then(function(){loadPortfolio();modalClose()}).catch(function(e){modalAlert('错误','删除失败: '+(e.response?.data?.detail||e.message),'❌')})})}
 async function loadSignals(){ld.s=true;ldErr.s='';try{var r=await axios.get(API+'/api/buy_signals',{params:{signal_date:sigDate.value}});Object.assign(sigs,r.data)}catch(e){ldErr.s='加载失败：'+e.message}ld.s=false}
 function switchTab(t){tab.value=t;pushHash(t==='l'?'l/stock':t);if(t==='l'){stockCat.value='stock';stocks.page=1;loadStocks(1)}else if(t==='p')loadPortfolio();else if(t==='s'){sigDate.value=todayStr();loadSignals()}else if(t==='x')loadDataStatus();else if(t==='o')loadSettings()}
@@ -504,8 +505,26 @@ function modalShowConfirm(t,m,cb,dt){modal.show=true;modal.type='confirm';modal.
 function modalConfirmDanger(t,m,cb){modalShowConfirm(t,m,cb,true);modal.icon='⚠️';modal.confirmText='确认删除'}
 function modalClose(){modal.show=false;modal.callback=null}
 function modalDoConfirm(){if(modal.callback){var cb=modal.callback;modal.show=false;modal.callback=null;cb()}}
+// onclick 全局回调（绕过 Vue 模板事件）
+window._setEditPos = function(code, qty, cost, note) {
+  editingPos.value = code;
+  editPos.qty = Number(qty);
+  editPos.cost = Number(cost);
+  editPos.note = note || '';
+  showEditDialog.value = true;
+};
+window._deletePos = function(code) {
+  modalConfirmDanger('确认删除', '确定删除该持仓？删除后数据不可恢复。', function() {
+    axios.delete(API + '/api/portfolio/' + code).then(function() {
+      loadPortfolio();
+      modalClose();
+    }).catch(function(e) {
+      modalAlert('错误', '删除失败: ' + (e.response?.data?.detail || e.message), '❌');
+    });
+  });
+};
 
-return{tab,health,ptf,sigs,stocks,stockCat,kw,sigDate,todayStr,detail,dcode,hcnt,adj,dateRange,overview,smonth,smonthLabel,cal,missingDates,dlog,todayStrategy,cfg,dsKey,prefMode,editing,editParams,showAdd,pf,editingPos,editPos,loginUser,doLogout,ld,ldErr,fmt,stars,dirName,exName,exFull,srcStr,modal,modalClose,modalDoConfirm,reloadChart,loadSettings,toggleStrategy,setPreference,saveParams,saveDsKey,loadPortfolio,loadSignals,loadStocks,showDetail,loadDataStatus,prevMonth,nextMonth,switchTab,switchCat,addPosition,startEditPos,savePosition,delPosition,calStyle,calTitle,doSyncDate,doSyncClick,handlePtfCellClick}
+return{tab,health,ptf,sigs,stocks,stockCat,kw,sigDate,todayStr,detail,dcode,hcnt,adj,dateRange,overview,smonth,smonthLabel,cal,missingDates,dlog,todayStrategy,cfg,dsKey,prefMode,editing,editParams,showAdd,pf,showEditDialog,editingPos,editPos,loginUser,doLogout,ld,ldErr,fmt,stars,dirName,exName,exFull,srcStr,modal,modalClose,modalDoConfirm,reloadChart,loadSettings,toggleStrategy,setPreference,saveParams,saveDsKey,loadPortfolio,loadSignals,loadStocks,showDetail,loadDataStatus,prevMonth,nextMonth,switchTab,switchCat,addPosition,startEditPos,savePosition,delPosition,calStyle,calTitle,doSyncDate,doSyncClick,handlePtfCellClick}
 }});
 app.use(ElementPlus);
 // 全局注册 Element Plus 图标
@@ -513,6 +532,14 @@ if(typeof ElementPlusIconsVue !== 'undefined'){
   for(var _k in ElementPlusIconsVue) app.component(_k, ElementPlusIconsVue[_k]);
 }
 var _app = app.mount('#app');
+// 持仓操作：通过 onclick + window 全局函数绕过 Vue 模板事件
+window._ptfEdit = function(el) {
+  var ds = el.dataset;
+  window._setEditPos(ds.code, ds.qty, ds.cost, ds.note);
+};
+window._ptfDel = function(el) {
+  window._deletePos(el.dataset.code);
+};
 </script>
 </body>
 </html>
