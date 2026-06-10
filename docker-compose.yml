@@ -12,6 +12,7 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./web:/app/web
+      - ./web-v2/dist:/app/web-v2/dist
     depends_on:
       db:
         condition: service_healthy
