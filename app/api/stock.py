@@ -38,7 +38,12 @@ def get_stock_detail(code: str):
                 FROM signal_history WHERE stock_code=:c AND signal_date=:d
                 ORDER BY combined_signal DESC, strength DESC
             """), {"c": code, "d": str(latest_signal_date)})
+            seen = set()
             for r in result.fetchall():
+                key = r.strategy_name
+                if key in seen:
+                    continue
+                seen.add(key)
                 src = r.source_strategies
                 if isinstance(src, str):
                     try:

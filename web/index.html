@@ -165,7 +165,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <el-input v-model="dcode" @keyup.enter="showDetail(dcode)" placeholder="6位代码" style="width:150px" size="default" clearable><template #append><el-button @click="showDetail(dcode)">查询</el-button></template></el-input></div>
 <div v-if="detail">
 <div class="summary"><div class="si"><div class="v">{{detail.stock_name}}</div><div class="l">{{detail.stock_code}}</div></div><div class="si"><div class="v">¥{{(detail.close||0).toFixed(2)}}</div><div class="l">最新价</div></div><div class="si"><div class="v">{{detail.latest_trade_date}}</div><div class="l">数据日期</div></div><div class="si"><div class="v">{{hcnt}}</div><div class="l">历史信号</div></div></div>
-<div class="card" style="border-left:3px solid var(--gold);min-height:60px"><h3>🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h3>
+<div class="card" style="min-height:60px"><h3>🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h3>
 <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:10px;flex-wrap:wrap">
 <div v-for="s in detail.latest_signals" style="flex:1;min-width:220px">
 <el-card shadow="never" :style="{borderLeft: s.combined_signal?'3px solid var(--gold)':'1px solid var(--el-border-color-light)'}" body-style="padding:12px 14px">
