@@ -131,7 +131,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div style="display:flex;gap:6px;margin-bottom:12px">
 <el-button :type="stockCat==='stock'?'primary':''" size="small" @click="switchCat('stock')">📌 个股</el-button>
 <el-button :type="stockCat==='index'?'primary':''" size="small" @click="switchCat('index')">📊 指数</el-button>
-<button @click="switchCat('etf')" :style="{background:stockCat==='etf'?'var(--blue)':'var(--bg)',color:stockCat==='etf'?'#fff':'var(--dim)',border:'1px solid var(--border)',padding:'6px 18px',borderRadius:'6px',cursor:'pointer',fontSize:'12px',fontWeight:'500'}">💹 ETF</button>
+<el-button :type="stockCat==='etf'?'primary':''" size="small" @click="switchCat('etf')">💹 ETF</el-button>
 </div>
 <div class="search-box">
 <el-input v-model="kw" @keyup.enter="loadStocks(1)" placeholder="搜索代码或名称..." clearable style="max-width:260px" size="default">
@@ -162,7 +162,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div class="loading" v-if="ld.d"><span style="font-size:24px">⏳</span><div style="margin-top:8px">加载个股数据...</div></div>
 <template v-else>
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-<input v-model="dcode" @keyup.enter="showDetail(dcode)" placeholder="6位代码" style="width:140px"><button class="btn" @click="showDetail(dcode)">查询</button></div>
+<el-input v-model="dcode" @keyup.enter="showDetail(dcode)" placeholder="6位代码" style="width:150px" size="default" clearable><template #append><el-button @click="showDetail(dcode)">查询</el-button></template></el-input></div>
 <div v-if="detail">
 <div class="summary"><div class="si"><div class="v">{{detail.stock_name}}</div><div class="l">{{detail.stock_code}}</div></div><div class="si"><div class="v">¥{{(detail.close||0).toFixed(2)}}</div><div class="l">最新价</div></div><div class="si"><div class="v">{{detail.latest_trade_date}}</div><div class="l">数据日期</div></div><div class="si"><div class="v">{{hcnt}}</div><div class="l">历史信号</div></div></div>
 <div class="card" style="border-left:3px solid var(--gold)"><h3>🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h3>
@@ -174,8 +174,11 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div style="display:flex;gap:12px">
 <div style="flex:0 0 68%;min-width:0">
 <div class="card"><h3>📈 K线图 + 布林带 <span style="font-size:11px;color:var(--dim);font-weight:400;margin-left:12px">{{dateRange}}</span>
-<select v-model="adj" @change="reloadChart" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:6px;font-size:11px;margin-left:12px;cursor:pointer">
-<option value="none">不复权</option><option value="qfq">前复权</option><option value="hfq">后复权</option></select></h3>
+<el-select v-model="adj" @change="reloadChart" size="small" style="width:110px;margin-left:12px">
+<el-option value="none" label="不复权"></el-option>
+<el-option value="qfq" label="前复权"></el-option>
+<el-option value="hfq" label="后复权"></el-option>
+</el-select></h3>
 <div id="c1" style="width:100%;height:340px"></div></div>
 <div class="card"><h3>📊 成交量</h3><div id="c2" style="width:100%;height:180px"></div></div>
 <div class="card"><h3>📉 MACD</h3><div id="c3" style="width:100%;height:180px"></div></div>
@@ -218,7 +221,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </div></div>
 <div class="card"><h3>📊 交易所</h3><table><thead><tr><th>交易所</th><th>最新日期</th><th>行情</th><th>股票</th></tr></thead><tbody><template v-for="(v,k) in overview.exchanges"><tr v-if="v&&v.stocks>0"><td>{{exFull(k)}}</td><td>{{v.latest_date||'-'}}</td><td>{{fmt(v.rows)}}</td><td>{{v.stocks}}</td></tr></template></tbody></table></div>
 <div class="card"><h3>📅 交易日历 & 数据完整度</h3>
-<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><button @click="prevMonth" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px">◀</button><span style="font-weight:600">{{smonthLabel}}</span><button @click="nextMonth" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px">▶</button><button @click="smonth=(new Date()).toISOString().slice(0,7);loadDataStatus()" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:10px">今天</button><span style="font-size:10px;color:var(--dim);margin-left:12px">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日 ⚪未来</span></div>
+<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px"><el-button size="small" @click="prevMonth">◀</el-button><span style="font-weight:600;font-size:14px;min-width:80px;text-align:center">{{smonthLabel}}</span><el-button size="small" @click="nextMonth">▶</el-button><el-button size="small" type="primary" plain @click="smonth=(new Date()).toISOString().slice(0,7);loadDataStatus()">今天</el-button><span style="font-size:10px;color:var(--el-text-color-secondary);margin-left:8px">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日 ⚪未来</span></div>
 <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10px;color:var(--dim);margin-bottom:3px"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span></div>
 <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">
 <div v-for="d in cal" :style="calStyle(d)" :title="calTitle(d)" @contextmenu.prevent="doSyncDate(d)" @click="doSyncClick(d)" :class="{'cal-cell':true,'cal-syncing':d.syncing}">{{d.day}}<div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div><div v-if="d.syncing" style="font-size:7px;color:var(--blue);margin-top:1px">⟳ 采集中</div></div></div></div>
