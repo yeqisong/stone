@@ -76,6 +76,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
 
 <div class="card"><h3>持仓明细</h3>
+
 <el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe size="small" @cell-click="handlePtfCellClick" style="width:100%">
 <el-table-column prop="stock_code" label="代码" width="90">
 <template #default="{row}"><span style="color:var(--el-color-primary);cursor:pointer">{{row.stock_code}}</span></template>
@@ -89,10 +90,10 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <el-table-column prop="notes" label="备注" min-width="80">
 <template #default="{row}"><span style="font-size:11px;color:var(--el-text-color-secondary)">{{row.notes||''}}</span></template>
 </el-table-column>
-<el-table-column label="操作" width="110" fixed="right">
+<el-table-column label="操作" width="120" fixed="right">
 <template #default="{row}">
-<button onclick="window._ptfEdit(this)" :data-code="row.stock_code" :data-qty="row.quantity" :data-cost="row.cost_price" :data-note="row.notes||''" style="cursor:pointer;padding:4px 10px;border:1px solid var(--el-border-color);border-radius:4px;font-size:12px;background:var(--el-fill-color-lighter);color:var(--el-text-color-regular)">编辑</button>
-<button onclick="window._ptfDel(this)" :data-code="row.stock_code" style="cursor:pointer;padding:4px 10px;border:1px solid var(--el-color-danger);border-radius:4px;font-size:12px;color:var(--el-color-danger);background:transparent;margin-left:6px">删除</button>
+<button onclick="window._ptfEdit(this)" :data-code="row.stock_code" :data-qty="row.quantity" :data-cost="row.cost_price" :data-note="row.notes||''" style="cursor:pointer;padding:5px 12px;border:1px solid var(--el-border-color);border-radius:4px;font-size:12px;background:var(--el-fill-color-lighter);color:var(--el-text-color-regular);margin-right:6px">编辑</button>
+<button onclick="window._ptfDel(this)" :data-code="row.stock_code" style="cursor:pointer;padding:5px 12px;border:1px solid var(--el-color-danger);border-radius:4px;font-size:12px;color:var(--el-color-danger);background:transparent">删除</button>
 </template>
 </el-table-column>
 </el-table>
