@@ -12,82 +12,42 @@
 <script src="https://cdn.jsdelivr.net/npm/element-plus"></script>
 <script src="https://cdn.jsdelivr.net/npm/@element-plus/icons-vue"></script>
 <style>
-:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#f1f5f9;--dim:#94a3b8;--up:#ef4444;--down:#10b981;--blue:#3b82f6;--gold:#f59e0b}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-.header{background:var(--card);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
-.header h1{font-size:18px}.st{font-size:11px;color:var(--dim)}
-.tabs{display:flex;background:var(--card);border-bottom:1px solid var(--border);padding:0 24px}
-.tabs button{background:none;border:none;color:var(--dim);padding:12px 20px;cursor:pointer;font-size:13px;border-bottom:2px solid transparent;transition:all .15s;font-weight:500}
-.tabs button:hover{color:var(--text);background:rgba(59,130,246,0.05)}.tabs button.active{color:var(--blue);border-bottom-color:var(--blue);background:rgba(59,130,246,0.08)}
-.content{padding:14px 20px;max-width:1500px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px}
-.card h3{font-size:14px;margin-bottom:10px;color:var(--dim)}
-.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px}
-.si{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
-.si .v{font-size:24px;font-weight:700}.si .l{font-size:10px;color:var(--dim)}
-.g{color:var(--up)}.r{color:var(--down)}
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);color:var(--dim);font-weight:500;font-size:11px}
-td{padding:7px 10px;border-bottom:1px solid rgba(51,65,85,0.4)}
-tr:hover{background:rgba(59,130,246,0.05)}tr.clickable{cursor:pointer}
-.sb{display:inline-block;padding:2px 7px;border-radius:3px;font-size:11px;font-weight:600}
-.sb.buy{background:rgba(239,68,68,0.15);color:var(--up)}.sb.sell{background:rgba(16,185,129,0.15);color:var(--down)}
-.stars{color:var(--gold)}
-.stock-table{max-height:65vh;overflow-y:auto}
-.search-box{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:14px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px}
-.search-box .info{font-size:12px;color:var(--dim);margin-left:auto}
-.disclaimer{text-align:center;color:#475569;font-size:10px;padding:12px}
+/* ── 自定义变量（补 Element Plus dark 变量未覆盖的部分） ── */
+:root{--bg-card:#1e293b;--gold:#f59e0b}
 
-/* ── Modal 弹窗 ── */
-.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:999;animation:fadeIn .15s}
-@keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.modal-box{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px 32px;max-width:420px;width:90vw;animation:scaleIn .15s}
-@keyframes scaleIn{from{transform:scale(0.92);opacity:0}to{transform:scale(1);opacity:1}}
-.modal-box .icon{font-size:36px;text-align:center;margin-bottom:10px}
-.modal-box .title{font-size:16px;font-weight:600;text-align:center;margin-bottom:6px}
-.modal-box .msg{font-size:13px;color:var(--dim);text-align:center;margin-bottom:18px;line-height:1.5}
-.modal-box .actions{display:flex;gap:10px;justify-content:center}
-.modal-box .actions button{min-width:90px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;border:none;transition:all .12s}
-.modal-box .actions .btn-primary{background:var(--blue);color:#fff}
-.modal-box .actions .btn-primary:hover{background:#2563eb}
-.modal-box .actions .btn-danger{background:var(--up);color:#fff}
-.modal-box .actions .btn-danger:hover{background:#dc2626}
-.modal-box .actions .btn-cancel{background:var(--bg);color:var(--dim);border:1px solid var(--border)}
-.modal-box .actions .btn-cancel:hover{color:var(--text);border-color:var(--dim)}
-.modal-box .actions .btn-ok{background:var(--down);color:#fff}
-.modal-box .actions .btn-ok:hover{background:#059669}
-.loading{text-align:center;padding:30px;color:var(--dim)}
-.spinner{display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top:2px solid var(--blue);border-radius:50%;animation:spin .6s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.spinner-sm{width:14px;height:14px;border-width:1.5px}
-.empty-state{text-align:center;padding:30px;color:var(--dim)}
-.empty-state .icon{font-size:36px;margin-bottom:8px}
-.error-state{text-align:center;padding:20px;color:var(--dim);font-size:12px}
-.error-state .msg{color:var(--up);margin-bottom:6px}
-.skeleton{background:linear-gradient(90deg,var(--border) 25%,#334155 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:14px;margin:4px 0}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.btn{background:var(--blue);color:#fff;border:none;padding:9px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;margin-left:6px}
-.btn:hover{background:#2563eb}
-input[type=text],input[type=number],input[type=password],select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px 14px;border-radius:8px;font-size:13px;transition:all .15s;outline:none;width:auto}
-input[type=text]:focus,input[type=number]:focus,input[type=password]:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,0.12)}
-input[type=text]::placeholder,input[type=number]::placeholder,input[type=password]::placeholder{color:#475569}
-input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.action-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;border:none;cursor:pointer;font-size:13px;transition:all .12s;background:transparent}
-.action-btn:hover{background:rgba(255,255,255,0.08)}
-.action-btn.edit{color:var(--dim)}.action-btn.edit:hover{color:var(--blue);background:rgba(59,130,246,0.12)}
-.action-btn.del{color:#ef444488}.action-btn.del:hover{color:#ef4444;background:rgba(239,68,68,0.12)}
-.pager{display:flex;align-items:center;gap:4px;margin-top:14px;font-size:12px;color:var(--dim);justify-content:center}
-.pager button{background:var(--bg);color:var(--text);border:1px solid var(--border);padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;transition:all .15s}
-.pager button:hover:not(:disabled){background:var(--blue);border-color:var(--blue);color:#fff}
-.pager button:disabled{opacity:0.2;cursor:default}
-.pager span{font-size:12px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
+
+/* ── 布局 ── */
+.header{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;border-bottom:1px solid var(--el-border-color-light)}
+.header h1{font-size:18px}.st{font-size:11px;color:var(--el-text-color-secondary)}
+.tabs{display:flex;align-items:center;gap:4px;padding:8px 24px;border-bottom:1px solid var(--el-border-color-light);background:var(--el-bg-color-overlay)}
+.content{padding:14px 20px;max-width:1500px;margin:0 auto}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px}
+.si{background:var(--el-bg-color-overlay);border:1px solid var(--el-border-color-light);border-radius:8px;padding:12px;text-align:center}
+.si .v{font-size:24px;font-weight:700}.si .l{font-size:10px;color:var(--el-text-color-secondary)}
+.g{color:var(--el-color-success)}.r{color:var(--el-color-danger)}
+.stars{color:var(--gold)}
+.stock-table{margin-top:8px}
+.search-box{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:14px 16px;background:var(--el-bg-color-overlay);border:1px solid var(--el-border-color-light);border-radius:10px}
+.search-box .info{font-size:12px;color:var(--el-text-color-secondary);margin-left:auto;white-space:nowrap}
+.pager{display:flex;justify-content:center;margin-top:14px}
+.disclaimer{text-align:center;color:var(--el-text-color-placeholder);font-size:10px;padding:12px}
+
+/* ── 加载状态 ── */
+.loading{text-align:center;padding:40px;color:var(--el-text-color-secondary)}
+.error-state{text-align:center;padding:20px;color:var(--el-text-color-secondary);font-size:12px}
+.error-state .msg{color:var(--el-color-danger);margin-bottom:6px}
+
+/* ── 日历网格（保留手写） ── */
+.cal-cell{cursor:pointer;transition:all .12s}.cal-cell:hover{filter:brightness(1.15)}
+.cal-syncing{animation:pulse 1s infinite}@keyframes pulse{0%{opacity:1}50%{opacity:0.5}100%{opacity:1}}
 </style>
 </head>
 <body>
 <div id="app">
 <div class="header"><div><h1>📊 个股买卖点监测系统</h1><div class="st">Stock Signal Monitor</div></div><div style="display:flex;align-items:center;gap:16px"><span class="st" style="cursor:pointer" @click="doLogout" title="退出登录">👤 {{loginUser}} | 退出</span><div class="st">{{health.ok?'正常':'异常'}} | {{overview.latest_date||'-'}}</div></div></div>
-<div class="tabs">
+<div style="display:flex;align-items:center;gap:4px;padding:8px 24px;border-bottom:1px solid var(--el-border-color-light);background:var(--el-bg-color-overlay)">
 <el-button :type="tab==='p'?'primary':''" size="small" @click="switchTab('p')">📈 持仓</el-button>
 <el-button :type="tab==='s'?'primary':''" size="small" @click="switchTab('s')">🔍 买点</el-button>
 <el-button :type="tab==='l'?'primary':''" size="small" @click="switchTab('l')">📋 个股</el-button>
@@ -99,7 +59,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 
 <!-- 持仓 -->
 <div v-if="tab==='p'">
-<div class="loading" v-if="ld.p"><span class="spinner"></span><div style="margin-top:8px">加载持仓数据...</div></div>
+<div class="loading" v-if="ld.p"><el-icon class="is-loading" style="font-size:24px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round"></circle></svg></el-icon><div style="margin-top:8px">加载持仓数据...</div></div>
 <template v-else>
 <div class="summary"><div class="si"><div class="v">{{ptf.count}}</div><div class="l">持仓</div></div><div class="si"><div class="v">¥{{fmt(ptf.total_value)}}</div><div class="l">市值</div></div><div class="si"><div class="v" :class="ptf.total_pnl>=0?'g':'r'">¥{{fmt(ptf.total_pnl)}}</div><div class="l">盈亏</div></div></div>
 <!-- 新增表单 -->
@@ -115,17 +75,17 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
 <div class="card"><h3>持仓明细</h3>
 <el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe highlight-current-row size="small" @row-click="(r)=>editingPos!==r.stock_code?showDetail(r.stock_code):null" style="width:100%">
-<el-table-column prop="stock_code" label="代码" width="80"></el-table-column>
-<el-table-column prop="stock_name" label="名称" width="100"></el-table-column>
-<el-table-column prop="quantity" label="数量" width="70"></el-table-column>
-<el-table-column label="成本" width="90"><template #default="{row:p}">¥{{(p.cost_price||0).toFixed(2)}}</template></el-table-column>
-<el-table-column label="现价" width="90"><template #default="{row:p}">¥{{(p.current_price||0).toFixed(2)}}</template></el-table-column>
-<el-table-column label="市值" width="100"><template #default="{row:p}">¥{{fmt(p.market_value)}}</template></el-table-column>
-<el-table-column label="盈亏" width="110"><template #default="{row:p}"><span :style="{color:p.pnl>=0?'var(--el-color-success)':'var(--el-color-danger)'}">¥{{fmt(p.pnl)}} ({{(p.pnl_pct||0)>=0?'+':''}}{{(p.pnl_pct||0).toFixed(1)}}%)</span></template></el-table-column>
+<el-table-column prop="stock_code" label="代码" min-width="85"></el-table-column>
+<el-table-column prop="stock_name" label="名称" min-width="100"></el-table-column>
+<el-table-column prop="quantity" label="数量" width="70" align="right"></el-table-column>
+<el-table-column label="成本" width="95" align="right"><template #default="{row:p}">¥{{(p.cost_price||0).toFixed(2)}}</template></el-table-column>
+<el-table-column label="现价" width="95" align="right"><template #default="{row:p}">¥{{(p.current_price||0).toFixed(2)}}</template></el-table-column>
+<el-table-column label="市值" width="105" align="right"><template #default="{row:p}">¥{{fmt(p.market_value)}}</template></el-table-column>
+<el-table-column label="盈亏" min-width="120" align="right"><template #default="{row:p}"><span :style="{color:p.pnl>=0?'var(--el-color-success)':'var(--el-color-danger)'}">¥{{fmt(p.pnl)}} ({{(p.pnl_pct||0)>=0?'+':''}}{{(p.pnl_pct||0).toFixed(1)}}%)</span></template></el-table-column>
 <el-table-column prop="notes" label="备注" min-width="80">
 <template #default="{row:p}"><span style="font-size:11px;color:var(--el-text-color-secondary)">{{p.notes||''}}</span></template>
 </el-table-column>
-<el-table-column label="操作" width="70" fixed="right">
+<el-table-column label="操作" width="65" fixed="right">
 <template #default="{row:p}">
 <el-button link size="small" @click.stop="startEditPos(p)">✎</el-button>
 <el-button type="danger" link size="small" @click.stop="delPosition(p.stock_code)">✕</el-button>
@@ -139,7 +99,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 
 <!-- 买点 -->
 <div v-if="tab==='s'">
-<div class="loading" v-if="ld.s"><span class="spinner"></span><div style="margin-top:8px">正在扫描全市场买点...</div></div>
+<div class="loading" v-if="ld.s"><span style="font-size:24px">⏳</span><div style="margin-top:8px">正在扫描全市场买点...</div></div>
 <template v-else>
 <div class="card"><h3>🔍 全市场买点</h3>
 <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
@@ -150,10 +110,10 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 </div>
 <div style="font-size:12px;color:var(--el-text-color-secondary);margin-bottom:10px">扫描 <b>{{sigs.scanned}}</b> 只, 买入信号 <b>{{sigs.total_signals}}</b> 只</div>
 <el-table v-if="sigs.signals" :data="sigs.signals" stripe highlight-current-row size="small" @row-click="(r)=>showDetail(r.stock_code)" style="width:100%">
-<el-table-column type="index" label="#" width="50"></el-table-column>
-<el-table-column prop="stock_code" label="代码" width="85"></el-table-column>
-<el-table-column prop="stock_name" label="名称" width="110"></el-table-column>
-<el-table-column label="现价" width="90"><template #default="{row:s}">¥{{(s.price||0).toFixed(2)}}</template></el-table-column>
+<el-table-column type="index" label="#" width="45"></el-table-column>
+<el-table-column prop="stock_code" label="代码" min-width="85"></el-table-column>
+<el-table-column prop="stock_name" label="名称" min-width="100"></el-table-column>
+<el-table-column label="现价" width="95" align="right"><template #default="{row:s}">¥{{(s.price||0).toFixed(2)}}</template></el-table-column>
 <el-table-column label="方向" width="55"><template #default><el-tag type="danger" size="small" effect="dark">买</el-tag></template></el-table-column>
 <el-table-column label="强度" width="80"><template #default="{row:s}"><span style="color:var(--el-color-warning)">{{stars(s.strength)}}</span></template></el-table-column>
 <el-table-column label="策略" min-width="200"><template #default="{row:s}"><span style="font-size:11px">{{srcStr(s)}}</span></template></el-table-column>
@@ -164,7 +124,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 
 <!-- 个股/指数列表 -->
 <div v-if="tab==='l'">
-<div class="loading" v-if="ld.l"><span class="spinner"></span><div style="margin-top:8px">加载列表中...</div></div>
+<div class="loading" v-if="ld.l"><span style="font-size:24px">⏳</span><div style="margin-top:8px">加载列表中...</div></div>
 <template v-else>
 <div class="card">
 <!-- 子标签：个股 / 指数 -->
@@ -181,13 +141,13 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 <span class="info">共 <b>{{stocks.total}}</b> 条 · 第 <b>{{stocks.page}}</b>/{{stocks.total_pages}} 页</span></div>
 <div class="stock-table">
 <el-table v-if="stocks.stocks" :data="stocks.stocks" stripe highlight-current-row size="small" @row-click="(r)=>showDetail(r.stock_code)" style="width:100%">
-<el-table-column prop="stock_code" label="代码" width="85"></el-table-column>
-<el-table-column prop="stock_name" label="名称" width="110"></el-table-column>
+<el-table-column prop="stock_code" label="代码" min-width="85"></el-table-column>
+<el-table-column prop="stock_name" label="名称" min-width="100"></el-table-column>
 <el-table-column label="交易所" width="55"><template #default="{row:s}">{{exName(s.exchange)}}</template></el-table-column>
-<el-table-column label="最新价" width="90"><template #default="{row:s}"><span style="font-weight:600">¥{{(s.price||0).toFixed(2)}}</span></template></el-table-column>
-<el-table-column label="PE" width="65"><template #default="{row:s}"><span :style="{color:s.pe_ttm>0?'var(--el-color-success)':'var(--el-color-danger)'}">{{s.pe_ttm? s.pe_ttm.toFixed(1):'-'}}</span></template></el-table-column>
+<el-table-column label="最新价" width="100" align="right"><template #default="{row:s}"><span style="font-weight:600">¥{{(s.price||0).toFixed(2)}}</span></template></el-table-column>
+<el-table-column label="PE" width="70" align="right"><template #default="{row:s}"><span :style="{color:s.pe_ttm>0?'var(--el-color-success)':'var(--el-color-danger)'}">{{s.pe_ttm? s.pe_ttm.toFixed(1):'-'}}</span></template></el-table-column>
 <el-table-column prop="industry" label="行业" min-width="100"></el-table-column>
-<el-table-column prop="data_rows" label="数据" width="60"></el-table-column>
+<el-table-column prop="data_rows" label="数据" width="65" align="right"></el-table-column>
 </el-table>
 <el-empty v-else-if="!ld.l" description="无数据"></el-empty>
 </div>
@@ -199,7 +159,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 
 <!-- 个股详情 -->
 <div v-if="tab==='d'">
-<div class="loading" v-if="ld.d"><span class="spinner"></span><div style="margin-top:8px">加载个股数据...</div></div>
+<div class="loading" v-if="ld.d"><span style="font-size:24px">⏳</span><div style="margin-top:8px">加载个股数据...</div></div>
 <template v-else>
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
 <input v-model="dcode" @keyup.enter="showDetail(dcode)" placeholder="6位代码" style="width:140px"><button class="btn" @click="showDetail(dcode)">查询</button></div>
@@ -243,7 +203,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 
 <!-- 数据状态 -->
 <div v-if="tab==='x'">
-<div class="loading" v-if="ld.x"><span class="spinner"></span><div style="margin-top:8px">加载状态数据...</div></div>
+<div class="loading" v-if="ld.x"><span style="font-size:24px">⏳</span><div style="margin-top:8px">加载状态数据...</div></div>
 <template v-else>
 <div class="summary" v-if="overview.total_stocks"><div class="si"><div class="v">{{fmt(overview.total_rows)}}</div><div class="l">行情总条数</div></div><div class="si"><div class="v">{{overview.total_stocks}}</div><div class="l">股票</div></div><div class="si"><div class="v">{{overview.latest_date||'-'}}</div><div class="l">最新数据</div></div><div class="si" style="border:1px solid var(--gold)"><div class="v go">{{missingDates.length}}</div><div class="l">漏数据日期</div></div></div>
 <!-- 今日策略运行状态 -->
@@ -277,7 +237,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-outer-s
 
 <!-- ═══ 设置 ═══ -->
 <div v-if="tab==='o'">
-<div class="loading" v-if="ld.o"><span class="spinner"></span><div style="margin-top:8px">加载设置...</div></div>
+<div class="loading" v-if="ld.o"><span style="font-size:24px">⏳</span><div style="margin-top:8px">加载设置...</div></div>
 <template v-else>
 <div class="card"><h3>🔧 系统设置</h3></div>
 <div class="card"><h3>🎯 全局交易偏好</h3>
