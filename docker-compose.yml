@@ -1,0 +1,66 @@
+services:
+  app:
+    build: .
+    container_name: stock-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    environment:
+      REDIS_URL: redis://stock-redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./web:/app/web
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - stock-net
+
+  db:
+    image: postgres:15-alpine
+    container_name: stock-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock123}
+      POSTGRES_DB: ${POSTGRES_DB:-stock_monitor}
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stock-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: stock-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stock-net
+
+  # nginx 由宿主机提供，反代到 app:8000
+  # 宿主机 nginx 配置文件见 nginx/host-nginx.conf
+
+  # certbot 由宿主机管理。首次申请证书:
+  #   certbot certonly --webroot -w /usr/local/htdoc/stone/web -d s.pmlab.top
+  # 自动续期:
+  #   echo "0 3 * * * certbot renew --quiet && systemctl reload nginx" | crontab -
+
+networks:
+  stock-net:
+    driver: bridge

@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 580" font-family="'SF Pro Display','PingFang SC','Microsoft YaHei',sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f87171"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrC" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <filter id="sh">
+      <feDropShadow dx="0" dy="1" stdDeviation="3" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="580" fill="url(#bg)" rx="8"/>
+
+  <!-- Title -->
+  <text x="550" y="32" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="700">数据采集与策略计算流程</text>
+  <text x="550" y="48" text-anchor="middle" fill="#64748b" font-size="10">Data Pipeline & Strategy Calculation Flow · v1.7</text>
+
+  <!-- ====== Step 1: Data Download ====== -->
+  <rect x="20" y="65" width="210" height="90" rx="8" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="20" y="65" width="210" height="22" rx="8" fill="#3b82f6" opacity="0.15"/>
+  <text x="125" y="82" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="700">① 数据下载 17:30</text>
+  <text x="38" y="100" fill="#94a3b8" font-size="9">• 查交易日历→非交易日静默退出</text>
+  <text x="38" y="114" fill="#94a3b8" font-size="9">• 检测缺失日期→自动补采</text>
+  <text x="38" y="128" fill="#94a3b8" font-size="9">• 三交易所下载 CSV/XLSX</text>
+  <text x="38" y="142" fill="#94a3b8" font-size="9">• 内部重试3次(30min/30min/1h)</text>
+
+  <line x1="230" y1="110" x2="270" y2="110" stroke="#60a5fa" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ====== Step 2: Parse & Clean ====== -->
+  <rect x="275" y="65" width="190" height="90" rx="8" fill="#0f172a" stroke="#60a5fa" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="275" y="65" width="190" height="22" rx="8" fill="#60a5fa" opacity="0.12"/>
+  <text x="370" y="82" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="700">② 解析与清洗</text>
+  <text x="293" y="100" fill="#94a3b8" font-size="9">• 统一字段映射 + OHLC 校验</text>
+  <text x="293" y="114" fill="#94a3b8" font-size="9">• 去重（唯一约束冲突跳过）</text>
+  <text x="293" y="128" fill="#94a3b8" font-size="9">• 除权日检测（跳空 >8%）</text>
+  <text x="293" y="142" fill="#94a3b8" font-size="9">• 异常文件备份+标记</text>
+
+  <line x1="465" y1="110" x2="505" y2="110" stroke="#34d399" stroke-width="2" marker-end="url(#arrG)"/>
+
+  <!-- ====== Step 3: DB Write ====== -->
+  <rect x="510" y="65" width="200" height="90" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="510" y="65" width="200" height="22" rx="8" fill="#34d399" opacity="0.12"/>
+  <text x="610" y="82" text-anchor="middle" fill="#34d399" font-size="11" font-weight="700">③ 入库 PostgreSQL</text>
+  <text x="528" y="100" fill="#94a3b8" font-size="9">• daily_quote 批量写入</text>
+  <text x="528" y="114" fill="#94a3b8" font-size="9">• 更新 adj_factor + close_hfq</text>
+  <text x="528" y="128" fill="#94a3b8" font-size="9">• 更新 latest_trade_date</text>
+  <text x="528" y="142" fill="#94a3b8" font-size="9">• Redis 缓存刷新</text>
+
+  <line x1="710" y1="110" x2="745" y2="110" stroke="#fbbf24" stroke-width="2" marker-end="url(#arrO)"/>
+
+  <!-- ====== Step 4: Strategy Calc ====== -->
+  <rect x="750" y="65" width="320" height="90" rx="8" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="750" y="65" width="320" height="22" rx="8" fill="#fbbf24" opacity="0.12"/>
+  <text x="910" y="82" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="700">④ 策略计算（采集成功后事件触发）</text>
+  <text x="768" y="100" fill="#94a3b8" font-size="9">• 读取全局偏好 → 调整 3 策略运行时参数</text>
+  <text x="768" y="114" fill="#94a3b8" font-size="9">• 全市场 5000 只 × 3 策略并行计算</text>
+  <text x="768" y="128" fill="#94a3b8" font-size="9">• Signal Combiner 3 路融合</text>
+  <text x="768" y="142" fill="#94a3b8" font-size="9">• 写入 signal_history + Redis 缓存</text>
+
+  <!-- Arrow from Step 4 down -->
+  <line x1="910" y1="155" x2="910" y2="188" stroke="#f87171" stroke-width="2" marker-end="url(#arrR)"/>
+
+  <!-- Signal classification -->
+  <polygon points="910,193 970,223 910,253 850,223" fill="#0f172a" stroke="#f87171" stroke-width="1.5"/>
+  <text x="910" y="223" text-anchor="middle" fill="#f87171" font-size="8" font-weight="600">信号分类</text>
+
+  <!-- Left branch: 持仓股 -->
+  <line x1="850" y1="223" x2="580" y2="223" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrP)"/>
+  <text x="715" y="216" text-anchor="middle" fill="#a78bfa" font-size="9">持仓股信号</text>
+
+  <!-- Right branch -->
+  <line x1="970" y1="223" x2="1000" y2="223" stroke="#f87171" stroke-width="2"/>
+  <line x1="1000" y1="223" x2="1000" y2="275" stroke="#f87171" stroke-width="2" marker-end="url(#arrR)"/>
+  <text x="1015" y="252" fill="#f87171" font-size="8">非持仓买入</text>
+
+  <!-- ====== Left: Portfolio Alert ====== -->
+  <rect x="310" y="178" width="270" height="125" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="310" y="178" width="270" height="22" rx="8" fill="#a78bfa" opacity="0.12"/>
+  <text x="445" y="195" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">⑤ 持仓操作提醒</text>
+  <text x="330" y="216" fill="#94a3b8" font-size="9">• 买入强+盈利 → 考虑加仓</text>
+  <text x="330" y="230" fill="#94a3b8" font-size="9">• 卖出中/强+盈利 → 减仓/清仓</text>
+  <text x="330" y="244" fill="#94a3b8" font-size="9">• 卖出强+亏损 → 紧急止损</text>
+  <text x="330" y="258" fill="#94a3b8" font-size="9">• 多空分歧 → 关注不操作</text>
+  <text x="330" y="272" fill="#94a3b8" font-size="9">• 生成飞书交互卡片</text>
+  <text x="330" y="290" fill="#64748b" font-size="8">策略计算完成后立即推送（降级见 4.4.4）</text>
+
+  <!-- ====== Right: Market Scan ====== -->
+  <rect x="810" y="275" width="260" height="105" rx="8" fill="#0f172a" stroke="#f87171" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="810" y="275" width="260" height="22" rx="8" fill="#f87171" opacity="0.12"/>
+  <text x="940" y="292" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">⑥ 全市场买点扫描</text>
+  <text x="828" y="312" fill="#94a3b8" font-size="9">• 排除 ST/次新/停牌</text>
+  <text x="828" y="326" fill="#94a3b8" font-size="9">• 按信号强度降序排列</text>
+  <text x="828" y="340" fill="#94a3b8" font-size="9">• Top 20 推送</text>
+  <text x="828" y="354" fill="#94a3b8" font-size="9">• 含策略来源+建议操作</text>
+  <text x="828" y="370" fill="#64748b" font-size="8">策略计算完成后立即推送</text>
+
+  <!-- Arrows from alerts to output -->
+  <line x1="445" y1="303" x2="445" y2="345" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="940" y1="380" x2="940" y2="415" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ====== Feishu Push ====== -->
+  <rect x="180" y="350" width="320" height="75" rx="8" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="340" y="372" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="600">💬 飞书 Bot 推送</text>
+  <text x="340" y="390" text-anchor="middle" fill="#94a3b8" font-size="9">持仓提醒 · 买点扫描 · 告警 · 交互卡片</text>
+  <text x="340" y="406" text-anchor="middle" fill="#64748b" font-size="8">→ 用户也可主动发自然语言消息 ←</text>
+  <text x="340" y="420" text-anchor="middle" fill="#64748b" font-size="8">FastAPI → 动态上下文 → DeepSeek → Function Calling</text>
+
+  <!-- ====== Web update ====== -->
+  <rect x="580" y="415" width="300" height="55" rx="8" fill="#0f172a" stroke="#8b5cf6" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="730" y="437" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="600">🖥️ Web 界面数据更新</text>
+  <text x="730" y="455" text-anchor="middle" fill="#64748b" font-size="9">FastAPI 读取 signal_history · 静态页面数据刷新</text>
+
+  <!-- Arrow from Feishu to Web -->
+  <line x1="500" y1="387" x2="580" y2="442" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- ====== Weekly Summary ====== -->
+  <rect x="30" y="445" width="220" height="55" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="140" y="467" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">📅 周五 19:00 周度总结</text>
+  <text x="140" y="485" text-anchor="middle" fill="#64748b" font-size="9">周线信号 · 下周展望 · 持仓周报</text>
+
+  <!-- ====== Error flow ====== -->
+  <rect x="30" y="188" width="255" height="118" rx="8" fill="#0f172a" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" filter="url(#sh)"/>
+  <text x="157" y="208" text-anchor="middle" fill="#ef4444" font-size="10" font-weight="600">⚠️ 异常处理</text>
+  <text x="48" y="226" fill="#94a3b8" font-size="9">• 采集失败 → 脚本内重试3次</text>
+  <text x="48" y="240" fill="#94a3b8" font-size="9">• 全部失败 → 飞书告警+记录 DB</text>
+  <text x="48" y="254" fill="#94a3b8" font-size="9">• 宕机恢复 → catch_up.py 自动补采</text>
+  <text x="48" y="268" fill="#94a3b8" font-size="9">• 解析异常 → 原文件备份+标记复核</text>
+  <text x="48" y="282" fill="#94a3b8" font-size="9">• 网站改版 → 适配层隔离+人工上传</text>
+  <text x="48" y="296" fill="#94a3b8" font-size="9">• 21:00后策略未完成 → 次日09:00补推</text>
+
+  <!-- Error arrow from Step 1 -->
+  <line x1="125" y1="155" x2="125" y2="188" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- ====== DeepSeek interaction box ====== -->
+  <rect x="590" y="350" width="500" height="55" rx="8" fill="#0f172a" stroke="#06b6d4" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="590" y="350" width="500" height="18" rx="8" fill="#06b6d4" opacity="0.08"/>
+  <text x="840" y="366" text-anchor="middle" fill="#22d3ee" font-size="10" font-weight="600">🤖 飞书自然语言消息处理（用户主动发起）</text>
+  <text x="840" y="382" text-anchor="middle" fill="#94a3b8" font-size="9">FastAPI 接收消息 → build_system_context() 注入持仓/信号/状态 → DeepSeek API</text>
+  <text x="840" y="396" text-anchor="middle" fill="#94a3b8" font-size="9">→ Function Calling → Python 执行 → 查询即时返回 / 写入确认卡片 → 飞书回复</text>
+
+  <!-- ====== Legend ====== -->
+  <rect x="30" y="515" width="1040" height="50" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+  <text x="50" y="537" fill="#64748b" font-size="9">图例：</text>
+  <rect x="85" y="524" width="12" height="12" rx="2" fill="#3b82f6" opacity="0.5"/><text x="102" y="537" fill="#94a3b8" font-size="9">数据流</text>
+  <rect x="155" y="524" width="12" height="12" rx="2" fill="#34d399" opacity="0.5"/><text x="172" y="537" fill="#94a3b8" font-size="9">存储</text>
+  <rect x="215" y="524" width="12" height="12" rx="2" fill="#fbbf24" opacity="0.5"/><text x="232" y="537" fill="#94a3b8" font-size="9">计算</text>
+  <rect x="280" y="524" width="12" height="12" rx="2" fill="#a78bfa" opacity="0.5"/><text x="297" y="537" fill="#94a3b8" font-size="9">持仓</text>
+  <rect x="340" y="524" width="12" height="12" rx="2" fill="#f87171" opacity="0.5"/><text x="357" y="537" fill="#94a3b8" font-size="9">推送</text>
+  <rect x="410" y="524" width="12" height="12" rx="2" fill="#22d3ee" opacity="0.5"/><text x="428" y="537" fill="#94a3b8" font-size="9">AI 交互</text>
+  <rect x="490" y="524" width="12" height="12" rx="2" fill="none" stroke="#ef4444" stroke-dasharray="3,2"/><text x="508" y="537" fill="#94a3b8" font-size="9">异常路径</text>
+
+  <!-- Bottom legend notes -->
+  <text x="50" y="550" fill="#475569" font-size="8">脚本内重试: 30min/30min/1h 共3次 · 补采上限: 10天(超出告警) · 推送降级: 18:30正常 18:30-21:00延迟 21:00+→次日09:00 · DeepSeek写入强制确认卡片 · DeepSeek不可用时回复快捷指令菜单</text>
+
+  <text x="1050" y="550" text-anchor="end" fill="#475569" font-size="9">v1.7 · 2026-06-06</text>
+</svg>

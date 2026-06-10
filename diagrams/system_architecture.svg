@@ -1,0 +1,256 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="'SF Pro Display','PingFang SC','Microsoft YaHei',sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e293b"/>
+      <stop offset="100%" style="stop-color:#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#6366f1"/>
+    </linearGradient>
+    <linearGradient id="accentGreen" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#34d399"/>
+    </linearGradient>
+    <linearGradient id="accentOrange" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#fbbf24"/>
+    </linearGradient>
+    <linearGradient id="accentPurple" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="accentRed" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#ef4444"/>
+      <stop offset="100%" style="stop-color:#f87171"/>
+    </linearGradient>
+    <linearGradient id="accentCyan" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#22d3ee"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f87171"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="720" fill="url(#bgGrad)" rx="8"/>
+
+  <!-- Title -->
+  <text x="600" y="36" text-anchor="middle" fill="#f1f5f9" font-size="18" font-weight="700">个股买卖点监测系统 · 系统架构图</text>
+  <text x="600" y="54" text-anchor="middle" fill="#64748b" font-size="11">System Architecture · v1.7</text>
+
+  <!-- ==================== Data Sources Layer ==================== -->
+  <rect x="30" y="70" width="1140" height="68" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
+  <text x="50" y="92" fill="#94a3b8" font-size="10" font-weight="600" letter-spacing="1">DATA SOURCES · 数据源层</text>
+
+  <!-- SSE -->
+  <rect x="120" y="98" width="200" height="32" rx="6" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="220" y="112" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="600">上交所 SSE</text>
+  <text x="220" y="126" text-anchor="middle" fill="#64748b" font-size="8">www.sse.com.cn</text>
+
+  <!-- SZSE -->
+  <rect x="380" y="98" width="200" height="32" rx="6" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="480" y="112" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="600">深交所 SZSE</text>
+  <text x="480" y="126" text-anchor="middle" fill="#64748b" font-size="8">www.szse.cn</text>
+
+  <!-- BSE -->
+  <rect x="640" y="98" width="200" height="32" rx="6" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="740" y="112" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="600">北交所 BSE</text>
+  <text x="740" y="126" text-anchor="middle" fill="#64748b" font-size="8">www.bse.cn</text>
+
+  <!-- CSI -->
+  <rect x="900" y="98" width="200" height="32" rx="6" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="1000" y="112" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="600">中证指数 CSI</text>
+  <text x="1000" y="126" text-anchor="middle" fill="#64748b" font-size="8">www.csindex.com.cn</text>
+
+  <!-- Arrows from data sources down -->
+  <line x1="220" y1="130" x2="220" y2="163" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowBlue)"/>
+  <line x1="480" y1="130" x2="480" y2="163" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowBlue)"/>
+  <line x1="740" y1="130" x2="740" y2="163" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowBlue)"/>
+  <line x1="1000" y1="130" x2="1000" y2="163" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowBlue)"/>
+
+  <!-- ==================== Application Layer ==================== -->
+  <rect x="30" y="163" width="1140" height="240" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
+  <text x="50" y="185" fill="#94a3b8" font-size="10" font-weight="600" letter-spacing="1">APPLICATION LAYER · 应用层（ECS / CentOS 服务器 · Python 3.11）</text>
+
+  <!-- Data Crawler -->
+  <rect x="55" y="198" width="220" height="90" rx="8" fill="#0f172a" stroke="url(#accentGreen)" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="55" y="198" width="220" height="24" rx="8" fill="url(#accentGreen)" opacity="0.15"/>
+  <text x="165" y="216" text-anchor="middle" fill="#34d399" font-size="12" font-weight="700">🕷️ Data Crawler</text>
+  <text x="165" y="235" text-anchor="middle" fill="#94a3b8" font-size="10">数据采集层 (cron 17:30)</text>
+  <text x="75" y="254" fill="#64748b" font-size="9">• 每日行情下载 + 内部重试</text>
+  <text x="75" y="267" fill="#64748b" font-size="9">• 交易日历管理 · 宕机补采(≤10天)</text>
+  <text x="75" y="280" fill="#64748b" font-size="9">• 行业指数 + 行业分类</text>
+
+  <!-- Arrow Crawler → Strategy -->
+  <line x1="275" y1="243" x2="310" y2="243" stroke="#34d399" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <text x="293" y="237" text-anchor="middle" fill="#34d399" font-size="8">数据</text>
+
+  <!-- Strategy Engine -->
+  <rect x="315" y="198" width="240" height="90" rx="8" fill="#0f172a" stroke="url(#accentOrange)" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="315" y="198" width="240" height="24" rx="8" fill="url(#accentOrange)" opacity="0.15"/>
+  <text x="435" y="216" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="700">⚙️ Strategy Engine</text>
+  <text x="435" y="235" text-anchor="middle" fill="#94a3b8" font-size="10">策略引擎（采集成功后事件触发）</text>
+  <text x="335" y="254" fill="#64748b" font-size="9">• 全局偏好修饰 · 日布林线</text>
+  <text x="335" y="267" fill="#64748b" font-size="9">• 量价背离(日/周/月) · 周趋势</text>
+  <text x="335" y="280" fill="#64748b" font-size="9">• Signal Combiner 3 路融合</text>
+
+  <!-- Arrow Strategy → Portfolio -->
+  <line x1="555" y1="243" x2="590" y2="243" stroke="#fbbf24" stroke-width="2" marker-end="url(#arrowOrange)"/>
+  <text x="573" y="237" text-anchor="middle" fill="#fbbf24" font-size="8">信号</text>
+
+  <!-- Portfolio Manager -->
+  <rect x="595" y="198" width="210" height="90" rx="8" fill="#0f172a" stroke="url(#accentPurple)" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="595" y="198" width="210" height="24" rx="8" fill="url(#accentPurple)" opacity="0.15"/>
+  <text x="700" y="216" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="700">💼 Portfolio Mgr</text>
+  <text x="700" y="235" text-anchor="middle" fill="#94a3b8" font-size="10">持仓管理</text>
+  <text x="615" y="254" fill="#64748b" font-size="9">• 持仓 CRUD + 成本管理</text>
+  <text x="615" y="267" fill="#64748b" font-size="9">• 盈亏计算 · 操作提醒</text>
+  <text x="615" y="280" fill="#64748b" font-size="9">• 加仓/减仓/清仓建议</text>
+
+  <!-- Arrow Portfolio → FastAPI -->
+  <line x1="700" y1="288" x2="700" y2="320" stroke="#06b6d4" stroke-width="2" marker-end="url(#arrowCyan)"/>
+
+  <!-- FastAPI + Nginx + AI -->
+  <rect x="825" y="198" width="320" height="112" rx="8" fill="#0f172a" stroke="url(#accentCyan)" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="825" y="198" width="320" height="24" rx="8" fill="url(#accentCyan)" opacity="0.15"/>
+  <text x="985" y="216" text-anchor="middle" fill="#22d3ee" font-size="12" font-weight="700">🌐 FastAPI + AI Gateway</text>
+  <text x="985" y="235" text-anchor="middle" fill="#94a3b8" font-size="10">飞书交互 + Web API + DeepSeek 调用</text>
+  <text x="845" y="254" fill="#64748b" font-size="9">• /webhook/feishu → 动态上下文 → DeepSeek</text>
+  <text x="845" y="267" fill="#64748b" font-size="9">• Function Calling → Python 执行 → 飞书回复</text>
+  <text x="845" y="280" fill="#64748b" font-size="9">• REST API (/api/*) → Vue 3 静态前端</text>
+  <text x="845" y="293" fill="#64748b" font-size="9">• 写入操作强制确认卡片机制</text>
+  <text x="845" y="306" fill="#475569" font-size="8">Nginx :443 → proxy → FastAPI :8000</text>
+
+  <!-- ==================== Database & Infra Row ==================== -->
+  <!-- PostgreSQL -->
+  <rect x="55" y="318" width="320" height="72" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="55" y="318" width="320" height="24" rx="8" fill="#475569" opacity="0.2"/>
+  <text x="215" y="336" text-anchor="middle" fill="#cbd5e1" font-size="12" font-weight="700">🐘 PostgreSQL 15</text>
+  <text x="75" y="356" fill="#64748b" font-size="9">• daily_quote（含 close_hfq/close_qfq）· index_daily_quote · trade_calendar</text>
+  <text x="75" y="370" fill="#64748b" font-size="9">• portfolio · portfolio_history · signal_history · corporate_actions</text>
+  <text x="75" y="384" fill="#64748b" font-size="9">• strategy_config · strategy_param_log · stock_industry · system_metrics</text>
+
+  <!-- Redis -->
+  <rect x="400" y="318" width="165" height="72" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="400" y="318" width="165" height="24" rx="8" fill="#475569" opacity="0.2"/>
+  <text x="482" y="336" text-anchor="middle" fill="#cbd5e1" font-size="12" font-weight="700">⚡ Redis 7</text>
+  <text x="420" y="356" fill="#64748b" font-size="9">• 交易日历缓存</text>
+  <text x="420" y="370" fill="#64748b" font-size="9">• 对话历史 (7天,30轮+摘要)</text>
+  <text x="420" y="384" fill="#64748b" font-size="9">• 推送去重 · 限频计数</text>
+
+  <!-- Cron -->
+  <rect x="590" y="318" width="215" height="72" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="590" y="318" width="215" height="24" rx="8" fill="#475569" opacity="0.2"/>
+  <text x="697" y="336" text-anchor="middle" fill="#cbd5e1" font-size="12" font-weight="700">⏰ Cron Scheduler</text>
+  <text x="610" y="356" fill="#64748b" font-size="9">• 17:30 数据采集（脚本内含重试）</text>
+  <text x="610" y="370" fill="#64748b" font-size="9">• 每小时健康检查</text>
+  <text x="610" y="384" fill="#64748b" font-size="9">• 每周日 DB 全量备份</text>
+
+  <!-- Arrows between DB/Infra row and App layer -->
+  <line x1="215" y1="318" x2="165" y2="288" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="215" y1="318" x2="435" y2="288" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="697" y1="318" x2="700" y2="288" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="985" y1="310" x2="985" y2="310" stroke="#475569" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- ==================== AI Service (External) ==================== -->
+  <rect x="40" y="410" width="1140" height="70" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
+  <text x="60" y="432" fill="#94a3b8" font-size="10" font-weight="600" letter-spacing="1">AI SERVICE · 外部 AI 服务（云端）</text>
+
+  <!-- DeepSeek -->
+  <rect x="400" y="440" width="380" height="32" rx="6" fill="#0f172a" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="590" y="460" text-anchor="middle" fill="#22d3ee" font-size="12" font-weight="600">🤖 DeepSeek API（deepseek-chat）</text>
+  <text x="590" y="472" text-anchor="middle" fill="#64748b" font-size="9">自然语言理解 · Function Calling · 国内直连低延迟 · ￥0.001/千tokens</text>
+
+  <!-- Arrow from FastAPI to DeepSeek -->
+  <line x1="985" y1="310" x2="985" y2="440" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowCyan)"/>
+  <text x="1000" y="380" fill="#22d3ee" font-size="8">API 调用</text>
+  <text x="1000" y="392" fill="#22d3ee" font-size="8">(带动态上下文)</text>
+
+  <!-- ==================== Output Layer ==================== -->
+  <rect x="40" y="495" width="1140" height="70" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
+  <text x="60" y="517" fill="#94a3b8" font-size="10" font-weight="600" letter-spacing="1">OUTPUT CHANNELS · 输出通道</text>
+
+  <!-- Feishu Bot -->
+  <rect x="150" y="525" width="400" height="32" rx="6" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="350" y="545" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="600">💬 飞书 Bot（自然语言对话 + 推送）</text>
+  <text x="350" y="555" text-anchor="middle" fill="#64748b" font-size="8">持仓提醒 · 买点扫描 · 策略配置 · 确认卡片 · 上下文对话</text>
+
+  <!-- Web Interface -->
+  <rect x="630" y="525" width="400" height="32" rx="6" fill="#0f172a" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="830" y="545" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="600">🖥️ Web 界面（只读看板）</text>
+  <text x="830" y="555" text-anchor="middle" fill="#64748b" font-size="8">持仓看板 · 买点清单 · K线详情 · 数据状态</text>
+
+  <!-- Arrows from FastAPI to Output -->
+  <line x1="350" y1="525" x2="350" y2="422" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="830" y1="525" x2="830" y2="422" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3"/>
+
+  <!-- ==================== Security & Infra Layer ==================== -->
+  <rect x="40" y="580" width="1140" height="125" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" filter="url(#shadow)"/>
+  <text x="60" y="602" fill="#94a3b8" font-size="10" font-weight="600" letter-spacing="1">INFRASTRUCTURE & SECURITY · 基础设施与安全层</text>
+
+  <!-- VPC -->
+  <rect x="55" y="614" width="200" height="78" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+  <text x="155" y="634" text-anchor="middle" fill="#cbd5e1" font-size="11" font-weight="600">🔒 VPC 网络</text>
+  <text x="75" y="652" fill="#64748b" font-size="9">• 安全组白名单</text>
+  <text x="75" y="666" fill="#64748b" font-size="9">• 仅放飞书回调 + SSH</text>
+  <text x="75" y="680" fill="#64748b" font-size="9">• Web 界面可选 IP 白名单</text>
+
+  <!-- SSL/TLS -->
+  <rect x="280" y="614" width="200" height="78" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+  <text x="380" y="634" text-anchor="middle" fill="#cbd5e1" font-size="11" font-weight="600">🔐 传输安全</text>
+  <text x="300" y="652" fill="#64748b" font-size="9">• 全程 HTTPS (TLS 1.3)</text>
+  <text x="300" y="666" fill="#64748b" font-size="9">• Let's Encrypt 自动续期</text>
+  <text x="300" y="680" fill="#64748b" font-size="9">• DeepSeek API 走 TLS</text>
+
+  <!-- Auth -->
+  <rect x="505" y="614" width="200" height="78" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+  <text x="605" y="634" text-anchor="middle" fill="#cbd5e1" font-size="11" font-weight="600">👤 身份认证</text>
+  <text x="525" y="652" fill="#64748b" font-size="9">• 飞书 Bot 单用户绑定</text>
+  <text x="525" y="666" fill="#64748b" font-size="9">• Web: OAuth / Basic Auth</text>
+  <text x="525" y="680" fill="#64748b" font-size="9">• 写入操作确认卡片确认</text>
+
+  <!-- Backup -->
+  <rect x="730" y="614" width="200" height="78" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+  <text x="830" y="634" text-anchor="middle" fill="#cbd5e1" font-size="11" font-weight="600">💾 备份与恢复</text>
+  <text x="750" y="652" fill="#64748b" font-size="9">• 数据盘每日自动快照</text>
+  <text x="750" y="666" fill="#64748b" font-size="9">• pg_dump 周全量备份</text>
+  <text x="750" y="680" fill="#64748b" font-size="9">• 宕机自动补采(≤10天)+告警</text>
+
+  <!-- Monitoring -->
+  <rect x="955" y="614" width="200" height="78" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+  <text x="1055" y="634" text-anchor="middle" fill="#cbd5e1" font-size="11" font-weight="600">📊 监控与告警</text>
+  <text x="975" y="652" fill="#64748b" font-size="9">• 采集失败率监控</text>
+  <text x="975" y="666" fill="#64748b" font-size="9">• 磁盘/CPU/内存阈值告警</text>
+  <text x="975" y="680" fill="#64748b" font-size="9">• 飞书推送异常告警</text>
+
+  <!-- Version label -->
+  <text x="1160" y="710" text-anchor="end" fill="#475569" font-size="9">v1.7 · 2026-06-06</text>
+</svg>

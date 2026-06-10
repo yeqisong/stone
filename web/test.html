@@ -1,0 +1,23 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Test</title>
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/axios@1.7.9/dist/axios.min.js"></script>
+<script src="https://unpkg.com/echarts@5.5.1/dist/echarts.min.js"></script>
+</head>
+<body><div id="app">
+<p>{{msg}}</p>
+<p v-if="data">{{data.count}}只</p>
+<table><tr v-for="s in list"><td>{{s.code}}</td><td>{{s.name}}</td><td :class="s.pe>0?'g':'r'">{{s.pe? s.pe.toFixed(1):'-'}}</td></tr></table>
+<p v-for="(v,k) in map">{{k}}:{{v}}</p>
+</div>
+<script>
+const{createApp,ref,reactive,onMounted}=Vue;
+createApp({setup(){
+const msg=ref('hello vue3');
+const data=ref(null);
+const list=reactive([{code:'300274',name:'阳光电源',pe:26.7},{code:'000001',name:'平安银行',pe:null}]);
+const map=reactive({SSE:'上交所',SZSE:'深交所'});
+onMounted(async()=>{try{data.value=(await axios.get(window.location.origin+'/api/portfolio')).data}catch(e){}});
+return{msg,data,list,map}
+}}).mount('#app');
+</script></body></html>
