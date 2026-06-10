@@ -26,7 +26,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px}
 .si{background:var(--el-bg-color-overlay);border:1px solid var(--el-border-color-light);border-radius:8px;padding:12px;text-align:center}
 .si .v{font-size:24px;font-weight:700}.si .l{font-size:10px;color:var(--el-text-color-secondary)}
-.g{color:var(--el-color-success)}.r{color:var(--el-color-danger)}
+.g{color:var(--el-color-danger)}.r{color:var(--el-color-success)}
 .stars{color:var(--gold)}
 .stock-table{margin-top:8px}
 .search-box{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:14px 16px;background:var(--el-bg-color-overlay);border:1px solid var(--el-border-color-light);border-radius:10px}
@@ -42,9 +42,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 /* ── 日历网格（保留手写） ── */
 .cal-cell{cursor:pointer;transition:all .12s}.cal-cell:hover{filter:brightness(1.15)}
 .cal-syncing{animation:pulse 1s infinite}@keyframes pulse{0%{opacity:1}50%{opacity:0.5}100%{opacity:1}}
-.act-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;font-size:14px;background:transparent;color:var(--el-text-color-secondary);transition:all .12s}
-.act-btn:hover{background:var(--el-fill-color-light);color:var(--el-color-primary)}
-.act-btn.act-del:hover{color:var(--el-color-danger);background:var(--el-color-danger-light-9)}
+
 </style>
 </head>
 <body>
@@ -77,24 +75,36 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </div></div>
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
 <div class="card"><h3>持仓明细</h3>
-<el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe size="small" style="width:100%">
-<el-table-column label="代码" min-width="85"><template #default="{row:p}"><a style="color:var(--el-color-primary);cursor:pointer;text-decoration:none" @click="showDetail(p.stock_code)">{{p.stock_code}}</a></template></el-table-column>
-<el-table-column label="名称" min-width="100"><template #default="{row:p}"><a style="cursor:pointer" @click="showDetail(p.stock_code)">{{p.stock_name}}</a></template></el-table-column>
-<el-table-column prop="quantity" label="数量" width="70" align="right"></el-table-column>
-<el-table-column label="成本" width="95" align="right"><template #default="{row:p}">¥{{(p.cost_price||0).toFixed(2)}}</template></el-table-column>
-<el-table-column label="现价" width="95" align="right"><template #default="{row:p}">¥{{(p.current_price||0).toFixed(2)}}</template></el-table-column>
-<el-table-column label="市值" width="105" align="right"><template #default="{row:p}">¥{{fmt(p.market_value)}}</template></el-table-column>
-<el-table-column label="盈亏" min-width="120" align="right"><template #default="{row:p}"><span :style="{color:p.pnl>=0?'var(--el-color-success)':'var(--el-color-danger)'}">¥{{fmt(p.pnl)}} ({{(p.pnl_pct||0)>=0?'+':''}}{{(p.pnl_pct||0).toFixed(1)}}%)</span></template></el-table-column>
-<el-table-column prop="notes" label="备注" min-width="80">
-<template #default="{row:p}"><span style="font-size:11px;color:var(--el-text-color-secondary)">{{p.notes||''}}</span></template>
-</el-table-column>
-<el-table-column label="操作" width="65" fixed="right">
-<template #default="{row:p}">
-<button class="act-btn" @click="startEditPos(p)" title="编辑">✎</button>
-<button class="act-btn act-del" @click="delPosition(p.stock_code)" title="删除">✕</button>
-</template>
-</el-table-column>
-</el-table>
+<div v-if="ptf.positions&&ptf.positions.length" style="overflow-x:auto">
+<table style="width:100%;border-collapse:collapse;font-size:12px">
+<thead><tr style="color:var(--el-text-color-secondary);font-size:11px">
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:left">代码</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:left">名称</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">数量</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">成本</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">现价</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">市值</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">盈亏</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:left">备注</th>
+<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:center">操作</th>
+</tr></thead>
+<tbody>
+<tr v-for="p in ptf.positions" style="border-bottom:1px solid var(--el-border-color-lighter)">
+<td style="padding:6px 8px"><span style="color:var(--el-color-primary);cursor:pointer" @click="showDetail(p.stock_code)">{{p.stock_code}}</span></td>
+<td style="padding:6px 8px"><span style="cursor:pointer" @click="showDetail(p.stock_code)">{{p.stock_name}}</span></td>
+<td style="padding:6px 8px;text-align:right">{{p.quantity}}</td>
+<td style="padding:6px 8px;text-align:right">¥{{(p.cost_price||0).toFixed(2)}}</td>
+<td style="padding:6px 8px;text-align:right">¥{{(p.current_price||0).toFixed(2)}}</td>
+<td style="padding:6px 8px;text-align:right">¥{{fmt(p.market_value)}}</td>
+<td style="padding:6px 8px;text-align:right"><span :style="{color:p.pnl>=0?'var(--el-color-danger)':'var(--el-color-success)'}">¥{{fmt(p.pnl)}} ({{(p.pnl_pct||0)>=0?'+':''}}{{(p.pnl_pct||0).toFixed(1)}}%)</span></td>
+<td style="padding:6px 8px;font-size:11px;color:var(--el-text-color-secondary)">{{p.notes||''}}</td>
+<td style="padding:6px 8px;text-align:center;white-space:nowrap">
+<span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;background:var(--el-fill-color-lighter)" @click="startEditPos(p)" title="编辑">✎</span>
+<span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;color:var(--el-color-danger);background:var(--el-color-danger-light-9)" @click="delPosition(p.stock_code)" title="删除">✕</span>
+</td>
+</tr>
+</tbody>
+</table></div>
 <el-empty v-else-if="!ld.p" description="暂无持仓"></el-empty>
 </tr></tbody></table><div v-else style="color:var(--el-text-color-secondary);padding:20px;text-align:center">暂无持仓，点击上方"+ 新增持仓"添加</div>
 <div class="error-state" v-if="ldErr.p"><div class="msg">{{ldErr.p}}</div></div>
