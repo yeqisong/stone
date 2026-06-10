@@ -93,7 +93,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </el-table-column>
 </el-table>
 <el-empty v-else-if="!ld.p" description="暂无持仓"></el-empty>
-</tr></tbody></table><div v-else style="color:var(--dim);padding:20px;text-align:center">暂无持仓，点击上方"+ 新增持仓"添加</div>
+</tr></tbody></table><div v-else style="color:var(--el-text-color-secondary);padding:20px;text-align:center">暂无持仓，点击上方"+ 新增持仓"添加</div>
 <div class="error-state" v-if="ldErr.p"><div class="msg">{{ldErr.p}}</div></div>
 </div></template></div>
 
@@ -165,16 +165,23 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <el-input v-model="dcode" @keyup.enter="showDetail(dcode)" placeholder="6位代码" style="width:150px" size="default" clearable><template #append><el-button @click="showDetail(dcode)">查询</el-button></template></el-input></div>
 <div v-if="detail">
 <div class="summary"><div class="si"><div class="v">{{detail.stock_name}}</div><div class="l">{{detail.stock_code}}</div></div><div class="si"><div class="v">¥{{(detail.close||0).toFixed(2)}}</div><div class="l">最新价</div></div><div class="si"><div class="v">{{detail.latest_trade_date}}</div><div class="l">数据日期</div></div><div class="si"><div class="v">{{hcnt}}</div><div class="l">历史信号</div></div></div>
-<div class="card" style="border-left:3px solid var(--gold)"><h3>🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h3>
-<div v-if="detail.latest_signals" style="display:flex;gap:8px;flex-wrap:wrap">
-<div v-for="s in detail.latest_signals" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:200px;font-size:12px" :style="{borderLeft: s.combined_signal?'2px solid var(--gold)':'1px solid var(--border)'}">
-<div><span class="sb" :class="s.direction">{{dirName(s.direction)}}</span> <span class="stars">{{stars(s.strength)}}</span></div>
-<div style="color:var(--dim);font-size:11px;margin-top:2px">{{s.reason}}</div></div></div><div v-else style="color:var(--dim)">暂无信号</div></div>
-<!-- 70/30布局 -->
-<div style="display:flex;gap:12px">
-<div style="flex:0 0 68%;min-width:0">
-<div class="card"><h3>📈 K线图 + 布林带 <span style="font-size:11px;color:var(--dim);font-weight:400;margin-left:12px">{{dateRange}}</span>
-<el-select v-model="adj" @change="reloadChart" size="small" style="width:110px;margin-left:12px">
+<div class="card" style="border-left:3px solid var(--gold);min-height:60px"><h3>🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h3>
+<div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:10px;flex-wrap:wrap">
+<div v-for="s in detail.latest_signals" style="flex:1;min-width:220px">
+<el-card shadow="never" :style="{borderLeft: s.combined_signal?'3px solid var(--gold)':'1px solid var(--el-border-color-light)'}" body-style="padding:12px 14px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+<el-tag :type="s.direction==='buy'?'danger':s.direction==='sell'?'success':'info'" size="small" effect="dark">{{dirName(s.direction)}}</el-tag>
+<span v-if="s.combined_signal" style="color:var(--gold);font-size:13px;font-weight:600">★{{s.strength}} 融合信号</span>
+<span v-else style="color:var(--el-color-warning);font-size:12px">{{stars(s.strength)}}</span>
+</div>
+<div style="font-size:12px;color:var(--el-text-color-regular);line-height:1.5">{{s.reason}}</div>
+</el-card></div></div>
+<el-empty v-else description="暂无信号" :image-size="60"></el-empty></div>
+<!-- 左右布局 -->
+<div style="display:flex;gap:12px;flex-wrap:wrap">
+<div style="flex:1;min-width:400px">
+<div class="card"><h3>📈 K线图 <span style="font-size:11px;color:var(--el-text-color-secondary);font-weight:400;margin-left:8px">{{dateRange}}</span>
+<el-select v-model="adj" @change="reloadChart" size="small" style="width:105px;margin-left:8px">
 <el-option value="none" label="不复权"></el-option>
 <el-option value="qfq" label="前复权"></el-option>
 <el-option value="hfq" label="后复权"></el-option>
@@ -184,21 +191,33 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <div class="card"><h3>📉 MACD</h3><div id="c3" style="width:100%;height:180px"></div></div>
 <div class="card"><h3>📐 RSI</h3><div id="c4" style="width:100%;height:180px"></div></div>
 </div>
-<div style="flex:0 0 30%">
-<div class="card"><h3>🏢 基本面</h3>
-<table v-if="detail.fundamentals&&detail.fundamentals.industry"><tr><td style="color:var(--dim)">行业</td><td>{{detail.fundamentals.industry||'-'}}</td></tr>
-<tr><td style="color:var(--dim)">PE(TTM)</td><td :class="detail.fundamentals.pe_ttm>0?(detail.fundamentals.pe_ttm<30?'g':'go'):'r'">{{detail.fundamentals.pe_ttm?detail.fundamentals.pe_ttm.toFixed(1):'-'}}</td></tr>
-<tr><td style="color:var(--dim)">PB</td><td>{{detail.fundamentals.pb_mrq?detail.fundamentals.pb_mrq.toFixed(2):'-'}}</td></tr>
-<tr><td style="color:var(--dim)">ROE</td><td :class="detail.fundamentals.roe>15?'g':detail.fundamentals.roe>5?'go':'r'">{{detail.fundamentals.roe?detail.fundamentals.roe.toFixed(1)+'%':'-'}}</td></tr>
-<tr><td style="color:var(--dim)">营收同比</td><td :class="detail.fundamentals.revenue_yoy>0?'g':'r'">{{detail.fundamentals.revenue_yoy!=null?detail.fundamentals.revenue_yoy.toFixed(1)+'%':'-'}}</td></tr>
-<tr><td style="color:var(--dim)">净利同比</td><td :class="detail.fundamentals.profit_yoy>0?'g':'r'">{{detail.fundamentals.profit_yoy!=null?detail.fundamentals.profit_yoy.toFixed(1)+'%':'-'}}</td></tr></table>
-<div v-else style="color:var(--dim);padding:8px;font-size:12px">暂无基本面数据<br>后台下载中...</div></div>
-<div class="card"><h3>📊 行情概览</h3>
-<table><tr><td style="color:var(--dim)">最新价</td><td style="font-weight:600">¥{{(detail.close||0).toFixed(2)}}</td></tr>
-<tr><td style="color:var(--dim)">后复权价</td><td>¥{{detail.close_hfq?detail.close_hfq.toFixed(2):'-'}}</td></tr>
-<tr><td style="color:var(--dim)">成交量</td><td>{{fmt(detail.volume)}}股</td></tr>
-<tr><td style="color:var(--dim)">换手率</td><td>{{detail.turnover?detail.turnover.toFixed(2):'-'}}%</td></tr>
-<tr><td style="color:var(--dim)">数据日期</td><td>{{detail.latest_trade_date}}</td></tr></table></div>
+<div style="width:320px;flex-shrink:0;display:flex;flex-direction:column;gap:12px">
+<div class="card" style="margin-bottom:0"><h3>🏢 基本面</h3>
+<el-descriptions v-if="detail.fundamentals&&detail.fundamentals.industry" :column="1" border size="small" label-width="85px">
+<el-descriptions-item label="行业">{{detail.fundamentals.industry||'-'}}</el-descriptions-item>
+<el-descriptions-item label="PE(TTM)">
+<el-tag :type="detail.fundamentals.pe_ttm>0?(detail.fundamentals.pe_ttm<30?'success':'warning'):'danger'" size="small" effect="plain">{{detail.fundamentals.pe_ttm?detail.fundamentals.pe_ttm.toFixed(1):'-'}}</el-tag>
+</el-descriptions-item>
+<el-descriptions-item label="PB">{{detail.fundamentals.pb_mrq?detail.fundamentals.pb_mrq.toFixed(2):'-'}}</el-descriptions-item>
+<el-descriptions-item label="ROE">
+<el-tag :type="detail.fundamentals.roe>15?'success':detail.fundamentals.roe>5?'warning':'danger'" size="small" effect="plain">{{detail.fundamentals.roe?detail.fundamentals.roe.toFixed(1)+'%':'-'}}</el-tag>
+</el-descriptions-item>
+<el-descriptions-item label="营收同比">
+<el-tag :type="detail.fundamentals.revenue_yoy>0?'success':'danger'" size="small" effect="plain">{{detail.fundamentals.revenue_yoy!=null?detail.fundamentals.revenue_yoy.toFixed(1)+'%':'-'}}</el-tag>
+</el-descriptions-item>
+<el-descriptions-item label="净利同比">
+<el-tag :type="detail.fundamentals.profit_yoy>0?'success':'danger'" size="small" effect="plain">{{detail.fundamentals.profit_yoy!=null?detail.fundamentals.profit_yoy.toFixed(1)+'%':'-'}}</el-tag>
+</el-descriptions-item>
+</el-descriptions>
+<el-empty v-else description="暂无基本面数据" :image-size="50"></el-empty></div>
+<div class="card" style="margin-bottom:0"><h3>📊 行情概览</h3>
+<el-descriptions :column="1" border size="small" label-width="85px">
+<el-descriptions-item label="最新价"><span style="font-weight:600">¥{{(detail.close||0).toFixed(2)}}</span></el-descriptions-item>
+<el-descriptions-item label="后复权价">¥{{detail.close_hfq?detail.close_hfq.toFixed(2):'-'}}</el-descriptions-item>
+<el-descriptions-item label="成交量">{{fmt(detail.volume)}}股</el-descriptions-item>
+<el-descriptions-item label="换手率">{{detail.turnover?detail.turnover.toFixed(2):'-'}}%</el-descriptions-item>
+<el-descriptions-item label="数据日期">{{detail.latest_trade_date}}</el-descriptions-item>
+</el-descriptions></div>
 </div></div>
 </div></div>
 <div class="error-state" v-if="ldErr.d"><div class="msg">{{ldErr.d}}</div></div>
@@ -210,31 +229,31 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 <template v-else>
 <div class="summary" v-if="overview.total_stocks"><div class="si"><div class="v">{{fmt(overview.total_rows)}}</div><div class="l">行情总条数</div></div><div class="si"><div class="v">{{overview.total_stocks}}</div><div class="l">股票</div></div><div class="si"><div class="v">{{overview.latest_date||'-'}}</div><div class="l">最新数据</div></div><div class="si" style="border:1px solid var(--gold)"><div class="v go">{{missingDates.length}}</div><div class="l">漏数据日期</div></div></div>
 <!-- 今日策略运行状态 -->
-<div class="card" v-if="todayStrategy" :style="{borderLeft: todayStrategy.status==='ok'?'3px solid var(--up)':'3px solid #f59e0b'}"><h3>🎯 今日策略运行 ({{todayStrategy.strategy_date||'-'}})</h3>
+<div class="card" v-if="todayStrategy" :style="{borderLeft: todayStrategy.status==='ok'?'3px solid var(--el-color-danger)':'3px solid #f59e0b'}"><h3>🎯 今日策略运行 ({{todayStrategy.strategy_date||'-'}})</h3>
 <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
-<div><span style="color:var(--dim)">扫描:</span> <b>{{todayStrategy.scanned||0}}</b> 只</div>
-<div><span style="color:var(--dim)">信号:</span> <b>{{todayStrategy.total_signals||0}}</b></div>
-<div><span style="color:var(--dim)">买入:</span> <b style="color:var(--up)">{{todayStrategy.buy_signals||0}}</b></div>
-<div><span style="color:var(--dim)">偏好:</span> {{todayStrategy.preference||'-'}}</div>
-<div><span style="color:var(--dim)">耗时:</span> {{todayStrategy.elapsed_seconds||0}}s</div>
-<div><span style="color:var(--dim)">执行:</span> {{todayStrategy.time||'-'}}</div>
+<div><span style="color:var(--el-text-color-secondary)">扫描:</span> <b>{{todayStrategy.scanned||0}}</b> 只</div>
+<div><span style="color:var(--el-text-color-secondary)">信号:</span> <b>{{todayStrategy.total_signals||0}}</b></div>
+<div><span style="color:var(--el-text-color-secondary)">买入:</span> <b style="color:var(--el-color-danger)">{{todayStrategy.buy_signals||0}}</b></div>
+<div><span style="color:var(--el-text-color-secondary)">偏好:</span> {{todayStrategy.preference||'-'}}</div>
+<div><span style="color:var(--el-text-color-secondary)">耗时:</span> {{todayStrategy.elapsed_seconds||0}}s</div>
+<div><span style="color:var(--el-text-color-secondary)">执行:</span> {{todayStrategy.time||'-'}}</div>
 </div></div>
 <div class="card"><h3>📊 交易所</h3><table><thead><tr><th>交易所</th><th>最新日期</th><th>行情</th><th>股票</th></tr></thead><tbody><template v-for="(v,k) in overview.exchanges"><tr v-if="v&&v.stocks>0"><td>{{exFull(k)}}</td><td>{{v.latest_date||'-'}}</td><td>{{fmt(v.rows)}}</td><td>{{v.stocks}}</td></tr></template></tbody></table></div>
 <div class="card"><h3>📅 交易日历 & 数据完整度</h3>
 <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px"><el-button size="small" @click="prevMonth">◀</el-button><span style="font-weight:600;font-size:14px;min-width:80px;text-align:center">{{smonthLabel}}</span><el-button size="small" @click="nextMonth">▶</el-button><el-button size="small" type="primary" plain @click="smonth=(new Date()).toISOString().slice(0,7);loadDataStatus()">今天</el-button><span style="font-size:10px;color:var(--el-text-color-secondary);margin-left:8px">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日 ⚪未来</span></div>
-<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10px;color:var(--dim);margin-bottom:3px"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span></div>
+<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10px;color:var(--el-text-color-secondary);margin-bottom:3px"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span></div>
 <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">
 <div v-for="d in cal" :style="calStyle(d)" :title="calTitle(d)" @contextmenu.prevent="doSyncDate(d)" @click="doSyncClick(d)" :class="{'cal-cell':true,'cal-syncing':d.syncing}">{{d.day}}<div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div><div v-if="d.syncing" style="font-size:7px;color:var(--blue);margin-top:1px">⟳ 采集中</div></div></div></div>
 <div class="card" v-if="missingDates.length"><h3>⚠️ 近期数据异常</h3>
-<div style="font-size:12px;color:var(--dim)">以下交易日数据不完整或完全缺失:</div>
+<div style="font-size:12px;color:var(--el-text-color-secondary)">以下交易日数据不完整或完全缺失:</div>
 <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px"><span v-for="d in missingDates" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);padding:2px 8px;border-radius:4px;font-size:11px">{{d}}</span></div></div>
 <!-- 最近下载日志 -->
 <div class="card" v-if="dlog.length"><h3>📥 最近下载记录</h3>
-<div style="font-size:11px"><div v-for="l in dlog.slice(0,8)" style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px">
-<span style="min-width:100px;color:var(--dim)">{{l.time}}</span>
+<div style="font-size:11px"><div v-for="l in dlog.slice(0,8)" style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--el-border-color-light);font-size:11px">
+<span style="min-width:100px;color:var(--el-text-color-secondary)">{{l.time}}</span>
 <span :style="{color:l.status==='ok'?'#10b981':l.status==='warn'?'#f59e0b':'#ef4444',fontWeight:500}">{{l.status==='ok'?'✅':l.status==='warn'?'⚠️':'❌'}}</span>
-<span style="color:var(--dim)">+{{l.rows}}行</span>
-<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)">{{l.detail||''}}</span></div></div></div></div>
+<span style="color:var(--el-text-color-secondary)">+{{l.rows}}行</span>
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--el-text-color-secondary)">{{l.detail||''}}</span></div></div></div></div>
 <div class="error-state" v-if="ldErr.x"><div class="msg">{{ldErr.x}}</div></div>
 </template></div>
 
