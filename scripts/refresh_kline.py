@@ -23,6 +23,7 @@ from loguru import logger
 
 
 def refresh_all(start_date="2021-01-01", end_date=None, workers=1):
+    time_start = time.time()
     """全量重刷历史数据。逐个股票下载并 UPSERT。"""
     import baostock as bs
 

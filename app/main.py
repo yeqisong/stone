@@ -90,4 +90,4 @@ async def health_check():
     }
 
 # 前端静态文件 (放在最后，不影响 API 路由匹配)
-app.mount("/", StaticFiles(directory="web", html=True), name="web")
+app.mount("/", StaticFiles(directory="web-v2/dist", html=True), name="web")
