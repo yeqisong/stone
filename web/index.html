@@ -75,38 +75,27 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;min-height:100vh}
 </div></div>
 <el-button v-else type="primary" plain size="small" @click="showAdd=true" style="margin-bottom:10px">+ 新增持仓</el-button>
 <div class="card"><h3>持仓明细</h3>
-<div v-if="ptf.positions&&ptf.positions.length" style="overflow-x:auto">
-<table style="width:100%;border-collapse:collapse;font-size:12px">
-<thead><tr style="color:var(--el-text-color-secondary);font-size:11px">
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:left">代码</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:left">名称</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">数量</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">成本</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">现价</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">市值</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:right">盈亏</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:left">备注</th>
-<th style="padding:6px 8px;border-bottom:1px solid var(--el-border-color-light);text-align:center">操作</th>
-</tr></thead>
-<tbody>
-<tr v-for="p in ptf.positions" style="border-bottom:1px solid var(--el-border-color-lighter)">
-<td style="padding:6px 8px"><span style="color:var(--el-color-primary);cursor:pointer" @click="showDetail(p.stock_code)">{{p.stock_code}}</span></td>
-<td style="padding:6px 8px"><span style="cursor:pointer" @click="showDetail(p.stock_code)">{{p.stock_name}}</span></td>
-<td style="padding:6px 8px;text-align:right">{{p.quantity}}</td>
-<td style="padding:6px 8px;text-align:right">¥{{(p.cost_price||0).toFixed(2)}}</td>
-<td style="padding:6px 8px;text-align:right">¥{{(p.current_price||0).toFixed(2)}}</td>
-<td style="padding:6px 8px;text-align:right">¥{{fmt(p.market_value)}}</td>
-<td style="padding:6px 8px;text-align:right"><span :style="{color:p.pnl>=0?'var(--el-color-danger)':'var(--el-color-success)'}">¥{{fmt(p.pnl)}} ({{(p.pnl_pct||0)>=0?'+':''}}{{(p.pnl_pct||0).toFixed(1)}}%)</span></td>
-<td style="padding:6px 8px;font-size:11px;color:var(--el-text-color-secondary)">{{p.notes||''}}</td>
-<td style="padding:6px 8px;text-align:center;white-space:nowrap">
-<span data-edit :data-code="p.stock_code" :data-qty="p.quantity" :data-cost="p.cost_price" :data-note="p.notes||''" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;background:var(--el-fill-color-lighter);color:var(--el-text-color-secondary)" title="编辑">✎</span>
-<span data-del :data-code="p.stock_code" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;color:var(--el-color-danger);background:var(--el-color-danger-light-9);margin-left:4px" title="删除">✕</span>
-</td>
-</tr>
-</tbody>
-</table></div>
-<el-empty v-else-if="!ld.p" description="暂无持仓"></el-empty>
-</tr></tbody></table><div v-else style="color:var(--el-text-color-secondary);padding:20px;text-align:center">暂无持仓，点击上方"+ 新增持仓"添加</div>
+<el-table v-if="ptf.positions&&ptf.positions.length" :data="ptf.positions" stripe size="small" @cell-click="handlePtfCellClick" style="width:100%">
+<el-table-column prop="stock_code" label="代码" width="90">
+<template #default="{row}"><span style="color:var(--el-color-primary);cursor:pointer">{{row.stock_code}}</span></template>
+</el-table-column>
+<el-table-column prop="stock_name" label="名称" width="110"></el-table-column>
+<el-table-column prop="quantity" label="数量" width="70" align="right"></el-table-column>
+<el-table-column label="成本" width="95" align="right"><template #default="{row}">¥{{(row.cost_price||0).toFixed(2)}}</template></el-table-column>
+<el-table-column label="现价" width="95" align="right"><template #default="{row}">¥{{(row.current_price||0).toFixed(2)}}</template></el-table-column>
+<el-table-column label="市值" width="105" align="right"><template #default="{row}">¥{{fmt(row.market_value)}}</template></el-table-column>
+<el-table-column label="盈亏" min-width="120" align="right"><template #default="{row}"><span :style="{color:row.pnl>=0?'var(--el-color-danger)':'var(--el-color-success)'}">¥{{fmt(row.pnl)}} ({{(row.pnl_pct||0)>=0?'+':''}}{{(row.pnl_pct||0).toFixed(1)}}%)</span></template></el-table-column>
+<el-table-column prop="notes" label="备注" min-width="80">
+<template #default="{row}"><span style="font-size:11px;color:var(--el-text-color-secondary)">{{row.notes||''}}</span></template>
+</el-table-column>
+<el-table-column label="操作" width="110" fixed="right">
+<template #default="{row}">
+<el-button size="small" @click.stop="startEditPos(row)">编辑</el-button>
+<el-button size="small" type="danger" @click.stop="delPosition(row.stock_code)">删除</el-button>
+</template>
+</el-table-column>
+</el-table>
+<el-empty v-else description="暂无持仓"></el-empty>
 <div class="error-state" v-if="ldErr.p"><div class="msg">{{ldErr.p}}</div></div>
 </div></template></div>
 
@@ -417,6 +406,11 @@ function srcStr(s){var a=s.source_strategies||[]; return a.length? a.join('+'): 
 
 async function checkHealth(){try{var r=await axios.get(API+'/health');health.ok=r.data.status==='ok'}catch(e){health.ok=false}}
 async function loadPortfolio(){ld.p=true;ldErr.p='';try{var r=await axios.get(API+'/api/portfolio');Object.assign(ptf,r.data)}catch(e){ldErr.p='加载失败：'+e.message}ld.p=false}
+function handlePtfCellClick(row, column, cell, event){
+  if (column.property === 'stock_code' || column.property === 'stock_name') {
+    showDetail(row.stock_code);
+  }
+}
 async function addPosition(){if(!pf.code)return;try{await axios.post(API+'/api/portfolio',{stock_code:pf.code,quantity:pf.qty,cost_price:pf.cost,notes:pf.note});showAdd.value=false;pf.code='';pf.qty=100;pf.cost=0;pf.note='';loadPortfolio()}catch(e){modalAlert('添加失败',e.response?.data?.detail||e.message,'❌')}}
 function startEditPos(p){editingPos.value=p.stock_code;editPos.qty=p.quantity;editPos.cost=p.cost_price;editPos.note=p.notes||''}
 async function savePosition(code){try{await axios.put(API+'/api/portfolio/'+code,{quantity:editPos.qty,cost_price:editPos.cost,notes:editPos.note});editingPos.value='';loadPortfolio()}catch(e){modalAlert('保存失败',e.message,'❌')}}
@@ -528,7 +522,7 @@ window._delPos = function(code) {
   });
 };
 
-return{tab,health,ptf,sigs,stocks,stockCat,kw,sigDate,todayStr,detail,dcode,hcnt,adj,dateRange,overview,smonth,smonthLabel,cal,missingDates,dlog,todayStrategy,cfg,dsKey,prefMode,editing,editParams,showAdd,pf,editingPos,editPos,loginUser,doLogout,ld,ldErr,fmt,stars,dirName,exName,exFull,srcStr,modal,modalClose,modalDoConfirm,reloadChart,loadSettings,toggleStrategy,setPreference,saveParams,saveDsKey,loadPortfolio,loadSignals,loadStocks,showDetail,loadDataStatus,prevMonth,nextMonth,switchTab,switchCat,addPosition,startEditPos,savePosition,delPosition,calStyle,calTitle,doSyncDate,doSyncClick}
+return{tab,health,ptf,sigs,stocks,stockCat,kw,sigDate,todayStr,detail,dcode,hcnt,adj,dateRange,overview,smonth,smonthLabel,cal,missingDates,dlog,todayStrategy,cfg,dsKey,prefMode,editing,editParams,showAdd,pf,editingPos,editPos,loginUser,doLogout,ld,ldErr,fmt,stars,dirName,exName,exFull,srcStr,modal,modalClose,modalDoConfirm,reloadChart,loadSettings,toggleStrategy,setPreference,saveParams,saveDsKey,loadPortfolio,loadSignals,loadStocks,showDetail,loadDataStatus,prevMonth,nextMonth,switchTab,switchCat,addPosition,startEditPos,savePosition,delPosition,calStyle,calTitle,doSyncDate,doSyncClick,handlePtfCellClick}
 }});
 app.use(ElementPlus);
 // 全局注册 Element Plus 图标
@@ -537,21 +531,28 @@ if(typeof ElementPlusIconsVue !== 'undefined'){
 }
 var _app = app.mount('#app');
 // 全局事件委托：绕过 Vue 模板事件系统处理表格按钮点击
-document.addEventListener('click', function(ev) {
-  var editEl = ev.target.closest('[data-edit]');
-  var delEl = ev.target.closest('[data-del]');
-  if (editEl) {
-    ev.preventDefault(); ev.stopPropagation();
-    var ds = editEl.dataset;
-    window._editPos(ds.code, ds.qty, ds.cost, ds.note);
-    return;
-  }
-  if (delEl) {
-    ev.preventDefault(); ev.stopPropagation();
-    window._delPos(delEl.dataset.code);
-    return;
-  }
-}, true);
+    document.addEventListener('click', function (ev) {
+        // 确保 target 是元素节点（文本节点没有 closest）
+        var target = ev.target.nodeType === Node.ELEMENT_NODE ? ev.target : ev.target.parentElement;
+        if (!target) return;
+
+        var editEl = target.closest('[data-edit]');
+        if (editEl) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var ds = editEl.dataset;
+            window._editPos(ds.code, ds.qty, ds.cost, ds.note);
+            return;
+        }
+
+        var delEl = target.closest('[data-del]');
+        if (delEl) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            window._delPos(delEl.dataset.code);
+            return;
+        }
+    }, true);
 </script>
 </body>
 </html>
