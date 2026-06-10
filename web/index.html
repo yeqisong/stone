@@ -414,9 +414,9 @@ function handlePtfCellClick(row, column, cell, event){
   }
 }
 async function addPosition(){if(!pf.code)return;try{await axios.post(API+'/api/portfolio',{stock_code:pf.code,quantity:pf.qty,cost_price:pf.cost,notes:pf.note});showAdd.value=false;pf.code='';pf.qty=100;pf.cost=0;pf.note='';loadPortfolio()}catch(e){modalAlert('添加失败',e.response?.data?.detail||e.message,'❌')}}
-function startEditPos(p){alert('startEditPos 被调用! stock_code='+p.stock_code);editingPos.value=p.stock_code;editPos.qty=p.quantity;editPos.cost=p.cost_price;editPos.note=p.notes||'';showEditDialog.value=true}
+function startEditPos(p){editingPos.value=p.stock_code;editPos.qty=p.quantity;editPos.cost=p.cost_price;editPos.note=p.notes||'';showEditDialog.value=true}
 async function savePosition(code){try{await axios.put(API+'/api/portfolio/'+code,{quantity:editPos.qty,cost_price:editPos.cost,notes:editPos.note});showEditDialog.value=false;loadPortfolio()}catch(e){showEditDialog.value=false;modalAlert('保存失败',e.message,'❌')}}
-async function delPosition(code){alert('delPosition 被调用! code='+code);modalConfirmDanger('确认删除','确定删除该持仓？删除后数据不可恢复。',function(){axios.delete(API+'/api/portfolio/'+code).then(function(){loadPortfolio();modalClose()}).catch(function(e){modalAlert('错误','删除失败: '+(e.response?.data?.detail||e.message),'❌')})})}
+async function delPosition(code){modalConfirmDanger('确认删除','确定删除该持仓？删除后数据不可恢复。',function(){axios.delete(API+'/api/portfolio/'+code).then(function(){loadPortfolio();modalClose()}).catch(function(e){modalAlert('错误','删除失败: '+(e.response?.data?.detail||e.message),'❌')})})}
 async function loadSignals(){ld.s=true;ldErr.s='';try{var r=await axios.get(API+'/api/buy_signals',{params:{signal_date:sigDate.value}});Object.assign(sigs,r.data)}catch(e){ldErr.s='加载失败：'+e.message}ld.s=false}
 function switchTab(t){tab.value=t;pushHash(t==='l'?'l/stock':t);if(t==='l'){stockCat.value='stock';stocks.page=1;loadStocks(1)}else if(t==='p')loadPortfolio();else if(t==='s'){sigDate.value=todayStr();loadSignals()}else if(t==='x')loadDataStatus();else if(t==='o')loadSettings()}
 function switchCat(c){stockCat.value=c;stocks.page=1;pushHash('l/'+c);loadStocks(1)}
