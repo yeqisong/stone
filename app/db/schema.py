@@ -236,6 +236,24 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals_history (
 CREATE INDEX IF NOT EXISTS idx_fh_stock_date ON stock_fundamentals_history (stock_code, report_date);
 """
 
+CREATE_TREEMAP_CACHE = """
+CREATE TABLE IF NOT EXISTS stock_treemap_cache (
+    id           SERIAL PRIMARY KEY,
+    trade_date   DATE NOT NULL,
+    parent       VARCHAR(10) NOT NULL DEFAULT 'root',
+    node_id      VARCHAR(10) NOT NULL,     -- L1代码(A/C)或L2代码(C15)或个股代码
+    name         VARCHAR(50) NOT NULL,     -- 显示名称
+    value        NUMERIC(18,2) NOT NULL,   -- 总面积/市值
+    chg_pct      NUMERIC(8,2),             -- 涨跌幅(汇总或个股)
+    trend_up     BOOLEAN DEFAULT true,      -- 20日线趋势
+    node_type    VARCHAR(10) NOT NULL,      -- 'l1','l2','stock'
+    item_style   TEXT DEFAULT '',           -- 颜色配置(JSON)
+    detail       TEXT DEFAULT '',           -- 个股明细(JSON)
+    UNIQUE (trade_date, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, parent);
+"""
+
 CREATE_SYSTEM_METRICS = """
 CREATE TABLE IF NOT EXISTS system_metrics (
     id           SERIAL PRIMARY KEY,
@@ -276,6 +294,7 @@ ALL_TABLES = [
     ("failed_downloads", CREATE_FAILED_DOWNLOADS),
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
+    ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
     ("system_metrics", CREATE_SYSTEM_METRICS),
 ]
 

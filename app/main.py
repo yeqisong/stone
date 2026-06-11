@@ -9,6 +9,7 @@ from app.config import settings
 from app.db.connection import async_engine, check_db_connection
 from app.db.schema import init_db, DEFAULT_STRATEGY_CONFIG
 from app.api.portfolio import router as portfolio_router
+from app.api.treemap import router as treemap_router
 from app.api.signals import router as signals_router
 from app.api.stock import router as stock_router
 from app.api.status import router as status_router
@@ -59,6 +60,7 @@ app.add_middleware(
 
 # ── 路由注册 ──
 app.include_router(portfolio_router, prefix="/api")
+app.include_router(treemap_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")
 app.include_router(status_router, prefix="/api")

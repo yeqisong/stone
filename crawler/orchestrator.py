@@ -91,12 +91,20 @@ def download_fundamentals_only(skip_existing: bool = True,
 
 
 def daily_update(trade_date: date = None):
-    """每日增量更新（cron 17:35 触发）。"""
+    """每日增量更新（cron 17:35 触发），完成后触发流水线。"""
     if trade_date is None:
         trade_date = date.today()
     c = BaostockCrawler()
     count = c.download_daily_update(trade_date)
     c.logout()
+
+    # 触发后续流水线（树图生成等）
+    try:
+        from scripts.pipeline import emit as _emit
+        _emit("after_kline", str(trade_date))
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"流水线触发失败: {e}")
     return count
 
 
