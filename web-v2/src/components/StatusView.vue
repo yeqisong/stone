@@ -1,80 +1,62 @@
 <template>
-<n-space vertical size="medium">
-  <!-- Overview Cards -->
-  <n-grid :cols="4" :x-gap="10">
-    <n-gi><n-card size="small"><div style="text-align:center">
-      <div style="font-size:22px;font-weight:700">{{fmt(overview.total_rows)}}</div>
-      <div style="font-size:11px;color:rgba(255,255,255,.45)">行情总条数</div>
-    </div></n-card></n-gi>
-    <n-gi><n-card size="small"><div style="text-align:center">
-      <div style="font-size:22px;font-weight:700">{{overview.total_stocks}}</div>
-      <div style="font-size:11px;color:rgba(255,255,255,.45)">股票</div>
-    </div></n-card></n-gi>
-    <n-gi><n-card size="small"><div style="text-align:center">
-      <div style="font-size:22px;font-weight:700">{{overview.latest_date||'-'}}</div>
-      <div style="font-size:11px;color:rgba(255,255,255,.45)">最新数据</div>
-    </div></n-card></n-gi>
-    <n-gi><n-card size="small" :style="missingDates.length>0?'border-color:#f59e0b':''"><div style="text-align:center">
-      <div style="font-size:22px;font-weight:700" :style="{color:missingDates.length>0?'#f59e0b':'inherit'}">{{missingDates.length}}</div>
-      <div style="font-size:11px;color:rgba(255,255,255,.45)">漏数据日期</div>
-    </div></n-card></n-gi>
-  </n-grid>
+<div>
+  <!-- Overview Stats -->
+  <div style="display:flex;gap:8px;justify-content:center;padding:6px 0 10px;flex-wrap:wrap">
+    <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">行情总条数</div><div style="font-size:20px;font-weight:700;color:#fff">{{fmt(overview.total_rows)}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">股票</div><div style="font-size:20px;font-weight:700;color:#fff">{{overview.total_stocks}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">最新数据</div><div style="font-size:20px;font-weight:700;color:#fff">{{overview.latest_date||'-'}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">漏数据日期</div><div style="font-size:20px;font-weight:700" :style="{color:missingDates.length>0?'#f59e0b':'#fff'}">{{missingDates.length}}</div></div>
+  </div>
 
   <!-- Today Strategy -->
-  <n-card v-if="todayStrategy" size="small" :style="{borderLeft:todayStrategy.status==='ok'?'3px solid #10b981':'3px solid #f59e0b'}">
-    <template #header><span style="color:#fff;font-size:14px">🎯 今日策略运行 ({{todayStrategy.strategy_date||'-'}})</span></template>
-    <n-space size="large">
-      <div><span style="color:rgba(255,255,255,.45)">扫描:</span> <b style="color:#fff">{{todayStrategy.scanned||0}} 只</b></div>
-      <div><span style="color:rgba(255,255,255,.45)">信号:</span> <b style="color:#fff">{{todayStrategy.total_signals||0}}</b></div>
+  <div v-if="todayStrategy" style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border-left:3px solid" :style="{borderColor:todayStrategy.status==='ok'?'#10b981':'#f59e0b'}">
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px;color:#fff">🎯 今日策略运行 ({{todayStrategy.strategy_date||'-'}})</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px">
+      <div><span style="color:rgba(255,255,255,.45)">扫描:</span> <b>{{todayStrategy.scanned||0}} 只</b></div>
+      <div><span style="color:rgba(255,255,255,.45)">信号:</span> <b>{{todayStrategy.total_signals||0}}</b></div>
       <div><span style="color:rgba(255,255,255,.45)">买入:</span> <b style="color:#ef4444">{{todayStrategy.buy_signals||0}}</b></div>
-      <div><span style="color:rgba(255,255,255,.45)">偏好:</span> <b style="color:#fff">{{todayStrategy.preference||'-'}}</b></div>
-      <div><span style="color:rgba(255,255,255,.45)">耗时:</span> <b style="color:#fff">{{todayStrategy.elapsed_seconds||0}}s</b></div>
-    </n-space>
-  </n-card>
-
-  <!-- Exchanges -->
-  <n-card size="small">
-    <template #header><span style="color:#fff;font-size:14px">📊 交易所</span></template>
-    <n-data-table :columns="exColumns" :data="exchangeRows" size="small" />
-  </n-card>
-
-  <!-- Calendar -->
-  <n-card size="small">
-    <template #header><span style="color:#fff;font-size:14px">📅 交易日历 & 数据完整度</span></template>
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-      <n-button size="small" @click="prevMonth">◀</n-button>
-      <span style="font-weight:600;font-size:14px;color:#fff;min-width:80px;text-align:center">{{monthLabel}}</span>
-      <n-button size="small" @click="nextMonth">▶</n-button>
-      <n-button size="small" @click="goToday">今天</n-button>
-      <span style="font-size:10px;color:rgba(255,255,255,.45)">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日</span>
+      <div><span style="color:rgba(255,255,255,.45)">偏好:</span> <b>{{todayStrategy.preference||'-'}}</b></div>
+      <div><span style="color:rgba(255,255,255,.45)">耗时:</span> <b>{{todayStrategy.elapsed_seconds||0}}s</b></div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10px;color:rgba(255,255,255,.45);margin-bottom:4px;text-align:center">
+  </div>
+
+  <div style="margin-bottom:10px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#fff">📊 交易所</div>
+    <n-data-table :columns="exColumns" :data="exchangeRows" size="small" />
+  </div>
+
+  <div style="margin-bottom:10px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#fff">📅 交易日历 & 数据完整度</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+      <n-button size="tiny" @click="prevMonth">◀</n-button>
+      <span style="font-weight:600;font-size:13px;color:#fff">{{monthLabel}}</span>
+      <n-button size="tiny" @click="nextMonth">▶</n-button>
+      <n-button size="tiny" @click="goToday">今天</n-button>
+      <span style="font-size:9px;color:rgba(255,255,255,.45)">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非交易日</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:10px;color:rgba(255,255,255,.45);margin-bottom:3px;text-align:center">
       <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">
-      <div v-for="d in cal" :key="d.date" :style="calStyle(d)" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)" style="transition:all .12s" :class="{calSync:d.syncing}">
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
+      <div v-for="d in cal" :key="d.date" :style="calStyle(d)" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)" style="transition:all .12s;cursor:pointer" :class="{calSync:d.syncing}">
         <span v-if="d.day!==null">{{d.day}}</span>
         <div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div>
         <div v-if="d.syncing" style="font-size:7px;color:#2080f0;margin-top:1px">⟳ 采集中</div>
       </div>
     </div>
-  </n-card>
+  </div>
 
-  <!-- Missing Dates -->
-  <n-card v-if="missingDates.length" size="small" :style="{borderColor:'#ef444466',borderLeft:'3px solid #ef4444'}">
-    <template #header><span style="color:#ef4444;font-size:14px">⚠️ 近期数据异常</span></template>
-    <div style="font-size:12px;color:rgba(255,255,255,.55);margin-bottom:8px">以下交易日数据不完整或完全缺失（点击日历日期可触发重新采集）:</div>
-    <n-space>
-      <n-tag v-for="d in missingDates" :key="d" type="error" size="small">{{d}}</n-tag>
-    </n-space>
-  </n-card>
+  <div v-if="missingDates.length" style="margin-bottom:10px;padding:8px 12px;background:rgba(239,68,68,.06);border-radius:8px;border:1px solid rgba(239,68,68,.3)">
+    <div style="font-size:13px;font-weight:600;color:#ef4444;margin-bottom:4px">⚠️ 近期数据异常</div>
+    <div style="font-size:11px;color:rgba(255,255,255,.55);margin-bottom:6px">以下交易日数据不完整或完全缺失（点击日历日期可触发重新采集）:</div>
+    <n-space><n-tag v-for="d in missingDates" :key="d" type="error" size="small">{{d}}</n-tag></n-space>
+  </div>
 
-  <!-- Download Log -->
-  <n-card v-if="dlog.length" size="small">
-    <template #header><span style="color:#fff;font-size:14px">📥 最近下载记录</span></template>
+  <div v-if="dlog.length">
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#fff">📥 最近下载记录</div>
     <n-data-table :columns="logColumns" :data="dlog.slice(0,8)" size="small" />
-  </n-card>
-</n-space>
+  </div>
+</div>
 </template>
 
 <script setup>
@@ -90,6 +72,7 @@ const todayStrategy = ref(null)
 const cal = ref([])
 const smonth = ref(new Date().toISOString().slice(0,7))
 
+const narrow = ref(typeof window !== 'undefined' && window.innerWidth < 640)
 const monthLabel = computed(() => {
   const y = parseInt(smonth.value.slice(0,4)), m = parseInt(smonth.value.slice(5,7))
   return y+'年'+m+'月'
@@ -249,5 +232,8 @@ async function loadDataStatus() {
   } catch(e) {}
 }
 
-onMounted(loadDataStatus)
+onMounted(() => {
+  loadDataStatus()
+  window.addEventListener('resize', () => narrow.value = window.innerWidth < 640)
+})
 </script>

@@ -2,7 +2,7 @@
   <n-config-provider :theme="darkTheme">
     <n-dialog-provider>
     <n-message-provider>
-      <div style="height:100vh;display:flex;flex-direction:column;background:#101014">
+      <div style="height:100vh;display:flex;flex-direction:column;background:#101014;overflow:hidden">
         <!-- Header -->
         <div style="padding:8px 24px;border-bottom:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:space-between;background:#1a1a1e">
           <div>
@@ -25,7 +25,7 @@
         </div>
 
         <!-- Content -->
-        <div style="flex:1;overflow-y:auto;padding:16px 24px">
+        <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
           <!-- Portfolio -->
           <div v-if="tab==='p'">
             <PortfolioView @show-detail="showDetail" />
@@ -58,7 +58,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { darkTheme } from 'naive-ui'
 import { NConfigProvider, NMessageProvider, NDialogProvider, NButton } from 'naive-ui'
 import axios from 'axios'
@@ -74,10 +74,30 @@ const tab = ref('p')
 const dcode = ref('')
 const overview = reactive({latest_date:'',total_rows:0,total_stocks:0})
 
+// URL hash 路由同步
+function parseHash() {
+  const hash = location.hash.slice(1) || '/'
+  if (hash.startsWith('/detail/')) {
+    const code = hash.split('/')[2]
+    if (code) { dcode.value = code; tab.value = 'd'; return }
+  }
+  const map = {'':'p','/':'p','/signals':'s','/stocks':'l','/status':'x','/settings':'o'}
+  tab.value = map[hash] || 'p'
+}
+function syncHash() {
+  const map = {p:'/',s:'/signals',l:'/stocks',x:'/status',o:'/settings',d:'/detail/'+dcode.value}
+  const target = map[tab.value] || '/'
+  if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
+}
+watch(tab, syncHash)
+watch(dcode, () => { if (tab.value === 'd') syncHash() })
+window.addEventListener('popstate', parseHash)
+
 function showDetail(code) { dcode.value = code; tab.value = 'd' }
 function doLogout() { localStorage.clear(); window.location.href='/login.html' }
 
 onMounted(async () => {
+  parseHash()  // 读取 URL hash 恢复页面状态
   // 设置 auth header
   const token = localStorage.getItem('token')
   if (token) {

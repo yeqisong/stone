@@ -208,3 +208,44 @@ def get_stock_kline(
         return {"stock_code": code, "stock_name": rows[0].stock_name if hasattr(rows[0], 'stock_name') else code, "kline": kline}
     finally:
         db.close()
+
+
+# ── PE 历史数据（从本地 stock_fundamentals_history 表读取） ──
+
+@router.get("/stock/{code}/pe_history")
+def get_stock_pe_history(code: str):
+    """获取个股历史 PE/PB/ROE 时序数据（从本地表读取）。"""
+    db = get_sync_db()
+    try:
+        result = db.execute(text("""
+            SELECT report_date, pe_ttm, pb_mrq, roe
+            FROM stock_fundamentals_history
+            WHERE stock_code = :c
+            ORDER BY report_date ASC
+        """), {"c": code})
+        rows = result.fetchall()
+        if not rows:
+            return {"stock_code": code, "pe_data": []}
+
+        all_data = []
+        pe_vals = []
+        for r in rows:
+            pe = float(r[1]) if r[1] else None
+            pb = float(r[2]) if r[2] else None
+            roe = float(r[3]) if r[3] else None
+            if pe: pe_vals.append(pe)
+            report_date = str(r[0])[:7]  # "2024-12-01" → "2024-12"
+            all_data.append({"date": report_date, "pe_ttm": pe, "pb_mrq": pb, "roe": roe})
+
+        # 计算分位数
+        import numpy as np
+        if pe_vals:
+            arr = np.array(pe_vals)
+            for d in all_data:
+                if d["pe_ttm"]:
+                    pct = np.sum(arr <= d["pe_ttm"]) / len(arr) * 100
+                    d["pe_percentile"] = round(pct, 1)
+
+        return {"stock_code": code, "data": all_data}
+    finally:
+        db.close()

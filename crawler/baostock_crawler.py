@@ -1062,6 +1062,58 @@ class BaostockCrawler:
 
 
 
+    def download_fundamentals_history(self, codes: List[str] = None) -> int:
+        """下载基本面历史时序数据（季度），写入 stock_fundamentals_history。"""
+        self.login()
+        db = get_sync_db()
+        if codes is None:
+            codes = self.get_all_stock_codes()
+
+        total = 0
+        from app.db.connection import is_sqlite as _is_sql
+        import time
+
+        for idx, code in enumerate(codes):
+            if idx % 100 == 0:
+                logger.info(f"  基本面历史进度: {idx}/{len(codes)}")
+            bs_code = self._bs_code(code)
+            for year in range(2020, 2027):
+                for quarter in [1, 2, 3, 4]:
+                    try:
+                        rs = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
+                        while rs.next():
+                            d = rs.get_row_data()
+                            if not d or not d[0]: continue
+                            # d: [code, pubDate, , roe, peTTM, pbMRQ, , , , profit_yoy]
+                            pe = float(d[4]) if len(d) > 4 and d[4] and d[4] != '' else None
+                            pb = float(d[5]) if len(d) > 5 and d[5] and d[5] != '' else None
+                            roe = float(d[3]) if len(d) > 3 and d[3] and d[3] != '' else None
+                            # 季度末作为报告日期
+                            report_date = f"{year}-{quarter*3:02d}-01"
+                            if _is_sql():
+                                db.execute(text("""
+                                    INSERT OR REPLACE INTO stock_fundamentals_history
+                                    (stock_code, report_date, pe_ttm, pb_mrq, roe)
+                                    VALUES (:c, :d, :pe, :pb, :roe)
+                                """), {"c": code, "d": report_date, "pe": pe, "pb": pb, "roe": roe})
+                            else:
+                                db.execute(text("""
+                                    INSERT INTO stock_fundamentals_history
+                                    (stock_code, report_date, pe_ttm, pb_mrq, roe)
+                                    VALUES (:c, :d, :pe, :pb, :roe)
+                                    ON CONFLICT (stock_code, report_date) DO UPDATE SET
+                                    pe_ttm=EXCLUDED.pe_ttm, pb_mrq=EXCLUDED.pb_mrq, roe=EXCLUDED.roe
+                                """), {"c": code, "d": report_date, "pe": pe, "pb": pb, "roe": roe})
+                            total += 1
+                        time.sleep(0.05)
+                    except Exception as e:
+                        continue
+            db.commit()
+        db.close()
+        logger.info(f"基本面历史下载完成: {total} 条")
+        return total
+
+
 # ── 便捷函数 ──
 
 def download_history(start: str = "2021-01-01", end: str = None):

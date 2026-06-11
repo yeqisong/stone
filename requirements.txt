@@ -17,6 +17,7 @@ fakeredis==2.26.2
 
 # Data Processing
 pandas==2.2.3
+cachetools>=5.0
 numpy==2.2.1
 
 # HTTP & Parsing

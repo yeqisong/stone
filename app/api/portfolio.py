@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import text
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from app.db.connection import get_sync_db
 from app.auth.auth import optional_auth
@@ -188,5 +188,46 @@ def delete_position(stock_code: str, user: str = Depends(optional_auth)):
         if _is_sqlite():
             db.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
         return {"ok": True, "deleted": stock_code}
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/{stock_code}/history")
+def get_position_history(stock_code: str):
+    """获取指定持仓的加减仓历史记录。"""
+    db = get_sync_db()
+    try:
+        result = db.execute(text("""
+            SELECT action, quantity_before, quantity_after, cost_before, cost_after, created_at
+            FROM portfolio_history WHERE stock_code = :c
+            ORDER BY created_at DESC LIMIT 50
+        """), {"c": stock_code})
+        records = []
+        for r in result.fetchall():
+            records.append({
+                "action": r[0],
+                "qty_before": r[1],
+                "qty_after": r[2],
+                "cost_before": float(r[3]) if r[3] else 0,
+                "cost_after": float(r[4]) if r[4] else 0,
+                "created_at": str(r[5]) if r[5] else None,
+            })
+
+        current = db.execute(text("""
+            SELECT stock_name, quantity, cost_price, notes
+            FROM portfolio WHERE stock_code = :c AND is_active = true
+        """), {"c": stock_code}).fetchone()
+
+        position = None
+        if current:
+            position = {
+                "stock_code": stock_code,
+                "stock_name": current[0],
+                "quantity": current[1],
+                "cost_price": float(current[2]) if current[2] else 0,
+                "notes": current[3] or "",
+            }
+
+        return {"records": records, "position": position}
     finally:
         db.close()

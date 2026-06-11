@@ -1,5 +1,5 @@
 <template>
-<n-card size="small">
+<div>
   <n-space align="center" style="margin-bottom:10px" wrap>
     <n-button :type="cat==='stock'?'primary':'default'" size="small" @click="cat='stock';page=1;load()">📌 个股</n-button>
     <n-button :type="cat==='index'?'primary':'default'" size="small" @click="cat='index';page=1;load()">📊 指数</n-button>
@@ -11,12 +11,14 @@
 
   <n-spin v-if="loading" style="padding:40px" />
   <div v-else>
-    <n-data-table :columns="columns" :data="rows" size="small" :row-props="rowProps" @update:sorter="handleSorter" />
+    <div style="overflow-x:auto">
+      <n-data-table :columns="columns" :data="rows" size="small" :row-props="rowProps" @update:sorter="handleSorter" scroll-x="720" />
+    </div>
     <div style="display:flex;justify-content:center;margin-top:10px">
       <n-pagination v-if="totalPages>1" :page="page" :page-count="totalPages" @update:page="p=>{page=p;load()}" size="small" />
     </div>
   </div>
-</n-card>
+</div>
 </template>
 <script setup>
 import { ref, reactive, h, computed } from 'vue'

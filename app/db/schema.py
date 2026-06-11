@@ -219,6 +219,23 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals (
 );
 """
 
+CREATE_FUNDAMENTALS_HISTORY = """
+CREATE TABLE IF NOT EXISTS stock_fundamentals_history (
+    id            SERIAL PRIMARY KEY,
+    stock_code    VARCHAR(6) NOT NULL,
+    report_date   DATE NOT NULL,         -- 财报截止日 (2024-12-31)
+    pe_ttm        NUMERIC(10,2),
+    pb_mrq        NUMERIC(10,2),
+    roe           NUMERIC(10,2),
+    revenue_yoy   NUMERIC(10,2),
+    profit_yoy    NUMERIC(10,2),
+    total_shares  BIGINT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (stock_code, report_date)
+);
+CREATE INDEX IF NOT EXISTS idx_fh_stock_date ON stock_fundamentals_history (stock_code, report_date);
+"""
+
 CREATE_SYSTEM_METRICS = """
 CREATE TABLE IF NOT EXISTS system_metrics (
     id           SERIAL PRIMARY KEY,
@@ -258,6 +275,7 @@ ALL_TABLES = [
     ("stock_industry", CREATE_STOCK_INDUSTRY),
     ("failed_downloads", CREATE_FAILED_DOWNLOADS),
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
+    ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("system_metrics", CREATE_SYSTEM_METRICS),
 ]
 
