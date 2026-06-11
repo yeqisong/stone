@@ -2,59 +2,34 @@
   <n-config-provider :theme="darkTheme">
     <n-dialog-provider>
     <n-message-provider>
-      <div style="height:100vh;display:flex;flex-direction:column;background:#101014;overflow:hidden">
-        <!-- Header -->
+      <LoginView v-if="showLogin" />
+      <div v-else style="height:100vh;display:flex;flex-direction:column;background:#101014;overflow:hidden">
         <div style="padding:8px 24px;border-bottom:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:space-between;background:#1a1a1e">
           <div>
-            <span style="font-size:18px;font-weight:700;color:#fff">悟道</span>
+            <span style="font-size:18px;font-weight:700;color:#fff">K道</span>
             <span style="font-size:11px;color:rgba(255,255,255,.38);margin-left:12px" id="header-date"></span>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
-            <span style="font-size:12px;color:rgba(255,255,255,.55)">👤 admin</span>
-            <n-button size="tiny" text @click="doLogout">退出</n-button>
+            <span style="font-size:12px;color:rgba(255,255,255,.55)">👤 {{ auth.username || 'admin' }}</span>
+            <n-button size="tiny" text @click="auth.logout">退出</n-button>
           </div>
         </div>
-        
-        <!-- Tabs -->
         <div style="padding:6px 20px;border-bottom:1px solid rgba(255,255,255,.09);display:flex;gap:4px">
-          <n-button :type="tab==='p'?'primary':'default'" size="small" @click="tab='p'">💼 持仓</n-button>
-          <n-button :type="tab==='m'?'primary':'default'" size="small" @click="switchTab('m')">📊 选股</n-button>
-          <n-button :type="tab==='s'?'primary':'default'" size="small" @click="switchTab('s')">🔴 信号</n-button>
-          <n-button :type="tab==='l'?'primary':'default'" size="small" @click="switchTab('l')">📋 个股</n-button>
-          <n-button :type="tab==='x'?'primary':'default'" size="small" @click="switchTab('x')">📊 状态</n-button>
-          <n-button :type="tab==='o'?'primary':'default'" size="small" @click="switchTab('o')">⚙️ 设置</n-button>
+          <n-button :type="nav.tab==='p'?'primary':'default'" size="small" @click="nav.switchTab('p')">💼 持仓</n-button>
+          <n-button :type="nav.tab==='m'?'primary':'default'" size="small" @click="nav.switchTab('m')">📊 选股</n-button>
+          <n-button :type="nav.tab==='s'?'primary':'default'" size="small" @click="nav.switchTab('s')">🔴 信号</n-button>
+          <n-button :type="nav.tab==='l'?'primary':'default'" size="small" @click="nav.switchTab('l')">📋 个股</n-button>
+          <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')">📊 状态</n-button>
+          <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')">⚙️ 设置</n-button>
         </div>
-
-        <!-- Content -->
         <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
-          <!-- Portfolio -->
-          <div v-if="tab==='p'">
-            <PortfolioView @show-detail="showDetail" />
-          </div>
-          <!-- Treemap Selection -->
-          <div v-if="tab==='m'">
-            <TreemapView @show-detail="showDetail" />
-          </div>
-          <!-- Signals -->
-          <div v-if="tab==='s'">
-            <SignalsView @show-detail="showDetail" />
-          </div>
-          <!-- Stocks -->
-          <div v-if="tab==='l'">
-            <StocksView @show-detail="showDetail" />
-          </div>
-          <!-- Detail -->
-          <div v-if="tab==='d'">
-            <DetailView :code="dcode" @back="backFromDetail" />
-          </div>
-          <!-- Data Status -->
-          <div v-if="tab==='x'">
-            <StatusView />
-          </div>
-          <!-- Settings -->
-          <div v-if="tab==='o'">
-            <SettingsView />
-          </div>
+          <div v-if="nav.tab==='p'"><PortfolioView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='s'"><SignalsView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='l'"><StocksView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
+          <div v-if="nav.tab==='x'"><StatusView /></div>
+          <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>
       </div>
     </n-message-provider>
@@ -63,10 +38,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { computed } from 'vue'
 import { darkTheme } from 'naive-ui'
 import { NConfigProvider, NMessageProvider, NDialogProvider, NButton } from 'naive-ui'
 import axios from 'axios'
+import { useAuthStore } from './stores/auth'
+import { useNavStore } from './stores/nav'
+import LoginView from './components/LoginView.vue'
 import PortfolioView from './components/PortfolioView.vue'
 import SignalsView from './components/SignalsView.vue'
 import TreemapView from './components/TreemapView.vue'
@@ -75,70 +53,43 @@ import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 import SettingsView from './components/SettingsView.vue'
 
-const API = window.location.origin
-const tab = ref('p')
-const dcode = ref('')
-const prevTab = ref('')  // 进入详情前的页面
+const auth = useAuthStore()
+const nav = useNavStore()
+const showLogin = computed(() => !auth.token)
 
+watch(showLogin, (v) => {
+  if (v) document.title = '登录 - K道'
+})
 
-// URL hash 路由同步
-function parseHash() {
-  const hash = location.hash.slice(1) || '/'
-  if (hash.startsWith('/detail/')) {
-    const code = hash.split('/')[2]
-    if (code) { dcode.value = code; tab.value = 'd'; return }
+const titleMap = {
+  p: '持仓 - K道',
+  m: '选股 - 市值 - K道',
+  s: '买点信号 - K道',
+  l: '个股列表 - K道',
+  d: '个股详情 - K道',
+  x: '数据状态 - K道',
+  o: '系统设置 - K道',
+}
+
+// tab 变化时更新页面标题
+import { watch } from 'vue'
+watch(() => nav.tab, (t) => {
+  if (t === 'd') {
+    document.title = (nav.dcode ? nav.dcode + ' - ' : '') + '个股详情 - K道'
+  } else {
+    document.title = titleMap[t] || 'K道'
   }
-  if (hash.startsWith('/market/')) {
-    tab.value = 'm'
-    const parts = hash.split('/')
-    if (parts[2]) window._treemapDate = parts[2]
-    return
-  }
-  const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/settings':'o'}
-  tab.value = map[hash] || 'p'
-}
-function syncHash() {
-  const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',o:'/settings',d:'/detail/'+dcode.value}
-  const target = map[tab.value] || '/'
-  if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
-}
-watch(tab, syncHash)
-watch(dcode, () => { if (tab.value === 'd') syncHash() })
-window.addEventListener('popstate', parseHash)
+}, { immediate: true })
 
-function switchTab(t) {
-  tab.value = t
-  if (t === 'm') window._treemapDate = null  // 重置选股日期
-}
-function showDetail(code) {
-  prevTab.value = tab.value  // 记住当前页面
-  dcode.value = code
-  tab.value = 'd'
-}
-function backFromDetail() {
-  tab.value = prevTab.value || 'l'  // 回到之前页面，默认个股
-}
-function doLogout() { localStorage.clear(); window.location.href='/login.html' }
-
-onMounted(async () => {
-  parseHash()  // 读取 URL hash 恢复页面状态
-  // 设置 auth header
-  const token = localStorage.getItem('token')
-  if (token) {
-    axios.defaults.headers.common['Authorization'] = 'Bearer ' + token
-  } else if (window.location.pathname !== '/login.html') {
-    window.location.href = '/login.html'
-    return
-  }
-  // 加载概览数据（用 DOM 操作绕过 Vue 响应式）
+if (!showLogin.value) {
   setTimeout(async () => {
     try {
-      const r = await axios.get(API + '/api/data_status')
+      const r = await axios.get(window.location.origin + '/api/data_status')
       if (r.data.overview && r.data.overview.latest_date) {
         const el = document.getElementById('header-date')
         if (el) el.textContent = r.data.overview.latest_date
       }
     } catch(e) {}
   }, 200)
-})
+}
 </script>

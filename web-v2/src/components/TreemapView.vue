@@ -24,22 +24,24 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, computed } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { NSpace, NDatePicker, NTag, NButton, NButtonGroup, NSpin } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
+import { useMarketStore } from '../stores/market'
 
+const store = useMarketStore()
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
 const metric = ref('mcap')
-const selDate = ref((window._treemapDate || new Date()).toISOString().slice(0,10))
-window._treemapDate = null
+const selDate = ref(store.selDate)
 const loading = ref(true)
 
 const fmt = v => v != null ? Number(v).toLocaleString() : '0'
 
 function switchMetric(m) {
   metric.value = m
+  store.drillStack = []
   drillStack.value = []
   loadTree()
 }
@@ -57,6 +59,7 @@ const levelLabel = computed(() => {
 
 function onDateChange() {
   drillStack.value = []
+  store.setDate(selDate.value)
   if (selDate.value) history.replaceState(null, '', '#/market/' + selDate.value)
   loadTree()
 }

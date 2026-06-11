@@ -69,9 +69,11 @@
 import { ref, reactive, h, onMounted } from 'vue'
 import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag } from 'naive-ui'
 import axios from 'axios'
+import { useAuthStore } from '../stores/auth'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
 const message = useMessage()
+const auth2 = useAuthStore()
 const data = reactive({positions:[], count:0, total_value:0, total_pnl:0})
 const showEdit = ref(false), showDeleteConfirm = ref(false), loading = ref(true)
 const isAdding = ref(false)
@@ -130,8 +132,8 @@ function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{if(!e.target
 async function load(){loading.value=true;try{const r=await axios.get(API+'/api/portfolio');Object.assign(data,r.data)}catch(e){}finally{loading.value=false}}
 async function doAdd(){
   if(!editForm.code)return
-  const token = localStorage.getItem('token')
-  const headers = token ? {Authorization: 'Bearer '+token} : {}
+  const auth2 = useAuthStore()
+  const headers = auth2.token ? {Authorization: 'Bearer '+auth2.token} : {}
   try{
     const body = {stock_code:editForm.code,quantity:editForm.qty,cost_price:editForm.cost,notes:editForm.note}
     if(editForm.date) body.trade_date = editForm.date
@@ -140,13 +142,11 @@ async function doAdd(){
   }catch(e){message.error('添加失败: '+(e.response?.data?.detail||e.message))}
 }
 async function doSaveEdit(){
-  const token = localStorage.getItem('token')
-  const headers = token ? {Authorization: 'Bearer '+token} : {}
+  const headers = auth2.token ? {Authorization: 'Bearer '+auth2.token} : {}
   try{await axios.put(API+'/api/portfolio/'+editForm.code,{quantity:editForm.qty,cost_price:editForm.cost,notes:editForm.note},{headers});showEdit.value=false;await load();message.success('已保存')}catch(e){message.error('保存失败')}
 }
 async function confirmDelete(){
-  const token = localStorage.getItem('token')
-  const headers = token ? {Authorization: 'Bearer '+token} : {}
+  const headers = auth2.token ? {Authorization: 'Bearer '+auth2.token} : {}
   try{await axios.delete(API+'/api/portfolio/'+deleteCode.value,{headers});showDeleteConfirm.value=false;await load();message.success('已删除')}catch(e){message.error('删除失败')}
 }
 onMounted(load)

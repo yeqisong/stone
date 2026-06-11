@@ -142,7 +142,15 @@ def main():
         logger.error("采集失败，跳过策略计算")
         return
 
-    # ── 4. 策略计算 ──
+    # ── 触发 DAG 流水线（treemap→strategy→index→etf→fund→stats）──
+    try:
+        from scripts.pipeline import dag
+        dag.run_all(trade_date=str(today))
+    except Exception as e:
+        logger.warning(f"DAG 流水线触发失败: {e}")
+    return
+
+    # ── 4. 策略计算（以下保留旧代码作为 fallback，DAG 接管后删除）──
     logger.info("[4/5] 加载策略配置...")
     db = get_sync_db()
     try:

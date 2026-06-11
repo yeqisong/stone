@@ -255,6 +255,14 @@ CREATE INDEX IF NOT EXISTS idx_tm_date_metric ON stock_treemap_cache (trade_date
 CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, parent);
 """
 
+CREATE_STATS_CACHE = """
+CREATE TABLE IF NOT EXISTS data_stats_cache (
+    id           SERIAL PRIMARY KEY,
+    stats_json   TEXT NOT NULL,
+    computed_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 CREATE_SYSTEM_METRICS = """
 CREATE TABLE IF NOT EXISTS system_metrics (
     id           SERIAL PRIMARY KEY,
@@ -296,6 +304,7 @@ ALL_TABLES = [
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
+    ("data_stats_cache", CREATE_STATS_CACHE),
     ("system_metrics", CREATE_SYSTEM_METRICS),
 ]
 

@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   server: { 
     port: 3000,
-    proxy: { '/api': 'http://localhost:8000', '/health': 'http://localhost:8000' }
+    proxy: { '/api': { target: 'http://localhost:8000', timeout: 120000 }, '/health': { target: 'http://localhost:8000', timeout: 120000 } }
   },
   build: { outDir: 'dist' }
 })
