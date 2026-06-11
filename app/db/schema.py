@@ -255,6 +255,20 @@ CREATE INDEX IF NOT EXISTS idx_tm_date_metric ON stock_treemap_cache (trade_date
 CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, parent);
 """
 
+CREATE_DAG_RUN_LOG = """
+CREATE TABLE IF NOT EXISTS dag_run_log (
+    id           SERIAL PRIMARY KEY,
+    trade_date   DATE NOT NULL,
+    node_name    VARCHAR(50) NOT NULL,
+    status       VARCHAR(10) NOT NULL DEFAULT 'ok',
+    rows         INTEGER DEFAULT 0,
+    started_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    detail       TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_drl_date ON dag_run_log (trade_date, node_name);
+"""
+
 CREATE_STATS_CACHE = """
 CREATE TABLE IF NOT EXISTS data_stats_cache (
     id           SERIAL PRIMARY KEY,
@@ -305,6 +319,7 @@ ALL_TABLES = [
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
     ("data_stats_cache", CREATE_STATS_CACHE),
+    ("dag_run_log", CREATE_DAG_RUN_LOG),
     ("system_metrics", CREATE_SYSTEM_METRICS),
 ]
 

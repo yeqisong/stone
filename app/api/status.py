@@ -71,6 +71,17 @@ def get_data_status(
         # ── 交易日历 + 每日数据量 ──
         result = db.execute(text("SELECT trade_date, COUNT(*) as cnt FROM daily_quote WHERE trade_date BETWEEN :s AND :e GROUP BY trade_date ORDER BY trade_date"), {"s": cal_start, "e": cal_end})
         daily_data = {str(r[0]): {"rows": r[1]} for r in result.fetchall()}
+        # 补充指数/ETF 数据到完整性判断
+        idx_data = {}
+        try:
+            ir = db.execute(text("SELECT trade_date, COUNT(*) FROM index_daily_quote WHERE trade_date BETWEEN :s AND :e GROUP BY trade_date"), {"s": cal_start, "e": cal_end}).fetchall()
+            idx_data = {str(r[0]): r[1] for r in ir}
+        except: pass
+        for d, cnt in idx_data.items():
+            if d in daily_data:
+                daily_data[d]['idx_rows'] = cnt
+            else:
+                daily_data[d] = {'rows': 0, 'idx_rows': cnt}
         result = db.execute(text("SELECT cal_date, is_trade_day FROM trade_calendar WHERE cal_date BETWEEN :s AND :e ORDER BY cal_date"), {"s": cal_start, "e": cal_end})
         calendar_dates = {str(r[0]): bool(r[1]) for r in result.fetchall()}
         daily_counts = [v["rows"] for v in daily_data.values()]
@@ -85,9 +96,11 @@ def get_data_status(
             dd = daily_data.get(d)
             if is_trade and dd:
                 pct = dd["rows"] / baseline_stocks * 100
+                # 指数、ETF 数据标记
+                has_idx = dd.get("idx_rows", 0) > 0
                 days_ago = (today - current).days
                 if pct < 80 and days_ago <= 7: missing_dates.append(d)
-                calendar.append({"date": d, "is_trade_day": True, "completeness": {"rows": dd["rows"], "pct": round(pct, 1), "baseline": baseline_stocks}, "weekday": current.weekday()})
+                calendar.append({"date": d, "is_trade_day": True, "completeness": {"rows": dd["rows"], "pct": round(pct, 1), "baseline": baseline_stocks, "idx": has_idx}, "weekday": current.weekday()})
             elif is_trade and not dd:
                 days_ago = (today - current).days
                 if days_ago <= 30 and current <= today: missing_dates.append(d)
@@ -106,9 +119,14 @@ def get_data_status(
             except: pass
             today_strategy = {"buy_signals": int(row[0]) if row[0] else 0, "status": row[1], "time": str(row[3])[:19] if row[3] else None, "total_signals": detail.get("total_signals", 0), "scanned": detail.get("scanned", 0), "elapsed_seconds": detail.get("elapsed_seconds", 0), "preference": detail.get("preference", ""), "strategy_date": str(row[3])[:10] if row[3] else None}
 
-        # ── 下载日志 ──
-        result = db.execute(text("SELECT metric_value, status, detail, checked_at FROM system_metrics WHERE metric_name='daily_download' ORDER BY checked_at DESC LIMIT 10"))
-        download_log = [{"rows": int(r[0]) if r[0] else 0, "status": r[1], "detail": r[2], "time": str(r[3])[:19] if r[3] else None} for r in result.fetchall()]
+        # ── DAG 运行日志 ──
+        # 取最近3天的所有节点日志，按 trade_date DESC, id ASC 排列
+        result = db.execute(text(
+            "SELECT trade_date, node_name, status, rows, finished_at, detail FROM dag_run_log "
+            "WHERE trade_date >= (SELECT COALESCE(MAX(trade_date), CURRENT_DATE) - 3 FROM dag_run_log) "
+            "ORDER BY trade_date DESC, id ASC LIMIT 30"
+        ))
+        download_log = [{"date": str(r[0]), "node": r[1], "status": r[2], "rows": r[3] or 0, "time": str(r[4])[:19] if r[4] else None, "detail": r[5] or ''} for r in result.fetchall()]
 
         # ── 数据明细（优先从 data_stats_cache 缓存表读取） ──
         import json as _json
@@ -191,30 +209,11 @@ class SyncDateRequest(BaseModel):
 def _run_sync_in_background(sync_date: str, task_id: str):
     _sync_tasks[task_id] = {"status": "running", "date": sync_date, "started_at": _time.time()}
     try:
-        from crawler.baostock_crawler import BaostockCrawler
-        db = get_sync_db()
-        try:
-            crawler = BaostockCrawler()
-            d = date.fromisoformat(sync_date)
-            result = crawler.download_daily_update(d, db=db)
-            crawler.logout()
-            db.commit()
-            idx_crawler = BaostockCrawler()
-            idx_rows = idx_crawler.download_all_index_daily(sync_date, db=db)
-            idx_crawler.logout()
-            db.commit()
-            etf_crawler = BaostockCrawler()
-            etf_result = etf_crawler.download_etf_daily(sync_date, db=db)
-            etf_crawler.logout()
-            db.commit()
-            after = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d"), {"d": sync_date}).scalar() or 0
-            _sync_tasks[task_id] = {"status": "completed", "date": sync_date, "stocks_added": result.get("rows", 0), "stocks_errors": result.get("errors", 0), "index_rows": idx_rows, "etf_rows": etf_result.get("rows", 0), "total_after": after, "elapsed": round(_time.time() - _sync_tasks[task_id]["started_at"])}
-        except Exception as e:
-            logger.error(f"后台同步 {sync_date} 失败: {e}")
-            _sync_tasks[task_id] = {"status": "failed", "date": sync_date, "error": str(e)}
-        finally:
-            db.close()
+        from scripts.pipeline import dag
+        dag.run("daily_update", trade_date=sync_date)
+        _sync_tasks[task_id] = {"status": "completed", "date": sync_date, "elapsed": round(_time.time() - _sync_tasks[task_id]["started_at"])}
     except Exception as e:
+        logger.error(f"后台同步 {sync_date} 失败: {e}")
         _sync_tasks[task_id] = {"status": "failed", "date": sync_date, "error": str(e)}
     _time.sleep(600)
     _sync_tasks.pop(task_id, None)

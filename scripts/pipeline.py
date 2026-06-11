@@ -142,6 +142,7 @@ def run_strategies(trade_date: str):
         except: pass
     db.commit(); db.close()
     logger.info(f"[pipeline] 策略完成: {saved} 信号")
+    return saved
 
 
 def generate_stats(*args, **kwargs):
@@ -179,6 +180,27 @@ def generate_stats(*args, **kwargs):
     db.execute(text("INSERT INTO data_stats_cache (stats_json, computed_at) VALUES (:j, CURRENT_TIMESTAMP)"), {"j": payload})
     db.commit(); db.close()
     logger.info(f"[pipeline] 数据统计完成: {len(stats)} 项")
+    return len(stats)
+
+
+# ══════════════════════════════════════════
+# 运行日志
+# ══════════════════════════════════════════
+
+def write_node_log(trade_date: str, node_name: str, status: str = 'ok', rows: int = 0, detail: str = ''):
+    """写入节点运行日志到 dag_run_log。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    try:
+        db = get_sync_db()
+        db.execute(text("""
+            INSERT INTO dag_run_log (trade_date, node_name, status, rows, started_at, finished_at, detail)
+            VALUES (:d, :n, :s, :r, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, :dt)
+        """), {"d": trade_date, "n": node_name, "s": status, "r": rows, "dt": detail})
+        db.commit()
+        db.close()
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════
@@ -187,45 +209,86 @@ def generate_stats(*args, **kwargs):
 
 def dag_task_kline(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today())
-    from crawler.baostock_crawler import BaostockCrawler
-    c = BaostockCrawler(); r = c.download_daily_update(date.fromisoformat(td)); c.logout()
-    return r
+    try:
+        from crawler.baostock_crawler import BaostockCrawler
+        c = BaostockCrawler(); r = c.download_daily_update(date.fromisoformat(td)); c.logout()
+        rows = r.get('rows', 0)
+        write_node_log(td, 'kline', 'ok', rows, r.get('detail', ''))
+        return r
+    except Exception as e:
+        write_node_log(td, 'kline', 'error', 0, str(e))
+        raise
 
 def dag_task_index(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today())
-    from crawler.baostock_crawler import BaostockCrawler
-    c = BaostockCrawler(); r = c.download_all_index_daily(td); c.logout()
-    return r
+    try:
+        from crawler.baostock_crawler import BaostockCrawler
+        c = BaostockCrawler(); r = c.download_all_index_daily(td); c.logout()
+        write_node_log(td, 'index', 'ok', r)
+        return r
+    except Exception as e:
+        write_node_log(td, 'index', 'error', 0, str(e))
+        raise
 
 def dag_task_etf(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today())
-    from crawler.baostock_crawler import BaostockCrawler
-    c = BaostockCrawler(); r = c.download_etf_daily(td); c.logout()
-    return r
+    try:
+        from crawler.baostock_crawler import BaostockCrawler
+        c = BaostockCrawler(); r = c.download_etf_daily(td); c.logout()
+        rows = r.get('rows', 0)
+        write_node_log(td, 'etf', 'ok', rows)
+        return r
+    except Exception as e:
+        write_node_log(td, 'etf', 'error', 0, str(e))
+        raise
 
 def dag_task_fund(trade_date=None, **kw):
-    from crawler.baostock_crawler import BaostockCrawler
-    c = BaostockCrawler(); r = c.download_fundamentals(skip_existing=False, skip_pe_pb=False); c.logout()
-    return r
+    try:
+        from crawler.baostock_crawler import BaostockCrawler
+        c = BaostockCrawler(); r = c.download_fundamentals(skip_existing=False, skip_pe_pb=False); c.logout()
+        write_node_log(str(kw.get('trade_date', '')), 'fund', 'ok', r or 0)
+        return r
+    except Exception as e:
+        write_node_log(str(kw.get('trade_date', '')), 'fund', 'error', 0, str(e))
+        raise
 
 def dag_task_treemap(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today())
-    for m in ['mcap', 'volume', 'amount', 'pe']: generate_treemap(td, m)
-    return 4
+    try:
+        for m in ['mcap', 'volume', 'amount', 'pe']: generate_treemap(td, m)
+        write_node_log(td, 'treemap', 'ok', 4)
+        return 4
+    except Exception as e:
+        write_node_log(td, 'treemap', 'error', 0, str(e))
+        raise
 
 def dag_task_strategy(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today())
-    return run_strategies(td)
+    try:
+        n = run_strategies(td)
+        write_node_log(td, 'strategy', 'ok', n or 0)
+        return n
+    except Exception as e:
+        write_node_log(td, 'strategy', 'error', 0, str(e))
+        raise
 
 def dag_task_stats(trade_date=None, **kw):
-    return generate_stats()
+    from datetime import date; td = trade_date or str(date.today())
+    try:
+        r = generate_stats()
+        write_node_log(td, 'stats', 'ok', r or 7)
+        return r
+    except Exception as e:
+        write_node_log(td, 'stats', 'error', 0, str(e))
+        raise
 
 
 dag = DagExecutor()
-dag.add(DagNode("kline",    deps=[],                      fn=dag_task_kline))
-dag.add(DagNode("index",    deps=[],                      fn=dag_task_index))
-dag.add(DagNode("etf",      deps=[],                      fn=dag_task_etf))
-dag.add(DagNode("fund",     deps=[],                      fn=dag_task_fund))
+dag.add(DagNode("daily_update", deps=[],  fn=lambda **kw: write_node_log(str(kw.get('trade_date','')), 'daily_update', 'ok', 0) or True))
+dag.add(DagNode("kline",    deps=["daily_update"],        fn=dag_task_kline))
+dag.add(DagNode("index",    deps=["daily_update"],        fn=dag_task_index))
+dag.add(DagNode("etf",      deps=["daily_update"],        fn=dag_task_etf))
+dag.add(DagNode("fund",     deps=["daily_update"],        fn=dag_task_fund))
 dag.add(DagNode("treemap",  deps=["kline"],                fn=dag_task_treemap))
 dag.add(DagNode("strategy", deps=["kline"],                fn=dag_task_strategy))
 dag.add(DagNode("stats",    deps=["treemap","strategy","index","etf","fund"], fn=dag_task_stats))

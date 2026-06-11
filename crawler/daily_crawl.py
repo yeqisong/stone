@@ -142,10 +142,10 @@ def main():
         logger.error("采集失败，跳过策略计算")
         return
 
-    # ── 触发 DAG 流水线（treemap→strategy→index→etf→fund→stats）──
+    # ── 触发 DAG 流水线（daily_update→kline/index/etf/fund→treemap/strategy→stats）──
     try:
         from scripts.pipeline import dag
-        dag.run_all(trade_date=str(today))
+        dag.run("daily_update", trade_date=str(today))
     except Exception as e:
         logger.warning(f"DAG 流水线触发失败: {e}")
     return

@@ -92,10 +92,12 @@ const monthLabel = computed(() => {
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
 
 const logColumns = [
+  { title:'日期', key:'date', width:100 },
+  { title:'节点', key:'node', width:70 },
+  { title:'状态', width:50, render(r){return r.status==='ok'?'✅':'❌'} },
+  { title:'行数', width:60, render(r){return r.rows||0} },
   { title:'时间', key:'time', width:150 },
-  { title:'状态', width:50 },
-  { title:'行数', width:60, render(r){return '+'+r.rows} },
-  { title:'详情', minWidth:200, ellipsis:{tooltip:true}, render(r){return r.detail||''} },
+  { title:'详情', minWidth:150, ellipsis:{tooltip:true}, render(r){return r.detail||''} },
 ]
 
 const dialog = useDialog()

@@ -91,11 +91,11 @@ def download_fundamentals_only(skip_existing: bool = True,
 
 
 def daily_update(trade_date: date = None):
-    """每日增量更新（cron 17:35 触发），完成后触发 DAG 流水线。"""
+    """每日增量更新（cron 17:35 触发），触发 DAG daily_update 节点。"""
     if trade_date is None:
         trade_date = date.today()
     from scripts.pipeline import dag
-    dag.run_all(trade_date=str(trade_date))
+    dag.run("daily_update", trade_date=str(trade_date))
     return {"ok": True}
 
 
