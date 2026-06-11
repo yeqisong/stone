@@ -104,7 +104,7 @@ def update_params(body: StrategyParams, user: str = Depends(optional_auth)):
 
 
 @router.post("/settings/deepseek_key")
-def set_deepseek_key(body: DeepSeekKey):
+def set_deepseek_key(body: DeepSeekKey, user: str = Depends(optional_auth)):
     """设置 DeepSeek API Key。"""
     db = get_sync_db()
     try:

@@ -2,7 +2,7 @@
 import json
 import hashlib
 import hmac
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
@@ -39,8 +39,8 @@ async def feishu_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             sign_str = f"{timestamp}{nonce}{settings.FEISHU_APP_SECRET}"
             expected = hashlib.sha256(sign_str.encode()).hexdigest()
             if signature != expected:
-                logger.warning("飞书签名校验失败")
-                # 不严格拦截，记录日志即可
+                logger.warning(f"飞书签名校验失败: received={signature}")
+                raise HTTPException(status_code=403, detail="签名校验失败")
 
     # 3. 处理消息
     event = body_json.get("event", {})

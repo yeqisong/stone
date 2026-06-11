@@ -6,7 +6,7 @@ from pathlib import Path
 class Settings(BaseSettings):
     # ── 应用 ──
     APP_ENV: str = "dev"  # dev | prod
-    APP_SECRET_KEY: str = "dev-secret-change-in-production"
+    APP_SECRET_KEY: str = ""  # 必须通过环境变量 APP_SECRET_KEY 设置
     JWT_EXPIRE_HOURS: int = 24
 
     # ── 数据库 ──
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # ── 登录认证 ──
     LOGIN_USERNAME: str = "admin"
-    LOGIN_PASSWORD: str = "admin123"
+    LOGIN_PASSWORD: str = ""  # 必须通过环境变量 LOGIN_PASSWORD 设置
 
     # ── 服务器 ──
     DOMAIN: str = "localhost"

@@ -1,11 +1,13 @@
 <template>
 <div>
-  <n-space align="center" style="margin-bottom:10px" wrap>
-    <n-button :type="cat==='stock'?'primary':'default'" size="small" @click="cat='stock';page=1;load()">📌 个股</n-button>
-    <n-button :type="cat==='index'?'primary':'default'" size="small" @click="cat='index';page=1;load()">📊 指数</n-button>
-    <n-button :type="cat==='etf'?'primary':'default'" size="small" @click="cat='etf';page=1;load()">💹 ETF</n-button>
-    <n-input v-model:value="kw" placeholder="搜索代码或名称..." size="small" style="width:180px" clearable @keyup.enter="page=1;load()" />
-    <n-button type="primary" size="small" :loading="loading" @click="page=1;load()">搜索</n-button>
+  <n-space align="center" style="margin-bottom:8px" wrap>
+    <n-button-group size="tiny">
+      <n-button :type="cat==='stock'?'primary':'default'" @click="cat='stock';page=1;load()">📌 个股</n-button>
+      <n-button :type="cat==='index'?'primary':'default'" @click="cat='index';page=1;load()">📊 指数</n-button>
+      <n-button :type="cat==='etf'?'primary':'default'" @click="cat='etf';page=1;load()">💹 ETF</n-button>
+    </n-button-group>
+    <n-input v-model:value="kw" placeholder="搜索代码或名称..." size="small" style="width:160px" clearable @keyup.enter="page=1;load()" />
+    <n-button type="primary" size="tiny" :loading="loading" @click="page=1;load()">搜索</n-button>
     <span style="font-size:11px;color:rgba(255,255,255,.45)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
   </n-space>
 
@@ -22,7 +24,7 @@
 </template>
 <script setup>
 import { ref, reactive, h, computed } from 'vue'
-import { NCard, NDataTable, NButton, NInput, NPagination, NTag, NSpace, NSpin } from 'naive-ui'
+import { NCard, NDataTable, NButton, NButtonGroup, NInput, NPagination, NTag, NSpace, NSpin } from 'naive-ui'
 import axios from 'axios'
 
 const emit = defineEmits(['show-detail'])

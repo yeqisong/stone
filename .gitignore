@@ -41,6 +41,10 @@ reasonix.toml
 # Docker
 docker-compose.override.yml
 
+# 环境配置（含密码）
+.env
+.env.prod
+
 # Git
 *.patch
 *.orig

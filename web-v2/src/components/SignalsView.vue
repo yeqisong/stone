@@ -35,7 +35,7 @@ async function load(){
     const d = typeof sigDate.value === 'string' ? sigDate.value : (sigDate.value||new Date()).toISOString().slice(0,10)
     const r = await axios.get(API+'/api/buy_signals',{params:{signal_date:d}})
     Object.assign(data, r.data)
-  }catch(e){}
+  }catch(e){console.error('load signals error',e)}
 }
 onMounted(load)
 </script>

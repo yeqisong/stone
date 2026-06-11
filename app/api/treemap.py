@@ -10,21 +10,22 @@ router = APIRouter(tags=["treemap"])
 @router.get("/treemap_data")
 def get_treemap_data(
     trade_date: str = Query(..., description="日期 YYYY-MM-DD"),
+    metric: str = Query("mcap", description="指标: mcap/volume/amount"),
     parent: str = Query("", description="父节点: 空=全量树, A=该行业下二级+个股, C15=该二级下个股"),
 ):
     """返回树图数据。parent 为空时返回全量扁平树(L1→个股)；指定 parent 返回该节点下直系子级。"""
     db = get_sync_db()
     try:
         has = db.execute(text(
-            "SELECT COUNT(*) FROM stock_treemap_cache WHERE trade_date=:d"
-        ), {"d": trade_date}).scalar() or 0
+            "SELECT COUNT(*) FROM stock_treemap_cache WHERE trade_date=:d AND metric=:m"
+        ), {"d": trade_date, "m": metric}).scalar() or 0
         if not has:
             return {"trade_date": trade_date, "children": []}
 
         rows = db.execute(text(
             "SELECT parent, node_id, name, value, chg_pct, trend_up, node_type, detail "
-            "FROM stock_treemap_cache WHERE trade_date=:d ORDER BY parent, value DESC"
-        ), {"d": trade_date}).fetchall()
+            "FROM stock_treemap_cache WHERE trade_date=:d AND metric=:m ORDER BY parent, value DESC"
+        ), {"d": trade_date, "m": metric}).fetchall()
 
         # 构建索引
         by_id = {}

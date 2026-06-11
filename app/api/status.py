@@ -30,11 +30,15 @@ def get_data_status(
         result = db.execute(text("SELECT MAX(trade_date) FROM daily_quote"))
         overview["latest_date"] = str(r) if (r := result.scalar()) else None
 
-        # 总行数（pg_class 统计信息，杜绝 656 万行 COUNT * 或秒级 GROUP BY）
-        result = db.execute(text(
-            "SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'"
-        ))
-        overview["total_rows"] = result.scalar() or 0
+        # 总行数（pg_class 统计信息，SQLite 回退 COUNT）
+        try:
+            result = db.execute(text(
+                "SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'"
+            ))
+            overview["total_rows"] = result.scalar() or 0
+        except Exception:
+            result = db.execute(text("SELECT COUNT(*) FROM daily_quote"))
+            overview["total_rows"] = result.scalar() or 0
 
         # 各交易所最新日期（逐个 LIMIT 1 + 新索引 idx_dq_exchange_date，各 ~0.2s）
         # COUNT(DISTINCT *) 或 GROUP BY COUNT(*) 需全索引扫 → 换成 stock_master 的股票数

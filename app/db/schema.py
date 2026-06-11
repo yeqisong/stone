@@ -240,17 +240,18 @@ CREATE_TREEMAP_CACHE = """
 CREATE TABLE IF NOT EXISTS stock_treemap_cache (
     id           SERIAL PRIMARY KEY,
     trade_date   DATE NOT NULL,
+    metric       VARCHAR(10) NOT NULL DEFAULT 'mcap',
     parent       VARCHAR(10) NOT NULL DEFAULT 'root',
-    node_id      VARCHAR(10) NOT NULL,     -- L1代码(A/C)或L2代码(C15)或个股代码
-    name         VARCHAR(50) NOT NULL,     -- 显示名称
-    value        NUMERIC(18,2) NOT NULL,   -- 总面积/市值
-    chg_pct      NUMERIC(8,2),             -- 涨跌幅(汇总或个股)
-    trend_up     BOOLEAN DEFAULT true,      -- 20日线趋势
-    node_type    VARCHAR(10) NOT NULL,      -- 'l1','l2','stock'
-    item_style   TEXT DEFAULT '',           -- 颜色配置(JSON)
-    detail       TEXT DEFAULT '',           -- 个股明细(JSON)
-    UNIQUE (trade_date, node_id)
+    node_id      VARCHAR(10) NOT NULL,
+    name         VARCHAR(50) NOT NULL,
+    value        NUMERIC(18,2) NOT NULL,
+    chg_pct      NUMERIC(8,2),
+    trend_up     BOOLEAN DEFAULT true,
+    node_type    VARCHAR(10) NOT NULL,
+    detail       TEXT DEFAULT '',
+    UNIQUE (trade_date, metric, node_id)
 );
+CREATE INDEX IF NOT EXISTS idx_tm_date_metric ON stock_treemap_cache (trade_date, metric, parent);
 CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, parent);
 """
 

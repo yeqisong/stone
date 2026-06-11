@@ -1,10 +1,24 @@
 """个股列表 API — 分页浏览 + 搜索，支持个股/指数分类。"""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from sqlalchemy import text
 
 from app.db.connection import get_sync_db
 
 router = APIRouter(tags=["stocks"])
+
+# 白名单验证
+VALID_CATEGORIES = {"stock", "index", "etf", "bond", "all"}
+VALID_ORDER_BY = {"price", "chg_pct", "pe_ttm", "trade_date", "market_cap"}
+VALID_ORDER_DIR = {"asc", "desc"}
+
+ORDER_SQL_MAP = {
+    "price": "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1)",
+    "pe_ttm": "sf.pe_ttm",
+    "trade_date": "trade_date",
+    "market_cap": "sf.market_cap",
+    "chg_pct": ("(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) - "
+                "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1)"),
+}
 
 
 @router.get("/stocks")
@@ -12,42 +26,44 @@ def list_stocks(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=10, le=100),
     keyword: str = Query("", description="搜索代码或名称"),
-    category: str = Query("stock", description="stock|index|etf|bond|all"),
-    order_by: str = Query("trade_date", description="排序字段: price|chg_pct|pe_ttm|trade_date"),
-    order_dir: str = Query("desc", description="排序方向: asc|desc"),
+    category: str = Query("stock"),
+    order_by: str = Query("trade_date"),
+    order_dir: str = Query("desc"),
 ):
-    """分页获取列表。支持排序: price, chg_pct, pe_ttm 升序/降序。"""
+    """分页获取列表。支持排序: price, chg_pct, pe_ttm, trade_date 升序/降序。"""
+    # 参数白名单验证
+    if category not in VALID_CATEGORIES:
+        raise HTTPException(400, f"无效的 category: {category}")
+    if order_by not in VALID_ORDER_BY:
+        raise HTTPException(400, f"无效的 order_by: {order_by}")
+    if order_dir not in VALID_ORDER_DIR:
+        raise HTTPException(400, f"无效的 order_dir: {order_dir}")
+
     db = get_sync_db()
     try:
         offset = (page - 1) * page_size
         like = f"%{keyword}%"
 
-        type_map = {"stock": "stock", "index": "index", "etf": "etf", "bond": "bond"}
-        category_clause = ""
-        if category in type_map:
-            category_clause = f" AND sm.stock_type = '{type_map[category]}'"
+        type_map = {"stock": "stock", "index": "index", "etf": "etf", "bond": "bond", "all": None}
+        stype = type_map[category]
+        params = {"k": like, "l": page_size, "o": offset}
 
-        where_base = "sm.status='N'" + category_clause
+        # 用参数化查询替代 f-string
+        if stype:
+            where_base = "sm.status='N' AND sm.stock_type = :stype"
+            params["stype"] = stype
+        else:
+            where_base = "sm.status='N'"
+
         if keyword:
             where_base += " AND (sm.stock_code LIKE :k OR sm.stock_name LIKE :k)"
 
-        result = db.execute(text(f"SELECT COUNT(*) FROM stock_master sm WHERE {where_base}"), {"k": like})
+        cnt_sql = f"SELECT COUNT(*) FROM stock_master sm WHERE {where_base}"
+        result = db.execute(text(cnt_sql), params)
         total = result.scalar() or 0
 
-        # 动态排序
         dir_sql = "DESC NULLS LAST" if order_dir == "desc" else "ASC NULLS LAST"
-        if order_by == "price":
-            order_sql = "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1)"
-        elif order_by == "pe_ttm":
-            order_sql = "sf.pe_ttm"
-        elif order_by == "trade_date":
-            order_sql = "trade_date"
-        elif order_by == "chg_pct":
-            order_sql = ("(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) - "
-                        "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1)")
-        else:
-            order_sql = "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1)"
-        order_clause = f"ORDER BY {order_sql} {dir_sql}"
+        order_sql = ORDER_SQL_MAP[order_by]
 
         base_sql = f"""SELECT sm.stock_code, sm.stock_name, sm.exchange, sm.stock_type,
                (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) as price,
@@ -57,9 +73,9 @@ def list_stocks(
                sf.pe_ttm, sf.pb_mrq, sf.industry, sf.roe, sf.market_cap
         FROM stock_master sm LEFT JOIN stock_fundamentals sf ON sf.stock_code=sm.stock_code
         WHERE {where_base}
-        {order_clause} LIMIT :l OFFSET :o"""
+        ORDER BY {order_sql} {dir_sql} LIMIT :l OFFSET :o"""
 
-        result = db.execute(text(base_sql), {"k": like, "l": page_size, "o": offset})
+        result = db.execute(text(base_sql), params)
 
         stocks = []
         for r in result.fetchall():
