@@ -2,6 +2,7 @@
 from typing import Dict, List, Callable, Set
 from loguru import logger
 import time
+import uuid
 
 
 class DagNode:
@@ -35,6 +36,7 @@ class DagExecutor:
         self._nodes: Dict[str, DagNode] = {}
         self._edges: Dict[str, List[str]] = {}       # node → 下游列表
         self._completed: Dict[str, float] = {}        # node → 最近完成时间戳
+        self.on_node_enter = None                     # 节点执行前回调 fn(name, **context)
 
     def add(self, node: DagNode):
         self._nodes[node.name] = node
@@ -76,8 +78,14 @@ class DagExecutor:
                     queue.append(d)
         return visited
 
+    def _gen_run_id(self) -> str:
+        """生成简短的任务ID。"""
+        return uuid.uuid4().hex[:8]
+
     def run(self, trigger: str, **context):
         """手工触发一个节点，自动传播到所有下游（依赖满足即跑）。"""
+        if 'run_id' not in context:
+            context['run_id'] = self._gen_run_id()
         if trigger not in self._nodes:
             raise ValueError(f"未知节点: {trigger}")
 
@@ -85,12 +93,21 @@ class DagExecutor:
         sorted_names = self._topo_sort(affected)
 
         logger.info(f"[dag] 触发 {trigger} → 影响 {len(sorted_names)} 个节点: {sorted_names}")
+        # 预创建所有受影响节点的 pending 日志
+        if self.on_node_enter:
+            for name in sorted_names:
+                self.on_node_enter(name, 'pending', **context)
         self._execute(sorted_names, **context)
 
     def run_all(self, **context):
         """全部节点按拓扑顺序执行一次。"""
+        if 'run_id' not in context:
+            context['run_id'] = self._gen_run_id()
         sorted_names = self._topo_sort(set(self._nodes.keys()))
-        logger.info(f"[dag] 全量执行 {len(sorted_names)} 个节点")
+        logger.info(f"[dag] 全量执行 {len(sorted_names)} 个节点 (run_id={context['run_id']})")
+        if self.on_node_enter:
+            for name in sorted_names:
+                self.on_node_enter(name, 'pending', **context)
         self._execute(sorted_names, **context)
 
     def run_node(self, name: str, **context):
@@ -106,21 +123,46 @@ class DagExecutor:
         return {name: datetime.fromtimestamp(ts).strftime('%H:%M:%S')
                 for name, ts in sorted(self._completed.items())}
 
+    def _run_with_hooks(self, node, context):
+        """执行单个节点（context 是 dict，展开为 **kwargs）。"""
+        return node.fn(**context)
+
     def _execute(self, sorted_names: List[str], **context):
-        """按顺序执行，依赖检查基于累计完成记录。"""
-        for name in sorted_names:
-            node = self._nodes[name]
-            # 依赖检查：曾经完成过即可（累计记录）
-            missing = [d for d in node.deps if d not in self._completed]
-            if missing:
-                logger.info(f"[dag] {name} 跳过，依赖未完成: {missing}")
-                continue
-            try:
-                t0 = time.time()
-                result = node.fn(**context)
-                elapsed = time.time() - t0
-                self._completed[name] = time.time()
-                logger.info(f"[dag] {name} ✓ ({elapsed:.2f}s)")
-            except Exception as e:
-                logger.error(f"[dag] {name} ✗ 失败: {e}")
-                raise
+        """按顺序执行，同层无依赖节点自动并行（ThreadPoolExecutor）。"""
+        import concurrent.futures
+
+        remaining = list(sorted_names)
+        while remaining:
+            # 找出当前所有依赖已满足的节点
+            ready = []
+            for name in remaining:
+                node = self._nodes[name]
+                if all(d in self._completed for d in node.deps):
+                    ready.append(name)
+            if not ready:
+                # 没有就绪节点 → 死锁或依赖链断裂
+                remaining_names = ', '.join(remaining)
+                logger.error(f"[dag] 无就绪节点，剩余: {remaining_names}")
+                break
+
+            # 并行执行就绪节点
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(ready)) as executor:
+                futures = {}
+                for name in ready:
+                    node = self._nodes[name]
+                    futures[executor.submit(self._run_with_hooks, node, context)] = name
+                for future in concurrent.futures.as_completed(futures):
+                    name = futures[future]
+                    try:
+                        t0 = time.time()
+                        future.result()  # 已经执行完了，这里只是获取结果/异常
+                        elapsed = time.time() - t0
+                        self._completed[name] = time.time()
+                        logger.info(f"[dag] {name} ✓ ({elapsed:.1f}s)")
+                    except Exception as e:
+                        logger.error(f"[dag] {name} ✗ 失败: {e}")
+                        # 不标记完成 → 下游依赖不满足 → 自动跳过
+
+            # 从剩余列表中移除已执行的节点
+            for name in ready:
+                remaining.remove(name)

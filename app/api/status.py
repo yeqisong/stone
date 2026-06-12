@@ -68,24 +68,21 @@ def get_data_status(
         overview["is_trade_day"] = bool(row[0]) if row else None
         overview["today"] = str(today)
 
-        # ── 交易日历 + 每日数据量 ──
-        result = db.execute(text("SELECT trade_date, COUNT(*) as cnt FROM daily_quote WHERE trade_date BETWEEN :s AND :e GROUP BY trade_date ORDER BY trade_date"), {"s": cal_start, "e": cal_end})
-        daily_data = {str(r[0]): {"rows": r[1]} for r in result.fetchall()}
-        # 补充指数/ETF 数据到完整性判断
-        idx_data = {}
-        try:
-            ir = db.execute(text("SELECT trade_date, COUNT(*) FROM index_daily_quote WHERE trade_date BETWEEN :s AND :e GROUP BY trade_date"), {"s": cal_start, "e": cal_end}).fetchall()
-            idx_data = {str(r[0]): r[1] for r in ir}
-        except: pass
-        for d, cnt in idx_data.items():
-            if d in daily_data:
-                daily_data[d]['idx_rows'] = cnt
-            else:
-                daily_data[d] = {'rows': 0, 'idx_rows': cnt}
-        result = db.execute(text("SELECT cal_date, is_trade_day FROM trade_calendar WHERE cal_date BETWEEN :s AND :e ORDER BY cal_date"), {"s": cal_start, "e": cal_end})
-        calendar_dates = {str(r[0]): bool(r[1]) for r in result.fetchall()}
-        daily_counts = [v["rows"] for v in daily_data.values()]
-        baseline_stocks = sorted(daily_counts)[len(daily_counts) // 2] if daily_counts else (overview["total_stocks"] or 1)
+        # ── 交易日历 + 每日数据量（从 daily_completeness 表增量读取） ──
+        dc_rows = db.execute(text(
+            "SELECT trade_date, stock_rows, index_rows, etf_rows, fund_rows FROM daily_completeness "
+            "WHERE trade_date BETWEEN :s AND :e ORDER BY trade_date"
+        ), {"s": cal_start, "e": cal_end}).fetchall()
+        dc = {str(r[0]): {"stock": r[1] or 0, "index": r[2] or 0, "etf": r[3] or 0, "fund": r[4] or 0} for r in dc_rows}
+
+        tc_rows = db.execute(text(
+            "SELECT cal_date, is_trade_day FROM trade_calendar WHERE cal_date BETWEEN :s AND :e ORDER BY cal_date"
+        ), {"s": cal_start, "e": cal_end}).fetchall()
+        calendar_dates = {str(r[0]): bool(r[1]) for r in tc_rows}
+
+        # 基线：当月正常交易日的中位数（排除 <5000 的低值，如部分更新日）
+        month_rows = sorted([r['stock'] for r in dc.values() if r['stock'] > 5000])
+        baseline = month_rows[len(month_rows)//2] if month_rows else 6000
 
         calendar = []
         missing_dates = []
@@ -93,20 +90,17 @@ def get_data_status(
         while current <= cal_end:
             d = str(current)
             is_trade = calendar_dates.get(d, current.weekday() < 5)
-            dd = daily_data.get(d)
-            if is_trade and dd:
-                pct = dd["rows"] / baseline_stocks * 100
-                # 指数、ETF 数据标记
-                has_idx = dd.get("idx_rows", 0) > 0
-                days_ago = (today - current).days
-                if pct < 80 and days_ago <= 7: missing_dates.append(d)
-                calendar.append({"date": d, "is_trade_day": True, "completeness": {"rows": dd["rows"], "pct": round(pct, 1), "baseline": baseline_stocks, "idx": has_idx}, "weekday": current.weekday()})
-            elif is_trade and not dd:
-                days_ago = (today - current).days
-                if days_ago <= 30 and current <= today: missing_dates.append(d)
-                calendar.append({"date": d, "is_trade_day": True, "completeness": {"rows": 0, "pct": 0, "baseline": baseline_stocks}, "weekday": current.weekday()})
+            dd = dc.get(d)
+            days_ago = (today - current).days
+            if dd:
+                rows = dd['stock']
+                pct = round(rows / baseline * 100, 1) if baseline and is_trade else 0
+                if is_trade and days_ago <= 7 and pct < 80 and rows > 0: missing_dates.append(d)
+                elif is_trade and days_ago <= 30 and rows == 0 and current <= today: missing_dates.append(d)
+                calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": rows, "pct": pct, "baseline": baseline} if is_trade else None, "weekday": current.weekday()})
             else:
-                calendar.append({"date": d, "is_trade_day": False, "completeness": None, "weekday": current.weekday()})
+                if is_trade and days_ago <= 30 and current <= today: missing_dates.append(d)
+                calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": 0, "pct": 0, "baseline": baseline} if is_trade else None, "weekday": current.weekday()})
             current += timedelta(days=1)
 
         # ── 今日策略 ──
@@ -120,28 +114,38 @@ def get_data_status(
             today_strategy = {"buy_signals": int(row[0]) if row[0] else 0, "status": row[1], "time": str(row[3])[:19] if row[3] else None, "total_signals": detail.get("total_signals", 0), "scanned": detail.get("scanned", 0), "elapsed_seconds": detail.get("elapsed_seconds", 0), "preference": detail.get("preference", ""), "strategy_date": str(row[3])[:10] if row[3] else None}
 
         # ── DAG 运行日志 ──
-        # 取最近3天的所有节点日志，按 trade_date DESC, id ASC 排列
-        result = db.execute(text(
-            "SELECT trade_date, node_name, status, rows, finished_at, detail FROM dag_run_log "
-            "WHERE trade_date >= (SELECT COALESCE(MAX(trade_date), CURRENT_DATE) - 3 FROM dag_run_log) "
-            "ORDER BY trade_date DESC, id ASC LIMIT 30"
-        ))
-        download_log = [{"date": str(r[0]), "node": r[1], "status": r[2], "rows": r[3] or 0, "time": str(r[4])[:19] if r[4] else None, "detail": r[5] or ''} for r in result.fetchall()]
+        # 取最新一次 run_id 的所有节点日志
+        result = db.execute(text("""
+            SELECT trade_date, node_name, status, rows, detail, run_id,
+                   created_at, started_at, finished_at
+            FROM dag_run_log WHERE run_id = (SELECT run_id FROM dag_run_log ORDER BY id DESC LIMIT 1)
+            OR run_id = '' ORDER BY id ASC LIMIT 30
+        """))
+        download_log = []
+        for r in result.fetchall():
+            raw_st = r[2]
+            norm_st = {'ok':'success','error':'failed'}.get(raw_st, raw_st)
+            def ts(v): return str(v)[:19] if v else None
+            download_log.append({
+                "date": str(r[0]), "node": r[1], "status": norm_st, "rows": r[3] or 0,
+                "detail": r[4] or '', "run_id": r[5] or '',
+                "created_at": ts(r[6]), "started_at": ts(r[7]), "finished_at": ts(r[8]),
+            })
 
-        # ── 数据明细（优先从 data_stats_cache 缓存表读取） ──
-        import json as _json
-        cached = db.execute(text("SELECT stats_json, computed_at FROM data_stats_cache ORDER BY id DESC LIMIT 1")).fetchone()
-        if cached:
-            try:
-                parsed = _json.loads(cached[0])
-                data_tables = parsed.get('tables', [])
-                stats_computed_at = str(cached[1])[:19] if cached[1] else None
-            except Exception:
-                data_tables = []
-                stats_computed_at = None
-        else:
-            data_tables = []
-            stats_computed_at = None
+        # ── 数据明细（直接查源表，DAG 保证时序） ──
+        def q(query):
+            try: return db.execute(text(query)).scalar()
+            except: db.rollback(); return -1
+        data_tables = [
+            {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")},
+            {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")},
+            {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
+            {'label':'ETF日K线','rows':round((q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") or 0) * (q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0) / max((q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')") or 1), 1)),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")},
+            {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
+            {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':f'买{q("SELECT COUNT(*) FROM signal_history WHERE direction=\'buy\'") or 0} 卖{q("SELECT COUNT(*) FROM signal_history WHERE direction=\'sell\'") or 0}'},
+            {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
+        ]
+        stats_computed_at = None
 
         return {
             "overview": overview, "calendar": calendar, "missing_dates": missing_dates,
@@ -151,37 +155,99 @@ def get_data_status(
         db.close()
 
 
+def _has_running_task() -> bool:
+    """检查是否有活跃 DAG 任务（心跳 5 分钟内更新过的 running 节点）。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    try:
+        db = get_sync_db()
+        r = db.execute(text(
+            "SELECT 1 FROM dag_run_log WHERE status='running' "
+            "AND heartbeat_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes' LIMIT 1"
+        )).scalar()
+        db.close()
+        return bool(r)
+    except:
+        return False
+
+
 @router.post("/dag_trigger")
 def dag_trigger(body: dict):
-    """手工触发 DAG 节点。body: {"node": "kline", "date": "2026-06-05"}"""
-    from scripts.pipeline import dag
-    from datetime import date
+    """手工触发 DAG 节点（后台执行）。body: {"node": "kline", "date": "2026-06-05"}"""
+    if _has_running_task():
+        return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
+    import uuid
     node = body.get("node", "stats")
     td = body.get("date", str(date.today()))
-    try:
-        if node == "all":
-            dag.run_all(trade_date=td)
-        else:
-            dag.run(node, trade_date=td)
-        return {"ok": True, "status": dag.status()}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    task_id = str(uuid.uuid4())[:8]
+    thread = threading.Thread(target=_run_dag_background, args=(node, td, task_id), daemon=True)
+    thread.start()
+    return {"ok": True, "task_id": task_id, "node": node, "date": td, "status": "started"}
 
 
 @router.post("/refresh_stats")
 def refresh_stats():
-    """手工触发全库数据统计（DAG stats 节点）。"""
-    from scripts.pipeline import dag
-    from datetime import date
-    dag.run("stats", trade_date=str(date.today()))
-    return {"ok": True}
+    """手工触发全库数据统计（DAG stats 节点，后台执行）。"""
+    if _has_running_task():
+        return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
+    import uuid
+    td = str(date.today())
+    task_id = str(uuid.uuid4())[:8]
+    thread = threading.Thread(target=_run_dag_background, args=("stats", td, task_id), daemon=True)
+    thread.start()
+    return {"ok": True, "task_id": task_id, "node": "stats", "date": td, "status": "started"}
 
 
 @router.get("/dag_status")
 def get_dag_status():
-    """查看 DAG 各节点最近完成时间。"""
+    """DAG 状态 + 自动看门狗：检测卡住>10分钟节点并标记超时。"""
     from scripts.pipeline import dag
-    return {"status": dag.status()}
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+
+    from scripts.pipeline import DAG_STRUCTURE
+    structure = DAG_STRUCTURE
+
+    # 看门狗：检测心跳超过 5 分钟未更新的 running 节点 → 卡死
+    db = get_sync_db()
+    stuck = db.execute(text("""
+        SELECT id, node_name, run_id FROM dag_run_log
+        WHERE status='running' AND heartbeat_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+    """)).fetchall()
+    for row in stuck:
+        db.execute(text("UPDATE dag_run_log SET status='error', detail=:dt, finished_at=CURRENT_TIMESTAMP WHERE id=:id"),
+                   {"id": row[0], "dt": f"心跳超时(>5min无更新), node={row[1]}"})
+    if stuck:
+        # 连带将下游 pending 节点标记为 skipped
+        stuck_names = [r[1] for r in stuck]
+        # 找出同 run_id 中依赖超时节点的 pending 行
+        run_ids = list(set(r[2] for r in stuck))
+        for rid in run_ids:
+            db.execute(text("""
+                UPDATE dag_run_log SET status='error', detail='上游超时跳过', finished_at=CURRENT_TIMESTAMP
+                WHERE run_id=:rid AND status='pending'
+            """), {"rid": rid})
+        db.commit()
+        logger.warning(f"[看门狗] 标记 {len(stuck)} 个超时 + 连带下游 pending 节点: {stuck_names}")
+    db.close()
+    db = get_sync_db()
+    rows = db.execute(text("""
+        SELECT DISTINCT ON (node_name) node_name, status, rows, detail, finished_at, trade_date
+        FROM dag_run_log ORDER BY node_name, id DESC
+    """)).fetchall()
+    run_status = {}
+    for r in rows:
+        # 归一化：ok→success, error→failed, pending→pending, running→running
+        raw = r[1]
+        norm = {'ok':'success','error':'failed'}.get(raw, raw)
+        run_status[r[0]] = {
+            "status": norm, "rows": r[2] or 0,
+            "detail": r[3] or '', "time": str(r[4])[:19] if r[4] else None,
+            "date": str(r[5]) if r[5] else None
+        }
+    db.close()
+
+    return {"structure": structure, "status": dag.status(), "run_status": run_status}
 
 
 @router.get("/trade_calendar")
@@ -200,31 +266,47 @@ import time as _time
 from loguru import logger
 from pydantic import BaseModel
 
+import threading as _threading
+_sync_lock = _threading.Lock()
 _sync_tasks: dict = {}
 
 class SyncDateRequest(BaseModel):
     date: str
+    node: str = "daily_update"
 
 
-def _run_sync_in_background(sync_date: str, task_id: str):
-    _sync_tasks[task_id] = {"status": "running", "date": sync_date, "started_at": _time.time()}
+def _run_dag_background(node: str, trade_date: str, task_id: str):
+    """后台线程执行 DAG 节点（带锁保护 _sync_tasks）。"""
+    with _sync_lock:
+        _sync_tasks[task_id] = {"status": "running", "node": node, "date": trade_date, "started_at": _time.time()}
     try:
         from scripts.pipeline import dag
-        dag.run("daily_update", trade_date=sync_date)
-        _sync_tasks[task_id] = {"status": "completed", "date": sync_date, "elapsed": round(_time.time() - _sync_tasks[task_id]["started_at"])}
+        if node == "all":
+            dag.run_all(trade_date=trade_date)
+        else:
+            dag.run(node, trade_date=trade_date)
+        with _sync_lock:
+            if task_id in _sync_tasks:
+                _sync_tasks[task_id].update({"status": "completed", "elapsed": round(_time.time() - _sync_tasks[task_id]["started_at"])})
     except Exception as e:
-        logger.error(f"后台同步 {sync_date} 失败: {e}")
-        _sync_tasks[task_id] = {"status": "failed", "date": sync_date, "error": str(e)}
+        logger.error(f"后台 DAG {node} {trade_date} 失败: {e}")
+        with _sync_lock:
+            if task_id in _sync_tasks:
+                _sync_tasks[task_id].update({"status": "failed", "error": str(e)})
     _time.sleep(600)
-    _sync_tasks.pop(task_id, None)
+    with _sync_lock:
+        _sync_tasks.pop(task_id, None)
 
 
 @router.post("/data_status/sync_date")
 def sync_date(body: SyncDateRequest):
+    if _has_running_task():
+        return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
     import uuid
     task_id = str(uuid.uuid4())[:8]
-    logger.info(f"手动触发数据采集: {body.date} (task={task_id})")
-    thread = threading.Thread(target=_run_sync_in_background, args=(body.date, task_id), daemon=True)
+    node = getattr(body, 'node', 'daily_update') or 'daily_update'
+    logger.info(f"手动触发数据采集: {body.date} node={node} (task={task_id})")
+    thread = threading.Thread(target=_run_dag_background, args=(node, body.date, task_id), daemon=True)
     thread.start()
     return {"ok": True, "task_id": task_id, "date": body.date, "status": "started"}
 
@@ -232,5 +314,20 @@ def sync_date(body: SyncDateRequest):
 @router.get("/data_status/sync_status")
 def sync_status(task_id: str):
     task = _sync_tasks.get(task_id)
-    if task is None: return {"ok": False, "error": "task_not_found"}
+    if task is None:
+        # fallback: 从 dag_run_log 读取运行状态
+        from app.db.connection import get_sync_db
+        from sqlalchemy import text
+        try:
+            db = get_sync_db()
+            rows = db.execute(text(
+                "SELECT node_name, status, rows, detail FROM dag_run_log ORDER BY id DESC LIMIT 20"
+            )).fetchall()
+            db.close()
+            if not rows:
+                return {"ok": False, "error": "task_not_found"}
+            nodes = [{"node": r[0], "status": r[1], "rows": r[2] or 0, "detail": r[3] or ''} for r in rows]
+            return {"ok": True, "from_log": True, "nodes": nodes}
+        except:
+            return {"ok": False, "error": "task_not_found"}
     return {"ok": True, "task": task}

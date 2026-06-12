@@ -99,7 +99,8 @@ class StrategyEngine:
         全市场策略计算（并行版）。
 
         Args:
-            data_loader: StrategyDataLoader 实例（或其等价对象，需有 get_all_codes / load_stock_data 方法）
+            data_loader: StrategyDataLoader 实例（需有 get_all_codes / load_stock_data 方法）
+                         或 {stock_code: DataFrame} 预加载数据字典。
             signal_date: 信号日期
             strategy_params: 策略配置
             stock_filter: 要计算的股票代码列表，None = 全市场
@@ -107,18 +108,21 @@ class StrategyEngine:
         Returns:
             所有信号列表
         """
-        if stock_filter is None:
-            stock_filter = data_loader.get_all_codes()
-
-        # ── 批量预加载（避免 5000 次小查询）──
-        all_data = {}
-        for code in stock_filter:
-            try:
-                df = data_loader.load_stock_data(code)
-                if df is not None and len(df) > 0:
-                    all_data[code] = df
-            except Exception as e:
-                print(f"[ERROR] Loading {code}: {e}")
+        # 支持直接传入 {stock_code: DataFrame} 字典（批量预加载）
+        if isinstance(data_loader, dict):
+            all_data = data_loader
+            stock_filter = list(all_data.keys())
+        else:
+            if stock_filter is None:
+                stock_filter = data_loader.get_all_codes()
+            all_data = {}
+            for code in stock_filter:
+                try:
+                    df = data_loader.load_stock_data(code)
+                    if df is not None and len(df) > 0:
+                        all_data[code] = df
+                except Exception as e:
+                    print(f"[ERROR] Loading {code}: {e}")
 
         # ── 并行计算 ──
         max_workers = min(8, os.cpu_count() or 4, len(all_data) or 1)

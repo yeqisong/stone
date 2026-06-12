@@ -48,3 +48,4 @@ docker-compose.override.yml
 # Git
 *.patch
 *.orig
+node_modules/

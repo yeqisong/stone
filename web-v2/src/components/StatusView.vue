@@ -2,25 +2,23 @@
 <div>
   <n-spin v-if="loading" style="padding:60px" />
   <template v-else>
-  <!-- Overview Strip -->
-  <div style="display:flex;gap:6px;justify-content:center;padding:4px 0 8px;flex-wrap:wrap">
-    <div style="text-align:center;min-width:60px"><div style="font-size:9px;color:rgba(255,255,255,.35)">行情总条数</div><div style="font-size:16px;font-weight:600;color:#fff">{{fmt(overview.total_rows)}}</div></div>
-    <div style="text-align:center;min-width:60px"><div style="font-size:9px;color:rgba(255,255,255,.35)">股票数</div><div style="font-size:16px;font-weight:600;color:#fff">{{overview.total_stocks}}</div></div>
-    <div style="text-align:center;min-width:60px"><div style="font-size:9px;color:rgba(255,255,255,.35)">最新数据</div><div style="font-size:16px;font-weight:600;color:#fff">{{overview.latest_date||'-'}}</div></div>
-    <div style="text-align:center;min-width:60px"><div style="font-size:9px;color:rgba(255,255,255,.35)">漏数据日期</div><div style="font-size:16px;font-weight:600" :style="{color:missingDates.length>0?'#f59e0b':'#888'}">{{missingDates.length}}</div></div>
+  <!-- Overview Strip (same style as portfolio page) -->
+  <div style="display:flex;gap:10px;justify-content:center;padding:8px 0 12px;flex-wrap:wrap">
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">行情总条数</div><div style="font-size:20px;font-weight:700;color:#fff">{{fmt(overview.total_rows)}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">股票数</div><div style="font-size:20px;font-weight:700;color:#fff">{{overview.total_stocks}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">最新数据</div><div style="font-size:20px;font-weight:700;color:#fff">{{overview.latest_date||'-'}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">漏数据日期</div><div style="font-size:20px;font-weight:700" :style="{color:missingDates.length>0?'#f59e0b':'#888'}">{{missingDates.length}}</div></div>
   </div>
 
-
-
-  <!-- Two-column layout: Data Detail + Calendar -->
-  <div style="display:flex;gap:10px;flex-wrap:wrap">
+  <!-- Two-column layout: Data Detail + Calendar (same height) -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">
     <!-- Left: Data Tables Detail -->
-    <div style="flex:1;min-width:280px">
+    <div style="flex:1;min-width:280px;display:flex;flex-direction:column">
       <div style="font-size:12px;font-weight:600;color:#ddd;margin-bottom:6px">📋 数据明细
         <span v-if="statsTime" style="font-size:9px;color:rgba(255,255,255,.3);margin-left:6px">统计于 {{statsTime}}</span>
         <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading">↻</n-button>
       </div>
-      <div style="display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1">
         <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:rgba(255,255,255,.03);border-radius:6px;border:1px solid rgba(255,255,255,.05)">
           <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
             <span style="font-size:12px;font-weight:600;color:#fff;white-space:nowrap">{{dt.label}}</span>
@@ -33,44 +31,81 @@
           </div>
         </div>
       </div>
-      <!-- Download Log -->
-      <div v-if="dlog.length" style="margin-top:10px">
-        <div style="font-size:12px;font-weight:600;color:#ddd;margin-bottom:4px">📥 最近下载记录</div>
-        <div style="font-size:10px;color:rgba(255,255,255,.35);margin-bottom:4px">下载记录由每日自动采集脚本写入，仅在有采集操作时更新</div>
-        <n-data-table :columns="logColumns" :data="dlog.slice(0,8)" size="small" />
-      </div>
     </div>
 
-    <!-- Right: Calendar -->
-    <div style="flex:1;min-width:280px">
+    <!-- Right: Calendar + Log -->
+    <div style="flex:1;min-width:300px;display:flex;flex-direction:column">
       <div style="font-size:12px;font-weight:600;color:#ddd;margin-bottom:6px">📅 交易日历</div>
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
         <n-button size="tiny" @click="prevMonth">◀</n-button>
         <span style="font-weight:600;font-size:13px;color:#fff">{{monthLabel}}</span>
         <n-button size="tiny" @click="nextMonth">▶</n-button>
         <n-button size="tiny" @click="goToday">今天</n-button>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:9px;color:rgba(255,255,255,.35);margin-bottom:3px;text-align:center">
-        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
-        <div v-for="d in cal" :key="d.date" :style="calStyle(d)" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)" style="transition:all .12s;cursor:pointer" :class="{calSync:d.syncing}">
-          <span v-if="d.day!==null" style="font-size:10px">{{d.day}}</span>
-          <div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div>
-          <div v-if="d.syncing" style="font-size:7px;color:#2080f0;margin-top:1px">⟳</div>
+
+      <!-- Calendar grid + legend side by side -->
+      <div style="display:flex;gap:6px">
+        <div style="flex:1">
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:9px;color:rgba(255,255,255,.35);margin-bottom:2px;text-align:center">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
+            <div v-for="d in cal" :key="d.date" :style="{'padding':'4px 0','borderRadius':'4px','fontSize':'10px','textAlign':'center','background':calBg(d),'color':d.td?'#fff':'#475569','cursor':d.td?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1}" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)">
+              <span v-if="d.day!==null" style="font-size:10px">{{d.day}}</span>
+              <div v-if="d.td&&d.cp" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div>
+            </div>
+          </div>
+        </div>
+        <!-- Vertical legend -->
+        <div style="display:flex;flex-direction:column;justify-content:center;gap:4px;font-size:9px;color:rgba(255,255,255,.35);white-space:nowrap;padding-left:4px">
+          <span><span style="color:#10b981;font-size:10px">●</span> ≥80%</span>
+          <span><span style="color:#f59e0b;font-size:10px">●</span> 50-80%</span>
+          <span><span style="color:#ef4444;font-size:10px">●</span> &lt;50%</span>
+          <span><span style="color:#475569;font-size:10px">●</span> 非/未来</span>
         </div>
       </div>
-      <div style="font-size:8px;color:rgba(255,255,255,.25);margin-top:4px;text-align:center">🟢≥80% 🟡50-80% 🔴&lt;50% ⚫非/未来</div>
+
+      <!-- Latest 3 log entries -->
+      <div style="margin-top:8px;flex:1">
+        <div style="font-size:11px;font-weight:600;color:#ddd;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
+          <span>📥 最近记录</span>
+          <n-button v-if="dlog.length>3" size="tiny" text style="font-size:10px" @click="showLogModal=true">更多 →</n-button>
+        </div>
+        <div v-if="dlog.length" style="display:flex;flex-direction:column;gap:2px;font-size:10px">
+          <div v-for="r in dlog.slice(0,3)" :key="r.date+r.node" style="display:flex;align-items:center;gap:6px;padding:3px 6px;background:rgba(255,255,255,.03);border-radius:4px">
+            <span style="color:rgba(255,255,255,.4);min-width:55px">{{(r.date||'').slice(5)}}</span>
+            <span :style="{color:r.status==='success'?'#10b981':r.status==='running'?'#2080f0':'#ef4444'}">{{r.status==='success'?'✓':r.status==='running'?'⟳':'✗'}}</span>
+            <span style="color:rgba(255,255,255,.6);min-width:60px">{{nodeName(r.node)}}</span>
+            <span style="font-size:8px;color:rgba(255,255,255,.25);min-width:50px">{{r.run_id||''}}</span>
+            <span style="color:rgba(255,255,255,.35);margin-left:auto">{{r.node==='daily_update'||r.node==='cron'?'—':(r.rows||0)+'条'}}</span>
+          </div>
+        </div>
+        <div v-else style="font-size:10px;color:rgba(255,255,255,.25);padding:4px 6px">暂无记录</div>
+      </div>
     </div>
   </div>
+
+  <!-- Data Status DAG Flow -->
+  <div style="margin-top:14px">
+    <DagView />
+  </div>
+
+  <!-- Log History Modal -->
+  <n-modal v-model:show="showLogModal" preset="card" title="📥 运行日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}">
+    <n-space vertical>
+      <n-data-table :columns="logColumns" :data="logPageData" size="small" :row-props="()=>({style:{fontSize:'12px'}})" />
+      <n-pagination v-if="logTotalPages>1" v-model:page="logPage" :page-count="logTotalPages" size="small" />
+    </n-space>
+  </n-modal>
   </template>
 </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { NDataTable, NButton, NSpace, NTag, NSpin, useDialog } from 'naive-ui'
+import { NDataTable, NButton, NButtonGroup, NSpace, NTag, NSpin, NPagination, NModal, useDialog } from 'naive-ui'
 import axios from 'axios'
+import DagView from './DagView.vue'
 
 const API = window.location.origin
 const loading = ref(true)
@@ -83,6 +118,9 @@ const statsTime = ref('')
 const statsLoading = ref(false)
 const cal = ref([])
 const smonth = ref(new Date().toISOString().slice(0,7))
+const showLogModal = ref(false)
+const logPage = ref(1)
+const logPageSize = 20
 
 const monthLabel = computed(() => {
   const y = parseInt(smonth.value.slice(0,4)), m = parseInt(smonth.value.slice(5,7))
@@ -91,14 +129,42 @@ const monthLabel = computed(() => {
 
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
 
+const logTotalPages = computed(() => Math.ceil(dlog.value.length / logPageSize))
+const logPageData = computed(() => {
+  const s = (logPage.value - 1) * logPageSize
+  return dlog.value.slice(s, s + logPageSize)
+})
+
+const nodeNames = {
+  daily_update:'更新汇总', kline:'A股日K线', index:'指数', etf:'ETF', fund:'基本面',
+  treemap:'树图', strategy:'策略', stats:'统计', test_node:'测试'
+}
+const nodeName = n => nodeNames[n] || n
+
 const logColumns = [
-  { title:'日期', key:'date', width:100 },
-  { title:'节点', key:'node', width:70 },
-  { title:'状态', width:50, render(r){return r.status==='ok'?'✅':'❌'} },
-  { title:'行数', width:60, render(r){return r.rows||0} },
-  { title:'时间', key:'time', width:150 },
-  { title:'详情', minWidth:150, ellipsis:{tooltip:true}, render(r){return r.detail||''} },
+  { title:'日期', key:'date', width:80, ellipsis:{tooltip:true} },
+  { title:'节点', key:'node', width:65, render(r){return nodeName(r.node)}, ellipsis:{tooltip:true} },
+  { title:'状态', width:44, render(r){return r.status==='success'?'✅':r.status==='running'?'⏳':r.status==='pending'?'◻':'❌'}, className:'nowrap-cell' },
+  { title:'行数', width:42, render(r){return r.node==='daily_update'||r.node==='cron'?'—':r.rows||0}, className:'nowrap-cell' },
+  { title:'任务ID', key:'run_id', width:72, ellipsis:{tooltip:true} },
+  { title:'创建', key:'created_at', width:130, ellipsis:{tooltip:true}, className:'nowrap-cell' },
+  { title:'开始', key:'started_at', width:130, ellipsis:{tooltip:true}, className:'nowrap-cell' },
+  { title:'完成', key:'finished_at', width:130, ellipsis:{tooltip:true}, className:'nowrap-cell' },
+  { title:'详情', key:'detail', minWidth:120, ellipsis:{tooltip:true} },
 ]
+
+const calBg = d => {
+  if(d.day===null) return 'transparent'
+  if(d.td && d.cp) { const p=d.cp.pct; return p>=80?'rgba(16,185,129,0.12)':p>=50?'rgba(251,191,36,0.12)':'rgba(239,68,68,0.12)' }
+  if(d.td && !d.cp) return 'rgba(239,68,68,0.08)'
+  return 'transparent'
+}
+const calBd = d => {
+  if(d.day===null) return 'transparent'
+  if(d.td && d.cp) { const p=d.cp.pct; return p>=80?'rgba(16,185,129,0.25)':p>=50?'rgba(251,191,36,0.2)':'rgba(239,68,68,0.25)' }
+  if(d.td && !d.cp) return 'rgba(239,68,68,0.2)'
+  return 'transparent'
+}
 
 const dialog = useDialog()
 
@@ -139,8 +205,9 @@ function loadSyncTasks() {
 
 function doSyncDate(d) {
   if(!d.td||d.syncing) return
-  d.syncing = true
   axios.post(API+'/api/data_status/sync_date', {date:d.date}).then(r => {
+    if(r.data.busy){ alert(r.data.error||'任务进行中，请等待'); return }
+    d.syncing = true
     const tid = r.data.task_id
     if(!tid){d.syncing=false;return}
     const tasks = JSON.parse(localStorage.getItem(SYNC_STORAGE_KEY)||'{}')
@@ -163,26 +230,6 @@ function doSyncDate(d) {
 function doSyncClick(d) {
   if(!d.td||d.syncing) return
   confirmSync(d)
-}
-
-function calStyle(d) {
-  if(d.day===null) return {padding:'5px 2px'}
-  const cp = d.cp
-  let bg='transparent', bd='transparent'
-  if(d.td && cp) {
-    const p=cp.pct
-    if(p>=80){bg='rgba(16,185,129,0.12)';bd='rgba(16,185,129,0.25)'}
-    else if(p>=50){bg='rgba(251,191,36,0.12)';bd='rgba(251,191,36,0.2)'}
-    else{bg='rgba(239,68,68,0.12)';bd='rgba(239,68,68,0.25)'}
-  } else if(d.td && !cp) {
-    bg='rgba(239,68,68,0.08)';bd='rgba(239,68,68,0.2)'
-  }
-  return {
-    padding:'4px 2px', borderRadius:'4px', fontSize:'10px', textAlign:'center',
-    background:bg, color:d.td?'#fff':'#475569', cursor:d.td?'pointer':'default',
-    border:d.td?'1px solid '+bd:'1px solid transparent',
-    opacity:d.future?0.35:1
-  }
 }
 
 function calTitle(d) {
@@ -208,7 +255,8 @@ function goToday() {
 async function refreshStats() {
   statsLoading.value = true
   try {
-    await axios.post(API+'/api/refresh_stats')
+    const r = await axios.post(API+'/api/refresh_stats')
+    if (r.data.busy) { alert(r.data.error||'任务进行中，请等待'); statsLoading.value=false; return }
     await loadDataStatus()
   } catch(e) {}
   statsLoading.value = false
@@ -239,5 +287,21 @@ async function loadDataStatus() {
   } catch(e) {} finally { loading.value = false }
 }
 
-onMounted(loadDataStatus)
+onMounted(() => {
+  // 清理 localStorage 中过期/不存在的同步任务
+  const SYNC_KEY = '_stock_sync_tasks'
+  const tasks = JSON.parse(localStorage.getItem(SYNC_KEY)||'{}')
+  const now = Date.now()
+  let changed = false
+  for (const [date, task] of Object.entries(tasks)) {
+    if (now - task.started > 3600000) { delete tasks[date]; changed = true }  // 1小时过期
+  }
+  if (changed) localStorage.setItem(SYNC_KEY, JSON.stringify(tasks))
+  loadDataStatus()
+})
 </script>
+
+<style>
+.nowrap-cell, .nowrap-cell .n-data-table-th { white-space:nowrap !important; }
+.n-data-table-td__ellipsis { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap !important; }
+</style>

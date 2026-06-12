@@ -157,27 +157,40 @@ def generate_stats(*args, **kwargs):
         try: return db.execute(text(query)).scalar()
         except: db.rollback(); return -1
     tables = [
-        ('上交所A股', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"))),
-        ('深交所A股', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"))),
-        ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'"))),
-        ('ETF日K线', lambda: (round(q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") * q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") / max(q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')"), 1)), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'"))),
-        ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"))),
-        ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"))),
-        ('交易日历', lambda: (q("SELECT COUNT(*) FROM trade_calendar"), None)),
+        ('上交所A股', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'")),
+         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")),
+        ('深交所A股', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'")),
+         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")),
+        ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")),
+         ("SELECT MIN(trade_date)::text FROM index_daily_quote", "SELECT MAX(trade_date)::text FROM index_daily_quote")),
+        ('ETF日K线', lambda: (round(q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") * q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") / max(q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')"), 1)), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")),
+         (None, None)),
+        ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals")),
+         ("SELECT MIN(updated_at)::text FROM stock_fundamentals", "SELECT MAX(updated_at)::text FROM stock_fundamentals")),
+        ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history")),
+         ("SELECT MIN(signal_date)::text FROM signal_history", "SELECT MAX(signal_date)::text FROM signal_history")),
+        ('交易日历', lambda: (q("SELECT COUNT(*) FROM trade_calendar"), None),
+         ("SELECT MIN(cal_date)::text FROM trade_calendar", "SELECT MAX(cal_date)::text FROM trade_calendar")),
     ]
     stats = []
-    for label, fn in tables:
+    for label, fn, date_q in tables:
         try:
             rows, items = fn()
-            stats.append({'label': label, 'rows': rows or 0, 'items': items})
-        except: db.rollback(); stats.append({'label': label, 'rows': -1, 'items': 0})
+            s = {'label': label, 'rows': rows or 0, 'items': items}
+            # 补充起止日期
+            if date_q:
+                sr = db.execute(text(date_q[0])).scalar()
+                er = db.execute(text(date_q[1])).scalar()
+                if sr: s['start'] = str(sr)[:10]
+                if er: s['end'] = str(er)[:10]
+            stats.append(s)
+        except:
+            db.rollback()
+            stats.append({'label': label, 'rows': -1, 'items': 0})
     sig_buy = q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0
     sig_sell = q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0
     for s in stats:
         if s['label'] == '交易信号': s['detail'] = f'买{sig_buy} 卖{sig_sell}'
-    payload = _json.dumps({'tables': stats, 'computed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
-    db.execute(text("DELETE FROM data_stats_cache"))
-    db.execute(text("INSERT INTO data_stats_cache (stats_json, computed_at) VALUES (:j, CURRENT_TIMESTAMP)"), {"j": payload})
     db.commit(); db.close()
     logger.info(f"[pipeline] 数据统计完成: {len(stats)} 项")
     return len(stats)
@@ -187,16 +200,64 @@ def generate_stats(*args, **kwargs):
 # 运行日志
 # ══════════════════════════════════════════
 
-def write_node_log(trade_date: str, node_name: str, status: str = 'ok', rows: int = 0, detail: str = ''):
-    """写入节点运行日志到 dag_run_log。"""
+def write_node_log(trade_date: str, node_name: str, status: str = 'ok', rows: int = 0, detail: str = '', run_id: str = ''):
+    """写入/更新节点运行日志。running 时自动设置 heartbeat_at。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     try:
         db = get_sync_db()
-        db.execute(text("""
-            INSERT INTO dag_run_log (trade_date, node_name, status, rows, started_at, finished_at, detail)
-            VALUES (:d, :n, :s, :r, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, :dt)
-        """), {"d": trade_date, "n": node_name, "s": status, "r": rows, "dt": detail})
+        if status == 'pending':
+            db.execute(text("""
+                INSERT INTO dag_run_log (trade_date, node_name, run_id, status, rows, detail, created_at)
+                VALUES (:d, :n, :rid, 'pending', 0, :dt, CURRENT_TIMESTAMP)
+            """), {"d": trade_date, "n": node_name, "rid": run_id, "dt": detail or '待进行'})
+        elif status == 'running':
+            updated = db.execute(text("""
+                UPDATE dag_run_log SET status='running', started_at=CURRENT_TIMESTAMP,
+                    heartbeat_at=CURRENT_TIMESTAMP, detail=:dt
+                WHERE trade_date=:d AND node_name=:n AND run_id=:rid AND status='pending'
+            """), {"d": trade_date, "n": node_name, "rid": run_id, "dt": detail or '进行中'})
+            if updated.rowcount == 0:
+                db.execute(text("""
+                    INSERT INTO dag_run_log (trade_date, node_name, run_id, status, rows, detail, created_at, started_at, heartbeat_at)
+                    VALUES (:d, :n, :rid, 'running', :rr, :dt, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """), {"d": trade_date, "n": node_name, "rid": run_id, "rr": rows, "dt": detail or '进行中'})
+        else:
+            updated = db.execute(text("""
+                UPDATE dag_run_log SET status=:s, rows=:rr, detail=:dt, finished_at=CURRENT_TIMESTAMP
+                WHERE trade_date=:d AND node_name=:n AND run_id=:rid AND status='running'
+            """), {"d": trade_date, "n": node_name, "rid": run_id, "s": status, "rr": rows, "dt": detail})
+            if updated.rowcount == 0:
+                updated = db.execute(text("""
+                    UPDATE dag_run_log SET status=:s, rows=:rr, detail=:dt, finished_at=CURRENT_TIMESTAMP
+                    WHERE trade_date=:d AND node_name=:n AND run_id=:rid AND status='pending'
+                """), {"d": trade_date, "n": node_name, "rid": run_id, "s": status, "rr": rows, "dt": detail})
+            if updated.rowcount == 0:
+                db.execute(text("""
+                    INSERT INTO dag_run_log (trade_date, node_name, run_id, status, rows, detail, created_at, started_at, heartbeat_at, finished_at)
+                    VALUES (:d, :n, :rid, :s, :rr, :dt, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """), {"d": trade_date, "n": node_name, "rid": run_id, "s": status, "rr": rows, "dt": detail})
+        db.commit()
+        db.close()
+    except Exception:
+        pass
+
+
+def update_node_progress(trade_date: str, node_name: str, rows: int = None, detail: str = None, run_id: str = ''):
+    """更新运行中节点的心跳 + 可选进度数据。每~30秒调用一次。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    try:
+        db = get_sync_db()
+        parts = ["heartbeat_at=CURRENT_TIMESTAMP"]
+        if rows is not None:
+            parts.append(f"rows={rows}")
+        if detail is not None:
+            parts.append("detail=:dt")
+        params = {"d": trade_date, "n": node_name, "rid": run_id}
+        if detail is not None:
+            params["dt"] = detail
+        db.execute(text(f"UPDATE dag_run_log SET {','.join(parts)} WHERE trade_date=:d AND node_name=:n AND run_id=:rid AND status='running'"), params)
         db.commit()
         db.close()
     except Exception:
@@ -204,87 +265,194 @@ def write_node_log(trade_date: str, node_name: str, status: str = 'ok', rows: in
 
 
 # ══════════════════════════════════════════
+# DAG 结构定义（唯一来源，供 API 和流程图使用）
+# ══════════════════════════════════════════
+
+DAG_STRUCTURE = [
+    {"name":"cron", "deps":[], "label":"⏰ Corn"},
+    {"name":"daily_update", "deps":["cron"], "label":"更新汇总"},
+    {"name":"kline", "deps":["daily_update"], "label":"A股日K线"},
+    {"name":"index", "deps":["daily_update"], "label":"指数"},
+    {"name":"etf", "deps":["daily_update"], "label":"ETF"},
+    {"name":"fund", "deps":["daily_update"], "label":"基本面"},
+    {"name":"treemap", "deps":["kline"], "label":"树图"},
+    {"name":"strategy", "deps":["kline"], "label":"策略"},
+    {"name":"stats", "deps":["treemap","strategy","index","etf","fund"], "label":"统计"},
+    {"name":"daily_completeness", "deps":["stats"], "label":"日历统计"},
+]
+
+# ══════════════════════════════════════════
 # DAG 定义 + DAG 包裹函数
 # ══════════════════════════════════════════
 
+def _rid(kw): return kw.get('run_id', '')
+
 def dag_task_kline(trade_date=None, **kw):
-    from datetime import date; td = trade_date or str(date.today())
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    write_node_log(td, 'kline', 'running', 0, '采集中', rid)
     try:
         from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler(); r = c.download_daily_update(date.fromisoformat(td)); c.logout()
+        c = BaostockCrawler()
+        update_node_progress(td, 'kline', 0, '登录baostock中…', rid)
+        r = c.download_daily_update(date.fromisoformat(td))
+        c.logout()
         rows = r.get('rows', 0)
-        write_node_log(td, 'kline', 'ok', rows, r.get('detail', ''))
+        update_node_progress(td, 'kline', rows, f'完成，{rows}条', rid)
+        write_node_log(td, 'kline', 'ok', rows, r.get('detail', ''), rid)
         return r
     except Exception as e:
-        write_node_log(td, 'kline', 'error', 0, str(e))
+        try: c.logout()
+        except: pass
+        write_node_log(td, 'kline', 'error', 0, str(e), rid)
         raise
 
 def dag_task_index(trade_date=None, **kw):
-    from datetime import date; td = trade_date or str(date.today())
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    write_node_log(td, 'index', 'running', 0, '采集中', rid)
     try:
         from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler(); r = c.download_all_index_daily(td); c.logout()
-        write_node_log(td, 'index', 'ok', r)
+        c = BaostockCrawler()
+        update_node_progress(td, 'index', 0, '登录baostock…', rid)
+        r = c.download_all_index_daily(td); c.logout()
+        update_node_progress(td, 'index', r, f'完成，{r}条', rid)
+        write_node_log(td, 'index', 'ok', r, '', rid)
         return r
     except Exception as e:
-        write_node_log(td, 'index', 'error', 0, str(e))
+        write_node_log(td, 'index', 'error', 0, str(e), rid)
         raise
 
 def dag_task_etf(trade_date=None, **kw):
-    from datetime import date; td = trade_date or str(date.today())
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    write_node_log(td, 'etf', 'running', 0, '采集中', rid)
     try:
         from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler(); r = c.download_etf_daily(td); c.logout()
+        c = BaostockCrawler()
+        update_node_progress(td, 'etf', 0, '登录baostock…', rid)
+        r = c.download_etf_daily(td); c.logout()
         rows = r.get('rows', 0)
-        write_node_log(td, 'etf', 'ok', rows)
+        update_node_progress(td, 'etf', rows, f'完成，{rows}条', rid)
+        write_node_log(td, 'etf', 'ok', rows, '', rid)
         return r
     except Exception as e:
-        write_node_log(td, 'etf', 'error', 0, str(e))
+        write_node_log(td, 'etf', 'error', 0, str(e), rid)
         raise
 
 def dag_task_fund(trade_date=None, **kw):
+    td = str(kw.get('trade_date', '')) or (trade_date or ''); rid = _rid(kw)
+    if not td: from datetime import date as _dd; td = str(_dd.today())
+    write_node_log(td, 'fund', 'running', 0, '采集中', rid)
     try:
         from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler(); r = c.download_fundamentals(skip_existing=False, skip_pe_pb=False); c.logout()
-        write_node_log(str(kw.get('trade_date', '')), 'fund', 'ok', r or 0)
+        c = BaostockCrawler()
+        update_node_progress(td, 'fund', 0, '登录baostock…', rid)
+        r = c.download_fundamentals(skip_existing=False, skip_pe_pb=False); c.logout()
+        update_node_progress(td, 'fund', r or 0, f'完成，{r}只', rid)
+        write_node_log(td, 'fund', 'ok', r or 0, '', rid)
         return r
     except Exception as e:
-        write_node_log(str(kw.get('trade_date', '')), 'fund', 'error', 0, str(e))
+        write_node_log(td, 'fund', 'error', 0, str(e), rid)
         raise
 
 def dag_task_treemap(trade_date=None, **kw):
-    from datetime import date; td = trade_date or str(date.today())
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    write_node_log(td, 'treemap', 'running', 0, '生成中', rid)
     try:
-        for m in ['mcap', 'volume', 'amount', 'pe']: generate_treemap(td, m)
-        write_node_log(td, 'treemap', 'ok', 4)
+        for i, m in enumerate(['mcap', 'volume', 'amount', 'pe']):
+            update_node_progress(td, 'treemap', i, f'生成{i+1}/4: {m}', rid)
+            generate_treemap(td, m)
+        update_node_progress(td, 'treemap', 4, '完成', rid)
+        write_node_log(td, 'treemap', 'ok', 4, '', rid)
         return 4
     except Exception as e:
-        write_node_log(td, 'treemap', 'error', 0, str(e))
+        write_node_log(td, 'treemap', 'error', 0, str(e), rid)
         raise
 
 def dag_task_strategy(trade_date=None, **kw):
-    from datetime import date; td = trade_date or str(date.today())
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    write_node_log(td, 'strategy', 'running', 0, '计算中', rid)
+    # 后台线程定期发心跳，避免耗时计算被看门狗误杀
+    import threading as _t, time as _tt
+    _stop_hb = False
+    def _heartbeat():
+        while not _stop_hb:
+            update_node_progress(td, 'strategy', None, '策略计算中…', rid)
+            _tt.sleep(25)
+    hb = _t.Thread(target=_heartbeat, daemon=True)
+    hb.start()
     try:
         n = run_strategies(td)
-        write_node_log(td, 'strategy', 'ok', n or 0)
+        _stop_hb = True
+        update_node_progress(td, 'strategy', n or 0, f'完成，{n}信号', rid)
+        write_node_log(td, 'strategy', 'ok', n or 0, '', rid)
         return n
     except Exception as e:
-        write_node_log(td, 'strategy', 'error', 0, str(e))
+        _stop_hb = True
+        write_node_log(td, 'strategy', 'error', 0, str(e), rid)
         raise
 
 def dag_task_stats(trade_date=None, **kw):
-    from datetime import date; td = trade_date or str(date.today())
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    write_node_log(td, 'stats', 'running', 0, '统计中', rid)
     try:
+        update_node_progress(td, 'stats', 0, '全库统计…', rid)
         r = generate_stats()
-        write_node_log(td, 'stats', 'ok', r or 7)
+        update_node_progress(td, 'stats', r, f'完成，{r}项', rid)
+        write_node_log(td, 'stats', 'ok', r or 7, '', rid)
         return r
     except Exception as e:
-        write_node_log(td, 'stats', 'error', 0, str(e))
+        write_node_log(td, 'stats', 'error', 0, str(e), rid)
+        raise
+
+def dag_task_completeness(trade_date=None, **kw):
+    """计算当日数据完整度并写入 daily_completeness 表。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    from datetime import date as _dd; td = trade_date or str(_dd.today()); rid = _rid(kw)
+    write_node_log(td, 'daily_completeness', 'running', 0, '计算中', rid)
+    try:
+        db = get_sync_db()
+        update_node_progress(td, 'daily_completeness', 0, '查询个股数…', rid)
+        for t, col in [('daily_quote', 'stock_rows'), ('index_daily_quote', 'index_rows')]:
+            try:
+                cnt = db.execute(text(f"SELECT COUNT(*) FROM {t} WHERE trade_date=:d"), {"d": td}).scalar() or 0
+                db.execute(text(f"INSERT INTO daily_completeness (trade_date, {col}) VALUES (:d, :c) ON CONFLICT (trade_date) DO UPDATE SET {col}=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": cnt})
+            except: db.rollback()
+        try:
+            etf = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND (stock_code LIKE '51%' OR stock_code LIKE '159%' OR stock_code LIKE '56%')"), {"d": td}).scalar() or 0
+            db.execute(text("INSERT INTO daily_completeness (trade_date, etf_rows) VALUES (:d, :c) ON CONFLICT (trade_date) DO UPDATE SET etf_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": etf})
+        except: pass
+        try:
+            fund = db.execute(text("SELECT COUNT(*) FROM stock_fundamentals WHERE updated_at::date=:d"), {"d": td}).scalar() or 0
+            db.execute(text("INSERT INTO daily_completeness (trade_date, fund_rows) VALUES (:d, :c) ON CONFLICT (trade_date) DO UPDATE SET fund_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": fund})
+        except: pass
+        db.commit(); db.close()
+        write_node_log(td, 'daily_completeness', 'ok', 4, '完成', rid)
+        return 4
+    except Exception as e:
+        db.rollback(); db.close()
+        write_node_log(td, 'daily_completeness', 'error', 0, str(e), rid)
         raise
 
 
 dag = DagExecutor()
-dag.add(DagNode("daily_update", deps=[],  fn=lambda **kw: write_node_log(str(kw.get('trade_date','')), 'daily_update', 'ok', 0) or True))
+
+def _node_enter(name, status, **ctx):
+    td = str(ctx.get('trade_date', '')) or ''
+    rid = ctx.get('run_id', '') or ''
+    if not td:
+        from datetime import date as _dd; td = str(_dd.today())
+    write_node_log(td, name, status, 0, '', rid)
+dag.on_node_enter = _node_enter
+
+def dag_task_daily_update(trade_date=None, **kw):
+    td = str(kw.get('trade_date', '')) or (trade_date or '')
+    rid = _rid(kw)
+    write_node_log(td, 'daily_update', 'running', 0, '启动中', rid)
+    write_node_log(td, 'daily_update', 'ok', 0, '启动完成', rid)
+    return True
+
+dag.add(DagNode("daily_update", deps=[],  fn=dag_task_daily_update))
+# daily_update 的子节点全部跑完后更新状态（在 dag 执行器外部无法自动感知，由子节点各自负责）
 dag.add(DagNode("kline",    deps=["daily_update"],        fn=dag_task_kline))
 dag.add(DagNode("index",    deps=["daily_update"],        fn=dag_task_index))
 dag.add(DagNode("etf",      deps=["daily_update"],        fn=dag_task_etf))
@@ -292,6 +460,7 @@ dag.add(DagNode("fund",     deps=["daily_update"],        fn=dag_task_fund))
 dag.add(DagNode("treemap",  deps=["kline"],                fn=dag_task_treemap))
 dag.add(DagNode("strategy", deps=["kline"],                fn=dag_task_strategy))
 dag.add(DagNode("stats",    deps=["treemap","strategy","index","etf","fund"], fn=dag_task_stats))
+dag.add(DagNode("daily_completeness", deps=["stats"], fn=dag_task_completeness))
 
 
 # ══════════════════════════════════════════

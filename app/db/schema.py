@@ -259,14 +259,29 @@ CREATE_DAG_RUN_LOG = """
 CREATE TABLE IF NOT EXISTS dag_run_log (
     id           SERIAL PRIMARY KEY,
     trade_date   DATE NOT NULL,
+    run_id       VARCHAR(20) DEFAULT '',
     node_name    VARCHAR(50) NOT NULL,
     status       VARCHAR(10) NOT NULL DEFAULT 'ok',
     rows         INTEGER DEFAULT 0,
-    started_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    finished_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at   TIMESTAMP,           -- 日志创建时间
+    started_at   TIMESTAMP,           -- 节点开始执行时间
+    heartbeat_at TIMESTAMP,           -- 最近一次心跳时间
+    finished_at  TIMESTAMP,           -- 节点执行完成时间
     detail       TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_drl_date ON dag_run_log (trade_date, node_name);
+CREATE INDEX IF NOT EXISTS idx_drl_run ON dag_run_log (run_id);
+"""
+
+CREATE_DAILY_COMPLETENESS = """
+CREATE TABLE IF NOT EXISTS daily_completeness (
+    trade_date DATE PRIMARY KEY,
+    stock_rows INTEGER DEFAULT 0,
+    index_rows INTEGER DEFAULT 0,
+    etf_rows  INTEGER DEFAULT 0,
+    fund_rows INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 CREATE_STATS_CACHE = """
