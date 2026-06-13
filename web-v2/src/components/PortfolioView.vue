@@ -117,9 +117,16 @@ const columns = [
   { title:'成本', width:95, align:'right', render(r){return '¥'+(r.cost_price||0).toFixed(2)} },
   { title:'现价', width:95, align:'right', render(r){return '¥'+(r.current_price||0).toFixed(2)} },
   { title:'市值', width:105, align:'right', render(r){return '¥'+fmt(r.market_value)} },
-  { title:'盈亏', minWidth:120, align:'right', render(r){
+  { title:'盈亏', width:110, align:'right', render(r){
     const pnl=r.pnl||0, pct=(r.pnl_pct||0).toFixed(1)
-    return h('span',{style:{color:pnl>=0?'#ef4444':'#10b981'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
+    return h('span',{style:{color:pnl>=0?'#ef4444':'#10b981',whiteSpace:'nowrap'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
+  }},
+  { title:'今日信号', width:115, align:'center', render(r){
+    if (!r.signal_direction) return h('span',{style:{color:'var(--c-text-faint)'}},'—')
+    const isBuy = r.signal_direction === 'buy'
+    const dateStr = (r.signal_date||'').slice(5)
+    return h('span',{style:{color:isBuy?'#ef4444':'#10b981',fontSize:'12px',whiteSpace:'nowrap'}},
+      (isBuy?'🔴买':'🟢卖') + ' ★'.repeat(r.signal_strength||0) + ' ' + dateStr)
   }},
   { title:'备注', key:'notes', minWidth:80, render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
   { title:'操作', width:140, fixed:'right', render(row){return h('span',[

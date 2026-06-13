@@ -117,8 +117,23 @@ def run_strategies(trade_date: str):
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     from strategy.engine import StrategyEngine
+    from datetime import datetime, timedelta
     import json as _json
     logger.info(f"[pipeline] 策略计算 {trade_date}...")
+
+    # 快速失败：目标日期无任何 K 线数据则直接返回
+    db = get_sync_db()
+    try:
+        cnt = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date = :d"), {"d": trade_date}).scalar() or 0
+        if cnt == 0:
+            logger.warning(f"[pipeline] {trade_date} 无 K 线数据，跳过策略计算")
+            return 0
+    finally:
+        db.close()
+
+    # 策略最多需要 200 个交易日 ≈ 280 个自然日的历史
+    min_date = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=300)).strftime("%Y-%m-%d")
+
     db = get_sync_db()
     try:
         configs = db.execute(text("SELECT strategy_name, params FROM strategy_config WHERE enabled=true")).fetchall()
@@ -130,11 +145,14 @@ def run_strategies(trade_date: str):
         db.close()
     from crawler.data_loader import StrategyDataLoader
     loader = StrategyDataLoader()
-    all_data = loader.load_all_stocks_data()
+    all_data = loader.load_all_stocks_data(min_trade_date=min_date)
     loader.close()
     engine = StrategyEngine()
     signals = engine.run_all(all_data, trade_date, strategy_params)
-    db = get_sync_db(); saved = 0
+    db = get_sync_db()
+    # 先删旧再插新，确保幂等（同日期多次生成不产生重复/矛盾信号）
+    db.execute(text("DELETE FROM signal_history WHERE signal_date = :d"), {"d": trade_date})
+    saved = 0
     for sig in signals:
         try:
             db.execute(text("INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, strategy_name, reason, price, preference, suggested_action, combined_signal, source_strategies) VALUES (:d, :c, :n, :dir, :st, :sn, :r, :p, :pref, :sa, :cs, :ss)"), {"d": trade_date, "c": sig.stock_code, "n": sig.stock_name, "dir": sig.direction, "st": sig.strength, "sn": sig.strategy_name, "r": sig.reason, "p": sig.price, "pref": sig.preference, "sa": sig.suggested_action, "cs": sig.combined_signal, "ss": _json.dumps(sig.source_strategies) if sig.source_strategies else None})

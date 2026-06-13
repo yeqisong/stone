@@ -4,22 +4,35 @@
     <span style="font-size:12px;color:var(--c-text-dim)">日期:</span>
     <n-date-picker v-model:formatted-value="sigDate" type="date" value-format="yyyy-MM-dd" size="small" @update:formatted-value="load" />
     <n-button size="small" @click="sigDate=todayStr();load()">今天</n-button>
+    <n-button size="tiny" @click="showGenModal = true">⚡ 生成</n-button>
     <n-tag v-if="todayStrategy&&todayStrategy.strategy_date!==sigDate" type="warning" size="small">⚠️ 该日无策略数据</n-tag>
   </n-space>
   <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
   <n-data-table v-if="data.signals" :columns="columns" :data="data.signals" size="small" />
   <n-empty v-else description="暂无信号" />
+
+  <n-modal v-model:show="showGenModal" preset="card" title="⚡ 生成策略信号" style="width:360px;max-width:85vw" :mask-closable="false">
+    <div style="text-align:center;padding:10px 0">
+      <div style="font-size:14px;color:var(--c-text);margin-bottom:16px">为 {{sigDate}} 重新生成策略信号？<br><span style="font-size:11px;color:var(--c-text-dim)">原有信号将被删除，重新全市场扫描</span></div>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <n-button @click="showGenModal = false">取消</n-button>
+        <n-button type="primary" @click="doGenerate" :loading="genLoading">生成</n-button>
+      </div>
+    </div>
+  </n-modal>
 </div>
 </template>
 <script setup>
 import { ref, reactive, h, onMounted } from 'vue'
-import { NCard, NDataTable, NDatePicker, NButton, NSpace, NTag, NEmpty } from 'naive-ui'
+import { NCard, NDataTable, NDatePicker, NButton, NSpace, NTag, NEmpty, NModal } from 'naive-ui'
 import axios from 'axios'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
 const sigDate = ref(new Date().toISOString().slice(0,10))
 const data = reactive({signals:null, scanned:0, total_signals:0})
 const todayStrategy = ref(null)
+const showGenModal = ref(false)
+const genLoading = ref(false)
 const todayStr = () => new Date().toISOString().slice(0,10)
 const columns = [
   { title:'#', key:'index', width:35, render:(_,i)=>i+1 },
@@ -30,6 +43,16 @@ const columns = [
   { title:'强度', width:70, render(r){return '★'.repeat(r.strength||0)} },
   { title:'策略', minWidth:180, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
 ]
+async function doGenerate() {
+  genLoading.value = true
+  try {
+    await axios.post(API + '/api/dag_trigger', { node: 'strategy', date: sigDate.value, include_downstream: false })
+    showGenModal.value = false
+  } catch(e) {} finally {
+    genLoading.value = false
+  }
+}
+
 async function load(){
   try{
     const d = typeof sigDate.value === 'string' ? sigDate.value : (sigDate.value||new Date()).toISOString().slice(0,10)

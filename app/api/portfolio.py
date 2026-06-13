@@ -42,7 +42,25 @@ def get_portfolio():
                 (SELECT dq.close FROM daily_quote dq
                  WHERE dq.stock_code = p.stock_code
                  ORDER BY dq.trade_date DESC LIMIT 1)
-            ) AS current_price
+            ) AS current_price,
+            (SELECT sh.direction FROM signal_history sh
+             WHERE sh.stock_code = p.stock_code
+               AND sh.combined_signal = true
+               AND sh.direction IN ('buy','sell')
+               AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+             LIMIT 1) AS signal_direction,
+            (SELECT sh.signal_date FROM signal_history sh
+             WHERE sh.stock_code = p.stock_code
+               AND sh.combined_signal = true
+               AND sh.direction IN ('buy','sell')
+               AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+             LIMIT 1) AS signal_date,
+            (SELECT sh.strength FROM signal_history sh
+             WHERE sh.stock_code = p.stock_code
+               AND sh.combined_signal = true
+               AND sh.direction IN ('buy','sell')
+               AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+             LIMIT 1) AS signal_strength
         FROM portfolio p
         WHERE p.is_active = true
         ORDER BY p.updated_at DESC
@@ -68,6 +86,9 @@ def get_portfolio():
                 "created_at": str(r.created_at),
                 "updated_at": str(r.updated_at),
                 "notes": r.notes or "",
+                "signal_direction": r.signal_direction or "",
+                "signal_date": str(r.signal_date) if r.signal_date else "",
+                "signal_strength": r.signal_strength or 0,
             })
         total_value = sum(p["market_value"] for p in portfolio)
         total_pnl = sum(p["pnl"] for p in portfolio)

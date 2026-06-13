@@ -6,6 +6,9 @@ from datetime import date, timedelta
 from app.db.connection import get_sync_db
 from app.signal import _dag_wake_event, wake_dag_broadcast, set_main_loop
 
+# 预加载 pipeline 模块，避免首次 DAG 触发时 cold import 延迟 5-10 秒
+from scripts.pipeline import dag
+
 router = APIRouter(tags=["status"])
 
 # 缓存计数结果（5分钟过期）
@@ -292,7 +295,6 @@ def _run_dag_background(node: str, trade_date: str, task_id: str, force: bool = 
     with _sync_lock:
         _sync_tasks[task_id] = {"status": "running", "node": node, "date": trade_date, "started_at": _time.time()}
     try:
-        from scripts.pipeline import dag
         kwargs = {"trade_date": trade_date, "force": force, "include_downstream": include_downstream}
         if node == "all":
             dag.run_all(**kwargs)

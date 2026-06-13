@@ -110,12 +110,12 @@ async function loadTree() {
   }
 }
 
-function buildTreemapSeries(nodes, depth) {
+function buildTreemapSeries(nodes, depth, borderColor) {
   return nodes.map(n => {
     const item = {
       name: n.name,
       value: n.value,
-      itemStyle: { color: colorForChg(n.chg_pct) },
+      itemStyle: { color: colorForChg(n.chg_pct), borderColor: borderColor, borderWidth: 0.5 },
       chg_pct: n.chg_pct,
       _type: n.type,
       _id: n.id,
@@ -136,7 +136,7 @@ function renderChart() {
   const chart = echarts.init(el)
   el._echart = chart
 
-  const data = buildTreemapSeries(treeData.value, 2)
+  const data = buildTreemapSeries(treeData.value, 2, chartBg)
 
   chart.setOption({
     backgroundColor: chartBg,
@@ -173,7 +173,7 @@ function renderChart() {
         { label: { show: true, fontSize: 14, fontWeight: 'bold', color: theme.isDark ? '#fff' : '#1a1a2e', position: 'insideTopLeft', padding: [4,0,0,6] },
           upperLabel: { show: true, fontSize: 14, fontWeight: 'bold', color: theme.isDark ? '#fff' : '#1a1a2e', height: 22 },
           itemStyle: { borderColor: chartBg, borderWidth: 2 } },
-        { label: { show: true, fontSize: 10, color: theme.isDark ? '#fff' : '#1a1a2e' }, itemStyle: { borderColor: 'var(--c-border-light)', borderWidth: 0.5 } },
+        { label: { show: true, fontSize: 10, color: theme.isDark ? '#fff' : '#1a1a2e' }, itemStyle: { borderColor: chartBg, borderWidth: 0.5 } },
       ],
       data: data,
       emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 2 } }

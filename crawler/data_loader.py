@@ -49,15 +49,23 @@ class StrategyDataLoader:
             'volume', 'stock_code', 'stock_name'
         ])
 
-    def load_all_stocks_data(self) -> dict:
-        """加载全市场行情数据，返回 {stock_code: DataFrame}。"""
-        result = self.db.execute(text("""
+    def load_all_stocks_data(self, min_trade_date: str = None) -> dict:
+        """加载全市场行情数据，返回 {stock_code: DataFrame}。
+
+        min_trade_date: 只加载此日期之后的数据（策略最多需要 200 个交易日历史）。
+        """
+        sql = """
             SELECT trade_date, stock_code, stock_name, open, high, low,
                    COALESCE(close_hfq, close) as close, volume
             FROM daily_quote
             WHERE stock_code IN (SELECT stock_code FROM stock_master WHERE status = 'N')
-            ORDER BY trade_date ASC
-        """))
+        """
+        params = {}
+        if min_trade_date:
+            sql += " AND trade_date >= :min_date"
+            params["min_date"] = min_trade_date
+        sql += " ORDER BY trade_date ASC"
+        result = self.db.execute(text(sql), params)
         rows = result.fetchall()
 
         # 按股票分组

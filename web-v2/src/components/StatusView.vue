@@ -295,8 +295,9 @@ onMounted(() => {
       dlog.value = data.nodes || []
     }
     if (data.type === 'dag_status') {
-      // 刷新统计按钮：有任务时转动
-      statsLoading.value = !!data.has_running
+      // 刷新统计按钮：仅 stats 节点 running/pending 时转动，不跟全局 has_running
+      const rs = data.run_status || {}
+      statsLoading.value = rs.stats?.status === 'running' || rs.stats?.status === 'pending'
       // 日历同步状态：任务结束后清除
       if (!data.has_running) {
         cal.value.forEach(d => { d.syncing = false })

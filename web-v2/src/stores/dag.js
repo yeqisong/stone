@@ -11,6 +11,7 @@ export const useDagStore = defineStore('dag', () => {
   const currentRunLatest = ref(null)
   const hasRunning = ref(false)
   const _prevRunId = ref(null)  // 追踪上一次 run_id，检测任务切换
+  let _expireTimer = null       // 任务完成 5 分钟后本地清空状态
 
   // WS 只推送节点状态（不含结构）
   let unwatch = null
@@ -35,6 +36,15 @@ export const useDagStore = defineStore('dag', () => {
         currentRunId.value = newRunId
         currentRunLatest.value = data.current_run_latest || null
         hasRunning.value = newHasRunning
+
+        // 本地 5 分钟过期计时器：不依赖 WS 推送 current_run_id=null
+        if (_expireTimer) { clearTimeout(_expireTimer); _expireTimer = null }
+        if (!newHasRunning && newRunId) {
+          _expireTimer = setTimeout(() => {
+            resetAll()
+            _expireTimer = null
+          }, 300000)  // 5 分钟
+        }
 
         if (data.run_status && Object.keys(data.run_status).length > 0) {
           for (const [name, s] of Object.entries(data.run_status)) {
