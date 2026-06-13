@@ -1,4 +1,4 @@
-"""持仓 API — 增删改查。全使用同步 session 确保 SQLite 读写一致。"""
+"""持仓 API — 增删改查。使用同步 session 确保读写一致。"""
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -82,7 +82,7 @@ def get_portfolio():
         db.close()
 
 
-# ── 增/改/删（同步 session，确保 SQLite 写入可靠）──
+# ── 增/改/删（同步 session）──
 
 @router.post("/portfolio")
 def add_position(body: AddPosition, user: str = Depends(optional_auth)):
@@ -122,9 +122,6 @@ def add_position(body: AddPosition, user: str = Depends(optional_auth)):
             """), {"c": code, "n": name, "e": ex, "q": body.quantity, "p": body.cost_price, "nt": body.notes})
 
         db.commit()
-        from app.db.connection import is_sqlite as _is_sqlite
-        if _is_sqlite():
-            db.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
         return {"ok": True}
     finally:
         db.close()
@@ -157,9 +154,6 @@ def update_position(stock_code: str, body: UpdatePosition, user: str = Depends(o
         """), {"qb": old_qty, "qa": new_qty, "cb": old_cost, "ca": round(new_cost, 3), "id": row[0]})
 
         db.commit()
-        from app.db.connection import is_sqlite as _is_sqlite
-        if _is_sqlite():
-            db.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
         return {"ok": True, "updated": {"qty": new_qty, "cost": round(new_cost, 3)}}
     finally:
         db.close()
@@ -184,9 +178,6 @@ def delete_position(stock_code: str, user: str = Depends(optional_auth)):
         """), {"q": row[1], "id": row[0]})
 
         db.commit()
-        from app.db.connection import is_sqlite as _is_sqlite
-        if _is_sqlite():
-            db.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
         return {"ok": True, "deleted": stock_code}
     finally:
         db.close()

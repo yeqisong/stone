@@ -18,7 +18,7 @@ from datetime import date, datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
-from app.db.connection import get_sync_db, is_sqlite as _is_sql
+from app.db.connection import get_sync_db
 from sqlalchemy import text
 
 
@@ -73,31 +73,18 @@ def step_index():
             while rs2.next():
                 d2 = rs2.get_row_data()
                 if not d2[0]: continue
-                if _is_sql():
-                    db.execute(text(
-                        "INSERT OR REPLACE INTO index_daily_quote "
-                        "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
-                        "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a)"
-                    ), {"d": d2[0],"c": index_code,"n": name,
-                        "o": float(d2[2]) if d2[2] else 0,
-                        "h": float(d2[3]) if d2[3] else 0,
-                        "l": float(d2[4]) if d2[4] else 0,
-                        "cl": float(d2[5]) if d2[5] else 0,
-                        "v": int(float(d2[6])) if d2[6] else 0,
-                        "a": float(d2[7]) if d2[7] else 0})
-                else:
-                    db.execute(text(
-                        "INSERT INTO index_daily_quote "
-                        "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
-                        "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
-                        "ON CONFLICT (trade_date, index_code) DO UPDATE SET "
-                        "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-                        "close=EXCLUDED.close, volume=EXCLUDED.volume, amount=EXCLUDED.amount"
-                    ), {"d": d2[0],"c": index_code,"n": name,
-                        "o": float(d2[2]) if d2[2] else 0,
-                        "h": float(d2[3]) if d2[3] else 0,
-                        "l": float(d2[4]) if d2[4] else 0,
-                        "cl": float(d2[5]) if d2[5] else 0,
+                db.execute(text(
+                    "INSERT INTO index_daily_quote "
+                    "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
+                    "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
+                    "ON CONFLICT (trade_date, index_code) DO UPDATE SET "
+                    "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
+                    "close=EXCLUDED.close, volume=EXCLUDED.volume, amount=EXCLUDED.amount"
+                ), {"d": d2[0],"c": index_code,"n": name,
+                    "o": float(d2[2]) if d2[2] else 0,
+                    "h": float(d2[3]) if d2[3] else 0,
+                    "l": float(d2[4]) if d2[4] else 0,
+                    "cl": float(d2[5]) if d2[5] else 0,
                         "v": int(float(d2[6])) if d2[6] else 0,
                         "a": float(d2[7]) if d2[7] else 0})
                 total += 1
@@ -140,29 +127,18 @@ def step_etf():
             while rs2.next():
                 d = rs2.get_row_data()
                 if not d[0]: continue
-                if _is_sql():
-                    db.execute(text(
-                        "INSERT OR REPLACE INTO daily_quote "
-                        "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
-                        "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:c,:c,:v,:a,:t)"
-                    ), {"td":d[0],"ex":ex,"sc":scode,"sn":sname,
-                        "o":float(d[1]) if d[1] else 0,"h":float(d[2]) if d[2] else 0,
-                        "l":float(d[3]) if d[3] else 0,"c":float(d[4]) if d[4] else 0,
-                        "v":int(float(d[5])) if d[5] else 0,"a":float(d[6]) if d[6] else 0,
-                        "t":float(d[7]) if d[7] else None})
-                else:
-                    db.execute(text(
-                        "INSERT INTO daily_quote "
-                        "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
-                        "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:c,:c,:v,:a,:t) "
-                        "ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
-                        "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-                        "close=EXCLUDED.close, close_hfq=EXCLUDED.close_hfq, "
-                        "volume=EXCLUDED.volume, amount=EXCLUDED.amount, turnover=EXCLUDED.turnover"
-                    ), {"td":d[0],"ex":ex,"sc":scode,"sn":sname,
-                        "o":float(d[1]) if d[1] else 0,"h":float(d[2]) if d[2] else 0,
-                        "l":float(d[3]) if d[3] else 0,"c":float(d[4]) if d[4] else 0,
-                        "v":int(float(d[5])) if d[5] else 0,"a":float(d[6]) if d[6] else 0,
+                db.execute(text(
+                    "INSERT INTO daily_quote "
+                    "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
+                    "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:c,:c,:v,:a,:t) "
+                    "ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
+                    "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
+                    "close=EXCLUDED.close, close_hfq=EXCLUDED.close_hfq, "
+                    "volume=EXCLUDED.volume, amount=EXCLUDED.amount, turnover=EXCLUDED.turnover"
+                ), {"td":d[0],"ex":ex,"sc":scode,"sn":sname,
+                    "o":float(d[1]) if d[1] else 0,"h":float(d[2]) if d[2] else 0,
+                    "l":float(d[3]) if d[3] else 0,"c":float(d[4]) if d[4] else 0,
+                    "v":int(float(d[5])) if d[5] else 0,"a":float(d[6]) if d[6] else 0,
                         "t":float(d[7]) if d[7] else None})
                 total += 1
             time.sleep(0.1)
@@ -187,14 +163,10 @@ def step_market_cap():
     """6. 更新市值数据（从每日行情最新价计算）"""
     logger.info("===== [6/6] 市值更新 =====")
     db = get_sync_db()
-    from app.db.connection import is_sqlite as _is_sql
 
     # 检查 stock_fundamentals 是否有 market_cap 字段
     try:
-        if _is_sql():
-            db.execute(text("ALTER TABLE stock_fundamentals ADD COLUMN market_cap BIGINT DEFAULT NULL"))
-        else:
-            db.execute(text("ALTER TABLE stock_fundamentals ADD COLUMN IF NOT EXISTS market_cap BIGINT DEFAULT NULL"))
+        db.execute(text("ALTER TABLE stock_fundamentals ADD COLUMN IF NOT EXISTS market_cap BIGINT DEFAULT NULL"))
         db.commit()
     except Exception:
         db.rollback()
@@ -222,26 +194,15 @@ def step_market_cap():
     # 简单方式：从 stock_master + daily_quote 最近价计算
     # 先检查是否有 total_shares 数据（旧导入可能有）
     try:
-        if _is_sql():
-            db.execute(text("""
-                UPDATE stock_fundamentals sf
-                SET market_cap = sf.total_shares * (
-                    SELECT dq.close FROM daily_quote dq
-                    WHERE dq.stock_code = sf.stock_code
-                    ORDER BY dq.trade_date DESC LIMIT 1
-                )
-                WHERE sf.total_shares IS NOT NULL
-            """))
-        else:
-            db.execute(text("""
-                UPDATE stock_fundamentals sf
-                SET market_cap = sf.total_shares * (
-                    SELECT dq.close FROM daily_quote dq
-                    WHERE dq.stock_code = sf.stock_code
-                    ORDER BY dq.trade_date DESC LIMIT 1
-                )
-                WHERE sf.total_shares IS NOT NULL
-            """))
+        db.execute(text("""
+            UPDATE stock_fundamentals sf
+            SET market_cap = sf.total_shares * (
+                SELECT dq.close FROM daily_quote dq
+                WHERE dq.stock_code = sf.stock_code
+                ORDER BY dq.trade_date DESC LIMIT 1
+            )
+            WHERE sf.total_shares IS NOT NULL
+        """))
         db.commit()
         updated = db.execute(text("SELECT COUNT(*) FROM stock_fundamentals WHERE market_cap IS NOT NULL")).scalar()
         logger.info(f"  市值已更新: {updated} 只")

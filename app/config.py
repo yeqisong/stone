@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
 
     # ── 数据库 ──
-    DATABASE_URL: str = "sqlite+aiosqlite:///./data/stock_monitor.db"
-    DATABASE_URL_SYNC: str = "sqlite:///./data/stock_monitor.db"
+    DATABASE_URL: str = "postgresql+asyncpg://stock:stock123@localhost:5432/stock_monitor"
+    DATABASE_URL_SYNC: str = "postgresql+psycopg2://stock:stock123@localhost:5432/stock_monitor"
 
     # ── Redis ──
     REDIS_URL: str = "redis://localhost:6379/0"

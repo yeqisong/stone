@@ -1,9 +1,9 @@
 <template>
 <div>
   <div class="stats-row" v-if="data.count" style="display:flex;gap:10px;justify-content:center;padding:8px 0 12px;flex-wrap:wrap">
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">持仓</div><div style="font-size:20px;font-weight:700;color:#fff">{{data.count}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">市值</div><div style="font-size:20px;font-weight:700;color:#fff">¥{{fmt(data.total_value)}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:rgba(255,255,255,.45)">盈亏</div><div style="font-size:20px;font-weight:700" :style="{color:data.total_pnl>=0?'#ef4444':'#10b981'}">¥{{fmt(data.total_pnl)}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">持仓</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{data.count}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">市值</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">¥{{fmt(data.total_value)}}</div></div>
+    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">盈亏</div><div style="font-size:20px;font-weight:700" :style="{color:data.total_pnl>=0?'#ef4444':'#10b981'}">¥{{fmt(data.total_pnl)}}</div></div>
   </div>
 
   <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin-bottom:6px">+ 新增持仓</n-button>
@@ -51,11 +51,11 @@
   <n-card style="width:600px" title="持仓明细" role="dialog" aria-modal="true">
     <div v-if="historyLoading" style="text-align:center;padding:20px">加载中...</div>
     <template v-else>
-      <div v-if="historyPos" style="display:flex;gap:20px;justify-content:center;padding:6px 0;margin-bottom:10px;background:rgba(255,255,255,.04);border-radius:8px">
-        <div style="text-align:center"><div style="font-size:11px;color:rgba(255,255,255,.45)">代码</div><div style="font-size:16px;font-weight:700">{{historyPos.stock_code}}</div></div>
-        <div style="text-align:center"><div style="font-size:11px;color:rgba(255,255,255,.45)">名称</div><div style="font-size:16px;font-weight:700">{{historyPos.stock_name}}</div></div>
-        <div style="text-align:center"><div style="font-size:11px;color:rgba(255,255,255,.45)">持仓</div><div style="font-size:16px;font-weight:700">{{historyPos.quantity}}股</div></div>
-        <div style="text-align:center"><div style="font-size:11px;color:rgba(255,255,255,.45)">成本价</div><div style="font-size:16px;font-weight:700">¥{{historyPos.cost_price.toFixed(2)}}</div></div>
+      <div v-if="historyPos" style="display:flex;gap:20px;justify-content:center;padding:6px 0;margin-bottom:10px;background:var(--c-card-bg-hover);border-radius:8px">
+        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">代码</div><div style="font-size:16px;font-weight:700">{{historyPos.stock_code}}</div></div>
+        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">名称</div><div style="font-size:16px;font-weight:700">{{historyPos.stock_name}}</div></div>
+        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">持仓</div><div style="font-size:16px;font-weight:700">{{historyPos.quantity}}股</div></div>
+        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">成本价</div><div style="font-size:16px;font-weight:700">¥{{historyPos.cost_price.toFixed(2)}}</div></div>
       </div>
       <h4 style="margin:8px 0">📜 加减仓记录</h4>
       <n-data-table v-if="historyRecords.length" :columns="historyColumns" :data="historyRecords" size="small" />
@@ -121,7 +121,7 @@ const columns = [
     const pnl=r.pnl||0, pct=(r.pnl_pct||0).toFixed(1)
     return h('span',{style:{color:pnl>=0?'#ef4444':'#10b981'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
   }},
-  { title:'备注', key:'notes', minWidth:80, render(r){return h('span',{style:{fontSize:'11px',color:'rgba(255,255,255,.45)'}},r.notes||'')} },
+  { title:'备注', key:'notes', minWidth:80, render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
   { title:'操作', width:140, fixed:'right', render(row){return h('span',[
     h(NButton,{size:'tiny',onClick:()=>showHistory(row.stock_code)},{default:()=>'详情'}),
     h(NButton,{size:'tiny',onClick:()=>{isAdding.value=false;editForm.code=row.stock_code;editForm.qty=row.quantity;editForm.cost=row.cost_price;editForm.date=null;editForm.note=row.notes||'';showEdit.value=true}},{default:()=>'编辑'}),

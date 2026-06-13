@@ -9,16 +9,10 @@ def load_calendar_from_csv(db_session, csv_path: str):
     with open(csv_path, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            from app.db.connection import is_sqlite as _is_sql
             is_trade_bool = row['is_trade_day'].strip() in ('1', 'true', 'True')
-            if _is_sql():
-                db_session.execute(text(
-                    "INSERT OR IGNORE INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e)"
-                ), {"d": row['cal_date'], "t": int(is_trade_bool), "e": row['exchange']})
-            else:
-                db_session.execute(text(
-                    "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) ON CONFLICT (cal_date, exchange) DO NOTHING"
-                ), {"d": row['cal_date'], "t": is_trade_bool, "e": row['exchange']})
+            db_session.execute(text(
+                "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) ON CONFLICT (cal_date, exchange) DO NOTHING"
+            ), {"d": row['cal_date'], "t": is_trade_bool, "e": row['exchange']})
     db_session.commit()
 
 
@@ -70,8 +64,6 @@ def sync_from_baostock(db_session, start_year: int = None, end_year: int = None)
     """
     import baostock as bs
     from loguru import logger
-    from app.db.connection import is_sqlite as _is_sql
-
     today = date.today()
     if start_year is None:
         start_year = today.year - 5
@@ -105,15 +97,10 @@ def sync_from_baostock(db_session, start_year: int = None, end_year: int = None)
                     d = rs.get_row_data()
                     cal_date = d[0]
                     is_trade = True if d[1] == '1' else False
-                    if _is_sql():
-                        db_session.execute(text(
-                            "INSERT OR REPLACE INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e)"
-                        ), {"d": cal_date, "t": int(is_trade), "e": ex})
-                    else:
-                        db_session.execute(text(
-                            "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) "
-                            "ON CONFLICT (cal_date, exchange) DO UPDATE SET is_trade_day=EXCLUDED.is_trade_day"
-                        ), {"d": cal_date, "t": is_trade, "e": ex})
+                    db_session.execute(text(
+                        "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) "
+                        "ON CONFLICT (cal_date, exchange) DO UPDATE SET is_trade_day=EXCLUDED.is_trade_day"
+                    ), {"d": cal_date, "t": is_trade, "e": ex})
                     rows_in_year += 1
                     inserted += 1
 
@@ -124,15 +111,10 @@ def sync_from_baostock(db_session, start_year: int = None, end_year: int = None)
                     end = date(y, 12, 31)
                     while current <= end:
                         is_weekend = current.weekday() >= 5
-                        if _is_sql():
-                            db_session.execute(text(
-                                "INSERT OR IGNORE INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e)"
-                            ), {"d": current, "t": int(not is_weekend), "e": ex})
-                        else:
-                            db_session.execute(text(
-                                "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) "
-                                "ON CONFLICT (cal_date, exchange) DO NOTHING"
-                            ), {"d": current, "t": not is_weekend, "e": ex})
+                        db_session.execute(text(
+                            "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) "
+                            "ON CONFLICT (cal_date, exchange) DO NOTHING"
+                        ), {"d": current, "t": not is_weekend, "e": ex})
                         current += timedelta(days=1)
                     inserted += 365 if y % 4 != 0 or (y % 100 == 0 and y % 400 != 0) else 366
 
@@ -156,16 +138,10 @@ def ensure_calendar_updated(db_session) -> bool:
     today = date.today()
     future_year = today.year + 2  # 确保未来 2 年有数据
 
-    # 查询 DB 中最大年份（兼容 SQLite 和 PostgreSQL）
-    from app.db.connection import is_sqlite as _is_sql
-    if _is_sql():
-        result = db_session.execute(text(
-            "SELECT MAX(CAST(strftime('%Y', cal_date) AS INTEGER)) FROM trade_calendar"
-        ))
-    else:
-        result = db_session.execute(text(
-            "SELECT MAX(EXTRACT(YEAR FROM cal_date)) FROM trade_calendar"
-        ))
+    # 查询 DB 中最大年份
+    result = db_session.execute(text(
+        "SELECT MAX(EXTRACT(YEAR FROM cal_date)) FROM trade_calendar"
+    ))
     max_year_in_db = result.scalar()
     if max_year_in_db is None:
         max_year_in_db = 0
@@ -183,17 +159,11 @@ def _insert_default(db_session, start_year: int, end_year: int):
     """回退：插入仅含周末的简化日历。"""
     from loguru import logger
     records = generate_default_calendar(start_year, end_year)
-    from app.db.connection import is_sqlite as _is_sql
     for cal_date, is_trade, ex in records:
         is_trade_bool = bool(is_trade)
-        if _is_sql():
-            db_session.execute(text(
-                "INSERT OR IGNORE INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e)"
-            ), {"d": cal_date, "t": int(is_trade_bool), "e": ex})
-        else:
-            db_session.execute(text(
-                "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) ON CONFLICT (cal_date, exchange) DO NOTHING"
-            ), {"d": cal_date, "t": is_trade_bool, "e": ex})
+        db_session.execute(text(
+            "INSERT INTO trade_calendar (cal_date, is_trade_day, exchange) VALUES (:d, :t, :e) ON CONFLICT (cal_date, exchange) DO NOTHING"
+        ), {"d": cal_date, "t": is_trade_bool, "e": ex})
     db_session.commit()
     logger.info(f"导入默认日历: {len(records)} 条 (仅周末)")
 

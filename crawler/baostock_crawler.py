@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 统一数据采集器 — baostock 单一数据源（生产级）。
 
@@ -99,7 +98,6 @@ class BaostockCrawler:
         elif code[0] in ('0', '3'):
             return f"sz.{code}"
         else:
-            # 北交所/其他：尝试 sz 前缀
             return f"sz.{code}"
 
     @staticmethod
@@ -113,32 +111,22 @@ class BaostockCrawler:
     # ── 获取A股列表（仅 type=1） ──
 
     def get_a_stock_codes(self) -> Dict[str, dict]:
-        """
-        获取全量A股代码及基础信息（仅 type=1，排除指数/可转债/ETF）。
-
-        Returns:
-            {code: {name, ipo_date, out_date, status}, ...}
-        """
+        """获取全量A股代码及基础信息（仅 type=1）。"""
         if not self._logged_in:
             self.login()
-
         rs = bs.query_stock_basic()
         if rs.error_code != '0':
             logger.error(f"query_stock_basic 失败: {rs.error_msg}")
             return {}
-
         stock_info = {}
         skipped_non_stock = 0
         skipped_delisted = 0
-
         while rs.next():
             row = rs.get_row_data()
-            # row: [code, name, ipoDate, outDate, type, status]
             sec_type = row[4] if len(row) > 4 else ''
-            if sec_type != '1':       # 仅 A 股，排除指数/可转债/ETF
+            if sec_type != '1':
                 skipped_non_stock += 1
                 continue
-
             raw_code = row[0]
             for prefix in ('sh.', 'sz.', 'bj.'):
                 if raw_code.startswith(prefix):
@@ -146,40 +134,28 @@ class BaostockCrawler:
                     break
             else:
                 code = raw_code
-
             if not (code.isdigit() and len(code) == 6):
                 continue
-
             out_date = row[3] if len(row) > 3 and row[3] else ''
-            # 在数据起始日期前已退市的跳过
             if out_date and out_date < CUTOFF_DATE:
                 skipped_delisted += 1
                 continue
-
             stock_info[code] = {
                 'name': row[1],
                 'ipo_date': row[2] if len(row) > 2 and row[2] else '',
                 'out_date': out_date,
                 'status': row[5] if len(row) > 5 else '1',
             }
-
         logger.info(f"A股列表: {len(stock_info)} 只 (跳过非A股{skipped_non_stock}, "
                      f"{CUTOFF_DATE}前退市{skipped_delisted})")
         return stock_info
 
     def get_all_stock_codes(self) -> List[str]:
-        """获取全量A股代码列表（兼容旧接口）。"""
         return list(self.get_a_stock_codes().keys())
 
     # ── 带重试的K线下载 ──
 
     def _fetch_kline(self, bs_code: str, start_date: str, end_date: str) -> tuple:
-        """
-        下载单只股票K线数据，带指数退避重试 + 会话失效检测。
-
-        Returns:
-            (rows_or_None, need_relogin: bool)
-        """
         for attempt in range(RETRY_MAX + 1):
             try:
                 rs = bs.query_history_k_data_plus(
@@ -187,52 +163,40 @@ class BaostockCrawler:
                     "date,open,high,low,close,volume,amount,turn",
                     start_date=start_date, end_date=end_date,
                     frequency="d", adjustflag="3")
-
                 if rs.error_code == '0':
                     rows = []
                     while rs.next():
                         rows.append(rs.get_row_data())
                     return (rows, False)
-
                 msg = rs.error_msg
-                # 会话失效 → 立即通知上层重新登录
                 if '未登录' in msg or 'login' in msg.lower():
-                    logger.warning(f"  {bs_code} 会话失效: {msg}")
+                    logger.warning(f"  {bs_code} 会话失效")
                     return (None, True)
-
                 if attempt < RETRY_MAX:
                     wait = RETRY_BACKOFF ** (attempt + 1)
-                    logger.debug(f"  {bs_code} API错误(attempt {attempt+1}): {msg}，{wait:.0f}s后重试")
+                    logger.debug(f"  {bs_code} API错误(attempt {attempt+1}): {msg}")
                     time.sleep(wait)
                     continue
                 logger.warning(f"  {bs_code} API最终失败: {msg}")
                 return (None, False)
-
             except Exception as e:
                 msg = str(e)
                 if '未登录' in msg or 'login' in msg.lower():
-                    logger.warning(f"  {bs_code} 会话失效异常: {e}")
+                    logger.warning(f"  {bs_code} 会话失效: {e}")
                     return (None, True)
-
                 if attempt < RETRY_MAX:
                     wait = RETRY_BACKOFF ** (attempt + 1)
-                    logger.debug(f"  {bs_code} 网络异常(attempt {attempt+1}): {e}，{wait:.0f}s后重试")
+                    logger.debug(f"  {bs_code} 网络异常(attempt {attempt+1}): {e}")
                     time.sleep(wait)
                     continue
                 logger.warning(f"  {bs_code} 最终网络失败: {e}")
                 return (None, False)
-
         return (None, False)
 
     # ── 批量插入 ──
 
     @staticmethod
-    def _batch_insert_rows(db, rows_batch: list) -> int:
-        """
-        批量插入 daily_quote 行（chunked INSERT OR IGNORE）。
-        rows_batch: [(trade_date, exchange, stock_code, stock_name,
-                       open, high, low, close, volume, amount, turnover), ...]
-        """
+    def _batch_insert_rows(db, rows_batch: list, upsert: bool = True) -> int:
         if not rows_batch:
             return 0
         chunk_size = 200
@@ -252,8 +216,7 @@ class BaostockCrawler:
                     f'sc{idx}': row[2], f'sn{idx}': row[3],
                     f'o{idx}': row[4], f'h{idx}': row[5],
                     f'l{idx}': row[6], f'c{idx}': row[7],
-                    f'ch{idx}': row[7],  # close_hfq = close (每日增量无复权)
-                    f'cq{idx}': row[7],  # close_qfq = close
+                    f'ch{idx}': row[7], f'cq{idx}': row[7],
                     f'v{idx}': row[8], f'a{idx}': row[9],
                     f't{idx}': row[10],
                 })
@@ -263,9 +226,12 @@ class BaostockCrawler:
                 "open,high,low,close,close_hfq,close_qfq,"
                 "volume,amount,turnover) "
                 "VALUES " + ",".join(placeholders))
-            from app.db.connection import is_sqlite
-            if is_sqlite():
-                sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO")
+            if upsert:
+                sql += (" ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
+                       "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
+                       "close=EXCLUDED.close, close_hfq=EXCLUDED.close_hfq, "
+                       "close_qfq=EXCLUDED.close_qfq, volume=EXCLUDED.volume, "
+                       "amount=EXCLUDED.amount, turnover=EXCLUDED.turnover")
             else:
                 sql += " ON CONFLICT (stock_code, exchange, trade_date) DO NOTHING"
             try:
@@ -275,726 +241,298 @@ class BaostockCrawler:
                 logger.error(f"批量插入异常: {e}")
         return total
 
+    # ── 统一下载核心 ──
+
+    def _download_kline_batch(self, codes: list, stock_names: dict,
+                                start_date: str, end_date: str,
+                                db, upsert_mode: bool,
+                                date_str_filter: str = None) -> dict:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        total_rows = 0; errors = 0; failed_codes = []
+        processed = 0; insert_buffer = []
+        insert_lock = threading.Lock(); fail_lock = threading.Lock()
+        start_time = time.time()
+
+        def fetch_one(code: str) -> tuple:
+            bs_code = self._bs_code(code)
+            _random_delay()
+            rows, need_relogin = self._fetch_kline(bs_code, start_date, end_date)
+            if need_relogin:
+                return (None, True, f"{code}: 会话失效")
+            if rows is None:
+                return (None, False, f"{code}: API错误")
+            return (rows, False, None)
+
+        max_workers = min(8, len(codes) or 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(fetch_one, code): code for code in codes}
+            for future in as_completed(futures):
+                code = futures[future]
+                ex = self._exchange(code)
+                name = stock_names.get(code, code)
+                try:
+                    rows, need_relogin, err = future.result()
+                except Exception as e:
+                    with fail_lock: errors += 1; failed_codes.append(code)
+                    continue
+                if need_relogin or rows is None:
+                    with fail_lock: errors += 1; failed_codes.append(code)
+                    continue
+                for row in rows:
+                    if date_str_filter and row[0] != date_str_filter:
+                        continue
+                    try:
+                        with insert_lock:
+                            insert_buffer.append((
+                                row[0], ex, code, name,
+                                float(row[1]), float(row[2]), float(row[3]), float(row[4]),
+                                int(float(row[5])), float(row[6]),
+                                float(row[7]) if row[7] else None,
+                            ))
+                            total_rows += 1
+                    except (ValueError, IndexError): pass
+                with fail_lock: processed += 1
+                if len(insert_buffer) >= 500:
+                    with insert_lock:
+                        self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
+                        db.commit(); insert_buffer.clear()
+                if processed % 500 == 0:
+                    elapsed = time.time() - start_time
+                    logger.info(f"  进度: {processed}/{len(codes)} | +{total_rows}行 | 错误{errors}")
+        if insert_buffer:
+            self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
+            db.commit()
+        return {"rows": total_rows, "stocks": processed, "errors": errors,
+                "failed_codes": failed_codes, "elapsed_seconds": time.time() - start_time}
+
     # ═══════════════════════════════════════════════════
-    #  每日增量更新（生产级）
+    #  每日增量更新（A股日K线）
     # ═══════════════════════════════════════════════════
 
-    def download_daily_update(self, trade_date: date = None, db=None) -> dict:
-        """
-        每日增量更新 — 下载当日日K线数据（生产级）。
-
-        特性:
-        - 仅查询 A 股（type=1），排除指数/可转债/ETF
-        - 随机请求间隔，避免限流
-        - 指数退避重试 + 会话失效自动重登录
-        - 批量 INSERT（200行/批）
-        - 自动从 stock_master 填充 stock_name
-        - 失败记录写入 failed_downloads 表，供补采使用
-        - 详细返回状态
-
-        Returns:
-            {rows, stocks, errors, skipped, failed_codes, elapsed_seconds}
-        """
+    def download_daily_update(self, trade_date: date = None, db=None, force: bool = False) -> dict:
         if trade_date is None:
             trade_date = date.today()
         date_str = trade_date.isoformat()
-
         if not self.login():
-            return {"rows": 0, "stocks": 0, "errors": 0, "skipped": 0,
-                    "failed_codes": [], "elapsed_seconds": 0, "fatal": "login_failed"}
-
+            return {"rows": 0, "fatal": "login_failed"}
         if db is None:
             db = get_sync_db()
-        own_db = (db is None)
-        if own_db:
-            db = get_sync_db()
-
         start_time = time.time()
         logger.info(f"=== 每日增量更新 {date_str} ===")
 
-        # ── 1. 获取A股列表 ──
-        stock_info = self.get_a_stock_codes()
-        if not stock_info:
-            logger.error("无法获取股票列表")
-            return {"rows": 0, "stocks": 0, "errors": 0, "skipped": 0,
-                    "failed_codes": [], "elapsed_seconds": time.time() - start_time,
-                    "fatal": "no_stock_list"}
-
-        all_codes = list(stock_info.keys())
-        logger.info(f"  候选A股: {len(all_codes)} 只")
-
-        # ── 2. 查询已有当日数据的股票（跳过） ──
-        existing = set()
+        a_stock_set = set(self.get_a_stock_codes().keys())
+        logger.info(f"  A股总数: {len(a_stock_set)} 只")
         try:
-            rows = db.execute(text(
-                "SELECT DISTINCT stock_code FROM daily_quote WHERE trade_date = :d"
-            ), {"d": date_str}).fetchall()
-            existing = {r[0] for r in rows}
-        except Exception as e:
-            logger.warning(f"查询已有数据失败: {e}")
-
-        # 跳过今日尚未上市的股票
-        not_listed_yet = {c for c, info in stock_info.items()
-                          if info['ipo_date'] and info['ipo_date'] > date_str}
-
-        remaining = [c for c in all_codes if c not in existing and c not in not_listed_yet]
-        skipped = len(all_codes) - len(remaining)
-        logger.info(f"  已覆盖: {len(existing)}, 未上市: {len(not_listed_yet)}, "
-                     f"跳过: {skipped}, 待下载: {len(remaining)}")
-
-        if not remaining:
-            logger.info("  所有股票已覆盖今日数据，无需下载")
-            return {"rows": 0, "stocks": 0, "errors": 0, "skipped": skipped,
-                    "failed_codes": [], "elapsed_seconds": time.time() - start_time}
-
-        # ── 3. 逐只下载当日数据 ──
-        total_rows = 0
-        errors = 0
-        failed_codes = []
-        insert_buffer = []
-        processed = 0
-
-        i = 0
-        while i < len(remaining):
-            code = remaining[i]
-            bs_code = self._bs_code(code)
-            ex = self._exchange(code)
-            name = stock_info[code]['name']
-
-            _random_delay()
-
-            rows, need_relogin = self._fetch_kline(bs_code, date_str, date_str)
-
-            # 会话失效 → 立即重登录，重试同一只股票
-            if need_relogin:
-                logger.warning("  会话失效，重新登录...")
-                self.logout()
-                time.sleep(3)
-                if self.login():
-                    continue  # 重试同一只，i 不变
+            rs = bs.query_all_stock(date_str)
+            if rs.error_code != '0':
+                return {"rows":0,"fatal":"no_stock_list"}
+            all_codes = []; stock_names = {}
+            while rs.next():
+                row = rs.get_row_data()
+                if not row or len(row) < 3: continue
+                raw = row[0]
+                for p in ('sh.', 'sz.', 'bj.'):
+                    if raw.startswith(p):
+                        code = raw[len(p):]; break
                 else:
-                    logger.error("  重新登录失败，跳过该股票")
-                    errors += 1
-                    failed_codes.append(code)
-                    self._record_failure(db, ex, trade_date, "daily_kline",
-                                         "relogin_failed", code)
-                    i += 1
-                    continue
+                    code = raw
+                if code in a_stock_set and row[1] == '1':
+                    all_codes.append(code)
+                    stock_names[code] = row[2]
+        except Exception as e:
+            return {"rows":0,"fatal":"query_all_stock_error"}
 
-            if rows is None:
-                errors += 1
-                failed_codes.append(code)
-                self._record_failure(db, ex, trade_date, "daily_kline",
-                                     "api_error", code)
-                i += 1
-                continue
+        logger.info(f"  {date_str} A股交易: {len(all_codes)} 只")
+        if force:
+            remaining = all_codes; skipped = 0
+        else:
+            existing = set()
+            try:
+                rows = db.execute(text("SELECT DISTINCT stock_code FROM daily_quote WHERE trade_date=:d"), {"d": date_str}).fetchall()
+                existing = {r[0] for r in rows}
+            except: pass
+            remaining = [c for c in all_codes if c not in existing]
+            skipped = len(all_codes) - len(remaining)
+        logger.info(f"  待下载: {len(remaining)} 只 (force={force})")
 
-            # 过滤：仅保留当日数据
-            for row in rows:
-                if row[0] != date_str:
-                    continue
-                try:
-                    insert_buffer.append((
-                        row[0], ex, code, name,
-                        float(row[1]), float(row[2]), float(row[3]), float(row[4]),
-                        int(float(row[5])), float(row[6]),
-                        float(row[7]) if row[7] else None,
-                    ))
-                except (ValueError, IndexError):
-                    pass
+        result = self._download_kline_batch(
+            codes=remaining, stock_names=stock_names,
+            start_date=date_str, end_date=date_str,
+            db=db, upsert_mode=True, date_str_filter=date_str)
+        result["skipped"] = skipped
 
-            total_rows += len(rows)
-            processed += 1
-            i += 1
-
-            # 批量提交（每日增量单只1行，500只提交一次）
-            if len(insert_buffer) >= 500:
-                self._batch_insert_rows(db, insert_buffer)
-                db.commit()
-                insert_buffer.clear()
-
-            # 日志输出
-            if processed % 500 == 0:
-                elapsed = time.time() - start_time
-                pct = 100 * i / len(remaining)
-                logger.info(f"  进度: {i}/{len(remaining)} ({pct:.1f}%) | "
-                            f"+{total_rows}行 | 错误{errors} | {elapsed:.0f}秒")
-
-        # ── 4. 最终提交 ──
-        if insert_buffer:
-            self._batch_insert_rows(db, insert_buffer)
-        db.commit()
+        if result["errors"] > len(remaining) * 0.8 and result["errors"] > 10:
+            logger.warning("  大量错误，尝试重新登录补采...")
+            self.logout(); time.sleep(3)
+            if self.login():
+                retry = self._download_kline_batch(
+                    codes=result["failed_codes"], stock_names=stock_names,
+                    start_date=date_str, end_date=date_str,
+                    db=db, upsert_mode=True, date_str_filter=date_str)
+                result["rows"] += retry["rows"]
 
         elapsed = time.time() - start_time
-        logger.info(f"每日更新完成: {processed}只有数据, +{total_rows}行, "
-                     f"错误{errors}, 跳过{skipped}, 耗时{elapsed:.0f}秒")
-
-        if failed_codes:
-            logger.warning(f"  失败股票 ({len(failed_codes)}): {failed_codes[:20]}...")
-
-        return {
-            "rows": total_rows,
-            "stocks": processed,
-            "errors": errors,
-            "skipped": skipped,
-            "failed_codes": failed_codes,
-            "elapsed_seconds": elapsed,
-        }
+        logger.info(f"每日更新完成: {result['stocks']}只 +{result['rows']}行 错误{result['errors']} {elapsed:.0f}s")
+        return result
 
     # ── 记录失败 ──
 
     @staticmethod
-    def _record_failure(db, exchange: str, trade_date: date, data_type: str,
-                         error_msg: str, stock_code: str = None):
-        """记录下载失败到 failed_downloads 表。"""
+    def _record_failure(db, exchange, trade_date, data_type, error_msg, stock_code=None):
         try:
-            db.execute(text("""
-                INSERT INTO failed_downloads
-                (exchange, trade_date, data_type, error_msg, retry_count, status)
-                VALUES (:ex, :td, :dt, :msg, 0, 'pending')
-            """), {
-                "ex": exchange, "td": trade_date,
-                "dt": data_type, "msg": f"{stock_code}: {error_msg}"[:500],
-            })
-        except Exception:
-            pass
+            db.execute(text("INSERT INTO failed_downloads (exchange,trade_date,data_type,error_msg,retry_count,status) VALUES (:ex,:td,:dt,:msg,0,'pending')"),
+                       {"ex": exchange, "td": trade_date, "dt": data_type, "msg": f"{stock_code}: {error_msg}"[:500]})
+        except: pass
 
     # ═══════════════════════════════════════════════════
-    #  全量历史下载（生产级）
+    #  全量历史下载（A股日K线）
     # ═══════════════════════════════════════════════════
 
-    def download_all_stocks(self, start_date: str = "2021-01-01",
-                            end_date: str = None, db=None,
-                            skip_existing: bool = True) -> dict:
-        """
-        下载全量A股历史日K线数据。支持断点续传。
-
-        Returns:
-            {total_rows, stocks, new_stocks, skipped, errors}
-        """
+    def download_all_stocks(self, start_date: str = "2021-01-01", end_date: str = None,
+                            db=None, skip_existing: bool = True) -> dict:
         if end_date is None:
             end_date = date.today().isoformat()
-
         if not self.login():
-            return {"total_rows": 0, "stocks": 0, "new_stocks": 0,
-                    "skipped": 0, "errors": 0, "error": "login_failed"}
-
+            return {"error": "login_failed"}
         if db is None:
             db = get_sync_db()
-
-        # ── 获取A股列表 ──
         stock_info = self.get_a_stock_codes()
         if not stock_info:
-            return {"total_rows": 0, "stocks": 0, "new_stocks": 0,
-                    "skipped": 0, "errors": 0, "error": "no_stock_list"}
-
+            return {"error": "no_stock_list"}
         all_codes = list(stock_info.keys())
-
-        # ── 跳过已有数据的股票 ──
-        skip_set: Set[str] = set()
+        skip_set = set()
         if skip_existing:
             db_skip = get_db_completed_stocks(db, "daily_quote")
             skip_set |= db_skip
-            logger.info(f"  DB中已有数据: {len(db_skip)} 只，跳过")
-
         remaining = [c for c in all_codes if c not in skip_set]
         skipped = len(all_codes) - len(remaining)
-        logger.info(f"全量下载: 总计 {len(all_codes)} 只, 跳过 {skipped} 只, "
-                     f"待下载 {len(remaining)} 只")
-        logger.info(f"  日期范围: {start_date} ~ {end_date}")
-
+        logger.info(f"全量下载: {len(all_codes)}只 跳过{skipped} 待下载{len(remaining)} | {start_date}~{end_date}")
         init_progress(len(all_codes), start_date, end_date, "daily_kline")
-
-        total_rows = 0
-        errors = 0
-        new_stocks = 0
-        batch_codes = []
-
-        for i, code in enumerate(remaining):
-            bs_code = self._bs_code(code)
-            ex = self._exchange(code)
-            name = stock_info[code]['name']
-
-            _random_delay()
-
-            rows, need_relogin = self._fetch_kline(bs_code, start_date, end_date)
-
-            if need_relogin:
-                logger.warning("  会话失效，重新登录...")
-                self.logout()
-                time.sleep(3)
-                if self.login():
-                    # 重试同一只
-                    rows, need_relogin = self._fetch_kline(bs_code, start_date, end_date)
-                    if need_relogin or rows is None:
-                        errors += 1
-                        continue
-                else:
-                    errors += 1
-                    continue
-
-            if rows is None:
-                errors += 1
-                continue
-
-            if not rows:
-                continue
-
-            # 批量插入
-            insert_batch = []
-            for row in rows:
-                try:
-                    insert_batch.append((
-                        row[0], ex, code, name,
-                        float(row[1]), float(row[2]), float(row[3]), float(row[4]),
-                        int(float(row[5])), float(row[6]),
-                        float(row[7]) if row[7] else None,
-                    ))
-                except (ValueError, IndexError):
-                    pass
-
-            self._batch_insert_rows(db, insert_batch)
-            total_rows += len(rows)
-            new_stocks += 1
-            batch_codes.append(code)
-
-            # 每 100 只提交
-            if (i + 1) % 100 == 0:
-                db.commit()
-                mark_batch_completed(batch_codes, "daily_kline")
-                batch_codes.clear()
-                pct = (i + 1) / len(remaining) * 100
-                logger.info(f"  进度: {skipped + i + 1}/{len(all_codes)} ({pct:.1f}%) "
-                            f"| {total_rows:,}行 | 剩余 {len(remaining) - i - 1} 只")
-
-        # 最后一批
+        stock_names = {c: stock_info[c]['name'] for c in remaining}
+        result = self._download_kline_batch(
+            codes=remaining, stock_names=stock_names,
+            start_date=start_date, end_date=end_date,
+            db=db, upsert_mode=False, date_str_filter=None)
         db.commit()
-        if batch_codes:
-            mark_batch_completed(batch_codes, "daily_kline")
-
-        logger.info(f"下载完成: {total_rows:,} 行, 新增 {new_stocks} 只, "
-                     f"跳过 {skipped} 只, 失败 {errors} 只")
-        return {
-            "total_rows": total_rows,
-            "stocks": len(all_codes),
-            "new_stocks": new_stocks,
-            "skipped": skipped,
-            "errors": errors,
-        }
-
-    # ── 按指定日期下载（补采用） ──
-
-    def download_for_date(self, trade_date: date, db=None) -> dict:
-        """
-        补采指定交易日的数据。与 download_daily_update 逻辑相同，
-        但不跳过已有数据的股票（强制覆盖/补充）。
-
-        Returns: 同 download_daily_update
-        """
-        return self.download_daily_update(trade_date, db)
+        mark_batch_completed(remaining, "daily_kline")
+        logger.info(f"全量下载完成: {result['rows']}行 新增{result['stocks']} 失败{result['errors']}")
+        return {"total_rows": result["rows"], "stocks": len(all_codes),
+                "new_stocks": result["stocks"], "skipped": skipped, "errors": result["errors"]}
 
     # ═══════════════════════════════════════════════════
-    #  股票基础信息
+    #  指数日K线
     # ═══════════════════════════════════════════════════
 
-    def get_stock_basic_info(self) -> pd.DataFrame:
-        """获取股票基础信息（代码、名称、上市日期、交易所、类型）。"""
-        # 需要从 baostock 原始数据获取 type 信息（get_a_stock_codes 只返回 type=1）
-        # 因此这里改用 query_stock_basic 原始数据
-        self.login()
-        data = []
-        rs = bs.query_stock_basic()
-        if rs.error_code == '0':
-            while rs.next():
-                row = rs.get_row_data()
-                sec_type = row[4] if len(row) > 4 else ''
-                raw_code = row[0]
-                for prefix in ('sh.', 'sz.', 'bj.'):
-                    if raw_code.startswith(prefix):
-                        code = raw_code[len(prefix):]
-                        break
-                else:
-                    code = raw_code
-                if not (code.isdigit() and len(code) == 6):
-                    continue
-
-                # 类型映射
-                type_names = {'1': 'stock', '2': 'index', '4': 'bond', '5': 'etf'}
-                stock_type = type_names.get(sec_type, 'other')
-
-                data.append({
-                    "stock_code": code,
-                    "stock_name": row[1],
-                    "exchange": self._exchange(code),
-                    "ipo_date": row[2] if len(row) > 2 and row[2] else None,
-                    "status": "N" if row[5] == '1' else "D",
-                    "stock_type": stock_type,
-                })
-        return pd.DataFrame(data)
-
-    # ═══════════════════════════════════════════════════
-    #  基本面下载
-    # ═══════════════════════════════════════════════════
-
-    def _get_latest_fundamentals(self, bs_code: str) -> dict:
-        """
-        获取单只股票最新基本面数据。智能季度回退。
-        Returns: {roe, revenue_yoy, profit_yoy}
-        """
-        today = date.today()
-        candidates = [
-            (today.year - 1, 4),       # 去年年报
-            (today.year, 1),           # 今年Q1
-        ]
-
-        result = {"roe": None, "revenue_yoy": None, "profit_yoy": None}
-
-        for year, quarter in candidates:
-            if result["roe"] is None:
-                try:
-                    rs = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
-                    if rs.error_code == '0':
-                        while rs.next():
-                            rr = rs.get_row_data()
-                            if len(rr) > 3 and rr[3]:
-                                try:
-                                    result["roe"] = float(rr[3]) * 100
-                                except (ValueError, TypeError):
-                                    pass
-                except Exception:
-                    pass
-
-            if result["revenue_yoy"] is None or result["profit_yoy"] is None:
-                try:
-                    rs = bs.query_growth_data(code=bs_code, year=year, quarter=quarter)
-                    if rs.error_code == '0':
-                        while rs.next():
-                            rr = rs.get_row_data()
-                            if result["revenue_yoy"] is None and len(rr) > 7 and rr[7]:
-                                try:
-                                    result["revenue_yoy"] = float(rr[7]) * 100
-                                except (ValueError, TypeError):
-                                    pass
-                            if result["profit_yoy"] is None and len(rr) > 5 and rr[5]:
-                                try:
-                                    result["profit_yoy"] = float(rr[5]) * 100
-                                except (ValueError, TypeError):
-                                    pass
-                except Exception:
-                    pass
-
-            if all(v is not None for v in result.values()):
-                break
-
-        return result
-
-    def download_fundamentals(self, codes: List[str] = None, db=None,
-                              skip_existing: bool = False,
-                              skip_pe_pb: bool = True) -> int:
-        """下载基本面数据(PE/PB/行业/ROE/增长率)。"""
-        self.login()
-        if db is None:
-            db = get_sync_db()
-
-        if codes is None:
-            codes = self.get_all_stock_codes()
-
-        if skip_existing:
-            existing = get_db_completed_stocks(db, "stock_fundamentals")
-            try:
-                has_roe = db.execute(text(
-                    "SELECT DISTINCT stock_code FROM stock_fundamentals WHERE roe IS NOT NULL"
-                )).fetchall()
-                has_roe_set = {r[0] for r in has_roe}
-                codes = [c for c in codes if c not in existing or c not in has_roe_set]
-            except Exception:
-                codes = [c for c in codes if c not in existing]
-            logger.info(f"  跳过 {len(existing)} 只已有基本面数据，待下载 {len(codes)} 只")
-
-        total = len(codes)
-        logger.info(f"基本面下载: {total} 只")
-
-        # 行业缓存
-        industry_map = {}
-        try:
-            rs_i = bs.query_stock_industry()
-            if rs_i.error_code == '0':
-                while rs_i.next():
-                    r = rs_i.get_row_data()
-                    if len(r) >= 4:
-                        c = r[1].replace("sz.", "").replace("sh.", "")
-                        industry_map[c] = r[3]
-            logger.info(f"  行业数据: {len(industry_map)} 条")
-        except Exception:
-            logger.warning("  行业数据获取失败，将跳过行业字段")
-
-        init_progress(total, section="fundamentals")
-
-        has_pe_set: Set[str] = set()
-        if skip_pe_pb:
-            try:
-                rows = db.execute(text(
-                    "SELECT DISTINCT stock_code FROM stock_fundamentals "
-                    "WHERE pe_ttm IS NOT NULL"
-                )).fetchall()
-                has_pe_set = {r[0] for r in rows}
-                logger.info(f"  已有PE数据: {len(has_pe_set)} 只，跳过PE/PB查询")
-            except Exception:
-                pass
-
-        updated = 0
-        pe_missing = 0
-        profit_missing = 0
-        growth_missing = 0
-        batch_codes = []
-
-        for i, code in enumerate(codes):
-            try:
-                bs_code = self._bs_code(code)
-
-                pe, pb = None, None
-                if not skip_pe_pb or code not in has_pe_set:
-                    try:
-                        rs = bs.query_history_k_data_plus(bs_code,
-                            "date,close,peTTM,pbMRQ",
-                            start_date=(date.today() - timedelta(days=7)).isoformat(),
-                            end_date=date.today().isoformat(),
-                            frequency="d")
-                        while rs.next():
-                            r = rs.get_row_data()
-                            try:
-                                if r[2] and r[2] != '0.000000' and r[2] != '':
-                                    pe = float(r[2])
-                                if r[3] and r[3] != '0.000000' and r[3] != '':
-                                    pb = float(r[3])
-                            except (ValueError, TypeError):
-                                pass
-                    except Exception:
-                        pass
-                    if pe is None:
-                        pe_missing += 1
-                else:
-                    try:
-                        row = db.execute(text(
-                            "SELECT pe_ttm, pb_mrq FROM stock_fundamentals WHERE stock_code=:c"
-                        ), {"c": code}).fetchone()
-                        if row:
-                            pe, pb = row[0], row[1]
-                    except Exception:
-                        pass
-
-                fund = self._get_latest_fundamentals(bs_code)
-                roe = fund["roe"]
-                rev_yoy = fund["revenue_yoy"]
-                prf_yoy = fund["profit_yoy"]
-                if roe is None:
-                    profit_missing += 1
-                if rev_yoy is None and prf_yoy is None:
-                    growth_missing += 1
-
-                ind = industry_map.get(code, "")
-                from app.db.connection import is_sqlite as _is_sql
-                if _is_sql():
-                    db.execute(text("""
-                        INSERT OR REPLACE INTO stock_fundamentals
-                        (stock_code, stock_name, industry, pe_ttm, pb_mrq,
-                         roe, revenue_yoy, profit_yoy, updated_at)
-                        VALUES (:c, '', :i, :pe, :pb, :roe, :ry, :py, CURRENT_TIMESTAMP)
-                    """), {"c": code, "i": ind, "pe": pe, "pb": pb,
-                           "roe": roe, "ry": rev_yoy, "py": prf_yoy})
-                else:
-                    db.execute(text("""
-                        INSERT INTO stock_fundamentals
-                        (stock_code, stock_name, industry, pe_ttm, pb_mrq,
-                         roe, revenue_yoy, profit_yoy, updated_at)
-                        VALUES (:c, '', :i, :pe, :pb, :roe, :ry, :py, CURRENT_TIMESTAMP)
-                        ON CONFLICT (stock_code) DO UPDATE SET
-                        stock_name=EXCLUDED.stock_name, industry=EXCLUDED.industry,
-                        pe_ttm=EXCLUDED.pe_ttm, pb_mrq=EXCLUDED.pb_mrq,
-                        roe=EXCLUDED.roe, revenue_yoy=EXCLUDED.revenue_yoy,
-                        profit_yoy=EXCLUDED.profit_yoy, updated_at=CURRENT_TIMESTAMP
-                    """), {"c": code, "i": ind, "pe": pe, "pb": pb,
-                           "roe": roe, "ry": rev_yoy, "py": prf_yoy})
-                updated += 1
-                batch_codes.append(code)
-
-                if (i + 1) % 200 == 0:
-                    db.commit()
-                    mark_batch_completed(batch_codes, "fundamentals")
-                    batch_codes.clear()
-                    pct = (i + 1) / total * 100
-                    logger.info(f"  基本面进度: {i+1}/{total} ({pct:.1f}%) "
-                                f"| PE缺失:{pe_missing} ROE缺失:{profit_missing} 增长缺失:{growth_missing}")
-                    time.sleep(0.3)
-
-            except Exception as e:
-                logger.warning(f"  {code} 基本面下载失败: {e}")
-
-        db.commit()
-        if batch_codes:
-            mark_batch_completed(batch_codes, "fundamentals")
-
-        logger.info(f"基本面下载完成: {updated} 只 | "
-                     f"PE缺失:{pe_missing}, ROE缺失:{profit_missing}, 增长缺失:{growth_missing}")
-        return updated
-
-
-    def download_index_daily(self, trade_date: str, db=None) -> int:
-        """下载指定日期的主要指数日K线数据。"""
-        import time
-        from loguru import logger
-        from app.db.connection import is_sqlite as _is_sql
-
-        if not self.login():
-            return 0
-        if db is None:
-            from app.db.connection import get_sync_db
-            db = get_sync_db()
-
-        INDEX_CODES = [
-            ('sh.000001', '上证指数'), ('sz.399001', '深证成指'),
-            ('sz.399006', '创业板指'), ('sh.000688', '科创50'),
-            ('sh.000300', '沪深300'), ('sh.000016', '上证50'),
-            ('sh.000905', '中证500'), ('sh.000852', '中证1000'),
-        ]
-        fields = 'date,code,open,high,low,close,volume,amount'
-        total = 0
-        for bs_code, name in INDEX_CODES:
-            try:
-                rs = self._bs.query_history_k_data_plus(
-                    bs_code, fields, start_date=trade_date, end_date=trade_date,
-                    frequency='d', adjustflag='3')
-                while rs.next():
-                    d = rs.get_row_data()
-                    if d[0] != trade_date:
-                        continue
-                    ex = 'SSE' if bs_code.startswith('sh.') else 'SZSE'
-                    index_code = bs_code.split('.')[1]
-                    if _is_sql():
-                        db.execute(text(
-                            "INSERT OR REPLACE INTO index_daily_quote "
-                            "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
-                            "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a)"
-                        ), {"d": d[0], "c": index_code, "n": name,
-                            "o": float(d[2]) if d[2] else 0,
-                            "h": float(d[3]) if d[3] else 0,
-                            "l": float(d[4]) if d[4] else 0,
-                            "cl": float(d[5]) if d[5] else 0,
-                            "v": int(float(d[6])) if d[6] else 0,
-                            "a": float(d[7]) if d[7] else 0})
-                    else:
-                        db.execute(text(
-                            "INSERT INTO index_daily_quote "
-                            "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
-                            "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
-                            "ON CONFLICT (trade_date, index_code) DO UPDATE SET "
-                            "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-                            "close=EXCLUDED.close, volume=EXCLUDED.volume, amount=EXCLUDED.amount"
-                        ), {"d": d[0], "c": index_code, "n": name,
-                            "o": float(d[2]) if d[2] else 0,
-                            "h": float(d[3]) if d[3] else 0,
-                            "l": float(d[4]) if d[4] else 0,
-                            "cl": float(d[5]) if d[5] else 0,
-                            "v": int(float(d[6])) if d[6] else 0,
-                            "a": float(d[7]) if d[7] else 0})
-                    total += 1
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"  指数 {bs_code} 下载失败: {e}")
-        db.commit()
-        logger.info(f"指数日线: {trade_date} -> {total} 条")
-        return total
-
-
-
-    def download_all_index_daily(self, trade_date: str, db=None) -> int:
-        """下载全量指数日K线（type=2），写入 index_daily_quote 表。"""
-        import time
-        from loguru import logger
-        from app.db.connection import is_sqlite as _is_sql
-        if not self.login():
-            return 0
-        if db is None:
-            from app.db.connection import get_sync_db
-            db = get_sync_db()
-
-        rs = bs.query_stock_basic()
-        index_codes = []
-        while rs.next():
-            d = rs.get_row_data()
-            if len(d) > 4 and d[4] == '2':  # 类型 '2' = 指数
-                raw = d[0]
-                for p in ('sh.', 'sz.', 'bj.'):
-                    if raw.startswith(p):
-                        code = raw[len(p):]
-                        break
-                else:
-                    code = raw
-                index_codes.append((raw, code, d[1]))
-
-        logger.info(f"指数列表: {len(index_codes)} 只")
-        fields = 'date,code,open,high,low,close,volume,amount'
-        total = 0
-        for bs_code, index_code, name in index_codes:
-            try:
-                rs2 = self._bs.query_history_k_data_plus(
-                    bs_code, fields, start_date=trade_date, end_date=trade_date,
-                    frequency='d', adjustflag='3')
-                while rs2.next():
-                    d = rs2.get_row_data()
-                    if d[0] != trade_date:
-                        continue
-                    if _is_sql():
-                        db.execute(text(
-                            "INSERT OR REPLACE INTO index_daily_quote "
-                            "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
-                            "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a)"
-                        ), {"d": d[0], "c": index_code, "n": name,
-                            "o": float(d[2]) if d[2] else 0,
-                            "h": float(d[3]) if d[3] else 0,
-                            "l": float(d[4]) if d[4] else 0,
-                            "cl": float(d[5]) if d[5] else 0,
-                            "v": int(float(d[6])) if d[6] else 0,
-                            "a": float(d[7]) if d[7] else 0})
-                    else:
-                        db.execute(text(
-                            "INSERT INTO index_daily_quote "
-                            "(trade_date, index_code, index_name, open, high, low, close, volume, amount) "
-                            "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
-                            "ON CONFLICT (trade_date, index_code) DO UPDATE SET "
-                            "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-                            "close=EXCLUDED.close, volume=EXCLUDED.volume, amount=EXCLUDED.amount"
-                        ), {"d": d[0], "c": index_code, "n": name,
-                            "o": float(d[2]) if d[2] else 0,
-                            "h": float(d[3]) if d[3] else 0,
-                            "l": float(d[4]) if d[4] else 0,
-                            "cl": float(d[5]) if d[5] else 0,
-                            "v": int(float(d[6])) if d[6] else 0,
-                            "a": float(d[7]) if d[7] else 0})
-                    total += 1
-                time.sleep(0.2)
-            except Exception as e:
-                logger.warning(f"  指数 {bs_code} 失败: {e}")
-        db.commit()
-        logger.info(f"指数下载完成: {trade_date} -> {total} 条")
-        return total
-
-    def download_etf_daily(self, trade_date: str, db=None) -> dict:
-        """下载 ETF 日K线（type=5），写入 daily_quote 表。"""
-        import time
-        from loguru import logger
-        from app.db.connection import is_sqlite as _is_sql
+    def download_all_index_daily(self, trade_date: str = None, db=None,
+                                   force: bool = True,
+                                   start_date: str = None, end_date: str = None) -> dict:
+        """下载全量指数日K线，支持单日/多日 + 覆盖/跳过。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
         if not self.login():
             return {"rows": 0, "errors": 0}
         if db is None:
-            from app.db.connection import get_sync_db
             db = get_sync_db()
+        sd = trade_date or start_date
+        ed = trade_date or end_date
+        if not sd or not ed:
+            return {"rows": 0, "errors": 0}
+        is_single = (sd == ed)
+        label = sd if is_single else f"{sd}~{ed}"
 
         rs = bs.query_stock_basic()
-        etf_list = []
+        items = []
         while rs.next():
             d = rs.get_row_data()
-            if len(d) > 4 and d[4] == '5':  # 类型 '5' = ETF
+            if len(d) > 4 and d[4] == '2':
+                raw = d[0]
+                for p in ('sh.', 'sz.', 'bj.'):
+                    if raw.startswith(p):
+                        code = raw[len(p):]; break
+                else:
+                    code = raw
+                items.append((raw, code, d[1]))
+
+        if not force:
+            before = len(items)
+            try:
+                rows = db.execute(text("SELECT DISTINCT index_code FROM index_daily_quote WHERE trade_date BETWEEN :s AND :e"),
+                                 {"s": sd, "e": ed}).fetchall()
+                exist = {r[0] for r in rows}
+                items = [i for i in items if i[1] not in exist]
+                logger.info(f"  跳过 {before - len(items)} 只")
+            except: pass
+
+        logger.info(f"指数 {label}: {len(items)} 只")
+        total = 0
+        lock = threading.Lock()
+
+        def fetch(item):
+            bs_code, icode, name = item
+            try:
+                r = bs.query_history_k_data_plus(bs_code, 'date,code,open,high,low,close,volume,amount',
+                    start_date=sd, end_date=ed, frequency='d', adjustflag='3')
+                rows = []
+                while r.next():
+                    rows.append(r.get_row_data())
+                return (item, rows, None)
+            except Exception as e:
+                return (item, None, str(e))
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for future in as_completed({pool.submit(fetch, i): i for i in items}):
+                (bs_code, icode, name), rows, err = future.result()
+                if not rows: continue
+                for d in rows:
+                    if is_single and d[0] != sd: continue
+                    try:
+                        with lock:
+                            db.execute(text(
+                                "INSERT INTO index_daily_quote "
+                                "(trade_date,index_code,index_name,open,high,low,close,volume,amount) "
+                                "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
+                                "ON CONFLICT (trade_date,index_code) DO UPDATE SET "
+                                "open=EXCLUDED.open,high=EXCLUDED.high,low=EXCLUDED.low,"
+                                "close=EXCLUDED.close,volume=EXCLUDED.volume,amount=EXCLUDED.amount"),
+                                {"d":d[0],"c":icode,"n":name,
+                                 "o":float(d[2]) if d[2] else 0,"h":float(d[3]) if d[3] else 0,
+                                 "l":float(d[4]) if d[4] else 0,"cl":float(d[5]) if d[5] else 0,
+                                 "v":int(float(d[6])) if d[6] else 0,"a":float(d[7]) if d[7] else 0})
+                            total += 1
+                    except: pass
+        db.commit()
+        logger.info(f"指数下载完成 {label}: {total} 条")
+        return {"rows": total, "errors": 0}
+
+    # ═══════════════════════════════════════════════════
+    #  ETF日K线
+    # ═══════════════════════════════════════════════════
+
+    def download_etf_daily(self, trade_date: str = None, db=None,
+                            force: bool = True,
+                            start_date: str = None, end_date: str = None) -> dict:
+        """
+        下载 ETF 日K线（type=5），支持单日/多日 + 覆盖/跳过。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        if not self.login():
+            return {"rows": 0}
+        if db is None:
+            db = get_sync_db()
+        sd = trade_date or start_date
+        ed = trade_date or end_date
+        if not sd or not ed:
+            return {"rows": 0}
+        is_single = (sd == ed)
+        label = sd if is_single else f"{sd}~{ed}"
+
+        rs = bs.query_stock_basic()
+        items = []
+        while rs.next():
+            d = rs.get_row_data()
+            if len(d) > 4 and d[4] == '5':
                 raw = d[0]
                 for p in ('sh.', 'sz.', 'bj.'):
                     if raw.startswith(p):
@@ -1003,121 +541,244 @@ class BaostockCrawler:
                         break
                 else:
                     code, ex = raw, 'SSE'
-                etf_list.append((raw, code, d[1], ex))
+                items.append((raw, code, d[1], ex))
 
-        logger.info(f"ETF 列表: {len(etf_list)} 只")
-
-        existing = set()
-        try:
-            rows = db.execute(text(
-                "SELECT DISTINCT stock_code FROM daily_quote WHERE trade_date=:d"
-            ), {"d": trade_date}).fetchall()
-            existing = {r[0] for r in rows}
-        except Exception:
-            pass
-
-        fields = 'date,open,high,low,close,volume,amount,turn'
-        total_rows = 0
-        errors = 0
-        insert_buffer = []
-        for bs_code, code, name, ex in etf_list:
-            if code in existing:
-                continue
+        if not force:
+            before = len(items)
             try:
-                rs2 = self._bs.query_history_k_data_plus(
-                    bs_code, fields, start_date=trade_date, end_date=trade_date,
-                    frequency='d', adjustflag='3')
-                while rs2.next():
-                    d = rs2.get_row_data()
-                    if d[0] != trade_date:
-                        continue
-                    insert_buffer.append((
-                        d[0], ex, code, name,
-                        float(d[1]) if d[1] else 0,
-                        float(d[2]) if d[2] else 0,
-                        float(d[3]) if d[3] else 0,
-                        float(d[4]) if d[4] else 0,
-                        int(float(d[5])) if d[5] else 0,
-                        float(d[6]) if d[6] else 0,
-                        float(d[7]) if d[7] else None,
-                    ))
-                    total_rows += 1
-                time.sleep(0.2)
+                rows = db.execute(text(
+                    "SELECT DISTINCT d.stock_code FROM daily_quote d JOIN stock_master s ON s.stock_code=d.stock_code "
+                    "WHERE d.trade_date BETWEEN :s AND :e AND s.stock_type='etf'"),
+                    {"s": sd, "e": ed}).fetchall()
+                exist = {r[0] for r in rows}
+                items = [i for i in items if i[1] not in exist]
+                logger.info(f"  跳过 {before - len(items)} 只")
+            except: pass
+
+        logger.info(f"ETF {label}: {len(items)} 只")
+        total = 0; errors = 0
+        buf = []; lock = threading.Lock()
+
+        def fetch(item):
+            bs_code, code, name, ex = item
+            try:
+                r = bs.query_history_k_data_plus(bs_code, 'date,open,high,low,close,volume,amount,turn',
+                    start_date=sd, end_date=ed, frequency='d', adjustflag='3')
+                rows = []
+                while r.next():
+                    rows.append(r.get_row_data())
+                return (item, rows, None)
             except Exception as e:
-                errors += 1
-                logger.warning(f"  ETF {bs_code} 失败: {e}")
+                return (item, None, str(e))
 
-            if len(insert_buffer) >= 200:
-                from crawler.baostock_crawler import BaostockCrawler as _BC
-                _BC._batch_insert_rows(db, insert_buffer)
-                insert_buffer = []
-
-        if insert_buffer:
-            from crawler.baostock_crawler import BaostockCrawler as _BC
-            _BC._batch_insert_rows(db, insert_buffer)
-
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for future in as_completed({pool.submit(fetch, i): i for i in items}):
+                (bs_code, code, name, ex), rows, err = future.result()
+                if err or not rows:
+                    errors += 1; continue
+                for d in rows:
+                    if is_single and d[0] != sd: continue
+                    try:
+                        with lock:
+                            buf.append((d[0], ex, code, name,
+                                float(d[1]) if d[1] else 0, float(d[2]) if d[2] else 0,
+                                float(d[3]) if d[3] else 0, float(d[4]) if d[4] else 0,
+                                int(float(d[5])) if d[5] else 0, float(d[6]) if d[6] else 0,
+                                float(d[7]) if d[7] else None))
+                            total += 1
+                    except: pass
+                if len(buf) >= 500:
+                    with lock:
+                        self._batch_insert_rows(db, buf)
+                        db.commit(); buf.clear()
+        if buf:
+            self._batch_insert_rows(db, buf)
         db.commit()
-        logger.info(f"ETF 下载完成: {trade_date} -> {total_rows} 条, {errors} 错误")
-        return {"rows": total_rows, "errors": errors}
+        logger.info(f"ETF下载完成 {label}: +{total}条 {errors}错误")
+        return {"rows": total, "errors": errors}
 
+    # ═══════════════════════════════════════════════════
+    #  股票基础信息
+    # ═══════════════════════════════════════════════════
 
+    def get_stock_basic_info(self) -> pd.DataFrame:
+        """获取全量证券基础信息（含指数/ETF/债券类型）。"""
+        self.login()
+        data = []
+        rs = bs.query_stock_basic()
+        if rs.error_code == '0':
+            while rs.next():
+                row = rs.get_row_data()
+                if not row or len(row) < 2: continue
+                sec_type = row[4] if len(row) > 4 else ''
+                raw_code = row[0]
+                for p in ('sh.', 'sz.', 'bj.'):
+                    if raw_code.startswith(p):
+                        code = raw_code[len(p):]; break
+                else: code = raw_code
+                if not (code.isdigit() and len(code) == 6): continue
+                tmap = {'1': 'stock', '2': 'index', '4': 'bond', '5': 'etf'}
+                data.append({"stock_code": code, "stock_name": row[1],
+                    "exchange": self._exchange(code),
+                    "ipo_date": row[2] if len(row) > 2 and row[2] else None,
+                    "status": "N" if row[5] == '1' else "D",
+                    "stock_type": tmap.get(sec_type, 'other')})
+        return pd.DataFrame(data)
+
+    # ═══════════════════════════════════════════════════
+    #  基本面
+    # ═══════════════════════════════════════════════════
+
+    def _get_latest_fundamentals(self, bs_code: str) -> dict:
+        today = date.today()
+        candidates = [(today.year - 1, 4), (today.year, 1)]
+        result = {"roe": None, "revenue_yoy": None, "profit_yoy": None}
+        for year, quarter in candidates:
+            if result["roe"] is None:
+                try:
+                    r = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
+                    if r.error_code == '0':
+                        while r.next():
+                            rr = r.get_row_data()
+                            if len(rr) > 3 and rr[3]:
+                                try: result["roe"] = float(rr[3]) * 100
+                                except: pass
+                except: pass
+            if result["revenue_yoy"] is None or result["profit_yoy"] is None:
+                try:
+                    r = bs.query_growth_data(code=bs_code, year=year, quarter=quarter)
+                    if r.error_code == '0':
+                        while r.next():
+                            rr = r.get_row_data()
+                            if result["revenue_yoy"] is None and len(rr) > 7 and rr[7]:
+                                try: result["revenue_yoy"] = float(rr[7]) * 100
+                                except: pass
+                            if result["profit_yoy"] is None and len(rr) > 5 and rr[5]:
+                                try: result["profit_yoy"] = float(rr[5]) * 100
+                                except: pass
+                except: pass
+            if all(v is not None for v in result.values()):
+                break
+        return result
+
+    def download_fundamentals(self, codes: List[str] = None, db=None,
+                              force: bool = True, progress_cb=None) -> dict:
+        """
+        下载基本面(PE/PB/ROE/营收/净利/行业/股本/市值)，并行 + upsert。
+        total_shares = volume / (turn% / 100), market_cap = close x total_shares。
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+
+        self.login()
+        if db is None:
+            db = get_sync_db()
+        if codes is None:
+            codes = self.get_all_stock_codes()
+        if not force:
+            try:
+                rows = db.execute(text("SELECT DISTINCT stock_code FROM stock_fundamentals")).fetchall()
+                exist = {r[0] for r in rows}
+                codes = [c for c in codes if c not in exist]
+                logger.info(f"  跳过 {len(exist)} 只已有，待下载 {len(codes)} 只")
+            except: pass
+
+        logger.info(f"基本面下载: {len(codes)} 只")
+
+        # 行业缓存（一次性）
+        industry_map = {}
+        try:
+            r = bs.query_stock_industry()
+            if r.error_code == '0':
+                while r.next():
+                    rr = r.get_row_data()
+                    if rr and len(rr) >= 4:
+                        c = rr[1].replace("sz.", "").replace("sh.", "")
+                        industry_map[c] = rr[3]
+        except: pass
+
+        updated = 0; pe_missing = 0; profit_missing = 0; growth_missing = 0
+        lock = threading.Lock()
+
+        def fetch_one(code: str) -> dict:
+            bs_code = self._bs_code(code)
+            res = {"code":code,"pe":None,"pb":None,"roe":None,"rev":None,"prf":None,"ts":None,"mc":None}
+            try:
+                r = bs.query_history_k_data_plus(bs_code, "date,close,volume,peTTM,pbMRQ,turn",
+                    start_date=(date.today()-timedelta(days=7)).isoformat(),
+                    end_date=date.today().isoformat(), frequency="d")
+                while r.next():
+                    rr = r.get_row_data()
+                    if not rr or len(rr) < 6: continue
+                    try:
+                        if rr[3] and rr[3] != '0.000000': res["pe"] = float(rr[3])
+                        if rr[4] and rr[4] != '0.000000': res["pb"] = float(rr[4])
+                        if rr[2] and rr[5] and rr[5] != '':
+                            vol = float(rr[2]); turn = float(rr[5]); close = float(rr[1])
+                            if turn > 0 and close > 0:
+                                ts = vol / (turn / 100)
+                                res["ts"] = round(ts); res["mc"] = round(close * ts)
+                    except: pass
+            except: pass
+            fund = self._get_latest_fundamentals(bs_code)
+            res["roe"]=fund["roe"]; res["rev"]=fund["revenue_yoy"]; res["prf"]=fund["profit_yoy"]
+            return res
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for i, res in enumerate(pool.map(fetch_one, codes)):
+                if res["pe"] is None: pe_missing += 1
+                if res["roe"] is None: profit_missing += 1
+                if res["rev"] is None and res["prf"] is None: growth_missing += 1
+                ind = industry_map.get(res["code"], "")
+                try:
+                    with lock:
+                        db.execute(text("INSERT INTO stock_fundamentals (stock_code,pe_ttm,pb_mrq,industry,roe,revenue_yoy,profit_yoy,total_shares,market_cap,updated_at) VALUES (:c,:pe,:pb,:ind,:roe,:rev,:prf,:ts,:mc,CURRENT_TIMESTAMP) ON CONFLICT (stock_code) DO UPDATE SET pe_ttm=EXCLUDED.pe_ttm,pb_mrq=EXCLUDED.pb_mrq,industry=EXCLUDED.industry,roe=EXCLUDED.roe,revenue_yoy=EXCLUDED.revenue_yoy,profit_yoy=EXCLUDED.profit_yoy,total_shares=EXCLUDED.total_shares,market_cap=EXCLUDED.market_cap,updated_at=CURRENT_TIMESTAMP"),
+                            {"c":res["code"],"pe":res["pe"],"pb":res["pb"],"ind":ind,"roe":res["roe"],"rev":res["rev"],"prf":res["prf"],"ts":res["ts"],"mc":res["mc"]})
+                        updated += 1
+                        # 每 200 只报告一次进度
+                        if updated % 200 == 0 and progress_cb:
+                            progress_cb(updated)
+                except Exception as e:
+                    logger.warning(f"  基本面入库 {res['code']} 失败: {e}")
+        if progress_cb: progress_cb(updated)
+        db.commit()
+        errors = pe_missing + profit_missing + growth_missing
+        logger.info(f"基本面完成: {updated}只 PE缺{pe_missing} ROE缺{profit_missing} 增长缺{growth_missing}")
+        return {"rows": updated, "errors": errors}
 
     def download_fundamentals_history(self, codes: List[str] = None) -> int:
-        """下载基本面历史时序数据（季度），写入 stock_fundamentals_history。"""
+        """下载基本面历史数据（按季度），写入 stock_fundamentals_history。"""
         self.login()
         db = get_sync_db()
         if codes is None:
             codes = self.get_all_stock_codes()
-
+        quarters = [(2024, 1), (2024, 2), (2024, 3), (2024, 4), (2025, 1), (2025, 2), (2025, 3), (2025, 4), (2026, 1)]
         total = 0
-        from app.db.connection import is_sqlite as _is_sql
-        import time
-
-        for idx, code in enumerate(codes):
-            if idx % 100 == 0:
-                logger.info(f"  基本面历史进度: {idx}/{len(codes)}")
+        for code in codes:
             bs_code = self._bs_code(code)
-            for year in range(2020, 2027):
-                for quarter in [1, 2, 3, 4]:
-                    try:
-                        rs = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
-                        while rs.next():
-                            d = rs.get_row_data()
-                            if not d or not d[0]: continue
-                            # d: [code, pubDate, , roe, peTTM, pbMRQ, , , , profit_yoy]
-                            pe = float(d[4]) if len(d) > 4 and d[4] and d[4] != '' else None
-                            pb = float(d[5]) if len(d) > 5 and d[5] and d[5] != '' else None
-                            roe = float(d[3]) if len(d) > 3 and d[3] and d[3] != '' else None
-                            # 季度末作为报告日期
-                            report_date = f"{year}-{quarter*3:02d}-01"
-                            if _is_sql():
-                                db.execute(text("""
-                                    INSERT OR REPLACE INTO stock_fundamentals_history
-                                    (stock_code, report_date, pe_ttm, pb_mrq, roe)
-                                    VALUES (:c, :d, :pe, :pb, :roe)
-                                """), {"c": code, "d": report_date, "pe": pe, "pb": pb, "roe": roe})
-                            else:
-                                db.execute(text("""
-                                    INSERT INTO stock_fundamentals_history
-                                    (stock_code, report_date, pe_ttm, pb_mrq, roe)
-                                    VALUES (:c, :d, :pe, :pb, :roe)
-                                    ON CONFLICT (stock_code, report_date) DO UPDATE SET
-                                    pe_ttm=EXCLUDED.pe_ttm, pb_mrq=EXCLUDED.pb_mrq, roe=EXCLUDED.roe
-                                """), {"c": code, "d": report_date, "pe": pe, "pb": pb, "roe": roe})
-                            total += 1
-                        time.sleep(0.05)
-                    except Exception as e:
-                        continue
-            db.commit()
+            for year, q in quarters:
+                try:
+                    r = bs.query_profit_data(code=bs_code, year=year, quarter=q)
+                    if r.error_code == '0' and r.next():
+                        d = r.get_row_data()
+                        report_date = f"{year}-{q*3:02d}-01"
+                        pe_ttm, pb, roe = None, None, None
+                        if len(d) > 3 and d[3]: pe_ttm = float(d[3])
+                        if len(d) > 4 and d[4]: pb = float(d[4])
+                        if len(d) > 5 and d[5]: roe = float(d[5]) * 100
+                        db.execute(text("""
+                            INSERT INTO stock_fundamentals_history (stock_code, report_date, pe_ttm, pb_mrq, roe)
+                            VALUES (:c,:d,:pe,:pb,:roe)
+                            ON CONFLICT (stock_code, report_date) DO UPDATE SET pe_ttm=EXCLUDED.pe_ttm, pb_mrq=EXCLUDED.pb_mrq, roe=EXCLUDED.roe
+                        """), {"c":code,"d":report_date,"pe":pe_ttm,"pb":pb,"roe":roe})
+                        total += 1
+                except: pass
+        db.commit()
         db.close()
-        logger.info(f"基本面历史下载完成: {total} 条")
         return total
 
 
-# ── 便捷函数 ──
-
 def download_history(start: str = "2021-01-01", end: str = None):
-    """下载全量历史数据。"""
     c = BaostockCrawler()
     result = c.download_all_stocks(start, end)
     c.logout()
@@ -1125,7 +786,6 @@ def download_history(start: str = "2021-01-01", end: str = None):
 
 
 def download_daily(date_str: str = None):
-    """每日增量下载。"""
     c = BaostockCrawler()
     d = date.fromisoformat(date_str) if date_str else date.today()
     result = c.download_daily_update(d)

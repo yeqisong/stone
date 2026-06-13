@@ -1,4 +1,5 @@
 """FastAPI 应用入口。"""
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,8 +38,15 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    # 保存主事件循环引用，供后台线程唤醒 WS 广播
+    from app.api.status import broadcast_dag_status
+    from app.signal import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+    broadcast_task = asyncio.create_task(broadcast_dag_status())
+
     yield
 
+    broadcast_task.cancel()
     await async_engine.dispose()
     logger.info("Application shutdown complete")
 

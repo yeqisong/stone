@@ -43,6 +43,32 @@ class DagExecutor:
         for dep in node.deps:
             self._edges.setdefault(dep, []).append(node.name)
 
+    def load_from_db(self, db_session, fn_map: Dict[str, callable]):
+        """从 dag_config 表动态加载节点拓扑，fn_map 提供节点名 → 执行函数的映射。
+
+        dag_config 表是拓扑的唯一来源，pipeline.py 只提供 {name: fn} 映射。
+        新增节点只需：1. 写入 dag_config 表  2. 在 fn_map 中注册函数。
+        """
+        from sqlalchemy import text
+        rows = db_session.execute(text(
+            "SELECT node_name, deps, label FROM dag_config ORDER BY sort_order"
+        )).fetchall()
+
+        if not rows:
+            logger.warning("[dag] dag_config 表为空，跳过加载")
+            return
+
+        for r in rows:
+            name = r[0]
+            deps = [d.strip() for d in r[1].split(',') if d.strip()]
+            fn = fn_map.get(name)
+            if fn is None:
+                logger.warning(f"[dag] 节点 '{name}' 在 fn_map 中无对应函数，跳过")
+                continue
+            self.add(DagNode(name=name, deps=deps, fn=fn))
+
+        logger.info(f"[dag] 从 dag_config 加载 {len(self._nodes)} 个节点")
+
     def _topo_sort(self, names: Set[str]) -> List[str]:
         """拓扑排序。"""
         in_degree = {n: 0 for n in names}
@@ -82,33 +108,101 @@ class DagExecutor:
         """生成简短的任务ID。"""
         return uuid.uuid4().hex[:8]
 
-    def run(self, trigger: str, **context):
-        """手工触发一个节点，自动传播到所有下游（依赖满足即跑）。"""
-        if 'run_id' not in context:
-            context['run_id'] = self._gen_run_id()
-        if trigger not in self._nodes:
-            raise ValueError(f"未知节点: {trigger}")
+    # 受 force 影响的数据节点
+    _FORCE_NODES = {'kline', 'index', 'etf', 'fund'}
 
-        affected = {trigger} | self._get_downstream(trigger)
-        sorted_names = self._topo_sort(affected)
+    @staticmethod
+    def _resolve_force(force, node_name: str) -> bool:
+        """解析 force 参数为 per-node bool。
 
-        logger.info(f"[dag] 触发 {trigger} → 影响 {len(sorted_names)} 个节点: {sorted_names}")
-        # 预创建所有受影响节点的 pending 日志
+        force 为 bool → 所有数据节点统一生效。
+        force 为 dict → 取对应 key，缺失默认 false。
+        非数据节点永远返回 false。
+        """
+        if node_name not in DagExecutor._FORCE_NODES:
+            return False
+        if isinstance(force, bool):
+            return force
+        if isinstance(force, dict):
+            return bool(force.get(node_name, False))
+        return False
+
+    def start(self, start_node: str = None, trade_date: str = '', force=False,
+              include_downstream: bool = True):
+        """统一入口：根据 start_node 创建计划并执行。
+
+        start_node=None → 全量执行
+        start_node="kline" → 从 kline 开始，跳上游
+        include_downstream=False → 仅执行指定节点，不传播下游（默认 true 保持向后兼容）
+        force: bool 或 {"kline": true, "fund": false}
+        """
+        run_id = self._gen_run_id()
+        self._completed.clear()
+
+        # 确定节点集合
+        if start_node is None:
+            names = set(self._nodes.keys())
+        else:
+            if start_node not in self._nodes:
+                raise ValueError(f"未知节点: {start_node}")
+            names = {start_node}
+            if include_downstream:
+                names |= self._get_downstream(start_node)
+            # 标记 unaffected 节点为已完成
+            for name in self._nodes:
+                if name not in names:
+                    self._completed[name] = True
+
+        sorted_names = self._topo_sort(names)
+
+        # 解析 force → 注入 context
+        context = {
+            'run_id': run_id,
+            'trade_date': trade_date,
+            'force': force,
+        }
+        # 为每个节点预解析 force 值
+        node_force = {name: self._resolve_force(force, name) for name in sorted_names}
+        context['_node_force'] = node_force
+
+        logger.info(f"[dag] start (start_node={start_node or 'None'}, force={force}) → "
+                    f"{len(sorted_names)} 节点: {sorted_names}")
+
+        # 阶段1: 创建计划 (pending 日志) + 收集 log_id
+        log_ids = {}
         if self.on_node_enter:
             for name in sorted_names:
-                self.on_node_enter(name, 'pending', **context)
+                lid = self.on_node_enter(name, 'pending', **context)
+                if lid:
+                    log_ids[name] = lid
+        context['_node_log_ids'] = log_ids
+        self._wake_broadcast()
+
+        # 阶段2: 按计划执行
         self._execute(sorted_names, **context)
+
+    def run(self, trigger: str, **context):
+        """手工触发一个节点，自动传播到所有下游（兼容旧接口，内部转调 start）。"""
+        if 'run_id' not in context:
+            context['run_id'] = self._gen_run_id()
+        td = context.get('trade_date', '')
+        force = context.get('force', False)
+        include_downstream = context.get('include_downstream', True)
+        self.start(start_node=trigger, trade_date=td, force=force,
+                   include_downstream=include_downstream)
+
+    def _wake_broadcast(self):
+        """线程安全地通知 WS 广播立即推送。"""
+        try:
+            from app.signal import wake_dag_broadcast
+            wake_dag_broadcast()
+        except: pass
 
     def run_all(self, **context):
-        """全部节点按拓扑顺序执行一次。"""
-        if 'run_id' not in context:
-            context['run_id'] = self._gen_run_id()
-        sorted_names = self._topo_sort(set(self._nodes.keys()))
-        logger.info(f"[dag] 全量执行 {len(sorted_names)} 个节点 (run_id={context['run_id']})")
-        if self.on_node_enter:
-            for name in sorted_names:
-                self.on_node_enter(name, 'pending', **context)
-        self._execute(sorted_names, **context)
+        """全部节点按拓扑顺序执行一次（兼容旧接口，内部转调 start）。"""
+        td = context.get('trade_date', '')
+        force = context.get('force', False)
+        self.start(start_node=None, trade_date=td, force=force)
 
     def run_node(self, name: str, **context):
         """只执行单个节点（不传播下游），用于重跑失败节点。"""
@@ -145,17 +239,28 @@ class DagExecutor:
                 logger.error(f"[dag] 无就绪节点，剩余: {remaining_names}")
                 break
 
-            # 并行执行就绪节点
+            # 并行执行就绪节点（启动前检查终止信号）
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(ready)) as executor:
-                futures = {}
+                future_info = {}
                 for name in ready:
                     node = self._nodes[name]
-                    futures[executor.submit(self._run_with_hooks, node, context)] = name
-                for future in concurrent.futures.as_completed(futures):
-                    name = futures[future]
+                    # 检查终止信号：若已终止，节点自行标记 failed 并跳过
+                    run_id = context.get('run_id', '')
+                    from app.signal import is_stop_requested
+                    if run_id and is_stop_requested(run_id):
+                        log_id = (context.get('_node_log_ids', {}) or {}).get(name)
+                        if log_id:
+                            from scripts.pipeline import _terminate_node
+                            _terminate_node(log_id, '用户手动终止')
+                        self._completed[name] = time.time()
+                        logger.info(f"[dag] {name} ⊗ 已终止 (跳过)")
+                        continue
+                    f = executor.submit(self._run_with_hooks, node, context)
+                    future_info[f] = (name, time.time())
+                for future in concurrent.futures.as_completed(future_info):
+                    name, t0 = future_info[future]
                     try:
-                        t0 = time.time()
-                        future.result()  # 已经执行完了，这里只是获取结果/异常
+                        future.result()
                         elapsed = time.time() - t0
                         self._completed[name] = time.time()
                         logger.info(f"[dag] {name} ✓ ({elapsed:.1f}s)")

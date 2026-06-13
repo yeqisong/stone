@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r req
 COPY app/ ./app/
 COPY crawler/ ./crawler/
 COPY strategy/ ./strategy/
+COPY scripts/ ./scripts/
 
 RUN mkdir -p /app/logs /app/data
 

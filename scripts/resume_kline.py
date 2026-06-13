@@ -96,16 +96,10 @@ def batch_insert(db, batch):
                 f'o{i}': row[4], f'h{i}': row[5], f'l{i}': row[6], f'c{i}': row[7],
                 f'v{i}': row[8], f'a{i}': row[9], f't{i}': row[10],
             })
-        from app.db.connection import is_sqlite as _is_sql
-        if _is_sql():
-            sql = ("INSERT OR IGNORE INTO daily_quote "
-                   "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
-                   "VALUES " + ",".join(placeholders))
-        else:
-            sql = ("INSERT INTO daily_quote "
-                   "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
-                   "VALUES " + ",".join(placeholders) +
-                   " ON CONFLICT (stock_code, exchange, trade_date) DO NOTHING")
+        sql = ("INSERT INTO daily_quote "
+               "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
+               "VALUES " + ",".join(placeholders) +
+               " ON CONFLICT (stock_code, exchange, trade_date) DO NOTHING")
         try:
             db.execute(text(sql), params)
             total += len(chunk)

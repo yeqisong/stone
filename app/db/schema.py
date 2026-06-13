@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS dag_run_log (
     trade_date   DATE NOT NULL,
     run_id       VARCHAR(20) DEFAULT '',
     node_name    VARCHAR(50) NOT NULL,
-    status       VARCHAR(10) NOT NULL DEFAULT 'ok',
+    status       VARCHAR(10) NOT NULL DEFAULT 'success',
     rows         INTEGER DEFAULT 0,
     created_at   TIMESTAMP,           -- 日志创建时间
     started_at   TIMESTAMP,           -- 节点开始执行时间
@@ -271,6 +271,29 @@ CREATE TABLE IF NOT EXISTS dag_run_log (
 );
 CREATE INDEX IF NOT EXISTS idx_drl_date ON dag_run_log (trade_date, node_name);
 CREATE INDEX IF NOT EXISTS idx_drl_run ON dag_run_log (run_id);
+"""
+
+CREATE_DAG_CONFIG = """
+CREATE TABLE IF NOT EXISTS dag_config (
+    id           SERIAL PRIMARY KEY,
+    node_name    VARCHAR(50) NOT NULL UNIQUE,
+    deps         TEXT DEFAULT '',       -- 逗号分隔的依赖节点名
+    label        VARCHAR(50) DEFAULT '',
+    sort_order   INTEGER DEFAULT 0,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
+    ('cron', '', '⏰ Corn', 0),
+    ('daily_update', 'cron', '更新汇总', 1),
+    ('kline', 'daily_update', 'A股日K线', 2),
+    ('index', 'daily_update', '指数', 3),
+    ('etf', 'daily_update', 'ETF', 4),
+    ('fund', 'kline', '基本面', 5),
+    ('treemap', 'fund', '树图', 6),
+    ('strategy', 'fund', '策略', 7),
+    ('stats', 'treemap,strategy,index,etf', '统计', 8),
+    ('daily_completeness', 'stats', '日历统计', 9)
+ON CONFLICT (node_name) DO NOTHING;
 """
 
 CREATE_DAILY_COMPLETENESS = """
@@ -308,11 +331,12 @@ CREATE INDEX IF NOT EXISTS idx_sm_status ON system_metrics (status, checked_at D
 # ── 默认数据 ──
 
 DEFAULT_STRATEGY_CONFIG = """
-INSERT OR IGNORE INTO strategy_config (strategy_name, display_name, enabled, params) VALUES
+INSERT INTO strategy_config (strategy_name, display_name, enabled, params) VALUES
 ('global_preference',       '全局偏好', true, '{"mode": "balanced"}'),
 ('bollinger_daily',         '日布林线', true, '{"period": 20, "std_mult": 2.0, "bandwidth_threshold": 0.04}'),
 ('volume_price_divergence', '量价背离', true, '{"levels": ["daily","weekly","monthly"], "lookback_daily": 20, "lookback_weekly": 24, "lookback_monthly": 12}'),
-('weekly_trend',            '周趋势',   true, '{"fast_period": 5, "slow_period": 20}');
+('weekly_trend',            '周趋势',   true, '{"fast_period": 5, "slow_period": 20}')
+ON CONFLICT (strategy_name) DO NOTHING;
 """
 
 # ── 顺序很重要（满足外键/依赖）──
@@ -335,40 +359,25 @@ ALL_TABLES = [
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),
+    ("dag_config", CREATE_DAG_CONFIG),
     ("system_metrics", CREATE_SYSTEM_METRICS),
 ]
 
 
 def init_db(sync_session) -> None:
     """初始化数据库：建表 + 默认数据。幂等，可重复执行。"""
-    from app.config import settings
-    is_sqlite = "sqlite" in settings.DATABASE_URL_SYNC
-
     for name, sql in ALL_TABLES:
         for stmt in sql.strip().split(";"):
             stmt = stmt.strip()
             if stmt and not stmt.startswith("--"):
                 try:
-                    if not is_sqlite:
-                        # PostgreSQL: CREATE INDEX IF NOT EXISTS 原生支持
-                        pass
-                    else:
-                        # SQLite 不支持 CREATE INDEX IF NOT EXISTS
-                        stmt = stmt.replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX")
                     sync_session.execute(text(stmt))
                 except Exception as e:
                     if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower() and "relation" not in str(e).lower():
                         raise
 
     # 默认策略配置
-    if is_sqlite:
-        sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
-    else:
-        # PostgreSQL: INSERT OR IGNORE → ON CONFLICT DO NOTHING
-        pg_config = DEFAULT_STRATEGY_CONFIG.replace("INSERT OR IGNORE", "INSERT").rstrip(";\n ")
-        pg_config += " ON CONFLICT (strategy_name) DO NOTHING;"
-        sync_session.execute(text(pg_config))
-
+    sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
     sync_session.commit()
 
     # 交易日历：如果为空则从 baostock 同步真实日历（含法定节假日）

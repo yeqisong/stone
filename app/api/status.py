@@ -1,9 +1,10 @@
 """数据状态 API — 交易日历 + 每日下载进度 + 数据完整性。"""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 from datetime import date, timedelta
 
 from app.db.connection import get_sync_db
+from app.signal import _dag_wake_event, wake_dag_broadcast, set_main_loop
 
 router = APIRouter(tags=["status"])
 
@@ -123,11 +124,9 @@ def get_data_status(
         """))
         download_log = []
         for r in result.fetchall():
-            raw_st = r[2]
-            norm_st = {'ok':'success','error':'failed'}.get(raw_st, raw_st)
             def ts(v): return str(v)[:19] if v else None
             download_log.append({
-                "date": str(r[0]), "node": r[1], "status": norm_st, "rows": r[3] or 0,
+                "date": str(r[0]), "node": r[1], "status": r[2], "rows": r[3] or 0,
                 "detail": r[4] or '', "run_id": r[5] or '',
                 "created_at": ts(r[6]), "started_at": ts(r[7]), "finished_at": ts(r[8]),
             })
@@ -142,7 +141,7 @@ def get_data_status(
             {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
             {'label':'ETF日K线','rows':round((q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") or 0) * (q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0) / max((q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')") or 1), 1)),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")},
             {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
-            {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':f'买{q("SELECT COUNT(*) FROM signal_history WHERE direction=\'buy\'") or 0} 卖{q("SELECT COUNT(*) FROM signal_history WHERE direction=\'sell\'") or 0}'},
+            {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
             {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
         ]
         stats_computed_at = None
@@ -179,9 +178,11 @@ def dag_trigger(body: dict):
     import uuid
     node = body.get("node", "stats")
     td = body.get("date", str(date.today()))
+    include_downstream = body.get("include_downstream", True)
     task_id = str(uuid.uuid4())[:8]
-    thread = threading.Thread(target=_run_dag_background, args=(node, td, task_id), daemon=True)
+    thread = threading.Thread(target=_run_dag_background, args=(node, td, task_id, False, include_downstream), daemon=True)
     thread.start()
+    # 不在此处唤醒 — dag.start() 写 pending 后内部调用 _wake_broadcast()
     return {"ok": True, "task_id": task_id, "node": node, "date": td, "status": "started"}
 
 
@@ -205,8 +206,8 @@ def get_dag_status():
     from app.db.connection import get_sync_db
     from sqlalchemy import text
 
-    from scripts.pipeline import DAG_STRUCTURE
-    structure = DAG_STRUCTURE
+    from scripts.pipeline import _load_dag_structure
+    structure = _load_dag_structure()
 
     # 看门狗：检测心跳超过 5 分钟未更新的 running 节点 → 卡死
     db = get_sync_db()
@@ -215,39 +216,48 @@ def get_dag_status():
         WHERE status='running' AND heartbeat_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes'
     """)).fetchall()
     for row in stuck:
-        db.execute(text("UPDATE dag_run_log SET status='error', detail=:dt, finished_at=CURRENT_TIMESTAMP WHERE id=:id"),
+        db.execute(text("UPDATE dag_run_log SET status='failed', detail=:dt, finished_at=CURRENT_TIMESTAMP WHERE id=:id"),
                    {"id": row[0], "dt": f"心跳超时(>5min无更新), node={row[1]}"})
     if stuck:
-        # 连带将下游 pending 节点标记为 skipped
-        stuck_names = [r[1] for r in stuck]
-        # 找出同 run_id 中依赖超时节点的 pending 行
         run_ids = list(set(r[2] for r in stuck))
         for rid in run_ids:
-            db.execute(text("""
-                UPDATE dag_run_log SET status='error', detail='上游超时跳过', finished_at=CURRENT_TIMESTAMP
-                WHERE run_id=:rid AND status='pending'
-            """), {"rid": rid})
+            db.execute(text("UPDATE dag_run_log SET status='failed', detail='上游超时跳过', finished_at=CURRENT_TIMESTAMP WHERE run_id=:rid AND status='pending'"),
+                       {"rid": rid})
         db.commit()
-        logger.warning(f"[看门狗] 标记 {len(stuck)} 个超时 + 连带下游 pending 节点: {stuck_names}")
+        logger.warning(f"[看门狗] 标记 {len(stuck)} 个超时, 连带下游 pending")
+    # 清理孤立 pending（超过 30 分钟的旧任务）
+    orphaned = db.execute(text("""
+        UPDATE dag_run_log SET status='failed', detail='上游已失败', finished_at=CURRENT_TIMESTAMP
+        WHERE status='pending' AND created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+    """)).rowcount
+    if orphaned:
+        db.commit()
     db.close()
     db = get_sync_db()
     rows = db.execute(text("""
         SELECT DISTINCT ON (node_name) node_name, status, rows, detail, finished_at, trade_date
-        FROM dag_run_log ORDER BY node_name, id DESC
+        FROM dag_run_log
+        WHERE run_id = (SELECT run_id FROM dag_run_log ORDER BY id DESC LIMIT 1)
+        ORDER BY node_name, id DESC
     """)).fetchall()
     run_status = {}
+    current_run_id = None
+    current_run_latest = None
     for r in rows:
-        # 归一化：ok→success, error→failed, pending→pending, running→running
-        raw = r[1]
-        norm = {'ok':'success','error':'failed'}.get(raw, raw)
         run_status[r[0]] = {
-            "status": norm, "rows": r[2] or 0,
+            "status": r[1], "rows": r[2] or 0,
             "detail": r[3] or '', "time": str(r[4])[:19] if r[4] else None,
             "date": str(r[5]) if r[5] else None
         }
+    # 获取当前 run_id
+    cr = db.execute(text("SELECT run_id, MAX(CASE WHEN status='success' OR status='failed' THEN finished_at ELSE NULL END) FROM dag_run_log GROUP BY run_id ORDER BY MAX(id) DESC LIMIT 1")).fetchone()
+    if cr:
+        current_run_id = cr[0]
+        current_run_latest = str(cr[1])[:19] if cr[1] else None
     db.close()
 
-    return {"structure": structure, "status": dag.status(), "run_status": run_status}
+    return {"structure": structure, "status": dag.status(), "run_status": run_status,
+            "current_run_id": current_run_id, "current_run_latest": current_run_latest}
 
 
 @router.get("/trade_calendar")
@@ -273,18 +283,21 @@ _sync_tasks: dict = {}
 class SyncDateRequest(BaseModel):
     date: str
     node: str = "daily_update"
+    mode: str = "quick"  # force=全量覆盖, quick=跳过已有
 
 
-def _run_dag_background(node: str, trade_date: str, task_id: str):
+def _run_dag_background(node: str, trade_date: str, task_id: str, force: bool = False,
+                        include_downstream: bool = True):
     """后台线程执行 DAG 节点（带锁保护 _sync_tasks）。"""
     with _sync_lock:
         _sync_tasks[task_id] = {"status": "running", "node": node, "date": trade_date, "started_at": _time.time()}
     try:
         from scripts.pipeline import dag
+        kwargs = {"trade_date": trade_date, "force": force, "include_downstream": include_downstream}
         if node == "all":
-            dag.run_all(trade_date=trade_date)
+            dag.run_all(**kwargs)
         else:
-            dag.run(node, trade_date=trade_date)
+            dag.run(node, **kwargs)
         with _sync_lock:
             if task_id in _sync_tasks:
                 _sync_tasks[task_id].update({"status": "completed", "elapsed": round(_time.time() - _sync_tasks[task_id]["started_at"])})
@@ -305,29 +318,238 @@ def sync_date(body: SyncDateRequest):
     import uuid
     task_id = str(uuid.uuid4())[:8]
     node = getattr(body, 'node', 'daily_update') or 'daily_update'
-    logger.info(f"手动触发数据采集: {body.date} node={node} (task={task_id})")
-    thread = threading.Thread(target=_run_dag_background, args=(node, body.date, task_id), daemon=True)
+    force = (body.mode == 'force')
+    logger.info(f"手动触发数据采集: {body.date} mode={body.mode} force={force} (task={task_id})")
+    thread = threading.Thread(target=_run_dag_background, args=(node, body.date, task_id, force), daemon=True)
     thread.start()
-    return {"ok": True, "task_id": task_id, "date": body.date, "status": "started"}
+    return {"ok": True, "task_id": task_id, "date": body.date, "mode": body.mode, "status": "started"}
+
+
+# ══════════════════════════════════════════
+# DAG 配置 API（流程结构唯一来源）
+# ══════════════════════════════════════════
+
+@router.post("/dag_terminate")
+def dag_terminate(body: dict):
+    """终止正在运行的任务。body: {"run_id": "xxx"}"""
+    run_id = body.get("run_id", "")
+    if not run_id:
+        return {"ok": False, "error": "缺少 run_id"}
+    from app.signal import request_stop
+    request_stop(run_id)
+    # 不直接写 DB — 由各节点的 _hb_thread 或 _execute 检测到信号后自行终止
+    logger.warning(f"[dag] 用户手动终止任务: {run_id}")
+    return {"ok": True, "run_id": run_id, "status": "terminated"}
+
+
+@router.get("/dag_config")
+def get_dag_config():
+    """返回当前 DAG 流程结构（从 dag_config 表读取，无任务时也可渲染）。"""
+    from scripts.pipeline import _load_dag_structure
+    structure = _load_dag_structure()
+    return {"structure": structure}
+
+
+# ══════════════════════════════════════════
+# WebSocket 管理器（DAG 状态实时推送）
+# ══════════════════════════════════════════
+
+import asyncio
+import json as _json
+from collections import OrderedDict
+
+_ws_clients: set = set()
+_last_dag_broadcast = {}
+
+@router.websocket("/ws/dag")
+async def ws_dag(websocket: WebSocket):
+    await websocket.accept()
+    _ws_clients.add(websocket)
+    # 立即发送当前状态（新连接不用等广播周期）
+    try:
+        await _send_current_state(websocket)
+        while True:
+            msg = await websocket.receive_text()
+            if msg == "ping":
+                await websocket.send_text('{"type":"pong"}')
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _ws_clients.discard(websocket)
+
+
+async def _send_current_state(ws):
+    """向单个 WS 客户端发送当前 DAG 状态。"""
+    try:
+        from app.db.connection import get_sync_db
+        from sqlalchemy import text
+        db = get_sync_db()
+        rows = db.execute(text("""
+            SELECT id, node_name, status, rows, detail, run_id, trade_date,
+                   created_at, started_at, finished_at
+            FROM dag_run_log
+            WHERE run_id = (SELECT run_id FROM dag_run_log ORDER BY id DESC LIMIT 1)
+            ORDER BY id
+        """)).fetchall()
+        run_status = {}
+        log_nodes = []
+        for r in rows:
+            run_status[r[1]] = {"status": r[2], "rows": r[3] or 0, "detail": r[4] or ''}
+            log_nodes.append({
+                "date": str(r[6]) if r[6] else None,
+                "node": r[1], "status": r[2], "rows": r[3] or 0,
+                "detail": r[4] or '', "run_id": r[5],
+                "created_at": str(r[7])[:19] if r[7] else None,
+                "started_at": str(r[8])[:19] if r[8] else None,
+                "finished_at": str(r[9])[:19] if r[9] else None,
+            })
+        cr = db.execute(text("SELECT run_id, MAX(CASE WHEN status='success' OR status='failed' THEN finished_at ELSE NULL END) FROM dag_run_log GROUP BY run_id ORDER BY MAX(id) DESC LIMIT 1")).fetchone()
+        rid = cr[0] if cr else None
+        rlatest = str(cr[1])[:19] if cr and cr[1] else None
+        has_run = any(s.get('status') == 'running' for s in run_status.values())
+        db.close()
+        await ws.send_text(_json.dumps({
+            "type": "dag_status", "run_status": run_status,
+            "current_run_id": rid, "current_run_latest": rlatest, "has_running": has_run
+        }))
+        if log_nodes:
+            await ws.send_text(_json.dumps({"type": "dag_log", "nodes": log_nodes}))
+    except: pass
+
+async def broadcast_dag_status():
+    """后台任务：每 2 秒检查 DAG 状态，有变化时推送给所有 WS 客户端。"""
+    global _ws_clients
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    _last_state = None
+    _last_log_state = None
+    _completed_since = None  # 记录全部完成的时间
+
+    while True:
+        try:
+            db = get_sync_db()
+            # 获取最新 run 的节点状态
+            rows = db.execute(text("""
+                SELECT id, node_name, status, rows, detail, run_id, trade_date,
+                       created_at, started_at, finished_at
+                FROM dag_run_log
+                WHERE run_id = (SELECT run_id FROM dag_run_log ORDER BY id DESC LIMIT 1)
+                ORDER BY id
+            """)).fetchall()
+
+            run_status = {}
+            has_running = False
+            node_list = []
+            for r in rows:
+                if r[2] == 'running': has_running = True
+                run_status[r[1]] = {"status": r[2], "rows": r[3] or 0, "detail": r[4] or ''}
+                node_list.append({
+                    "date": str(r[6]) if r[6] else None,
+                    "node": r[1], "status": r[2], "rows": r[3] or 0,
+                    "detail": r[4] or '', "run_id": r[5],
+                    "created_at": str(r[7])[:19] if r[7] else None,
+                    "started_at": str(r[8])[:19] if r[8] else None,
+                    "finished_at": str(r[9])[:19] if r[9] else None,
+                })
+
+            cr = db.execute(text("SELECT run_id, MAX(finished_at) FROM dag_run_log GROUP BY run_id ORDER BY MAX(id) DESC LIMIT 1")).fetchone()
+            current_run_id = cr[0] if cr else None
+            current_run_latest = str(cr[1])[:19] if cr and cr[1] else None
+
+            # 全部完成后开始计时 5 分钟
+            now_ts = _time.time()
+            if not has_running and current_run_latest:
+                ft = _time.mktime(_time.strptime(current_run_latest, "%Y-%m-%d %H:%M:%S"))
+                age = now_ts - ft
+                if age > 300:  # >5 分钟
+                    current_run_id = None
+                    current_run_latest = None
+
+            state_hash = f"{current_run_id}_{current_run_latest}_{has_running}"
+            log_hash = _json.dumps(node_list, sort_keys=True)
+
+            # DAG 状态变化 → 推送
+            if state_hash != _last_state:
+                _last_state = state_hash
+                payload = _json.dumps({
+                    "type": "dag_status",
+                    "run_status": run_status,
+                    "current_run_id": current_run_id,
+                    "current_run_latest": current_run_latest,
+                    "has_running": has_running
+                })
+                dead = set()
+                for ws in _ws_clients:
+                    try:
+                        await ws.send_text(payload)
+                    except:
+                        dead.add(ws)
+                _ws_clients -= dead
+
+            # 日志状态变化 → 推送
+            if log_hash != _last_log_state:
+                _last_log_state = log_hash
+                log_payload = _json.dumps({"type": "dag_log", "nodes": node_list})
+                dead = set()
+                for ws in _ws_clients:
+                    try:
+                        await ws.send_text(log_payload)
+                    except:
+                        dead.add(ws)
+                _ws_clients -= dead
+
+            db.close()
+        except Exception as e:
+            logger.error(f"[ws] broadcast error: {e}")
+
+        # 空闲时 30 秒，有任务时 2 秒；外部可通过 _dag_wake_event.set() 立即唤醒
+        try:
+            await asyncio.wait_for(_dag_wake_event.wait(), timeout=2 if has_running else 30)
+            _dag_wake_event.clear()
+        except asyncio.TimeoutError:
+            pass
+
+
+# ══════════════════════════════════════════
+# 日志 API（WebSocket 补充，用于弹窗）
+# ══════════════════════════════════════════
+
+@router.get("/dag_logs")
+def get_dag_logs():
+    """返回当前进行中任务的完整日志，无进行中任务返回空。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    try:
+        db = get_sync_db()
+        run_id = db.execute(text("""
+            SELECT run_id FROM dag_run_log
+            WHERE status='running' AND heartbeat_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+            ORDER BY id DESC LIMIT 1
+        """)).scalar()
+        if not run_id:
+            return {"ok": True, "nodes": []}
+        rows = db.execute(text("""
+            SELECT node_name, status, rows, detail, run_id, created_at, started_at, finished_at
+            FROM dag_run_log WHERE run_id=:rid ORDER BY id
+        """), {"rid": run_id}).fetchall()
+        nodes = []
+        for r in rows:
+            nodes.append({
+                "node": r[0], "status": r[1], "rows": r[2] or 0, "detail": r[3] or '',
+                "run_id": r[4],
+                "created_at": str(r[5])[:19] if r[5] else None,
+                "started_at": str(r[6])[:19] if r[6] else None,
+                "finished_at": str(r[7])[:19] if r[7] else None,
+            })
+        db.close()
+        return {"ok": True, "nodes": nodes}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @router.get("/data_status/sync_status")
 def sync_status(task_id: str):
     task = _sync_tasks.get(task_id)
     if task is None:
-        # fallback: 从 dag_run_log 读取运行状态
-        from app.db.connection import get_sync_db
-        from sqlalchemy import text
-        try:
-            db = get_sync_db()
-            rows = db.execute(text(
-                "SELECT node_name, status, rows, detail FROM dag_run_log ORDER BY id DESC LIMIT 20"
-            )).fetchall()
-            db.close()
-            if not rows:
-                return {"ok": False, "error": "task_not_found"}
-            nodes = [{"node": r[0], "status": r[1], "rows": r[2] or 0, "detail": r[3] or ''} for r in rows]
-            return {"ok": True, "from_log": True, "nodes": nodes}
-        except:
-            return {"ok": False, "error": "task_not_found"}
+        return {"ok": False, "error": "task_not_found"}
     return {"ok": True, "task": task}

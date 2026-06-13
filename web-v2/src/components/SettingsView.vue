@@ -2,7 +2,7 @@
 <div>
   <div v-if="loading" style="text-align:center;padding:20px">加载中...</div>
   <template v-else>
-    <h4 style="margin-bottom:8px;color:#fff">🎯 全局交易偏好</h4>
+    <h4 style="margin-bottom:8px;color:var(--c-text)">🎯 全局交易偏好</h4>
     <n-radio-group v-model:value="prefMode" @update:value="setPref">
       <n-radio-button value="left" label="左侧(早触发)" />
       <n-radio-button value="balanced" label="均衡" />
@@ -10,14 +10,14 @@
     </n-radio-group>
     <n-tag style="margin-left:8px" :type="prefMode==='left'?'error':prefMode==='right'?'success':'warning'">{{prefMode==='left'?'左侧':prefMode==='right'?'右侧':'均衡'}}</n-tag>
     
-    <h4 style="margin:12px 0 8px;color:#fff">📊 策略启停</h4>
+    <h4 style="margin:12px 0 8px;color:var(--c-text)">📊 策略启停</h4>
     <n-list>
       <template v-for="s in strategies" :key="s.name">
       <n-list-item v-if="s.name!=='global_preference'">
         <div style="display:flex;align-items:center;justify-content:space-between;width:100%;gap:10px">
           <div style="flex:1;min-width:0">
             <b>{{s.display||s.name}}</b>
-            <div v-if="editing!==s.name" style="font-size:11px;color:rgba(255,255,255,.45);word-break:break-all">{{JSON.stringify(s.params)}}</div>
+            <div v-if="editing!==s.name" style="font-size:11px;color:var(--c-text-dim);word-break:break-all">{{JSON.stringify(s.params)}}</div>
             <n-input v-else v-model:value="editText" type="textarea" :rows="3" size="small" style="font-family:monospace;font-size:11px;margin-top:4px" />
           </div>
           <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -33,12 +33,12 @@
       </template>
     </n-list>
     
-    <h4 style="margin:12px 0 8px;color:#fff">🤖 DeepSeek API Key</h4>
+    <h4 style="margin:12px 0 8px;color:var(--c-text)">🤖 DeepSeek API Key</h4>
     <n-space>
       <n-input v-model:value="dsKey" type="password" placeholder="sk-..." show-password style="width:300px" size="small" />
       <n-button type="primary" size="small" @click="saveKey">保存</n-button>
     </n-space>
-    <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:4px">{{dsConfigured?'✅ 已配置':'⚠️ 未配置'}}</div>
+    <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{dsConfigured?'✅ 已配置':'⚠️ 未配置'}}</div>
   </template>
 </div>
 </template>

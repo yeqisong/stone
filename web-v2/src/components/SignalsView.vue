@@ -1,12 +1,12 @@
 <template>
 <div>
   <n-space align="center" style="margin-bottom:8px" wrap>
-    <span style="font-size:12px;color:rgba(255,255,255,.55)">日期:</span>
+    <span style="font-size:12px;color:var(--c-text-dim)">日期:</span>
     <n-date-picker v-model:formatted-value="sigDate" type="date" value-format="yyyy-MM-dd" size="small" @update:formatted-value="load" />
     <n-button size="small" @click="sigDate=todayStr();load()">今天</n-button>
     <n-tag v-if="todayStrategy&&todayStrategy.strategy_date!==sigDate" type="warning" size="small">⚠️ 该日无策略数据</n-tag>
   </n-space>
-  <div style="margin-bottom:8px;font-size:12px;color:rgba(255,255,255,.55)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
+  <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
   <n-data-table v-if="data.signals" :columns="columns" :data="data.signals" size="small" />
   <n-empty v-else description="暂无信号" />
 </div>

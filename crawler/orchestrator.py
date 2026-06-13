@@ -28,33 +28,20 @@ def download_full_history(start: str = "2021-01-01", end: str = None,
             df = c.get_stock_basic_info()
             db = get_sync_db()
             for _, row in df.iterrows():
-                from app.db.connection import is_sqlite as _is_sql
-                if _is_sql():
-                    db.execute(text("""
-                        INSERT OR REPLACE INTO stock_master
-                        (stock_code, stock_name, exchange, ipo_date, status, stock_type, updated_at)
-                        VALUES (:c, :n, :e, :ip, :st, :tp, CURRENT_TIMESTAMP)
-                    """), {
-                        "c": row["stock_code"], "n": row["stock_name"],
-                        "e": row["exchange"], "ip": row.get("ipo_date"),
-                        "st": row.get("status", "N"),
-                        "tp": row.get("stock_type", ""),
-                    })
-                else:
-                    db.execute(text("""
-                        INSERT INTO stock_master
-                        (stock_code, stock_name, exchange, ipo_date, status, stock_type, updated_at)
-                        VALUES (:c, :n, :e, :ip, :st, :tp, CURRENT_TIMESTAMP)
-                        ON CONFLICT (stock_code) DO UPDATE SET
-                        stock_name=EXCLUDED.stock_name, exchange=EXCLUDED.exchange,
-                        ipo_date=EXCLUDED.ipo_date, status=EXCLUDED.status,
-                        stock_type=EXCLUDED.stock_type, updated_at=CURRENT_TIMESTAMP
-                    """), {
-                        "c": row["stock_code"], "n": row["stock_name"],
-                        "e": row["exchange"], "ip": row.get("ipo_date"),
-                        "st": row.get("status", "N"),
-                        "tp": row.get("stock_type", ""),
-                    })
+                db.execute(text("""
+                    INSERT INTO stock_master
+                    (stock_code, stock_name, exchange, ipo_date, status, stock_type, updated_at)
+                    VALUES (:c, :n, :e, :ip, :st, :tp, CURRENT_TIMESTAMP)
+                    ON CONFLICT (stock_code) DO UPDATE SET
+                    stock_name=EXCLUDED.stock_name, exchange=EXCLUDED.exchange,
+                    ipo_date=EXCLUDED.ipo_date, status=EXCLUDED.status,
+                    stock_type=EXCLUDED.stock_type, updated_at=CURRENT_TIMESTAMP
+                """), {
+                    "c": row["stock_code"], "n": row["stock_name"],
+                    "e": row["exchange"], "ip": row.get("ipo_date"),
+                    "st": row.get("status", "N"),
+                    "tp": row.get("stock_type", ""),
+                })
             db.commit()
             db.close()
             logger.info(f"  stock_master: {len(df)} 只")
@@ -110,34 +97,21 @@ def update_stock_master():
 
     db = get_sync_db()
     count = 0
-    from app.db.connection import is_sqlite as _is_sql
     for _, row in df.iterrows():
-        if _is_sql():
-            db.execute(text("""
-                INSERT OR REPLACE INTO stock_master
-                (stock_code, stock_name, exchange, ipo_date, status, stock_type, updated_at)
-                VALUES (:c, :n, :e, :ip, :st, :tp, CURRENT_TIMESTAMP)
-            """), {
-                "c": row["stock_code"], "n": row["stock_name"],
-                "e": row["exchange"], "ip": row.get("ipo_date"),
-                "st": row.get("status", "N"),
-                "tp": row.get("stock_type", ""),
-            })
-        else:
-            db.execute(text("""
-                INSERT INTO stock_master
-                (stock_code, stock_name, exchange, ipo_date, status, stock_type, updated_at)
-                VALUES (:c, :n, :e, :ip, :st, :tp, CURRENT_TIMESTAMP)
-                ON CONFLICT (stock_code) DO UPDATE SET
-                stock_name=EXCLUDED.stock_name, exchange=EXCLUDED.exchange,
-                ipo_date=EXCLUDED.ipo_date, status=EXCLUDED.status,
-                stock_type=EXCLUDED.stock_type, updated_at=CURRENT_TIMESTAMP
-            """), {
-                "c": row["stock_code"], "n": row["stock_name"],
-                "e": row["exchange"], "ip": row.get("ipo_date"),
-                "st": row.get("status", "N"),
-                "tp": row.get("stock_type", ""),
-            })
+        db.execute(text("""
+            INSERT INTO stock_master
+            (stock_code, stock_name, exchange, ipo_date, status, stock_type, updated_at)
+            VALUES (:c, :n, :e, :ip, :st, :tp, CURRENT_TIMESTAMP)
+            ON CONFLICT (stock_code) DO UPDATE SET
+            stock_name=EXCLUDED.stock_name, exchange=EXCLUDED.exchange,
+            ipo_date=EXCLUDED.ipo_date, status=EXCLUDED.status,
+            stock_type=EXCLUDED.stock_type, updated_at=CURRENT_TIMESTAMP
+        """), {
+            "c": row["stock_code"], "n": row["stock_name"],
+            "e": row["exchange"], "ip": row.get("ipo_date"),
+            "st": row.get("status", "N"),
+            "tp": row.get("stock_type", ""),
+        })
         count += 1
     db.commit()
     db.close()

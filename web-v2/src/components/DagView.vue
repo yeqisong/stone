@@ -1,7 +1,10 @@
 <template>
 <div>
-  <div style="font-size:12px;font-weight:600;color:#ddd;margin-bottom:6px">📊 数据状态</div>
-  <div v-if="store.structure.length===0" style="padding:10px;text-align:center;color:rgba(255,255,255,.25);font-size:11px">加载中...</div>
+  <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">📊 数据状态
+    <span v-if="activeRunId" style="font-size:9px;color:var(--c-text-faint);margin-left:6px">#{{activeRunId}}</span>
+  </div>
+  <div v-if="store.structure.length===0" style="padding:10px;text-align:center;color:var(--c-text-faint);font-size:11px">加载中...</div>
+  <div v-if="store.structure.length===0" style="padding:10px;text-align:center;color:var(--c-text-faint);font-size:11px">加载中...</div>
   <div v-else style="overflow-x:auto;padding:4px 0">
     <svg :width="svgW" :height="svgH" style="display:block;margin:0 auto">
       <g v-for="e in store.edgeList" :key="e.key">
@@ -15,17 +18,23 @@
         <text v-if="n.state!=='default' && n.x!=null" :x="n.x" :y="n.y+14" text-anchor="middle" :fill="nodeSub(n.state)" font-size="9">{{n.name==='cron'?'2026-06-12':''}}</text>
       </g>
     </svg>
+    <div v-if="store.hasRunning" style="text-align:center;margin-top:6px">
+      <n-button size="tiny" text style="font-size:10px;color:var(--c-text-faint)" @click="terminateTask">终止任务 #{{store.currentRunId}}</n-button>
+    </div>
   </div>
 </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { NButton } from 'naive-ui'
-import axios from 'axios'
+import { ref, computed, onMounted } from 'vue'
 import { useDagStore } from '../stores/dag'
+import { useThemeStore } from '../stores/theme'
+import { connectWebSocket } from '../utils/ws'
+import axios from 'axios'
+import { NButton } from 'naive-ui'
 
 const store = useDagStore()
+const theme = useThemeStore()
 const svgW = ref(600)
 const svgH = ref(400)
 
@@ -118,6 +127,7 @@ function computeLayout(structure) {
   const PAD_T = 20
 
   // 先分配根层节点的Y（在画布总高度内居中）
+  if (!sortedLevels.length) return  // 无节点
   const rootLevel = sortedLevels[0]
   const rootSpan = rootLevel.reduce((sum, n) => sum + span[n], 0)
   const rootOffsetY = (maxLevelSpan - rootSpan) / 2 * U
@@ -203,70 +213,67 @@ function computeLayout(structure) {
 // ── 颜色函数 ──
 
 function nodeBg(s) {
-  return {default:'rgba(255,255,255,.04)', success:'rgba(16,185,129,0.15)', failed:'rgba(239,68,68,0.15)', running:'rgba(32,128,240,0.15)'}[s]||'rgba(255,255,255,.04)'
+  return {default:'var(--c-card-bg-hover)', pending:'rgba(251,191,36,0.1)', success:'rgba(16,185,129,0.15)', failed:'rgba(239,68,68,0.15)', running:'rgba(32,128,240,0.15)'}[s]||'var(--c-card-bg-hover)'
 }
 function nodeBd(s) {
-  return {default:'rgba(255,255,255,.2)', success:'#10b981', failed:'#ef4444', running:'#2080f0'}[s]||'rgba(255,255,255,.2)'
+  return {default:'var(--c-border)', pending:'#f59e0b', success:'#10b981', failed:'#ef4444', running:'#2080f0'}[s]||'var(--c-border)'
 }
 function nodeText(s) {
   if (s==='running') return '#2080f0'
   if (s==='success') return '#10b981'
   if (s==='failed') return '#ef4444'
-  return '#fff'
+  if (s==='pending') return '#f59e0b'
+  return theme.colors.text
 }
 function nodeSub(s) {
-  return s==='running'?'rgba(32,128,240,.5)':'rgba(255,255,255,.35)'
+  return s==='running'?'rgba(32,128,240,.5)':'var(--c-text-faint)'
 }
 function edgeColor(s) {
-  return {default:'rgba(255,255,255,.12)', success:'#10b981', failed:'#ef4444', running:'#2080f0'}[s]||'rgba(255,255,255,.12)'
+  return {default:'var(--c-card-bg-hover)', success:'#10b981', failed:'#ef4444', running:'#2080f0'}[s]||'var(--c-card-bg-hover)'
 }
 
 // ── 预览 ──
 
 const nodePositions = ref({})  // name → {x, y}
 const edgePaths = ref({})      // edgeKey → path d
+const activeRunId = computed(() => {
+  const rid = store.currentRunId
+  if (!rid) return null
+  const ts = store.currentRunLatest
+  // 无完成时间=任务执行中；有完成时间则5分钟内显示
+  if (ts) {
+    const age = Date.now() - new Date(ts.replace(' ', 'T') + '+08:00').getTime()
+    if (age > 300000) return null
+  }
+  return rid
+})
+
 const nodesWithPos = computed(() => store.nodeList.map(n => ({
   ...n,
   x: (nodePositions.value[n.name] || {}).x,
   y: (nodePositions.value[n.name] || {}).y,
 })))
-let dagPollTimer = null
+async function init() {
+  await store.loadStructure()
+  // 如果首次加载失败，重试一次（可能 API 尚未就绪）
+  if (store.structure.length === 0) {
+    await new Promise(r => setTimeout(r, 1000))
+    await store.loadStructure()
+  }
+  computeLayout(store.structure)
+  store.initWs()
+  connectWebSocket()
+}
 
-async function pollDagStatus() {
+async function terminateTask() {
+  const rid = store.currentRunId
+  if (!rid) return
   try {
-    const r = await axios.get(window.location.origin + '/api/dag_status')
-    const runStatus = r.data.run_status || {}
-    const now = Date.now()
-    let anyRunning = false, newestTime = 0
-
-    for (const [name, s] of Object.entries(runStatus)) {
-      store.setNodeState(name, s.status)
-      if (s.status === 'running') anyRunning = true
-      if (s.time) {
-        const ts = new Date(s.time.replace(' ', 'T')).getTime()
-        if (ts > newestTime) newestTime = ts
-      }
-    }
-    store.autoEdges()
-
-    // 全部结束超过 5 分钟 → 恢复默认态
-    if (!anyRunning && newestTime > 0 && (now - newestTime > 300000)) {
-      store.resetAll()
-    }
+    await axios.post(window.location.origin + '/api/dag_terminate', {run_id: rid})
   } catch(e) {}
 }
 
-async function init() {
-  await store.loadStructure()
-  computeLayout(store.structure)
-  // 启动轮询：每 5 秒更新一次 DAG 状态
-  dagPollTimer = setInterval(pollDagStatus, 5000)
-}
-
 onMounted(init)
-onUnmounted(() => {
-  if (dagPollTimer) clearInterval(dagPollTimer)
-})
 </script>
 
 <style>

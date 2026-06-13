@@ -8,7 +8,7 @@
     </n-button-group>
     <n-input v-model:value="kw" placeholder="搜索代码或名称..." size="small" style="width:160px" clearable @keyup.enter="page=1;load()" />
     <n-button type="primary" size="tiny" :loading="loading" @click="page=1;load()">搜索</n-button>
-    <span style="font-size:11px;color:rgba(255,255,255,.45)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
+    <span style="font-size:11px;color:var(--c-text-dim)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
   </n-space>
 
   <n-spin v-if="loading" style="padding:40px" />
@@ -43,7 +43,7 @@ const columns = computed(() => [
   { title:'名称', key:'stock_name', minWidth:100, ellipsis:{tooltip:true} },
   { title:'交易所', key:'exchange', width:70, render(r){return exName(r.exchange)} },
   { title:'最新价', key:'price', width:105, align:'right', sorter:true, sortOrder: sortField.value==='price'?sortDir.value:false, render(r){
-    const color = r.chg_pct!=null ? (r.chg_pct>=0?'#ef4444':'#10b981') : '#fff'
+    const color = r.chg_pct!=null ? (r.chg_pct>=0?'#ef4444':'#10b981') : 'var(--c-text)'
     return h('span',{style:{fontWeight:600,color,whiteSpace:'nowrap'}}, '¥'+(r.price||0).toFixed(2))
   }},
   { title:'涨跌幅', key:'chg_pct', width:90, align:'right', sorter:true, sortOrder: sortField.value==='chg_pct'?sortDir.value:false, render(r){

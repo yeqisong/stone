@@ -8,34 +8,50 @@
   <n-button :type="metric==='pe'?'primary':'default'" @click="switchMetric('pe')">📉 PE</n-button>
 </n-button-group>
     <n-date-picker v-model:formatted-value="selDate" type="date" value-format="yyyy-MM-dd" size="small" style="width:140px" @update:formatted-value="onDateChange" />
+    <n-button size="tiny" @click="showGenModal = true">⚡ 生成</n-button>
     <n-tag v-if="!loading && !noData && levelLabel" size="small" style="margin-left:auto">{{levelLabel}}</n-tag>
     <n-button v-if="drillStack.length>0" size="tiny" @click="goBack">◀ {{drillStack.length>1?drillStack[drillStack.length-2].name:'全部行业'}}</n-button>
   </n-space>
 
   <n-spin v-if="loading" style="padding:60px" />
-  <div v-else-if="noData" style="text-align:center;padding:60px;color:rgba(255,255,255,.45)">
+  <div v-else-if="noData" style="text-align:center;padding:60px;color:var(--c-text-dim)">
     <div style="font-size:48px;margin-bottom:12px">📭</div>
     <div style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size:11px">请等待数据采集完成后重试，或选择其他日期</span></div>
   </div>
   <div v-else>
     <div :id="'treemap-chart'" style="width:100%;height:calc(100vh - 130px);min-height:400px"></div>
   </div>
+
+  <!-- 生成确认弹窗 -->
+  <n-modal v-model:show="showGenModal" preset="card" title="⚡ 生成树图" style="width:360px;max-width:85vw" :mask-closable="false">
+    <div style="text-align:center;padding:10px 0">
+      <div style="font-size:14px;color:var(--c-text);margin-bottom:16px">为 {{selDate}} 重新生成树图数据？<br><span style="font-size:11px;color:var(--c-text-dim)">已有数据将被更新，无数据将新建</span></div>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <n-button @click="showGenModal = false">取消</n-button>
+        <n-button type="primary" @click="doGenerate" :loading="genLoading">生成</n-button>
+      </div>
+    </div>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
-import { NSpace, NDatePicker, NTag, NButton, NButtonGroup, NSpin } from 'naive-ui'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { NSpace, NDatePicker, NTag, NButton, NButtonGroup, NSpin, NModal } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useMarketStore } from '../stores/market'
+import { useThemeStore } from '../stores/theme'
 
 const store = useMarketStore()
+const theme = useThemeStore()
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
 const metric = ref('mcap')
 const selDate = ref(store.selDate)
 const loading = ref(true)
+const showGenModal = ref(false)
+const genLoading = ref(false)
 
 const fmt = v => v != null ? Number(v).toLocaleString() : '0'
 
@@ -116,12 +132,14 @@ function renderChart() {
   const el = document.getElementById('treemap-chart')
   if (!el) return
   if (el._echart) el._echart.dispose()
+  const chartBg = theme.colors.bg
   const chart = echarts.init(el)
   el._echart = chart
 
   const data = buildTreemapSeries(treeData.value, 2)
 
   chart.setOption({
+    backgroundColor: chartBg,
     tooltip: {
       formatter: p => {
         const d = p.data, detail = d._detail || {}
@@ -149,13 +167,13 @@ function renderChart() {
       roam: false,
       width: '100%', height: '100%',
       breadcrumb: { show: false },
-      itemStyle: { borderColor: '#101014', borderWidth: 1 },
+      itemStyle: { borderColor: chartBg, borderWidth: 1 },
       levels: [
-        { label: { show: false }, itemStyle: { borderColor: '#101014', borderWidth: 4 } },
-        { label: { show: true, fontSize: 14, fontWeight: 'bold', color: '#fff', position: 'insideTopLeft', padding: [4,0,0,6] },
-          upperLabel: { show: true, fontSize: 14, fontWeight: 'bold', color: '#fff', height: 22 },
-          itemStyle: { borderColor: '#101014', borderWidth: 2 } },
-        { label: { show: true, fontSize: 10, color: '#fff' }, itemStyle: { borderColor: 'rgba(255,255,255,0.06)', borderWidth: 0.5 } },
+        { label: { show: false }, itemStyle: { borderColor: chartBg, borderWidth: 4 } },
+        { label: { show: true, fontSize: 14, fontWeight: 'bold', color: theme.isDark ? '#fff' : '#1a1a2e', position: 'insideTopLeft', padding: [4,0,0,6] },
+          upperLabel: { show: true, fontSize: 14, fontWeight: 'bold', color: theme.isDark ? '#fff' : '#1a1a2e', height: 22 },
+          itemStyle: { borderColor: chartBg, borderWidth: 2 } },
+        { label: { show: true, fontSize: 10, color: theme.isDark ? '#fff' : '#1a1a2e' }, itemStyle: { borderColor: 'var(--c-border-light)', borderWidth: 0.5 } },
       ],
       data: data,
       emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 2 } }
@@ -183,5 +201,38 @@ function goBack() {
   }
 }
 
-onMounted(() => nextTick(() => loadTree()))
+async function doGenerate() {
+  genLoading.value = true
+  try {
+    // include_downstream: false — 树图不产生基础数据，无需跑 stats + daily_completeness
+    await axios.post(API + '/api/dag_trigger', { node: 'treemap', date: selDate.value, include_downstream: false })
+    showGenModal.value = false
+  } catch(e) {} finally {
+    genLoading.value = false
+  }
+}
+
+async function loadLatestDate() {
+  try {
+    const r = await axios.get(API + '/api/treemap_latest_date')
+    if (r.data && r.data.latest_date) {
+      selDate.value = r.data.latest_date
+      store.setDate(selDate.value)
+      history.replaceState(null, '', '#/market/' + selDate.value)
+    }
+  } catch(e) {}
+}
+
+onMounted(async () => {
+  await loadLatestDate()
+  await nextTick()
+  loadTree()
+})
+
+// 主题切换时重新渲染图表
+watch(() => theme.isDark, () => {
+  if (!loading.value && !noData.value) {
+    nextTick(() => renderChart())
+  }
+})
 </script>

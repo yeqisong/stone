@@ -11,23 +11,23 @@
   <template v-else-if="detail">
     <!-- Summary Cards - unified stat-row style -->
     <div style="display:flex;gap:8px;justify-content:center;padding:6px 0 10px;flex-wrap:wrap">
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">{{detail.stock_code}}</div><div style="font-size:20px;font-weight:700;color:#fff">{{detail.stock_name}}</div></div>
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">最新价</div><div style="font-size:20px;font-weight:700" :style="{color:priceColor}">¥{{(detail.close||0).toFixed(2)}} <span v-if="priceChg!=null" style="font-size:11px;font-weight:400">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></div></div>
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">数据日期</div><div style="font-size:20px;font-weight:700;color:#fff">{{detail.latest_trade_date}}</div></div>
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:rgba(255,255,255,.45)">历史信号</div><div style="font-size:20px;font-weight:700;color:#fff">{{hcnt}}</div></div>
+      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">{{detail.stock_code}}</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{detail.stock_name}}</div></div>
+      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">最新价</div><div style="font-size:20px;font-weight:700" :style="{color:priceColor}">¥{{(detail.close||0).toFixed(2)}} <span v-if="priceChg!=null" style="font-size:11px;font-weight:400">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></div></div>
+      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">数据日期</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{detail.latest_trade_date}}</div></div>
+      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">历史信号</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{hcnt}}</div></div>
     </div>
 
     <!-- Strategy Signals -->
     <div style="margin-bottom:12px;min-height:50px">
-      <h4 style="margin-bottom:6px;font-size:14px;color:#fff">🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
+      <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
       <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:8px;flex-wrap:wrap">
-        <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:8px;padding:10px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09)">
+        <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:8px;padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
             <n-tag :type="s.direction==='buy'?'error':s.direction==='sell'?'success':'default'" size="small" :bordered="false">{{dirName(s.direction)}}</n-tag>
             <span v-if="s.combined_signal" style="color:var(--n-color-target);font-size:13px;font-weight:600">★{{s.strength}}</span>
             <span v-else style="font-size:12px">{{'★'.repeat(s.strength)}}</span>
           </div>
-          <div style="font-size:12px;line-height:1.5;color:rgba(255,255,255,.75)">{{s.reason}}</div>
+          <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
         </div>
       </div>
       <n-empty v-else description="暂无信号" style="padding:10px" />
@@ -37,23 +37,23 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:#fff">📈 K线图 <span style="font-size:11px;color:rgba(255,255,255,.45)">{{dateRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📈 K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:#fff">📊 成交量</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 成交量</h4>
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:#fff">📉 MACD</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📉 MACD</h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:#fff">📐 RSI</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📐 RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:#fff">📊 PE历史分位 <span style="font-size:11px;color:rgba(255,255,255,.45)">{{peRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
       </div>
@@ -61,25 +61,25 @@
       <!-- Right: Fundamentals & Overview -->
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
         <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:#fff">🏢 基本面</h4>
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">🏢 基本面</h4>
           <table v-if="detail.fundamentals&&detail.fundamentals.industry" style="width:100%;border-collapse:collapse;font-size:12px">
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">行业</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff">{{detail.fundamentals.industry||'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">PE(TTM)</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1)"><n-tag :type="detail.fundamentals.pe_ttm>0?(detail.fundamentals.pe_ttm<30?'success':'warning'):'error'" size="small" :bordered="false">{{detail.fundamentals.pe_ttm?detail.fundamentals.pe_ttm.toFixed(1):'-'}}</n-tag></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">PB</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff">{{detail.fundamentals.pb_mrq?detail.fundamentals.pb_mrq.toFixed(2):'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">ROE</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1)"><n-tag :type="detail.fundamentals.roe>15?'success':detail.fundamentals.roe>5?'warning':'error'" size="small" :bordered="false">{{detail.fundamentals.roe?detail.fundamentals.roe.toFixed(1)+'%':'-'}}</n-tag></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">营收同比</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1)"><n-tag :type="detail.fundamentals.revenue_yoy>0?'success':'error'" size="small" :bordered="false">{{detail.fundamentals.revenue_yoy!=null?detail.fundamentals.revenue_yoy.toFixed(1)+'%':'-'}}</n-tag></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">净利同比</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1)"><n-tag :type="detail.fundamentals.profit_yoy>0?'success':'error'" size="small" :bordered="false">{{detail.fundamentals.profit_yoy!=null?detail.fundamentals.profit_yoy.toFixed(1)+'%':'-'}}</n-tag></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">行业</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.fundamentals.industry||'-'}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">PE(TTM)</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.pe_ttm>0?(detail.fundamentals.pe_ttm<30?'success':'warning'):'error'" size="small" :bordered="false">{{detail.fundamentals.pe_ttm?detail.fundamentals.pe_ttm.toFixed(1):'-'}}</n-tag></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">PB</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.fundamentals.pb_mrq?detail.fundamentals.pb_mrq.toFixed(2):'-'}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">ROE</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.roe>15?'success':detail.fundamentals.roe>5?'warning':'error'" size="small" :bordered="false">{{detail.fundamentals.roe?detail.fundamentals.roe.toFixed(1)+'%':'-'}}</n-tag></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">营收同比</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.revenue_yoy>0?'success':'error'" size="small" :bordered="false">{{detail.fundamentals.revenue_yoy!=null?detail.fundamentals.revenue_yoy.toFixed(1)+'%':'-'}}</n-tag></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">净利同比</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.profit_yoy>0?'success':'error'" size="small" :bordered="false">{{detail.fundamentals.profit_yoy!=null?detail.fundamentals.profit_yoy.toFixed(1)+'%':'-'}}</n-tag></td></tr>
           </table>
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
         <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:#fff">📊 行情概览</h4>
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">📊 行情概览</h4>
           <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">最新价</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff"><span style="font-weight:600">¥{{(detail.close||0).toFixed(2)}}</span></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">后复权价</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff">¥{{detail.close_hfq?detail.close_hfq.toFixed(2):'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff">{{fmt(detail.volume)}}股</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff">{{detail.turnover?detail.turnover.toFixed(2):'-'}}%</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.55);font-size:11px">数据日期</td><td style="padding:5px 8px;border:1px solid rgba(255,255,255,.1);color:#fff">{{detail.latest_trade_date}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最新价</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)"><span style="font-weight:600">¥{{(detail.close||0).toFixed(2)}}</span></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">后复权价</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{detail.close_hfq?detail.close_hfq.toFixed(2):'-'}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{fmt(detail.volume)}}股</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.turnover?detail.turnover.toFixed(2):'-'}}%</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">数据日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.latest_trade_date}}</td></tr>
           </table>
         </div>
       </div>
@@ -160,13 +160,13 @@ function drawCharts(kd){
 
   dateRange.value = dates[0]+' ~ '+dates[dates.length-1]
   const dz = [{type:'slider',xAxisIndex:0,start:82,end:100,height:22,bottom:4,handleSize:8,
-    borderColor:'rgba(255,255,255,0.08)',
-    backgroundColor:'rgba(255,255,255,0.03)',
+    borderColor:'var(--c-input-bg)',
+    backgroundColor:'var(--c-card-bg)',
     fillerColor:'rgba(96,165,250,0.15)',
-    handleStyle:{borderColor:'rgba(255,255,255,0.15)',color:'rgba(255,255,255,0.08)'},
-    textStyle:{color:'rgba(255,255,255,0.35)',fontSize:9},
+    handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},
+    textStyle:{color:'var(--c-text-faint)',fontSize:9},
     labelStyle:{color:'transparent'},
-    moveHandleStyle:{color:'rgba(255,255,255,0.04)'}
+    moveHandleStyle:{color:'var(--c-card-bg-hover)'}
   }]
   const xA = {type:'category',data:dates,axisLabel:{show:false}}
   const tt = {trigger:'axis',axisPointer:{type:'cross'}}
@@ -183,7 +183,7 @@ function drawCharts(kd){
 
   const c1 = make('c1', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:18,bottom:50},
-    xAxis:xA, yAxis:{scale:true,splitLine:{lineStyle:{color:'rgba(255,255,255,.06)'}}},
+    xAxis:xA, yAxis:{scale:true,splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
     dataZoom:dz,
     series:[
       {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
@@ -194,13 +194,13 @@ function drawCharts(kd){
   })
   const c2 = make('c2', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
-    xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:{lineStyle:{color:'rgba(255,255,255,.06)'}}},
+    xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
     dataZoom:dz,
     series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]}}]
   })
   const c3 = make('c3', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
-    xAxis:xA, yAxis:{splitLine:{lineStyle:{color:'rgba(255,255,255,.06)'}}},
+    xAxis:xA, yAxis:{splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
     dataZoom:dz,
     series:[
       {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]}},
@@ -210,7 +210,7 @@ function drawCharts(kd){
   })
   const c4 = make('c4', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
-    xAxis:xA, yAxis:{min:0,max:100,splitLine:{lineStyle:{color:'rgba(255,255,255,.06)'}}},
+    xAxis:xA, yAxis:{min:0,max:100,splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
     dataZoom:dz,
     series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',areaStyle:{color:'rgba(139,92,246,0.1)'},
       markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:'#ef4444',type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:'#10b981',type:'dashed'}}]}}
@@ -234,17 +234,17 @@ function drawPeChart(){
   c5.setOption({
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     grid:{left:'8%',right:'3%',top:8,bottom:50},
-    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30},splitLine:{lineStyle:{color:'rgba(255,255,255,.06)'}}},
+    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30},splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
     yAxis:[
-      {type:'value',name:'PE',splitLine:{lineStyle:{color:'rgba(255,255,255,.06)'}}},
+      {type:'value',name:'PE',splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
     ],
     dataZoom:[{type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
-      borderColor:'rgba(255,255,255,0.08)',backgroundColor:'rgba(255,255,255,0.03)',
+      borderColor:'var(--c-input-bg)',backgroundColor:'var(--c-card-bg)',
       fillerColor:'rgba(96,165,250,0.15)',
-      handleStyle:{borderColor:'rgba(255,255,255,0.15)',color:'rgba(255,255,255,0.08)'},
-      textStyle:{color:'rgba(255,255,255,0.35)'},labelStyle:{color:'transparent'},
-      moveHandleStyle:{color:'rgba(255,255,255,0.04)'}
+      handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},
+      textStyle:{color:'var(--c-text-faint)'},labelStyle:{color:'transparent'},
+      moveHandleStyle:{color:'var(--c-card-bg-hover)'}
     }],
     series:[
       {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none',areaStyle:{color:'rgba(96,165,250,0.1)'}},

@@ -35,12 +35,12 @@ async def test_health_check(client):
 
 @pytest.mark.asyncio
 async def test_data_status(client):
-    """数据状态API - SQLite async/sync 混合访问可能偶发 ResourceClosedError"""
+    """数据状态API — PostgreSQL async/sync 混合访问。"""
     try:
         response = await client.get("/api/data_status")
         assert response.status_code in (200, 500)
     except Exception:
-        pytest.skip("SQLite async/sync 混合访问问题，PostgreSQL 生产环境不存在此问题")
+        pytest.skip("数据库连接暂时不可用")
 
 
 @pytest.mark.asyncio

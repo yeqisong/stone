@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""导出 SQLite → PostgreSQL 兼容 SQL 压缩包。"""
+"""导出 PostgreSQL 数据为 SQL 压缩包。
+
+⚠️ 已弃用：项目已统一使用 PostgreSQL，此脚本仅用于历史数据迁移。
+如需使用，请确保目标环境为 PostgreSQL。
+"""
 import sys, os, gzip, re, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,13 +25,32 @@ def export():
         f.write('BEGIN;\n\n')
 
         for table in TABLES:
-            ok = db.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")).fetchone()
+            ok = db.execute(text(f"SELECT table_name FROM information_schema.tables WHERE table_name='{table}'")).fetchone()
             if not ok:
                 f.write(f'-- {table}: skipped\n\n')
                 continue
 
-            # ── Schema ──
-            raw_sql = db.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")).fetchone()[0]
+            # ── Schema ── (PG 15+ native)
+            f.write(f'-- {table}: schema from information_schema\n')
+            # 从 information_schema 获取列定义
+            cols = db.execute(text(f"""
+                SELECT column_name, data_type, character_maximum_length,
+                       numeric_precision, numeric_scale, is_nullable,
+                       column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table}'
+                ORDER BY ordinal_position
+            """)).fetchall()
+            raw_sql = f'CREATE TABLE IF NOT EXISTS {table} (\n'
+            col_defs = []
+            for c in cols:
+                dt = c[1]
+                if c[2]: dt += f'({c[2]})'
+                elif c[3] and c[4]: dt += f'({c[3]},{c[4]})'
+                null_str = ' NOT NULL' if c[5] == 'NO' else ''
+                def_str = f' DEFAULT {c[6]}' if c[6] and 'nextval' not in str(c[6]) else ''
+                col_defs.append(f'    {c[0]} {dt}{null_str}{def_str}')
+            raw_sql += ',\n'.join(col_defs) + '\n);'
 
             # Fixes for PG compatibility
             raw_sql = raw_sql.replace('AUTOINCREMENT', '')
@@ -40,10 +63,13 @@ def export():
             f.write(f'{raw_sql};\n')
 
             # ── Data ──
-            # Check if id column is all NULL (SQLite SERIAL didn't generate values)
-            col_info = db.execute(text(f"PRAGMA table_info('{table}')")).fetchall()
-            col_names = [ci[1] for ci in col_info]
-            col_types = {ci[1]: (ci[2] or '').upper() for ci in col_info}
+            # 从 information_schema 获取列信息
+            col_info = db.execute(text(f"""
+                SELECT column_name, data_type FROM information_schema.columns
+                WHERE table_name = '{table}' ORDER BY ordinal_position
+            """)).fetchall()
+            col_names = [ci[0] for ci in col_info]
+            col_types = {ci[0]: (ci[1] or '').upper() for ci in col_info}
 
             result = db.execute(text(f'SELECT * FROM {table}'))
             rows = result.fetchall()

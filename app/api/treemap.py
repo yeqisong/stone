@@ -7,6 +7,18 @@ import json
 router = APIRouter(tags=["treemap"])
 
 
+@router.get("/treemap_latest_date")
+def get_treemap_latest_date():
+    """返回 stock_treemap_cache 中最新有数据的日期，无数据返回 null。"""
+    db = get_sync_db()
+    try:
+        result = db.execute(text("SELECT MAX(trade_date) FROM stock_treemap_cache"))
+        latest = result.scalar()
+        return {"latest_date": str(latest) if latest else None}
+    finally:
+        db.close()
+
+
 @router.get("/treemap_data")
 def get_treemap_data(
     trade_date: str = Query(..., description="日期 YYYY-MM-DD"),

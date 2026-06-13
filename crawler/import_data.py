@@ -49,21 +49,13 @@ def import_csv_to_db(csv_dir: str):
         placeholders = ",".join([f":{c}" for c in columns])
         col_names = ",".join(columns)
 
-        # SQLite 不支持 ON CONFLICT，用 INSERT OR IGNORE
-        is_sqlite = "sqlite" in str(db.bind.url)
-
         count = 0
         for _, row in df.iterrows():
             try:
                 values = {c: row[c] if pd.notna(row[c]) else None for c in columns}
-                if is_sqlite:
-                    db.execute(text(
-                        f"INSERT OR IGNORE INTO {table} ({col_names}) VALUES ({placeholders})"
-                    ), values)
-                else:
-                    db.execute(text(
-                        f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
-                    ), values)
+                db.execute(text(
+                    f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+                ), values)
                 count += 1
             except Exception as e:
                 if count == 0:  # 只打印第一次错误
