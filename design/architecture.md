@@ -118,6 +118,8 @@
 
 ## 4. 内部 API 路由
 
+> **完整 API 文档**（含请求体 / 响应体 / 参数详情）：见 [`design/api-reference.md`](api-reference.md)
+
 所有 API 路径前缀为 `/api`，飞书回调除外。
 
 ### 4.1 认证
