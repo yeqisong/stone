@@ -1072,12 +1072,16 @@ NODE_FN_MAP = {
 }
 
 # 从 dag_config 表动态加载拓扑（唯一来源），绑定 fn_map 中的函数
-from app.db.connection import get_sync_db as _get_sync_db
-_db = _get_sync_db()
+# try/except 处理首次部署时 dag_config 表尚未创建的情况（init_db 在 lifespan 中创建）
 try:
-    dag.load_from_db(_db, NODE_FN_MAP)
-finally:
-    _db.close()
+    from app.db.connection import get_sync_db as _get_sync_db
+    _db = _get_sync_db()
+    try:
+        dag.load_from_db(_db, NODE_FN_MAP)
+    finally:
+        _db.close()
+except Exception:
+    pass  # 表不存在时跳过，lifespan 中 init_db 后会重新加载
 
 
 # ══════════════════════════════════════════

@@ -33,6 +33,11 @@ async def lifespan(app: FastAPI):
     try:
         init_db(db)
         logger.info("Database initialized successfully")
+        # init_db 后重新加载 DAG 拓扑（首次部署时模块级加载会因表不存在而跳过）
+        from scripts.pipeline import dag, NODE_FN_MAP
+        if not dag._nodes:
+            dag.load_from_db(db, NODE_FN_MAP)
+            logger.info(f"DAG reloaded: {len(dag._nodes)} nodes")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
