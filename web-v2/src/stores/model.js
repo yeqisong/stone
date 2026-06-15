@@ -37,7 +37,7 @@ export const useModelStore = defineStore('model', () => {
 
   function selectVersion(version) {
     selectedId.value = version
-    detailTab.value = 'train'
+    detailTab.value = 'indicators'  // 先确认指标数据再训练
   }
 
   function switchTab(tab) {

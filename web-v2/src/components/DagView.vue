@@ -35,7 +35,7 @@ import { NButton } from 'naive-ui'
 
 const store = useDagStore()
 const theme = useThemeStore()
-const svgW = ref(600)
+const svgW = ref(700)
 const svgH = ref(400)
 
 // ── 自动布局（Sugiyama 启发式：层级分配 + 交叉减少） ──
@@ -124,7 +124,7 @@ function computeLayout(structure) {
     if (lvSpan > maxLevelSpan) maxLevelSpan = lvSpan
   }
   maxLevelSpan = Math.max(maxLevelSpan, 1)
-  const PAD_T = 20
+  const PAD_T = 60  // 顶部留白 (node rect 高 36px，y-18 需要 ≥ 0)
 
   // 先分配根层节点的Y（在画布总高度内居中）
   if (!sortedLevels.length) return  // 无节点
@@ -183,16 +183,22 @@ function computeLayout(structure) {
     }
   }
 
-  // 6. 计算宽高
-  svgH.value = Math.max(maxLevelSpan * U + 40, 300)
-  svgW.value = Math.max(sortedLevels.length * LEVEL_GAP + PAD_L + 40, 600)
+  // 6. 计算宽高（上下各留 40px 余量，最小 400px）
+  svgH.value = Math.max(maxLevelSpan * U + PAD_T * 2, 400)
+  svgW.value = Math.max(sortedLevels.length * LEVEL_GAP + PAD_L + 80, 700)
 
-  // 7. 分配X坐标
+  // 7. 分配X坐标，并确保所有 Y ≥ 18（节点矩形 y-18 不低于 0）
   const positions = {}
+  let minY = Infinity
   for (const [name, y] of Object.entries(yPos)) {
     const actualY = typeof y === 'object' ? y.sum / y.count : y
     const li = levelMap[name]
     positions[name] = { x: PAD_L + li * LEVEL_GAP, y: actualY }
+    if (actualY < minY) minY = actualY
+  }
+  if (minY < 18) {
+    const shift = 18 - minY
+    for (const p of Object.values(positions)) p.y += shift
   }
 
   // 5. 保存坐标

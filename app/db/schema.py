@@ -146,7 +146,14 @@ CREATE TABLE IF NOT EXISTS signal_history (
     is_pushed         BOOLEAN DEFAULT false,
     pushed_at         TIMESTAMP,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    params_snapshot   TEXT DEFAULT ''
+    params_snapshot   TEXT DEFAULT '',
+    ml_confidence     DECIMAL(5,3),
+    forward_5d_return DECIMAL(8,4),
+    forward_10d_return DECIMAL(8,4),
+    forward_20d_return DECIMAL(8,4),
+    actual_return     DECIMAL(8,4),
+    close_reason      VARCHAR(30),
+    closed_at         TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_sh_date ON signal_history (signal_date);
 CREATE INDEX IF NOT EXISTS idx_sh_stock ON signal_history (stock_code, signal_date DESC);
@@ -540,6 +547,22 @@ def init_db(sync_session) -> None:
 
     # 默认策略配置
     sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
+    sync_session.commit()
+
+    # 迁移：signal_history 新增模型训练列（幂等）
+    for col, col_type in [
+        ('ml_confidence', 'DECIMAL(5,3)'),
+        ('forward_5d_return', 'DECIMAL(8,4)'),
+        ('forward_10d_return', 'DECIMAL(8,4)'),
+        ('forward_20d_return', 'DECIMAL(8,4)'),
+        ('actual_return', 'DECIMAL(8,4)'),
+        ('close_reason', 'VARCHAR(30)'),
+        ('closed_at', 'TIMESTAMP'),
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
     sync_session.commit()
 
     # 交易日历：如果为空则从 baostock 同步真实日历（含法定节假日）

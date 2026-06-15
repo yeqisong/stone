@@ -49,6 +49,24 @@ class TestModelPage:
         body = page.locator("body").inner_text()
         assert "indicator_incr" in body or "model_train" in body or "模型" in body
 
+    def test_eval_tab_content(self, page):
+        """评估 Tab 显示指标卡片。"""
+        page.wait_for_timeout(2000)
+        eval_tab = page.locator("text=评估").first
+        eval_tab.click()
+        page.wait_for_timeout(500)
+        body = page.locator("body").inner_text()
+        assert "夏普" in body or "胜率" in body or "暂未训练" in body or "无评估数据" in body
+
+    def test_indicators_tab(self, page):
+        """指标 Tab 显示操作按钮。"""
+        page.wait_for_timeout(2000)
+        ind_tab = page.locator("text=指标").first
+        ind_tab.click()
+        page.wait_for_timeout(500)
+        body = page.locator("body").inner_text()
+        assert "增量" in body or "全量" in body or "BOLL" in body
+
     def test_nav_tab_active(self, page):
         """导航栏 🧠 模型 Tab 处于选中状态。"""
         page.wait_for_timeout(1000)
