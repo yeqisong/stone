@@ -441,7 +441,8 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('stats', 'treemap,strategy,index,etf', '统计', 8),
     ('daily_completeness', 'stats', '日历统计', 9),
     ('indicator_incr', 'kline', '指标增量', 10),
-    ('indicator_full', '', '指标全量', 11)
+    ('indicator_full', '', '指标全量', 11),
+    ('model_train', '', '模型训练', 12)
 ON CONFLICT (node_name) DO NOTHING;
 """
 

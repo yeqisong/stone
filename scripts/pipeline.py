@@ -686,6 +686,115 @@ def dag_task_indicator_incr(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
+def dag_task_model_train(trade_date=None, **kw):
+    """模型训练：读取指标数据 → Walk-Forward 回测 → 写入训练结果。"""
+    from datetime import date as _date
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    import json as _json
+    from strategy.backtest import BacktestEngine
+    import pandas as pd
+
+    td = trade_date or str(_date.today())
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('model_train')
+    write_node_log(log_id=log_id, status='running', detail='模型训练中…')
+
+    try:
+        db = get_sync_db()
+
+        # 获取当前 DRAFT 版本
+        ver = db.execute(text("SELECT version FROM model_versions WHERE status='DRAFT' ORDER BY created_at DESC LIMIT 1")).scalar()
+        if not ver:
+            # 创建第一个版本
+            ver = "v1.0"
+            db.execute(text("INSERT INTO model_versions (version, model_name, status) VALUES (:v, :n, 'DRAFT') ON CONFLICT DO NOTHING"),
+                       {"v": ver, "n": "自动训练模型"})
+            db.commit()
+        db.execute(text("UPDATE model_versions SET status='TRAINING', trained_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": ver})
+        db.commit()
+
+        # 加载指标数据（JOIN 6 张表）
+        update_node_progress(log_id=log_id, rows=0, detail='加载指标数据…')
+        rows = db.execute(text("""
+            SELECT b.trade_date, b.stock_code, b.upper, b.mid, b.lower, b.pct_b,
+                   m.dif, m.dea, m.hist, r.rsi, a.atr,
+                   ma.ma5, ma.ma20, v.vol_ratio
+            FROM stock_indicators_boll b
+            JOIN stock_indicators_macd m USING (stock_code, trade_date)
+            JOIN stock_indicators_rsi r USING (stock_code, trade_date)
+            JOIN stock_indicators_atr a USING (stock_code, trade_date)
+            JOIN stock_indicators_ma ma USING (stock_code, trade_date)
+            JOIN stock_indicators_volume v USING (stock_code, trade_date)
+            WHERE b.trade_date >= '2021-01-01'
+            ORDER BY b.trade_date ASC
+            LIMIT 100000
+        """)).fetchall()
+        if not rows:
+            write_node_log(log_id=log_id, status='failed', detail='无指标数据，请先运行 indicator_full')
+            db.close()
+            return 0
+
+        df = pd.DataFrame(rows, columns=['trade_date','stock_code','upper','mid','lower','pct_b',
+                                          'dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio'])
+        update_node_progress(log_id=log_id, rows=len(df), detail=f'{len(df)} 行指标数据')
+
+        # 简易信号函数：BOLL 下轨 + RSI 超卖 → 买入
+        def simple_signal(train_df, test_df):
+            signals = []
+            for _, row in test_df.iterrows():
+                score = 0
+                if row['pct_b'] and row['pct_b'] < 0.2:
+                    score += 1
+                if row['rsi'] and row['rsi'] < 35:
+                    score += 1
+                if score >= 2:
+                    ret = float(row['pct_b']) * 0.05 if row['pct_b'] else 0
+                    signals.append({'return': ret})
+            return signals
+
+        # Walk-Forward 回测
+        engine = BacktestEngine(train_window=250, test_window=30, step=30)
+        report = engine.run(df, simple_signal)
+
+        # 写入训练结果
+        db.execute(text("""
+            UPDATE model_versions SET status='PENDING',
+                evaluation_report=:rep, sharpe=:sh, win_rate=:wr,
+                max_drawdown=:md, annual_return=:ar
+            WHERE version=:v
+        """), {
+            "v": ver,
+            "rep": _json.dumps({
+                "sharpe": report.sharpe, "win_rate": report.win_rate,
+                "max_drawdown": report.max_drawdown, "annual_return": report.annual_return,
+                "total_signals": report.total_signals, "folds": len(report.fold_results),
+            }),
+            "sh": round(report.sharpe, 4), "wr": round(report.win_rate, 4),
+            "md": round(report.max_drawdown, 4), "ar": round(report.annual_return, 4),
+        })
+
+        # 写入 trial 记录
+        for i, fold in enumerate(report.fold_results):
+            db.execute(text("""
+                INSERT INTO training_trials (version, trial_number, params, score)
+                VALUES (:v, :n, :p, :s)
+                ON CONFLICT (version, trial_number) DO UPDATE SET score=EXCLUDED.score
+            """), {
+                "v": ver, "n": i + 1,
+                "p": _json.dumps({"train": f"{fold.train_start}~{fold.train_end}", "test": f"{fold.test_start}~{fold.test_end}"}),
+                "s": round(fold.sharpe, 4),
+            })
+
+        db.commit()
+        db.close()
+        write_node_log(log_id=log_id, status='success', rows=report.total_signals,
+                       detail=f'训练完成: 夏普{report.sharpe:.2f} 胜率{report.win_rate:.0%} {len(report.fold_results)} folds')
+        return report.total_signals
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
 def dag_task_stats(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('stats')
@@ -779,6 +888,7 @@ NODE_FN_MAP = {
     'daily_completeness': dag_task_completeness,
     'indicator_full':     dag_task_indicator_full,
     'indicator_incr':     dag_task_indicator_incr,
+    'model_train':        dag_task_model_train,
 }
 
 # 从 dag_config 表动态加载拓扑（唯一来源），绑定 fn_map 中的函数
