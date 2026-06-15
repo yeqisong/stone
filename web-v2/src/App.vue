@@ -35,6 +35,7 @@
           <n-button :type="nav.tab==='s'?'primary':'default'" size="small" @click="nav.switchTab('s')">🔴 信号</n-button>
           <n-button :type="nav.tab==='l'?'primary':'default'" size="small" @click="nav.switchTab('l')">📋 个股</n-button>
           <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')">📊 状态</n-button>
+          <n-button :type="nav.tab==='a'?'primary':'default'" size="small" @click="nav.switchTab('a')">🧠 模型</n-button>
           <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')">⚙️ 设置</n-button>
         </div>
         <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
@@ -44,6 +45,7 @@
           <div v-if="nav.tab==='l'"><StocksView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
+          <div v-if="nav.tab==='a'"><ModelView /></div>
           <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>
       </div>
@@ -80,6 +82,7 @@ import StocksView from './components/StocksView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 import SettingsView from './components/SettingsView.vue'
+import ModelView from './components/ModelView.vue'
 
 const auth = useAuthStore()
 const nav = useNavStore()
@@ -103,6 +106,7 @@ const titleMap = {
   l: '个股列表 - K道',
   d: '个股详情 - K道',
   x: '数据状态 - K道',
+  a: '模型管理 - K道',
   o: '系统设置 - K道',
 }
 
