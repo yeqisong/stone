@@ -146,6 +146,36 @@ class TestCombiner:
         assert len(combined) == 0
 
 
+class TestOBV:
+    """OBV 能量潮指标单元测试。"""
+
+    def test_obv_uptrend(self, sample_daily_data):
+        """上升趋势中 OBV 应递增。"""
+        from strategy.indicators import obv
+        vals = obv(sample_daily_data)
+        # 上升趋势中 OBV 大部分时间为正增长
+        assert vals.iloc[-1] > vals.iloc[20]
+
+    def test_obv_downtrend(self, sample_downtrend_data):
+        """下跌趋势中 OBV 应递减。"""
+        from strategy.indicators import obv
+        vals = obv(sample_downtrend_data)
+        # 下跌趋势中 OBV 从高点回落
+        assert vals.iloc[-1] < vals.max()
+
+    def test_obv_first_value_zero(self, sample_daily_data):
+        """OBV 第一个值应为 0。"""
+        from strategy.indicators import obv
+        vals = obv(sample_daily_data)
+        assert vals.iloc[0] == 0
+
+    def test_obv_length_matches_input(self, sample_daily_data):
+        """OBV 长度应与输入一致。"""
+        from strategy.indicators import obv
+        vals = obv(sample_daily_data)
+        assert len(vals) == len(sample_daily_data)
+
+
 class TestPreference:
     def test_left_adjustment(self):
         """左侧偏好：std_mult 减小 0.3，rsi_oversold 提高到 35。"""

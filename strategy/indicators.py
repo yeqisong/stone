@@ -107,3 +107,23 @@ def aggregate_monthly(df: pd.DataFrame) -> pd.DataFrame:
 
     monthly['trade_date'] = pd.to_datetime(monthly['trade_date'])
     return monthly.sort_values('trade_date')
+
+
+def obv(df: pd.DataFrame) -> pd.Series:
+    """能量潮 (On-Balance Volume)。
+
+    若当日收盘 > 前日收盘，OBV = 前日OBV + 当日成交量
+    若当日收盘 < 前日收盘，OBV = 前日OBV - 当日成交量
+    若相等，OBV 不变。
+    """
+    close = df['close'].values
+    volume = df['volume'].values
+    obv_vals = np.zeros(len(close))
+    for i in range(1, len(close)):
+        if close[i] > close[i - 1]:
+            obv_vals[i] = obv_vals[i - 1] + volume[i]
+        elif close[i] < close[i - 1]:
+            obv_vals[i] = obv_vals[i - 1] - volume[i]
+        else:
+            obv_vals[i] = obv_vals[i - 1]
+    return pd.Series(obv_vals, index=df.index)

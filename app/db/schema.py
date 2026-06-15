@@ -255,6 +255,89 @@ CREATE INDEX IF NOT EXISTS idx_tm_date_metric ON stock_treemap_cache (trade_date
 CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, parent);
 """
 
+# ── 模型训练：共享指标池（6张窄表，按指标类型分表） ──
+
+CREATE_INDICATORS_BOLL = """
+CREATE TABLE IF NOT EXISTS stock_indicators_boll (
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    upper      DECIMAL(12,4),
+    mid        DECIMAL(12,4),
+    lower      DECIMAL(12,4),
+    pct_b      DECIMAL(8,4),
+    width      DECIMAL(8,4),
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_boll_date ON stock_indicators_boll (trade_date);
+"""
+
+CREATE_INDICATORS_MACD = """
+CREATE TABLE IF NOT EXISTS stock_indicators_macd (
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    dif        DECIMAL(12,4),
+    dea        DECIMAL(12,4),
+    hist       DECIMAL(12,4),
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_macd_date ON stock_indicators_macd (trade_date);
+"""
+
+CREATE_INDICATORS_RSI = """
+CREATE TABLE IF NOT EXISTS stock_indicators_rsi (
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    rsi        DECIMAL(8,4),
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_rsi_date ON stock_indicators_rsi (trade_date);
+"""
+
+CREATE_INDICATORS_ATR = """
+CREATE TABLE IF NOT EXISTS stock_indicators_atr (
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    atr        DECIMAL(12,4),
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_atr_date ON stock_indicators_atr (trade_date);
+"""
+
+CREATE_INDICATORS_MA = """
+CREATE TABLE IF NOT EXISTS stock_indicators_ma (
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    ma5        DECIMAL(12,4),
+    ma20       DECIMAL(12,4),
+    ma60       DECIMAL(12,4),
+    ma250      DECIMAL(12,4),
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_ma_date ON stock_indicators_ma (trade_date);
+"""
+
+CREATE_INDICATORS_VOLUME = """
+CREATE TABLE IF NOT EXISTS stock_indicators_volume (
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    vol_ma5    DECIMAL(18,4),
+    vol_ratio  DECIMAL(8,4),
+    obv        DECIMAL(18,4),
+    obv_ma5    DECIMAL(18,4),
+    obv_ma10   DECIMAL(18,4),
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_volume_date ON stock_indicators_volume (trade_date);
+"""
+
+# ── DAG 日志 + 配置 ──
+
 CREATE_DAG_RUN_LOG = """
 CREATE TABLE IF NOT EXISTS dag_run_log (
     id           SERIAL PRIMARY KEY,
@@ -292,7 +375,9 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('treemap', 'fund', '树图', 6),
     ('strategy', 'fund', '策略', 7),
     ('stats', 'treemap,strategy,index,etf', '统计', 8),
-    ('daily_completeness', 'stats', '日历统计', 9)
+    ('daily_completeness', 'stats', '日历统计', 9),
+    ('indicator_incr', 'kline', '指标增量', 10),
+    ('indicator_full', '', '指标全量', 11)
 ON CONFLICT (node_name) DO NOTHING;
 """
 
@@ -357,6 +442,12 @@ ALL_TABLES = [
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
+    ("stock_indicators_boll", CREATE_INDICATORS_BOLL),
+    ("stock_indicators_macd", CREATE_INDICATORS_MACD),
+    ("stock_indicators_rsi", CREATE_INDICATORS_RSI),
+    ("stock_indicators_atr", CREATE_INDICATORS_ATR),
+    ("stock_indicators_ma", CREATE_INDICATORS_MA),
+    ("stock_indicators_volume", CREATE_INDICATORS_VOLUME),
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),
     ("dag_config", CREATE_DAG_CONFIG),
