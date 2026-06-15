@@ -336,6 +336,70 @@ CREATE TABLE IF NOT EXISTS stock_indicators_volume (
 CREATE INDEX IF NOT EXISTS idx_volume_date ON stock_indicators_volume (trade_date);
 """
 
+# ── 模型训练：版本管理 ──
+
+CREATE_MODEL_VERSIONS = """
+CREATE TABLE IF NOT EXISTS model_versions (
+    version       VARCHAR(20) PRIMARY KEY,
+    model_name    VARCHAR(100) NOT NULL,
+    status        VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
+    config        JSONB NOT NULL DEFAULT '{}',
+    best_params   JSONB,
+    evaluation_report JSONB,
+    sharpe        DECIMAL(8,4),
+    win_rate      DECIMAL(5,4),
+    max_drawdown  DECIMAL(5,4),
+    annual_return DECIMAL(5,4),
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    trained_at    TIMESTAMP,
+    activated_at  TIMESTAMP,
+    archived_at   TIMESTAMP,
+    CONSTRAINT chk_model_status CHECK (status IN ('DRAFT','TRAINING','VALIDATING','PENDING','ACTIVE','REJECTED','ARCHIVED'))
+);
+"""
+
+CREATE_MODEL_TRIALS = """
+CREATE TABLE IF NOT EXISTS training_trials (
+    id           SERIAL PRIMARY KEY,
+    version      VARCHAR(20) NOT NULL REFERENCES model_versions(version),
+    trial_number INTEGER NOT NULL,
+    params       JSONB,
+    score        DECIMAL(8,4),
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (version, trial_number)
+);
+"""
+
+CREATE_MODEL_COMPARISONS = """
+CREATE TABLE IF NOT EXISTS version_comparisons (
+    id           SERIAL PRIMARY KEY,
+    version_a    VARCHAR(20) NOT NULL REFERENCES model_versions(version),
+    version_b    VARCHAR(20) NOT NULL REFERENCES model_versions(version),
+    sharpe_diff  DECIMAL(8,4),
+    winrate_diff DECIMAL(5,4),
+    drawdown_diff DECIMAL(5,4),
+    report       JSONB,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_MODEL_HEALTH = """
+CREATE TABLE IF NOT EXISTS model_health (
+    id           SERIAL PRIMARY KEY,
+    version      VARCHAR(20) NOT NULL REFERENCES model_versions(version),
+    check_date   DATE NOT NULL,
+    health_status VARCHAR(20) NOT NULL DEFAULT 'HEALTHY',
+    live_win_rate DECIMAL(5,4),
+    signal_count  INTEGER DEFAULT 0,
+    avg_forward_5d DECIMAL(8,4),
+    max_drawdown  DECIMAL(5,4),
+    detail       JSONB DEFAULT '{}',
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (version, check_date)
+);
+CREATE INDEX IF NOT EXISTS idx_mh_version_date ON model_health (version, check_date DESC);
+"""
+
 # ── DAG 日志 + 配置 ──
 
 CREATE_DAG_RUN_LOG = """
@@ -452,6 +516,10 @@ ALL_TABLES = [
     ("dag_run_log", CREATE_DAG_RUN_LOG),
     ("dag_config", CREATE_DAG_CONFIG),
     ("system_metrics", CREATE_SYSTEM_METRICS),
+    ("model_versions", CREATE_MODEL_VERSIONS),
+    ("training_trials", CREATE_MODEL_TRIALS),
+    ("version_comparisons", CREATE_MODEL_COMPARISONS),
+    ("model_health", CREATE_MODEL_HEALTH),
 ]
 
 

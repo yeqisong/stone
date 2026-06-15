@@ -20,16 +20,19 @@ export const useModelStore = defineStore('model', () => {
   async function loadVersions() {
     try {
       const r = await axios.get(window.location.origin + '/api/v1/models')
-      versions.value = r.data?.versions || []
+      if (r.data?.versions?.length) {
+        versions.value = r.data.versions
+        return
+      }
     } catch(e) {
       // API 未就绪时使用 mock 数据
-      versions.value = [
-        { version: 'v2.1', model_name: '布林+MACD+RSI 多策略融合', status: 'ACTIVE', sharpe: 2.15, win_rate: 0.58, created_at: '2026-06-10' },
-        { version: 'v2.0', model_name: '布林+MACD 双策略', status: 'ARCHIVED', sharpe: 1.82, win_rate: 0.52, created_at: '2026-05-20' },
-        { version: 'v1.3', model_name: '布林+MACD+量能 三策略', status: 'PENDING', sharpe: 2.31, win_rate: 0.61, created_at: '2026-06-08' },
-        { version: 'v1.2', model_name: 'RSI+量能 实验策略', status: 'DRAFT', sharpe: null, win_rate: null, created_at: '2026-06-12' },
-      ]
     }
+    versions.value = [
+      { version: 'v2.1', model_name: '布林+MACD+RSI 多策略融合', status: 'ACTIVE', sharpe: 2.15, win_rate: 0.58, created_at: '2026-06-10' },
+      { version: 'v2.0', model_name: '布林+MACD 双策略', status: 'ARCHIVED', sharpe: 1.82, win_rate: 0.52, created_at: '2026-05-20' },
+      { version: 'v1.3', model_name: '布林+MACD+量能 三策略', status: 'PENDING', sharpe: 2.31, win_rate: 0.61, created_at: '2026-06-08' },
+      { version: 'v1.2', model_name: 'RSI+量能 实验策略', status: 'DRAFT', sharpe: null, win_rate: null, created_at: '2026-06-12' },
+    ]
   }
 
   function selectVersion(version) {
