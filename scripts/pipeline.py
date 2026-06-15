@@ -795,6 +795,184 @@ def dag_task_model_train(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
+def dag_task_model_signal(trade_date=None, **kw):
+    """模型信号生成：读 ACTIVE 模型 + 今日指标 → 评分 → 写入 signal_history。"""
+    from datetime import date as _date, timedelta
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    import json as _json
+
+    td = trade_date or str(_date.today())
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('model_signal')
+    write_node_log(log_id=log_id, status='running', detail='生成模型信号…')
+
+    try:
+        db = get_sync_db()
+        # 获取 ACTIVE 模型
+        ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
+        if not ver:
+            write_node_log(log_id=log_id, status='failed', detail='无 ACTIVE 模型')
+            db.close()
+            return 0
+
+        # 读取今日指标
+        rows = db.execute(text("""
+            SELECT b.stock_code, b.pct_b, r.rsi, m.dif, m.hist, v.vol_ratio,
+                   dq.close_hfq, sm.stock_name
+            FROM stock_indicators_boll b
+            JOIN stock_indicators_rsi r USING (stock_code, trade_date)
+            JOIN stock_indicators_macd m USING (stock_code, trade_date)
+            JOIN stock_indicators_volume v USING (stock_code, trade_date)
+            JOIN daily_quote dq ON dq.stock_code=b.stock_code AND dq.trade_date=b.trade_date
+            JOIN stock_master sm ON sm.stock_code=b.stock_code
+            WHERE b.trade_date = :d
+        """), {"d": td}).fetchall()
+        if not rows:
+            write_node_log(log_id=log_id, status='failed', detail=f'{td} 无指标数据')
+            db.close()
+            return 0
+
+        # 先删旧信号再插新
+        db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal'"), {"d": td})
+        saved = 0
+        for r in rows:
+            code, pct_b, rsi_val, dif, hist, vol_ratio, price, name = r
+            direction, strength, reason = None, 0, ""
+
+            # 简易评分规则
+            buy_score = 0
+            if pct_b is not None and float(pct_b) < 0.2:
+                buy_score += 1
+                reason += "BOLL下轨; "
+            if rsi_val is not None and float(rsi_val) < 35:
+                buy_score += 1
+                reason += "RSI超卖; "
+            if dif is not None and hist is not None and float(dif) > float(hist):
+                buy_score += 1
+                reason += "MACD正柱; "
+
+            if buy_score >= 2:
+                direction = 'buy'
+                strength = min(buy_score, 3)
+            elif pct_b is not None and float(pct_b) > 0.8 and rsi_val is not None and float(rsi_val) > 65:
+                direction = 'sell'
+                strength = 2
+                reason = "BOLL上轨+RSI超买"
+
+            if direction:
+                db.execute(text("""
+                    INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference)
+                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,'balanced')
+                """), {
+                    "d": td, "c": code, "n": name or code, "dir": direction, "st": strength,
+                    "r": reason, "p": float(price) if price else 0,
+                    "sa": "关注建仓" if direction == 'buy' else "考虑减仓",
+                    "ss": _json.dumps(["model_signal"]),
+                })
+                saved += 1
+
+        db.commit()
+        db.close()
+        write_node_log(log_id=log_id, status='success', rows=saved, detail=f'{saved} 个信号')
+        return saved
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
+def dag_task_model_health(trade_date=None, **kw):
+    """模型健康度评估：回填 forward 收益 + 了结信号 + 5 维度评估。"""
+    from datetime import date as _date, timedelta
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    import json as _json
+
+    td = trade_date or str(_date.today())
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('model_health')
+    write_node_log(log_id=log_id, status='running', detail='健康度评估…')
+
+    try:
+        db = get_sync_db()
+        ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
+        if not ver:
+            write_node_log(log_id=log_id, status='failed', detail='无 ACTIVE 模型')
+            db.close()
+            return 0
+
+        # 1. 回填 forward 收益（5/10/20 日前的信号）
+        for days in [5, 10, 20]:
+            col = f"forward_{days}d_return"
+            target_date = (_date.today() - timedelta(days=days)).isoformat()
+            signals = db.execute(text(f"""
+                SELECT id, stock_code, signal_date, price FROM signal_history
+                WHERE signal_date = :d AND strategy_name = 'model_signal'
+            """), {"d": target_date}).fetchall()
+            for sig in signals:
+                close = db.execute(text(
+                    "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
+                ), {"c": sig.stock_code, "d": td}).scalar()
+                if close and sig.price and float(sig.price) > 0:
+                    ret = (float(close) - float(sig.price)) / float(sig.price)
+                    db.execute(text(f"UPDATE signal_history SET {col}=:r WHERE id=:id"),
+                               {"r": round(ret, 4), "id": sig.id})
+
+        # 2. 信号了结检查
+        open_sigs = db.execute(text("""
+            SELECT id, stock_code, signal_date, price, direction FROM signal_history
+            WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL
+        """)).fetchall()
+        for sig in open_sigs:
+            close_price = db.execute(text(
+                "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
+            ), {"c": sig.stock_code, "d": td}).scalar()
+            reason = None
+            actual_ret = None
+            if close_price and sig.price and float(sig.price) > 0:
+                pnl = (float(close_price) - float(sig.price)) / float(sig.price)
+                if pnl < -0.08:
+                    reason = 'stop_loss'
+                    actual_ret = pnl
+            if reason:
+                db.execute(text("UPDATE signal_history SET status='closed', actual_return=:r, close_reason=:c, closed_at=CURRENT_DATE WHERE id=:id"),
+                           {"r": round(actual_ret, 4) if actual_ret else None, "c": reason, "id": sig.id})
+
+        # 3. 5 维度评估
+        total = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal'")).scalar() or 0
+        closed = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND status='closed'")).scalar() or 0
+        wins = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND actual_return > 0")).scalar() or 0
+        win_rate = wins / max(closed, 1)
+        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL")).scalar() or 0
+
+        health = 'HEALTHY'
+        if win_rate < 0.3:
+            health = 'CRITICAL'
+        elif win_rate < 0.45:
+            health = 'WARNING'
+        elif win_rate < 0.5:
+            health = 'CAUTION'
+
+        db.execute(text("""
+            INSERT INTO model_health (version, check_date, health_status, live_win_rate, signal_count, avg_forward_5d, detail)
+            VALUES (:v, :d, :h, :wr, :sc, :af, :dt)
+            ON CONFLICT (version, check_date) DO UPDATE SET
+                health_status=EXCLUDED.health_status, live_win_rate=EXCLUDED.live_win_rate,
+                signal_count=EXCLUDED.signal_count, avg_forward_5d=EXCLUDED.avg_forward_5d, detail=EXCLUDED.detail
+        """), {
+            "v": ver, "d": td, "h": health, "wr": round(win_rate, 4),
+            "sc": total, "af": round(float(avg_f5), 4) if avg_f5 else 0,
+            "dt": _json.dumps({"closed": closed, "wins": wins, "forward_5d_avg": float(avg_f5) if avg_f5 else 0}),
+        })
+
+        db.commit()
+        db.close()
+        write_node_log(log_id=log_id, status='success', rows=total,
+                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号 {closed}了结')
+        return total
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
 def dag_task_stats(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('stats')
@@ -889,6 +1067,8 @@ NODE_FN_MAP = {
     'indicator_full':     dag_task_indicator_full,
     'indicator_incr':     dag_task_indicator_incr,
     'model_train':        dag_task_model_train,
+    'model_signal':       dag_task_model_signal,
+    'model_health':       dag_task_model_health,
 }
 
 # 从 dag_config 表动态加载拓扑（唯一来源），绑定 fn_map 中的函数
