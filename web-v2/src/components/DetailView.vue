@@ -193,9 +193,13 @@ function drawCharts(kd){
     if(!o) return ''
     const chg = o[1] && ohlc[idx-1] ? ((o[1]-ohlc[idx-1][1])/ohlc[idx-1][1]*100).toFixed(2) : '—'
     const color = chg>=0?'#ef4444':'#10b981'
+    const mid = bmid[idx], up = bup[idx], lo = blo[idx]
     return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
       开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
-      高: ${o[3].toFixed(2)}  低: ${o[2].toFixed(2)}  量: ${(vols[idx]/1e6).toFixed(1)}M</div>`
+      高: ${o[3].toFixed(2)}  低: ${o[2].toFixed(2)}  量: ${(vols[idx]/1e6).toFixed(1)}M<br/>
+      <span style="color:#f59e0b">BOLL上轨: ${up!=null?up.toFixed(2):'—'}</span>
+      <span style="color:#60a5fa"> 中轨: ${mid!=null?mid.toFixed(2):'—'}</span>
+      <span style="color:#f59e0b"> 下轨: ${lo!=null?lo.toFixed(2):'—'}</span></div>`
   }
 
   const c1 = make('c1', {
