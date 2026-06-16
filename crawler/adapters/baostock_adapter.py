@@ -274,34 +274,63 @@ class BaostockAdapter(DataSourceAdapter):
         results = []
         now = date.today()
         year = now.year
-        quarter = (now.month - 1) // 3 or 4
-        if quarter == 0:
-            quarter = 4
-            year -= 1
+        # 正确计算当前季度：Q1=(1-3月), Q2=(4-6月), Q3=(7-9月), Q4=(10-12月)
+        quarter = (now.month - 1) // 3 + 1
+
+        # 预加载行业映射（一次 API 调用，缓存给所有股票使用）
+        industry_map = {}
+        try:
+            rs = bs.query_stock_industry()
+            if rs.error_code == '0':
+                while rs.next():
+                    d = rs.get_row_data()
+                    if d and len(d) >= 2:
+                        # baostock 返回格式: [updateDate, code, code_name, industry, industry_type, ...]
+                        raw_code = d[1] if len(d) > 1 else ''
+                        ind_name = d[3] if len(d) > 3 else ''
+                        for prefix in ('sh.', 'sz.', 'bj.'):
+                            if raw_code.startswith(prefix):
+                                code_6 = raw_code[len(prefix):]
+                                industry_map[code_6] = ind_name
+                                break
+        except Exception:
+            pass
 
         for code in codes:
             bs_code = self._bs_code(code)
-            row = FundamentalRow(stock_code=code, stock_name="")
-            # 利润指标 → ROE
-            try:
-                rs = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
-                if rs.error_code == '0' and rs.next():
-                    d = rs.get_row_data()
-                    if len(d) > 3 and d[3]:
-                        row.roe = float(d[3]) * 100  # 小数 → %
-            except Exception:
-                pass
-            # 成长指标 → revenue_yoy, profit_yoy
-            try:
-                rs = bs.query_growth_data(code=bs_code, year=year, quarter=quarter)
-                if rs.error_code == '0' and rs.next():
-                    d = rs.get_row_data()
-                    if len(d) > 1 and d[1]:
-                        row.revenue_yoy = float(d[1]) * 100
-                    if len(d) > 2 and d[2]:
-                        row.profit_yoy = float(d[2]) * 100
-            except Exception:
-                pass
+            row = FundamentalRow(stock_code=code, stock_name="",
+                                 industry=industry_map.get(code, None))
+            # ROE / revenue_yoy / profit_yoy → 季度财报（需试多个季度）
+            # 数据依赖：季度财报只在季度结束后才可用
+            # 当前季度未结束时回退到前一季度
+            candidates = [(year, quarter), (year, quarter - 1)]
+            if quarter == 1:
+                candidates = [(year, 1), (year - 1, 4)]
+            for y, q in candidates:
+                if row.roe is None:
+                    try:
+                        rs = bs.query_profit_data(code=bs_code, year=y, quarter=q)
+                        if rs.error_code == '0' and rs.next():
+                            d = rs.get_row_data()
+                            if len(d) > 3 and d[3]:
+                                row.roe = float(d[3]) * 100  # 小数 → %
+                    except Exception:
+                        pass
+                if row.revenue_yoy is None or row.profit_yoy is None:
+                    try:
+                        rs = bs.query_growth_data(code=bs_code, year=y, quarter=q)
+                        if rs.error_code == '0' and rs.next():
+                            d = rs.get_row_data()
+                            # d[0]=code, d[1]=publish_date, d[2]=report_date,
+                            # d[3]=营业收入同比增长率, d[4]=净利润同比增长率
+                            if len(d) > 3 and d[3]:
+                                row.revenue_yoy = float(d[3]) * 100
+                            if len(d) > 4 and d[4]:
+                                row.profit_yoy = float(d[4]) * 100
+                    except Exception:
+                        pass
+                if row.roe is not None and row.revenue_yoy is not None:
+                    break
             # PE/PB/市值 → 最近7天K线
             try:
                 end_d = now.isoformat()
