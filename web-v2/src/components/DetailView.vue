@@ -165,7 +165,10 @@ function drawCharts(kd){
   const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
 
   dateRange.value = dates[0]+' ~ '+dates[dates.length-1]
-  const dz = [{type:'slider',xAxisIndex:0,start:82,end:100,height:22,bottom:4,handleSize:8,
+  // 默认显示最近 60 个交易日（不足则全显示）
+  const totalDays = dates.length
+  const dzStart = totalDays <= 60 ? 0 : ((totalDays - 60) / totalDays * 100).toFixed(1)
+  const dz = [{type:'slider',xAxisIndex:0,start:dzStart,end:100,height:22,bottom:4,handleSize:8,
     borderColor:'var(--c-input-bg)',
     backgroundColor:'var(--c-card-bg)',
     fillerColor:'rgba(96,165,250,0.15)',
