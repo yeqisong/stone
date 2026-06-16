@@ -525,6 +525,7 @@ ALL_TABLES = [
     ("stock_indicators_atr", CREATE_INDICATORS_ATR),
     ("stock_indicators_ma", CREATE_INDICATORS_MA),
     ("stock_indicators_volume", CREATE_INDICATORS_VOLUME),
+    ("daily_completeness", CREATE_DAILY_COMPLETENESS),
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),
     ("dag_config", CREATE_DAG_CONFIG),
