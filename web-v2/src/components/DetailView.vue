@@ -177,7 +177,9 @@ function drawCharts(kd){
     labelStyle:{color:'transparent'},
     moveHandleStyle:{color:'var(--c-card-bg-hover)'}
   }]
-  const xA = {type:'category',data:dates,axisLabel:{show:false}}
+  const xA = {type:'category',data:dates,axisLabel:{show:false},
+    axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},
+    axisTick:{show:false}}
   const tt = {trigger:'axis',axisPointer:{type:'cross'}}
 
   function make(id, opt){
@@ -207,24 +209,24 @@ function drawCharts(kd){
 
   const c1 = make('c1', {
     tooltip:{trigger:'axis',axisPointer:{type:'cross'},formatter:tooltipFmt},
-    grid:{left:'8%',right:'3%',top:18,bottom:50},
+    grid:{left:'8%',right:'3%',top:18,bottom:30},
     xAxis:xA, yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
       {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
-      {name:'上轨',type:'line',data:bup,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'},
-      {name:'中轨',type:'line',data:bmid,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none'},
-      {name:'下轨',type:'line',data:blo,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'}
+      {name:'上轨',type:'line',data:bup,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true},
+      {name:'中轨',type:'line',data:bmid,lineStyle:{color:'#60a5fa',width:2},symbol:'none',smooth:true},
+      {name:'下轨',type:'line',data:blo,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true}
     ]
   })
   const c2 = make('c2', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
+    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
     dataZoom:dz,
     series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]}}]
   })
   const c3 = make('c3', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
+    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{splitLine:gl},
     dataZoom:dz,
     series:[
@@ -234,7 +236,7 @@ function drawCharts(kd){
     ]
   })
   const c4 = make('c4', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
+    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
     series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',areaStyle:{color:'rgba(139,92,246,0.1)'},
