@@ -10,6 +10,16 @@
     <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">漏数据日期</div><div style="font-size:20px;font-weight:700" :style="{color:missingDates.length>0?'#f59e0b':'#888'}">{{missingDates.length}}</div></div>
   </div>
 
+  <!-- Data Source Health -->
+  <div v-if="dataSources.length" style="display:flex;align-items:center;gap:12px;padding:0 0 10px;flex-wrap:wrap">
+    <span style="font-size:11px;color:var(--c-text-dim)">数据源</span>
+    <div v-for="src in dataSources" :key="src.name" style="display:flex;align-items:center;gap:4px;padding:3px 10px;border-radius:12px;font-size:11px" :style="{background: src.name===activeSource ? 'rgba(32,128,240,0.1)' : 'var(--c-card-bg)', border: src.name===activeSource ? '1px solid rgba(32,128,240,0.3)' : '1px solid var(--c-border)'}">
+      <span :style="{color: src.healthy ? '#10b981' : '#ef4444', fontSize:'14px'}">●</span>
+      <span style="color:var(--c-text)">{{src.name}}</span>
+      <span v-if="src.name===activeSource" style="font-size:9px;color:#2080f0;font-weight:600">活跃</span>
+    </div>
+  </div>
+
   <!-- Two-column layout: Data Detail + Calendar (same height) -->
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">
     <!-- Left: Data Tables Detail -->
@@ -137,6 +147,8 @@ const showLogModal = ref(false)
 const logPage = ref(1)
 const logPageSize = 20
 const logLoading = ref(false)
+const dataSources = ref([])
+const activeSource = ref(null)
 
 async function loadLogModal() {
   logLoading.value = true
@@ -288,8 +300,17 @@ async function loadDataStatus() {
   } catch(e) {} finally { loading.value = false }
 }
 
+async function loadDataSources() {
+  try {
+    const r = await axios.get(API + '/api/data-sources/health')
+    dataSources.value = r.data?.sources || []
+    activeSource.value = r.data?.active_source || null
+  } catch(e) { /* API 不可用时静默 */ }
+}
+
 onMounted(() => {
   loadDataStatus()
+  loadDataSources()
   addWsListener((data) => {
     if (data.type === 'dag_log') {
       dlog.value = data.nodes || []

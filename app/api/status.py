@@ -555,3 +555,14 @@ def sync_status(task_id: str):
     if task is None:
         return {"ok": False, "error": "task_not_found"}
     return {"ok": True, "task": task}
+
+
+@router.get("/data-sources/health")
+def data_sources_health():
+    """数据源健康状态。返回所有注册源的可用性和当前活跃源。"""
+    try:
+        from crawler.adapters import get_data_source_manager
+        manager = get_data_source_manager()
+        return manager.get_health_summary()
+    except Exception as e:
+        return {"sources": [], "active_source": None, "error": str(e)}
