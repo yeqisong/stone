@@ -12,16 +12,28 @@ router = APIRouter(tags=["stock"])
 
 @router.get("/stock/{code}/detail")
 def get_stock_detail(code: str):
-    """获取个股详情：最新行情 + 最新交易日策略信号 + 历史信号概览。"""
+    """获取个股/指数/ETF 详情：最新行情 + 最新交易日策略信号 + 历史信号概览。"""
     db = get_sync_db()
     try:
-        result = db.execute(text("""
-            SELECT stock_code, stock_name, trade_date, close, close_hfq, volume, turnover
-            FROM daily_quote WHERE stock_code=:c ORDER BY trade_date DESC LIMIT 1
-        """), {"c": code})
+        # 判断证券类型
+        stype = db.execute(text("SELECT stock_type FROM stock_master WHERE stock_code=:c"), {"c": code}).scalar()
+
+        if stype == 'index':
+            # 指数：从 index_daily_quote 获取最新行情
+            result = db.execute(text("""
+                SELECT index_code as stock_code, index_name as stock_name, trade_date,
+                       close, close as close_hfq, volume, 0 as turnover
+                FROM index_daily_quote WHERE index_code=:c ORDER BY trade_date DESC LIMIT 1
+            """), {"c": code})
+        else:
+            result = db.execute(text("""
+                SELECT stock_code, stock_name, trade_date, close, close_hfq, volume, turnover
+                FROM daily_quote WHERE stock_code=:c ORDER BY trade_date DESC LIMIT 1
+            """), {"c": code})
+
         quote = result.fetchone()
         if not quote:
-            raise HTTPException(status_code=404, detail=f"未找到股票 {code}")
+            raise HTTPException(status_code=404, detail=f"未找到 {code}")
 
         # 最新信号日期
         result = db.execute(text(
@@ -172,14 +184,26 @@ def get_stock_kline(
     code: str, days: int = Query(120, ge=30, le=500),
     adjust: str = Query("none", description="复权: none=不复权, qfq=前复权, hfq=后复权"),
 ):
-    """获取 K线 + 技术指标。支持切换复权类型。"""
+    """获取 K线 + 技术指标。支持切换复权类型。支持个股/指数/ETF。"""
     db = get_sync_db()
     try:
-        col = {"none": "close", "qfq": "close_qfq", "hfq": "close_hfq"}.get(adjust, "close")
-        result = db.execute(text(f"""
-            SELECT trade_date, open, high, low, COALESCE({col}, close) as close, volume
-            FROM daily_quote WHERE stock_code=:c ORDER BY trade_date ASC
-        """), {"c": code})
+        # 判断证券类型
+        stype = db.execute(text("SELECT stock_type FROM stock_master WHERE stock_code=:c"), {"c": code}).scalar()
+
+        if stype == 'index':
+            # 指数：从 index_daily_quote 获取（无复权概念）
+            result = db.execute(text("""
+                SELECT trade_date, open, high, low, close, volume
+                FROM index_daily_quote WHERE index_code=:c ORDER BY trade_date ASC
+            """), {"c": code})
+        else:
+            # 个股/ETF：从 daily_quote 获取（支持复权）
+            col = {"none": "close", "qfq": "close_qfq", "hfq": "close_hfq"}.get(adjust, "close")
+            result = db.execute(text(f"""
+                SELECT trade_date, open, high, low, COALESCE({col}, close) as close, volume
+                FROM daily_quote WHERE stock_code=:c ORDER BY trade_date ASC
+            """), {"c": code})
+
         rows = result.fetchall()
         if not rows:
             raise HTTPException(status_code=404, detail=f"未找到 {code}")

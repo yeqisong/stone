@@ -66,10 +66,26 @@ def list_stocks(
         order_sql = ORDER_SQL_MAP[order_by]
 
         base_sql = f"""SELECT sm.stock_code, sm.stock_name, sm.exchange, sm.stock_type,
-               (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) as price,
-               (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1) as prev_close,
-               (SELECT dq.trade_date FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) as trade_date,
-               (SELECT COUNT(*) FROM daily_quote dq WHERE dq.stock_code=sm.stock_code) as data_rows,
+               CASE WHEN sm.stock_type='index' THEN
+                   (SELECT iq.close FROM index_daily_quote iq WHERE iq.index_code=sm.stock_code ORDER BY iq.trade_date DESC LIMIT 1)
+               ELSE
+                   (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1)
+               END as price,
+               CASE WHEN sm.stock_type='index' THEN
+                   (SELECT iq.close FROM index_daily_quote iq WHERE iq.index_code=sm.stock_code ORDER BY iq.trade_date DESC LIMIT 1 OFFSET 1)
+               ELSE
+                   (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1)
+               END as prev_close,
+               CASE WHEN sm.stock_type='index' THEN
+                   (SELECT iq.trade_date FROM index_daily_quote iq WHERE iq.index_code=sm.stock_code ORDER BY iq.trade_date DESC LIMIT 1)
+               ELSE
+                   (SELECT dq.trade_date FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1)
+               END as trade_date,
+               CASE WHEN sm.stock_type='index' THEN
+                   (SELECT COUNT(*) FROM index_daily_quote iq WHERE iq.index_code=sm.stock_code)
+               ELSE
+                   (SELECT COUNT(*) FROM daily_quote dq WHERE dq.stock_code=sm.stock_code)
+               END as data_rows,
                sf.pe_ttm, sf.pb_mrq, sf.industry, sf.roe, sf.market_cap
         FROM stock_master sm LEFT JOIN stock_fundamentals sf ON sf.stock_code=sm.stock_code
         WHERE {where_base}
