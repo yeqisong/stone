@@ -75,11 +75,14 @@
         <div>
           <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">📊 行情概览</h4>
           <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最新价</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)"><span style="font-weight:600">¥{{(detail.close||0).toFixed(2)}}</span></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">后复权价</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{detail.close_hfq?detail.close_hfq.toFixed(2):'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{fmt(detail.volume)}}股</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(32,128,240,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">开盘</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.close||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最高</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#ef4444':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.close||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最低</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#10b981':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.close||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">收盘</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)"><span style="font-weight:600">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size:10px;margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'#ef4444':'#10b981'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交额</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.amount?fmt(detail.amount)+'元':'-'}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.turnover?detail.turnover.toFixed(2):'-'}}%</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">数据日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.latest_trade_date}}</td></tr>
           </table>
         </div>
       </div>
@@ -116,6 +119,7 @@ const dirName = d => ({buy:'买入',sell:'卖出',neutral:'中性'}[d]||d)
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
 const priceChg = ref(null)
 const priceColor = ref('#fff')
+const hoverInfo = ref(null)  // crosshair hover 时动态更新的行情数据
 
 function calcPriceChange(kd){
   if(!kd||!kd.kline||kd.kline.length<2) { priceChg.value=null; priceColor.value='#fff'; return }
@@ -155,8 +159,10 @@ function drawCharts(kd){
   const vols = kd.kline.map(d=>d.volume)
   const bmid = kd.kline.map(d=>d.boll_mid), bup = kd.kline.map(d=>d.boll_upper), blo = kd.kline.map(d=>d.boll_lower)
   const rs = kd.kline.map(d=>d.rsi), di = kd.kline.map(d=>d.dif), de = kd.kline.map(d=>d.dea), ba = kd.kline.map(d=>d.macd_bar)
-  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.5)':'rgba(16,185,129,0.5)')
-  const bc = ba.map(v=>v>=0?'rgba(239,68,68,0.6)':'rgba(16,185,129,0.6)')
+  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
+  const bc = ba.map(v=>v>=0?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
+  // 浅灰色网格线（比默认的 --c-border-light 更浅）
+  const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
 
   dateRange.value = dates[0]+' ~ '+dates[dates.length-1]
   const dz = [{type:'slider',xAxisIndex:0,start:82,end:100,height:22,bottom:4,handleSize:8,
@@ -181,9 +187,21 @@ function drawCharts(kd){
     return c
   }
 
+  const tooltipFmt = p => {
+    if(!p||!p.length) return ''
+    const d = p[0]; const idx = d.dataIndex; const o = ohlc[idx]
+    if(!o) return ''
+    const chg = o[1] && ohlc[idx-1] ? ((o[1]-ohlc[idx-1][1])/ohlc[idx-1][1]*100).toFixed(2) : '—'
+    const color = chg>=0?'#ef4444':'#10b981'
+    return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
+      开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
+      高: ${o[3].toFixed(2)}  低: ${o[2].toFixed(2)}  量: ${(vols[idx]/1e6).toFixed(1)}M</div>`
+  }
+
   const c1 = make('c1', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:18,bottom:50},
-    xAxis:xA, yAxis:{scale:true,splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},formatter:tooltipFmt},
+    grid:{left:'8%',right:'3%',top:18,bottom:50},
+    xAxis:xA, yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
       {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
@@ -194,13 +212,13 @@ function drawCharts(kd){
   })
   const c2 = make('c2', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
-    xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+    xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
     dataZoom:dz,
     series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]}}]
   })
   const c3 = make('c3', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
-    xAxis:xA, yAxis:{splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+    xAxis:xA, yAxis:{splitLine:gl},
     dataZoom:dz,
     series:[
       {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]}},
@@ -210,13 +228,23 @@ function drawCharts(kd){
   })
   const c4 = make('c4', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:20},
-    xAxis:xA, yAxis:{min:0,max:100,splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+    xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
     series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',areaStyle:{color:'rgba(139,92,246,0.1)'},
       markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:'#ef4444',type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:'#10b981',type:'dashed'}}]}}
     ]
   })
   calcPriceChange(kd)
+  // crosshair 交互：hover K 线时更新动态行情数据
+  if(c1){
+    c1.on('mousemove', p=>{
+      if(p.dataIndex!=null){
+        const o = ohlc[p.dataIndex]
+        hoverInfo.value = { date: dates[p.dataIndex], open: o[0], close: o[1], low: o[2], high: o[3], volume: vols[p.dataIndex], prevClose: p.dataIndex>0 ? ohlc[p.dataIndex-1][1] : null }
+      }
+    })
+    c1.on('mouseout', ()=>{ hoverInfo.value = null })
+  }
   const charts = [c1,c2,c3,c4].filter(Boolean)
   if(charts.length){charts.forEach(c=>c.group='s');echarts.connect('s')}
 }
