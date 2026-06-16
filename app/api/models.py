@@ -46,12 +46,25 @@ def list_models():
     """模型版本列表。"""
     db = get_sync_db()
     try:
-        rows = db.execute(text("""
-            SELECT version, model_name, status, best_params,
-                   evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
-                   created_at, trained_at, activated_at
-            FROM model_versions ORDER BY created_at DESC
-        """)).fetchall()
+        try:
+            rows = db.execute(text("""
+                SELECT version, model_name, status, best_params,
+                       evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
+                       created_at, trained_at, activated_at
+                FROM model_versions
+                WHERE deleted_at IS NULL
+                ORDER BY created_at DESC
+            """)).fetchall()
+        except Exception:
+            db.rollback()
+            # deleted_at 列未迁移时回退
+            rows = db.execute(text("""
+                SELECT version, model_name, status, best_params,
+                       evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
+                       created_at, trained_at, activated_at
+                FROM model_versions
+                ORDER BY created_at DESC
+            """)).fetchall()
         versions = []
         for r in rows:
             versions.append({
@@ -181,9 +194,9 @@ def get_model_signals(version: str):
         rows = db.execute(text("""
             SELECT id, signal_date, stock_code, stock_name, direction, strength, price
             FROM signal_history
-            WHERE strategy_name = 'model_signal'
+            WHERE strategy_name = 'model_signal' AND model_version = :version
             ORDER BY signal_date DESC LIMIT 50
-        """)).fetchall()
+        """), {"version": version}).fetchall()
         signals = []
         for r in rows:
             signals.append({
@@ -198,6 +211,130 @@ def get_model_signals(version: str):
         raise HTTPException(500, f"查询信号失败: {str(e)[:200]}")
     finally:
         db.close()
+
+@router.get("/v1/models/{version}/delete-check")
+def check_model_delete(version: str):
+    """检查模型是否可以物理删除，返回关联数据统计。"""
+    db = get_sync_db()
+    try:
+        # 先查模型是否存在（兼容 deleted_at 列未迁移的情况）
+        try:
+            r = db.execute(text(
+                "SELECT status, activated_at, deleted_at FROM model_versions WHERE version = :v"
+            ), {"v": version}).fetchone()
+        except Exception:
+            db.rollback()
+            # deleted_at 列不存在，回退查询
+            r = db.execute(text(
+                "SELECT status, activated_at, NULL as deleted_at FROM model_versions WHERE version = :v"
+            ), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, f"版本 {version} 不存在")
+        if r[2] is not None:
+            raise HTTPException(400, "该模型已被删除")
+        if r[0] == 'ACTIVE':
+            raise HTTPException(400, "ACTIVE 状态模型不能删除，请先归档")
+
+        activated = r[1] is not None
+        signals = db.execute(text(
+            "SELECT COUNT(*) FROM signal_history WHERE model_version = :v"
+        ), {"v": version}).scalar() or 0
+        trials = db.execute(text(
+            "SELECT COUNT(*) FROM training_trials WHERE version = :v"
+        ), {"v": version}).scalar() or 0
+        health = db.execute(text(
+            "SELECT COUNT(*) FROM model_health WHERE version = :v"
+        ), {"v": version}).scalar() or 0
+        comparisons = db.execute(text(
+            "SELECT COUNT(*) FROM version_comparisons WHERE version_a = :v OR version_b = :v"
+        ), {"v": version}).scalar() or 0
+
+        can_physical = not activated and signals == 0 and trials == 0 and health == 0 and comparisons == 0
+        return {
+            "version": version,
+            "can_physical_delete": can_physical,
+            "related_data": {
+                "signals": signals,
+                "training_trials": trials,
+                "health_records": health,
+                "comparisons": comparisons,
+                "activated": activated,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"删除检查失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
+@router.delete("/v1/models/{version}")
+def delete_model(version: str, mode: str = Query("soft")):
+    """删除模型版本。mode=soft 逻辑删除，mode=hard 物理删除。"""
+    if mode not in ("soft", "hard"):
+        raise HTTPException(400, "mode 参数只能是 soft 或 hard")
+    db = get_sync_db()
+    try:
+        # 兼容 deleted_at 列未迁移的情况
+        try:
+            r = db.execute(text(
+                "SELECT status, activated_at, deleted_at FROM model_versions WHERE version = :v"
+            ), {"v": version}).fetchone()
+        except Exception:
+            db.rollback()
+            r = db.execute(text(
+                "SELECT status, activated_at, NULL as deleted_at FROM model_versions WHERE version = :v"
+            ), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, f"版本 {version} 不存在")
+        if r[2] is not None:
+            raise HTTPException(400, "该模型已被删除")
+        if r[0] == 'ACTIVE':
+            raise HTTPException(400, "ACTIVE 状态模型不能删除，请先归档")
+
+        if mode == "soft":
+            db.execute(text(
+                "UPDATE model_versions SET deleted_at = CURRENT_TIMESTAMP WHERE version = :v"
+            ), {"v": version})
+            db.commit()
+            return {"ok": True, "version": version, "mode": "soft"}
+
+        # mode == "hard" — 物理删除
+        activated = r[1] is not None
+        signals = db.execute(text(
+            "SELECT COUNT(*) FROM signal_history WHERE model_version = :v"
+        ), {"v": version}).scalar() or 0
+        trials = db.execute(text(
+            "SELECT COUNT(*) FROM training_trials WHERE version = :v"
+        ), {"v": version}).scalar() or 0
+        health = db.execute(text(
+            "SELECT COUNT(*) FROM model_health WHERE version = :v"
+        ), {"v": version}).scalar() or 0
+        comparisons = db.execute(text(
+            "SELECT COUNT(*) FROM version_comparisons WHERE version_a = :v OR version_b = :v"
+        ), {"v": version}).scalar() or 0
+
+        if activated or signals > 0 or trials > 0 or health > 0 or comparisons > 0:
+            raise HTTPException(400, "该模型有关联数据，不能物理删除，请使用逻辑删除（mode=soft）")
+
+        # 按 FK 依赖顺序删除
+        db.execute(text("DELETE FROM version_comparisons WHERE version_a = :v OR version_b = :v"), {"v": version})
+        db.execute(text("DELETE FROM model_health WHERE version = :v"), {"v": version})
+        db.execute(text("DELETE FROM training_trials WHERE version = :v"), {"v": version})
+        db.execute(text("DELETE FROM signal_history WHERE model_version = :v"), {"v": version})
+        db.execute(text("DELETE FROM model_versions WHERE version = :v"), {"v": version})
+        db.commit()
+        return {"ok": True, "version": version, "mode": "hard"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"删除失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
 
 @router.get("/v1/indicators/{name}/status")
 def get_indicator_status(name: str):

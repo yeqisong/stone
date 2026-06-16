@@ -12,10 +12,14 @@
         <div style="flex:1;overflow-y:auto;padding:0 8px">
           <div v-for="v in store.versions" :key="v.version"
             :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-border)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-card-bg-hover)':'transparent'}"
-            @click="store.selectVersion(v.version)">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
-              <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{store.statusLabel(v.status)}}</n-tag>
+            @click="store.selectVersion(v.version)"
+            @mouseenter="hoveredVersion = v.version" @mouseleave="hoveredVersion = null">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
+                <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{store.statusLabel(v.status)}}</n-tag>
+              </div>
+              <n-button v-if="v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型">✕</n-button>
             </div>
             <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
             <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--c-text-faint)">
@@ -112,6 +116,38 @@
         </template>
       </n-card>
     </n-modal>
+    <!-- Delete Confirm Modal -->
+    <n-modal v-model:show="showDeleteModal">
+      <n-card :style="{width:'420px',maxWidth:'92vw'}" :title="deleteInfo?.can_physical_delete ? '⚠️ 永久删除模型' : '🗑️ 删除模型'" role="dialog" aria-modal="true">
+        <template v-if="deleteInfo">
+          <template v-if="deleteInfo.can_physical_delete">
+            <p style="font-size:13px;color:var(--c-text);margin:0">
+              模型 <b>{{ deleteTarget?.version }}</b> 没有关联数据，将被永久删除且无法恢复。
+            </p>
+          </template>
+          <template v-else>
+            <p style="font-size:13px;color:var(--c-text);margin:0 0 8px 0">
+              模型 <b>{{ deleteTarget?.version }}</b> 已产生关联数据，删除后将标记为已删除状态，历史数据不受影响。
+            </p>
+            <div style="font-size:11px;color:var(--c-text-dim);padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+              <div v-if="deleteInfo.related_data.signals > 0">📊 信号数据 {{ deleteInfo.related_data.signals }} 条</div>
+              <div v-if="deleteInfo.related_data.training_trials > 0">🧪 训练试验 {{ deleteInfo.related_data.training_trials }} 次</div>
+              <div v-if="deleteInfo.related_data.health_records > 0">💊 健康记录 {{ deleteInfo.related_data.health_records }} 条</div>
+              <div v-if="deleteInfo.related_data.comparisons > 0">📋 版本对比 {{ deleteInfo.related_data.comparisons }} 条</div>
+              <div v-if="deleteInfo.related_data.activated">🚀 曾上线运行</div>
+            </div>
+          </template>
+        </template>
+        <template #footer>
+          <n-space justify="flex-end">
+            <n-button @click="showDeleteModal=false">取消</n-button>
+            <n-button :type="deleteInfo?.can_physical_delete ? 'error' : 'warning'" @click="confirmDelete" :loading="deleting">
+              {{ deleteInfo?.can_physical_delete ? '永久删除' : '删除' }}
+            </n-button>
+          </n-space>
+        </template>
+      </n-card>
+    </n-modal>
   </template>
 </div>
 </template>
@@ -131,6 +167,11 @@ const loading = ref(true)
 const showCreate = ref(false)
 const createName = ref('')
 const creating = ref(false)
+const showDeleteModal = ref(false)
+const deleteInfo = ref(null)
+const deleteTarget = ref(null)
+const deleting = ref(false)
+const hoveredVersion = ref(null)
 const createForm = reactive({
   train_start: '2021-01-01', train_end: '2025-12-31',
   test_start: '2026-01-01', test_end: null,
@@ -208,6 +249,31 @@ async function rejectModel() {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/reject`)
     await store.loadVersions()
   } catch(e) {}
+}
+
+async function handleDeleteClick(v) {
+  deleteTarget.value = v
+  try {
+    deleteInfo.value = await store.checkDelete(v.version)
+    showDeleteModal.value = true
+  } catch(e) {
+    const msg = e.response?.data?.detail || '检查失败'
+    alert(msg)
+  }
+}
+async function confirmDelete() {
+  if (!deleteTarget.value || !deleteInfo.value) return
+  deleting.value = true
+  try {
+    const mode = deleteInfo.value.can_physical_delete ? 'hard' : 'soft'
+    await store.deleteVersion(deleteTarget.value.version, mode)
+    showDeleteModal.value = false
+    deleteTarget.value = null
+    deleteInfo.value = null
+  } catch(e) {
+    const msg = e.response?.data?.detail || '删除失败'
+    alert(msg)
+  } finally { deleting.value = false }
 }
 
 onMounted(async () => {

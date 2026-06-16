@@ -44,5 +44,20 @@ export const useModelStore = defineStore('model', () => {
     detailTab.value = tab
   }
 
-  return { versions, selectedId, detailTab, selected, statusBadge, statusLabel, loadVersions, selectVersion, switchTab }
+  async function checkDelete(version) {
+    const r = await axios.get(window.location.origin + `/api/v1/models/${version}/delete-check`)
+    return r.data
+  }
+
+  async function deleteVersion(version, mode = 'soft') {
+    await axios.delete(window.location.origin + `/api/v1/models/${version}`, { params: { mode } })
+    // 删除后从本地列表移除
+    versions.value = versions.value.filter(v => v.version !== version)
+    // 如果删除的是当前选中项，自动选中第一个
+    if (selectedId.value === version) {
+      selectedId.value = versions.value.length > 0 ? versions.value[0].version : null
+    }
+  }
+
+  return { versions, selectedId, detailTab, selected, statusBadge, statusLabel, loadVersions, selectVersion, switchTab, checkDelete, deleteVersion }
 })
