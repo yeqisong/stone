@@ -231,15 +231,15 @@ function drawCharts(kd){
     dataZoom:dz,
     series:[
       {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]}},
-      {name:'DIF',type:'line',data:di,lineStyle:{color:'#f59e0b',width:1},symbol:'none'},
-      {name:'DEA',type:'line',data:de,lineStyle:{color:'#06b6d4',width:1},symbol:'none'}
+      {name:'DIF',type:'line',data:di,lineStyle:{color:'#f59e0b',width:1},symbol:'none',smooth:true},
+      {name:'DEA',type:'line',data:de,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true}
     ]
   })
   const c4 = make('c4', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
-    series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',areaStyle:{color:'rgba(139,92,246,0.1)'},
+    series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(139,92,246,0.1)'},
       markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:'#ef4444',type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:'#10b981',type:'dashed'}}]}}
     ]
   })
@@ -284,8 +284,8 @@ function drawPeChart(){
       moveHandleStyle:{color:'var(--c-card-bg-hover)'}
     }],
     series:[
-      {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none',areaStyle:{color:'rgba(96,165,250,0.1)'}},
-      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'}
+      {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
+      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none',smooth:true}
     ]
   })
 }
