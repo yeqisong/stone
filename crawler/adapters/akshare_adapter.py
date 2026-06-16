@@ -227,10 +227,11 @@ class AKShareAdapter(DataSourceAdapter):
         return results
 
     def fetch_fundamentals(self, codes: List[str]) -> List[FundamentalRow]:
-        """拉取基本面数据（PE/PB/总市值）。
+        """拉取基本面数据（总市值/总股本/行业）。
 
-        注意：AKShare stock_a_indicator_lg 不含 ROE/营收增长/净利增长，
-        这些字段保留为 None，由 Manager 的混合策略从 Baostock 补充。
+        使用 stock_individual_info_em 获取个股信息。
+        PE/PB 暂不可用（需 stock_zh_a_spot_em 批量获取，但该接口返回全市场数据）。
+        ROE/营收增长/净利增长 AKShare 无直接接口，由 Baostock 补充。
         """
         results = []
         for code in codes:
@@ -239,15 +240,16 @@ class AKShareAdapter(DataSourceAdapter):
                 stock_name=self._get_name(code),
             )
             try:
-                df = ak.stock_a_indicator_lg(symbol=code)
+                df = ak.stock_individual_info_em(symbol=code)
                 if df is not None and not df.empty:
-                    latest = df.iloc[-1]  # 取最新一行
-                    if pd.notna(latest.get("pe_ttm")):
-                        row.pe_ttm = float(latest["pe_ttm"])
-                    if pd.notna(latest.get("pb")):
-                        row.pb_mrq = float(latest["pb"])
-                    if pd.notna(latest.get("total_mv")):
-                        row.market_cap = int(float(latest["total_mv"]) * 10000)  # ⚠️ 万元→元
+                    # DataFrame 格式: item列 + value列
+                    info = dict(zip(df["item"], df["value"]))
+                    if "总市值" in info and info["总市值"]:
+                        row.market_cap = int(float(info["总市值"]))
+                    if "总股本" in info and info["总股本"]:
+                        row.total_shares = int(float(info["总股本"]))
+                    if "行业" in info and info["行业"]:
+                        row.industry = str(info["行业"])
             except Exception as e:
                 logger.warning(f"[akshare] 基本面 {code} 失败: {e}")
             results.append(row)

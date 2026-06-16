@@ -72,10 +72,28 @@ class BaostockAdapter(DataSourceAdapter):
 
     @staticmethod
     def _bs_code(code: str) -> str:
-        """6位A股代码 → baostock 格式 (sh.600519)。"""
+        """A股股票代码 → baostock 格式。6xx→sh, 其他→sz"""
         if code.startswith('6'):
             return f"sh.{code}"
         return f"sz.{code}"
+
+    @staticmethod
+    def _bs_index_code(code: str) -> str:
+        """指数代码 → baostock 格式。000xxx→sh(上交所), 399xxx→sz(深交所)"""
+        if code.startswith('0'):
+            return f"sh.{code}"
+        elif code.startswith('3'):
+            return f"sz.{code}"
+        return f"sh.{code}"
+
+    @staticmethod
+    def _bs_etf_code(code: str) -> str:
+        """ETF代码 → baostock 格式。5xxxxx→sh(沪市ETF), 1xxxxx→sz(深市ETF)"""
+        if code.startswith('5'):
+            return f"sh.{code}"
+        elif code.startswith('1'):
+            return f"sz.{code}"
+        return f"sh.{code}"
 
     @staticmethod
     def _delay():
@@ -83,13 +101,17 @@ class BaostockAdapter(DataSourceAdapter):
 
     # ── 内部：单只股票K线拉取（含重试）──
 
-    def _fetch_kline_single(self, code: str, start: str, end: str) -> Optional[List[list]]:
-        """拉取单只股票K线，返回原始行列表或 None。
+    def _fetch_kline_single(self, code: str, start: str, end: str,
+                            bs_code_override: str = None) -> Optional[List[list]]:
+        """拉取单只股票/ETF K线，返回原始行列表或 None。
 
         每行格式: [date, open, high, low, close, volume, amount, turn, close_hfq]
         含 RETRY_MAX 次重试 + relogin 检测。
+
+        Args:
+            bs_code_override: 如指定则直接使用（用于 ETF 代码映射）
         """
-        bs_code = self._bs_code(code)
+        bs_code = bs_code_override or self._bs_code(code)
         for attempt in range(RETRY_MAX + 1):
             try:
                 # 第1次 API：不复权 OHLCV
@@ -178,14 +200,42 @@ class BaostockAdapter(DataSourceAdapter):
         return results
 
     def fetch_etf_kline(self, codes: List[str], start: str, end: str) -> List[KlineRow]:
-        # ETF 与个股使用完全相同的拉取逻辑
-        return self.fetch_stock_kline(codes, start, end)
+        """拉取 ETF K线（使用 ETF 专用代码映射）。"""
+        self._ensure_login()
+        results = []
+        for code in codes:
+            raw = self._fetch_kline_single(code, start, end,
+                                           bs_code_override=self._bs_etf_code(code))
+            if not raw:
+                self._delay()
+                continue
+            exchange = code_to_exchange(code)
+            for r in raw:
+                try:
+                    results.append(KlineRow(
+                        trade_date=r[0],
+                        stock_code=code,
+                        stock_name="",
+                        exchange=exchange,
+                        open=float(r[1]) if r[1] else 0,
+                        high=float(r[2]) if r[2] else 0,
+                        low=float(r[3]) if r[3] else 0,
+                        close=float(r[4]) if r[4] else 0,
+                        close_hfq=float(r[8]) if r[8] else float(r[4]) if r[4] else 0,
+                        volume=int(float(r[5])) if r[5] else 0,
+                        amount=float(r[6]) if r[6] else 0,
+                        turnover=float(r[7]) if r[7] else None,
+                    ))
+                except (ValueError, IndexError):
+                    continue
+            self._delay()
+        return results
 
     def fetch_index_kline(self, codes: List[str], start: str, end: str) -> List[IndexKlineRow]:
         self._ensure_login()
         results = []
         for code in codes:
-            bs_code = self._bs_code(code)
+            bs_code = self._bs_index_code(code)
             try:
                 rs = bs.query_history_k_data_plus(
                     bs_code, "date,code,open,high,low,close,volume,amount",
