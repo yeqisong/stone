@@ -17,14 +17,15 @@ CREATE INDEX IF NOT EXISTS idx_tc_date ON trade_calendar (cal_date, is_trade_day
 
 CREATE_STOCK_MASTER = """
 CREATE TABLE IF NOT EXISTS stock_master (
-    stock_code  VARCHAR(6) PRIMARY KEY,
+    stock_code  VARCHAR(6) NOT NULL,
     stock_name  VARCHAR(30) NOT NULL,
     exchange    VARCHAR(4) NOT NULL,
     ipo_date    DATE,
     status      VARCHAR(10) DEFAULT 'N',
-    stock_type  VARCHAR(10) DEFAULT '',
+    stock_type  VARCHAR(10) DEFAULT 'stock',
     status_date DATE,
-    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, stock_type)
 );
 CREATE INDEX IF NOT EXISTS idx_sm_status ON stock_master (status, exchange);
 """
@@ -153,7 +154,8 @@ CREATE TABLE IF NOT EXISTS signal_history (
     forward_20d_return DECIMAL(8,4),
     actual_return     DECIMAL(8,4),
     close_reason      VARCHAR(30),
-    closed_at         TIMESTAMP
+    closed_at         TIMESTAMP,
+    model_version     VARCHAR(20)
 );
 CREATE INDEX IF NOT EXISTS idx_sh_date ON signal_history (signal_date);
 CREATE INDEX IF NOT EXISTS idx_sh_stock ON signal_history (stock_code, signal_date DESC);
@@ -361,6 +363,7 @@ CREATE TABLE IF NOT EXISTS model_versions (
     trained_at    TIMESTAMP,
     activated_at  TIMESTAMP,
     archived_at   TIMESTAMP,
+    deleted_at    TIMESTAMP,
     CONSTRAINT chk_model_status CHECK (status IN ('DRAFT','TRAINING','VALIDATING','PENDING','ACTIVE','REJECTED','ARCHIVED'))
 );
 """
@@ -558,11 +561,43 @@ def init_db(sync_session) -> None:
         ('actual_return', 'DECIMAL(8,4)'),
         ('close_reason', 'VARCHAR(30)'),
         ('closed_at', 'TIMESTAMP'),
+        ('model_version', 'VARCHAR(20)'),
     ]:
         try:
             sync_session.execute(text(f"ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS {col} {col_type}"))
         except Exception:
             sync_session.rollback()
+    # 迁移：signal_history.model_version 索引
+    try:
+        sync_session.execute(text("CREATE INDEX IF NOT EXISTS idx_sh_model_version ON signal_history (model_version)"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：model_versions 新增 deleted_at 列（幂等）
+    try:
+        sync_session.execute(text("ALTER TABLE model_versions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：stock_master PK 改为复合主键 (stock_code, stock_type)
+    try:
+        # 检查当前 PK 是否只有 stock_code（旧方案）
+        has_old_pk = sync_session.execute(text("""
+            SELECT COUNT(*) FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+            WHERE tc.table_name='stock_master' AND tc.constraint_type='PRIMARY KEY'
+            AND kcu.column_name='stock_code'
+            AND NOT EXISTS (
+                SELECT 1 FROM information_schema.key_column_usage k2
+                WHERE k2.constraint_name=tc.constraint_name AND k2.column_name='stock_type'
+            )
+        """)).scalar()
+        if has_old_pk and has_old_pk > 0:
+            sync_session.execute(text("ALTER TABLE stock_master DROP CONSTRAINT stock_master_pkey"))
+            sync_session.execute(text("UPDATE stock_master SET stock_type='stock' WHERE stock_type='' OR stock_type IS NULL"))
+            sync_session.execute(text("ALTER TABLE stock_master ADD PRIMARY KEY (stock_code, stock_type)"))
+    except Exception:
+        sync_session.rollback()
     sync_session.commit()
 
     # 交易日历：如果为空则从 baostock 同步真实日历（含法定节假日）

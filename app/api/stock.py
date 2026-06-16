@@ -11,23 +11,32 @@ router = APIRouter(tags=["stock"])
 
 
 @router.get("/stock/{code}/detail")
-def get_stock_detail(code: str):
+def get_stock_detail(code: str, type: str = Query(None, description="证券类型: stock/index/etf，不传则自动检测")):
     """获取个股/指数/ETF 详情：最新行情 + 最新交易日策略信号 + 历史信号概览。"""
     db = get_sync_db()
     try:
-        # 判断证券类型
-        stype = db.execute(text("SELECT stock_type FROM stock_master WHERE stock_code=:c"), {"c": code}).scalar()
+        # 判断证券类型（优先用前端传入的 type，否则自动检测）
+        if type:
+            stype = type
+        else:
+            stype = db.execute(text(
+                "SELECT stock_type FROM stock_master WHERE stock_code=:c ORDER BY CASE stock_type WHEN 'stock' THEN 1 WHEN 'etf' THEN 2 WHEN 'index' THEN 3 END LIMIT 1"
+            ), {"c": code}).scalar()
+
+        # 从 stock_master 获取名称（权威来源）
+        stock_name = db.execute(text(
+            "SELECT stock_name FROM stock_master WHERE stock_code=:c AND stock_type=:t"
+        ), {"c": code, "t": stype or 'stock'}).scalar() or ""
 
         if stype == 'index':
-            # 指数：从 index_daily_quote 获取最新行情
             result = db.execute(text("""
-                SELECT index_code as stock_code, index_name as stock_name, trade_date,
+                SELECT index_code as stock_code, trade_date,
                        close, close as close_hfq, volume, 0 as turnover
                 FROM index_daily_quote WHERE index_code=:c ORDER BY trade_date DESC LIMIT 1
             """), {"c": code})
         else:
             result = db.execute(text("""
-                SELECT stock_code, stock_name, trade_date, close, close_hfq, volume, turnover
+                SELECT stock_code, trade_date, close, close_hfq, volume, turnover
                 FROM daily_quote WHERE stock_code=:c ORDER BY trade_date DESC LIMIT 1
             """), {"c": code})
 
@@ -95,8 +104,8 @@ def get_stock_detail(code: str):
             }
 
         return {
-            "stock_code": quote.stock_code,
-            "stock_name": quote.stock_name,
+            "stock_code": code,
+            "stock_name": stock_name,
             "latest_trade_date": str(quote.trade_date),
             "close": float(quote.close) if quote.close else 0,
             "close_hfq": float(quote.close_hfq) if quote.close_hfq else None,
@@ -183,12 +192,18 @@ def get_stock_history(
 def get_stock_kline(
     code: str, days: int = Query(120, ge=30, le=500),
     adjust: str = Query("none", description="复权: none=不复权, qfq=前复权, hfq=后复权"),
+    type: str = Query(None, description="证券类型: stock/index/etf"),
 ):
     """获取 K线 + 技术指标。支持切换复权类型。支持个股/指数/ETF。"""
     db = get_sync_db()
     try:
-        # 判断证券类型
-        stype = db.execute(text("SELECT stock_type FROM stock_master WHERE stock_code=:c"), {"c": code}).scalar()
+        # 判断证券类型（优先用前端传入的 type）
+        if type:
+            stype = type
+        else:
+            stype = db.execute(text(
+                "SELECT stock_type FROM stock_master WHERE stock_code=:c ORDER BY CASE stock_type WHEN 'stock' THEN 1 WHEN 'etf' THEN 2 WHEN 'index' THEN 3 END LIMIT 1"
+            ), {"c": code}).scalar()
 
         if stype == 'index':
             # 指数：从 index_daily_quote 获取（无复权概念）

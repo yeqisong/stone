@@ -32,7 +32,7 @@ def main():
         db.execute(text("""
             INSERT INTO stock_master (stock_code, stock_name, exchange, ipo_date, status, stock_type)
             VALUES (:c, :n, :e, :i, 'N', 'stock')
-            ON CONFLICT (stock_code) DO UPDATE SET stock_name=EXCLUDED.stock_name
+            ON CONFLICT (stock_code, stock_type) DO UPDATE SET stock_name=EXCLUDED.stock_name
         """), {"c": code, "n": info["name"], "e": "SSE" if code[0]=='6' else "SZSE", "i": info.get("ipo_date") or None})
     db.commit()
     logger.info(f"  stock_master: {len(stock_info)} 只")
