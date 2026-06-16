@@ -159,6 +159,9 @@ class StockInfo:
     stock_type: str = "stock"  # "stock" / "index" / "etf"
 ```
 
+> **⚠️ 代码冲突（设计时未考虑到，开发中发现）**：
+> 同一 6 位代码可能同时是股票和指数。如 `000001` 既是**平安银行**(stock, SZSE) 又是**上证综合指数**(index, SSE)。类似冲突约 120 只（000xxx 深交所个股 vs 上交所指数）。因此 `stock_master` 表的主键必须从单一 `stock_code` 改为复合主键 `(stock_code, stock_type)`，且所有 `ON CONFLICT` 子句需同步更新。
+
 ### 4.2 适配器抽象基类
 
 ```python
@@ -274,13 +277,13 @@ class DataSourceAdapter(ABC):
 | `stock_code` | VARCHAR(6) | `code` | 去前缀 | `symbol` 参数 | 已是6位 |
 | `stock_name` | VARCHAR(20) | 从 master 查 | — | 从 `stock_info_a_code_name()` | 预加载字典 |
 | `industry` | VARCHAR(50) | `query_stock_industry()` 返回 | 直接使用 | **⚠️ AKShare 无直接行业接口** | 保留 baostock 或从东方财富个股信息获取 |
-| `pe_ttm` | NUMERIC(10,2) | `query_history_k_data_plus` → `peTTM` | `float(val)` | `stock_a_indicator_lg()` → `pe_ttm` | 直接使用 |
-| `pb_mrq` | NUMERIC(10,2) | `query_history_k_data_plus` → `pbMRQ` | `float(val)` | `stock_a_indicator_lg()` → `pb` | 直接使用 |
-| `roe` | NUMERIC(10,2) | `query_profit_data()` → 第4列 | `float(val) * 100`（小数→%） | **⚠️ AKShare `stock_a_indicator_lg` 不含 ROE** | 需从 `ak.stock_financial_analysis_indicator()` 补充，或保留 baostock |
-| `revenue_yoy` | NUMERIC(10,2) | `query_growth_data()` → 第2列 | `float(val) * 100` | **⚠️ 同上，需其他接口** | `ak.stock_financial_abstract_ths()` 或保留 baostock |
-| `profit_yoy` | NUMERIC(10,2) | `query_growth_data()` → 第3列 | `float(val) * 100` | **⚠️ 同上** | 同上 |
-| `total_shares` | BIGINT | 计算: `volume / (turn/100)` | 整数化 | `stock_zh_a_spot_em()` → `总市值/最新价` | 需计算 |
-| `market_cap` | BIGINT | 计算: `close * total_shares` | 整数化 | `stock_a_indicator_lg()` → `total_mv` | `val * 10000` **⚠️ 万元→元** |
+| `pe_ttm` | NUMERIC(10,2) | `query_history_k_data_plus` → `peTTM` | `float(val)` | ~~`stock_a_indicator_lg()`~~ **⚠️ 该 API 在 v1.18.23 已不存在，改用 `stock_individual_info_em()`** → 不含 PE/PB | 仅返回总市值/总股本/行业 |
+| `pb_mrq` | NUMERIC(10,2) | `query_history_k_data_plus` → `pbMRQ` | `float(val)` | 同上 | — |
+| `roe` | NUMERIC(10,2) | `query_profit_data()` → 第4列 | `float(val) * 100`（小数→%） | **⚠️ AKShare 无直接 ROE 接口** | 保留 baostock 作为该字段来源 |
+| `revenue_yoy` | NUMERIC(10,2) | `query_growth_data()` → 第2列 | `float(val) * 100` | **⚠️ 同上** | 保留 baostock |
+| `profit_yoy` | NUMERIC(10,2) | `query_growth_data()` → 第3列 | `float(val) * 100` | **⚠️ 同上** | 保留 baostock |
+| `total_shares` | BIGINT | 计算: `volume / (turn/100)` | 整数化 | `stock_individual_info_em()` → `总股本` | 直接使用 |
+| `market_cap` | BIGINT | 计算: `close * total_shares` | 整数化 | `stock_individual_info_em()` → `总市值` | 直接使用（单位已是元） |
 
 **⚠️ 基本面关键差异**：
 1. **ROE / 营收增长 / 净利增长**：AKShare 的 `stock_a_indicator_lg()` **不包含**这三个字段，需要调用其他接口或保留 baostock 作为该类数据的来源
@@ -470,17 +473,25 @@ def fetch_stock_kline(self, codes, start, end):
 
 **AKShare 特有注意事项**：
 
-| 问题 | 处理方式 |
-|------|----------|
-| `start_date` 格式 `"20240101"` 无连字符 | 入参 `"2024-01-01"` 需 `.replace("-","")` |
-| 成交量单位「手」 | `* 100` 转为「股」 |
-| 股票名称不在 K 线返回中 | 首次调用 `stock_info_a_code_name()` 建立全局映射缓存 |
-| 东方财富反爬 | 每次请求间隔 ≥ 0.8 秒 |
-| 空 DataFrame | 接口在无数据时返回空 DF 而非抛异常，需检查 `len(df) == 0` |
+| 问题 | 处理方式 | 实际验证 |
+|------|----------|----------|
+| `stock_a_indicator_lg` API | 设计时假设此 API 存在用于获取 PE/PB/市值 | ⚠️ **在 v1.18.23 中不存在**，改用 `stock_individual_info_em()` 获取总市值/总股本/行业，PE/PB 需从 baostock 补充 |
+| `start_date` 格式 `"20240101"` 无连字符 | 入参 `"2024-01-01"` 需 `.replace("-","")` | ✅ 已验证 |
+| 成交量单位「手」 | `* 100` 转为「股」 | ✅ 已验证 |
+| 股票名称不在 K 线返回中 | 首次调用 `stock_info_a_code_name()` 建立全局映射缓存 | ✅ 已验证（5,528 只） |
+| 东方财富反爬 | 每次请求间隔 ≥ 0.8 秒 | ⚠️ **部分网络环境完全不可达**（开发网络被东方财富屏蔽），这是 AKShare 依赖东方财富公开接口的固有风险 |
+| 空 DataFrame | 接口在无数据时返回空 DF 而非抛异常，需检查 `len(df) == 0` | ✅ 已验证 |
+| HTTP 连接错误 | `Connection aborted / RemoteDisconnected` | 需捕获所有网络异常并降级为空结果 |
 
 ### 7.2 BaostockAdapter（`crawler/adapters/baostock_adapter.py`）
 
-从现有 `BaostockCrawler` 提取核心拉取逻辑，**保留其已有的重试机制**：
+从现有 `BaostockCrawler` 提取核心拉取逻辑，**保留其已有的重试机制**。
+
+> **⚠️ 关键约束：baostock 非线程安全**（开发过程中发现的重要问题）
+>
+> baostock 内部使用**单一 TCP 连接**（通过 `bs.login()` 建立）。多个线程并发调用 `bs.query_*` 时，响应数据会**串扰**——如股票 600104 返回 600105 的 K 线数据，导致数据库中写入错误数据。
+>
+> **必须串行调用 baostock API**，禁止 `ThreadPoolExecutor` 或多线程并发访问同一 baostock 会话。
 
 ```python
 class BaostockAdapter(DataSourceAdapter):
@@ -507,12 +518,44 @@ class BaostockAdapter(DataSourceAdapter):
             ...
 ```
 
+**代码映射**（指数/ETF 需要专用转换函数，通用 `_bs_code()` 不能覆盖）：
+
+| 方法 | 用途 | 规则 | 示例 |
+|------|------|------|------|
+| `_bs_code(code)` | 个股代码 | `6xxxxx→sh`，其他→`sz` | `600519→sh.600519` |
+| `_bs_index_code(code)` | 指数代码 | `000xxx→sh`，`399xxx→sz` | `000001→sh.000001`（上证指数） |
+| `_bs_etf_code(code)` | ETF 代码 | `5xxxxx→sh`，`1xxxxx→sz` | `510050→sh.510050`（50ETF） |
+
+> **⚠️ 重要**：个股 `000001`（平安银行·深交所）和指数 `000001`（上证指数·上交所）虽然代码相同但**交易所不同**。通用的 `_bs_code("000001")` 返回 `"sz.000001"`（平安银行），而指数需要用 `_bs_index_code("000001")` 返回 `"sh.000001"`（上证指数）。设计时未考虑此冲突，导致 fetch_index_kline 最初返回了错误的个股数据。
+
+**会话稳定性**（开发过程中发现 baostock 的两个退化模式）：
+
+| 退化模式 | 现象 | 修复 |
+|----------|------|------|
+| **会话退化** | 约 200 次请求后开始返回空数据 | 每 200 只股票主动 `logout()+login()` 刷新 |
+| **连接 hang 住** | 请求发出后永不返回（线程永久阻塞） | `socket.setdefaulttimeout(30)`，超时立即跳过 |
+| **行数据残缺** | API 返回成功但行数据长度不足，`r[4]` 引发 IndexError | 过滤 `< 8` 列的行（`if len(row) >= 8 and row[0]`） |
+| **超时重试死循环** | 超时后 `RETRY_MAX=4` 每次都超时（退化会话重试无用） | 检测 `timed out/timeout` 异常后**不重试**，直接返回空 |
+
+**批量下载最终方案**（串行 + 会话刷新）：
+
+```
+for i, code in enumerate(codes):
+    if i % 200 == 0: logout(); sleep(2); login()  # 每 200 只刷新会话
+    rows = _fetch_kline(code, start, end)           # 串行调用
+    if len(rows) == 0: empty_streak += 1
+    else: empty_streak = 0; write_to_buffer(rows)
+    if empty_streak >= 20: logout(); login()        # 连续 20 只空结果时提前刷新
+    if len(buffer) >= 500: batch_upsert(db, buffer) # 批量写入 DB
+```
+
 **提取原则**：
-1. `_fetch_kline()` → 提取为 `fetch_stock_kline()` + `fetch_etf_kline()`
+1. `_fetch_kline()` → 提取为 `fetch_stock_kline()` + `fetch_etf_kline()`（注意使用正确的 `_bs_index_code` / `_bs_etf_code`）
 2. `download_all_index_daily()` → 提取为 `fetch_index_kline()`
 3. `download_fundamentals()` → 提取为 `fetch_fundamentals()`
-4. 保留 `RETRY_MAX=4` + 指数退避 + `need_relogin` 检测
+4. 保留重试机制，但超时不重试
 5. 去掉数据库写入逻辑（移到 `writers.py`）
+6. 去掉 ThreadPoolExecutor 多线程（baostock 非线程安全）
 
 ### 7.3 旧 BaostockCrawler 兼容层
 
@@ -576,12 +619,26 @@ def dag_task_kline(trade_date=None, **kw):
 
 ### 8.2 四个 DAG 节点改造对照
 
-| DAG 节点 | 当前调用 | 改造后调用 | 写入函数 |
-|----------|----------|-----------|----------|
-| `kline` | `crawler.download_daily_update()` | `manager.fetch_with_fallback("fetch_stock_kline", ...)` | `batch_upsert_kline()` |
-| `index` | `crawler.download_all_index_daily()` | `manager.fetch_with_fallback("fetch_index_kline", ...)` | `batch_upsert_index_kline()` |
-| `etf` | `crawler.download_etf_daily()` | `manager.fetch_with_fallback("fetch_etf_kline", ...)` | `batch_upsert_kline()` (同个股) |
-| `fund` | `crawler.download_fundamentals()` | `manager.fetch_with_fallback("fetch_fundamentals", ...)` | `batch_upsert_fundamentals()` |
+**实际采用渐进式策略**（baostock 可用时保留原有路径，只在不可用时 fallback）：
+
+| DAG 节点 | baostock 可用时 | baostock 不可用（fallback） | 写入函数 |
+|----------|----------------|---------------------------|----------|
+| `kline` | `BaostockCrawler.download_daily_update()` | `adapter.fetch_stock_kline()` → `batch_upsert_kline()` | 原有 / writers.py |
+| `index` | `BaostockCrawler.download_all_index_daily()` | `adapter.fetch_index_kline()` → `batch_upsert_index_kline()` | 原有 / writers.py |
+| `etf` | `BaostockCrawler.download_etf_daily()` | `adapter.fetch_etf_kline()` → `batch_upsert_kline()` | 原有 / writers.py |
+| `fund` | `BaostockCrawler.download_fundamentals()` | `adapter.fetch_fundamentals()` → `batch_upsert_fundamentals()` | 原有 / writers.py |
+
+### 8.3 前端 API 兼容（设计时遗漏的问题）
+
+适配器层统一了数据拉取，但**前端 API 层未考虑指数/ETF 与个股使用不同数据库表**：
+
+| API 端点 | 设计时假设 | 实际问题 | 修复 |
+|----------|-----------|---------|------|
+| `GET /api/stocks?category=index` | 所有数据在 `daily_quote` | 指数在 `index_daily_quote` | `CASE WHEN stock_type='index' THEN index_daily_quote ELSE daily_quote` |
+| `GET /api/stock/{code}/detail` | 同上 | 同上 | 先查 `stock_master.stock_type`，指数走 `index_daily_quote` |
+| `GET /api/stock/{code}/kline` | 同上 | 同上 | 同上 |
+| `stock_name` 来源 | 从 `daily_quote.stock_name` | 适配器写入时可能为空 | 改为从 `stock_master.stock_name` 获取（权威来源） |
+| `stock_type` 歧义 | `stock_code` 唯一确定类型 | 同码可有多类型（如 000001） | 新增 `?type=index/stock/etf` 可选参数 |
 
 ### 8.3 统一写入函数（`crawler/writers.py`）
 
@@ -679,14 +736,17 @@ def batch_upsert_fundamentals(db, rows: list[FundamentalRow], batch_size=200):
 
 ## 十、风险评估与缓解
 
-| 风险 | 严重度 | 概率 | 缓解措施 |
-|------|--------|------|----------|
-| AKShare API 接口变更（列名/参数改动） | 高 | 中 | 适配器内部消化，ABC 接口不变；版本锁定 `akshare==1.18.*` |
-| 东方财富反爬限流 | 中 | 中 | 请求间隔 ≥ 0.8s；触发限流后自动 fallback 到 baostock |
-| 两源数据精度差异（小数位不同） | 低 | 高 | 以先到数据为准，差异在 0.01% 以内可忽略 |
-| 基本面 ROE/营收增长 AKShare 缺失 | 中 | 确定 | Phase 3 采用混合策略：PE/PB 用 AKShare，ROE/营收用 baostock |
-| 重构导致 Pipeline 中断 | 高 | 低 | Phase 2 先建代理层，确保旧接口不变；灰度切换 |
-| AKShare `stock_a_indicator_lg` 无历史分位数据 | 低 | 确定 | 历史 PE/PB 分位仍可从 `stock_a_indicator_lg` 时间序列计算 |
+| 风险 | 严重度 | 概率 | 缓解措施 | 实际发现 |
+|------|--------|------|----------|----------|
+| AKShare API 接口变更 | 高 | 中 | 适配器内部消化，ABC 接口不变 | ⚠️ **已证实**：`stock_a_indicator_lg` 在 v1.18.23 不存在，已改用 `stock_individual_info_em` |
+| 东方财富反爬/网络不可达 | 中 | 中 | 请求间隔 ≥ 0.8s；fallback 到 baostock | ⚠️ **已证实**：某些网络环境（如开发机）东方财富完全不可达，AKShare 全线失败 |
+| **baostock 非线程安全** | **高** | **确定** | 串行调用，禁止 ThreadPoolExecutor | ⚠️ **设计时遗漏**：多线程导致数据串扰（600104 返回 600105 数据） |
+| **baostock 会话退化** | **高** | **确定** | 每 200 只股票 logout+login 刷新 | ⚠️ **设计时遗漏**：~200 次请求后开始返回空/残缺数据 |
+| **baostock 连接 hang 住** | **高** | **中** | `socket.setdefaulttimeout(30)` + 超时不重试 | ⚠️ **设计时遗漏**：退化后请求永不返回，线程永久阻塞 |
+| 两源数据精度差异 | 低 | 高 | 以先到数据为准 | 尚未验证 |
+| 基本面 ROE/营收 AKShare 缺失 | 中 | 确定 | PE/PB/market_cap 用 AKShare，ROE/营收用 baostock 补充 | 已实现混合策略 |
+| **stock_master 代码冲突** | **中** | **确定** | PK 改为 `(stock_code, stock_type)` 复合主键 | ⚠️ **设计时遗漏**：000001 既是平安银行(stock)也是上证指数(index) |
+| 前端 API 表路由 | 中 | 确定 | 判断 stock_type 后选择 daily_quote 或 index_daily_quote | ⚠️ **设计时遗漏**：kline/detail 接口最初只查 daily_quote |
 
 ### 基本面混合策略
 
