@@ -132,7 +132,9 @@ class BaostockAdapter(DataSourceAdapter):
 
                 raw_rows = []
                 while rs.next():
-                    raw_rows.append(rs.get_row_data())
+                    row = rs.get_row_data()
+                    if len(row) >= 8 and row[0]:  # 过滤空行/残缺行
+                        raw_rows.append(row)
                 if not raw_rows:
                     return []
 
@@ -145,7 +147,8 @@ class BaostockAdapter(DataSourceAdapter):
                 if rs_hfq.error_code == '0':
                     while rs_hfq.next():
                         d = rs_hfq.get_row_data()
-                        hfq_map[d[0]] = d[1]
+                        if len(d) >= 2 and d[0] and d[1]:  # 过滤残缺行
+                            hfq_map[d[0]] = d[1]
 
                 # 合并
                 rows = []

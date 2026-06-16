@@ -71,6 +71,9 @@ class BaostockCrawler:
 
     def login(self) -> bool:
         """登录 baostock，带重试。返回是否成功。"""
+        import socket
+        if socket.getdefaulttimeout() is None:
+            socket.setdefaulttimeout(30)  # 防止 baostock 连接 hang 住
         if self._logged_in:
             return True
         for attempt in range(5):
@@ -174,7 +177,9 @@ class BaostockCrawler:
                 if rs.error_code == '0':
                     raw_rows = []
                     while rs.next():
-                        raw_rows.append(rs.get_row_data())
+                        row = rs.get_row_data()
+                        if len(row) >= 8 and row[0]:  # 过滤空行/残缺行
+                            raw_rows.append(row)
                     # 第2次：后复权 close
                     rs_hfq = bs.query_history_k_data_plus(
                         bs_code, "date,close",
@@ -184,7 +189,8 @@ class BaostockCrawler:
                     if rs_hfq.error_code == '0':
                         while rs_hfq.next():
                             d = rs_hfq.get_row_data()
-                            hfq_map[d[0]] = d[1]  # date → 后复权close
+                            if len(d) >= 2 and d[0] and d[1]:  # 过滤残缺行
+                                hfq_map[d[0]] = d[1]  # date → 后复权close
                     # 合并：每行追加 close_hfq
                     rows = []
                     for r in raw_rows:
@@ -207,6 +213,10 @@ class BaostockCrawler:
                 if '未登录' in msg or 'login' in msg.lower():
                     logger.warning(f"  {bs_code} 会话失效: {e}")
                     return (None, True)
+                # 超时 = 会话退化/连接挂起，不重试（重试也会超时）
+                if 'timed out' in msg.lower() or 'timeout' in msg.lower():
+                    logger.debug(f"  {bs_code} 连接超时，跳过")
+                    return ([], False)
                 if attempt < RETRY_MAX:
                     wait = RETRY_BACKOFF ** (attempt + 1)
                     logger.debug(f"  {bs_code} 网络异常(attempt {attempt+1}): {e}")
@@ -270,66 +280,120 @@ class BaostockCrawler:
                                 start_date: str, end_date: str,
                                 db, upsert_mode: bool,
                                 date_str_filter: str = None) -> dict:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import threading
+        """串行下载 K 线数据（baostock 非线程安全，禁止并发调用）。
+
+        重要：baostock 内部使用单一 TCP 连接，多线程并发会导致数据串扰
+        （如 600104 返回 600105 的数据）。必须逐只串行调用。
+
+        策略：
+        - 逐只股票串行调用 baostock API
+        - 每 200 只主动刷新会话（防止会话退化）
+        - 连续 20 只空结果时提前刷新会话
+        - 超时直接跳过（不重试退化的会话）
+        - 批量写入 DB（每 500 行一次 commit）
+        """
+        SESSION_REFRESH = 200  # 每 N 只股票刷新一次会话
+        REFRESH_PAUSE = 2      # 刷新间隔秒数
+
         total_rows = 0; errors = 0; failed_codes = []
         processed = 0; insert_buffer = []
-        insert_lock = threading.Lock(); fail_lock = threading.Lock()
+        empty_streak = 0  # 连续空结果计数
         start_time = time.time()
 
-        def fetch_one(code: str) -> tuple:
+        for i, code in enumerate(codes):
+            # ── 定期刷新会话（防退化）──
+            if i > 0 and i % SESSION_REFRESH == 0:
+                if insert_buffer:
+                    self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
+                    db.commit(); insert_buffer.clear()
+                self.logout(); time.sleep(REFRESH_PAUSE)
+                if not self.login():
+                    logger.error(f"  会话刷新失败 (第 {i} 只)，终止")
+                    break
+                empty_streak = 0
+                logger.info(f"  进度: {processed}/{len(codes)} | +{total_rows}行 | "
+                           f"错误{errors} | {time.time()-start_time:.0f}s")
+
+            # ── 连续空结果过多 = 会话退化，提前刷新 ──
+            if empty_streak >= 20:
+                logger.warning(f"  连续 {empty_streak} 只空结果，提前刷新会话")
+                if insert_buffer:
+                    self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
+                    db.commit(); insert_buffer.clear()
+                self.logout(); time.sleep(REFRESH_PAUSE)
+                if not self.login():
+                    logger.error("  会话刷新失败，终止")
+                    break
+                empty_streak = 0
+
+            # ── 串行拉取单只股票 ──
             bs_code = self._bs_code(code)
             _random_delay()
-            rows, need_relogin = self._fetch_kline(bs_code, start_date, end_date)
-            if need_relogin:
-                return (None, True, f"{code}: 会话失效")
-            if rows is None:
-                return (None, False, f"{code}: API错误")
-            return (rows, False, None)
+            try:
+                rows, need_relogin = self._fetch_kline(bs_code, start_date, end_date)
+            except Exception as e:
+                errors += 1; failed_codes.append(code)
+                processed += 1
+                continue
 
-        max_workers = min(8, len(codes) or 1)
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(fetch_one, code): code for code in codes}
-            for future in as_completed(futures):
-                code = futures[future]
-                ex = self._exchange(code)
-                name = stock_names.get(code, code)
-                try:
-                    rows, need_relogin, err = future.result()
-                except Exception as e:
-                    with fail_lock: errors += 1; failed_codes.append(code)
-                    continue
-                if need_relogin or rows is None:
-                    with fail_lock: errors += 1; failed_codes.append(code)
-                    continue
-                for row in rows:
-                    if date_str_filter and row[0] != date_str_filter:
-                        continue
+            if need_relogin:
+                self.logout(); time.sleep(REFRESH_PAUSE)
+                if self.login():
                     try:
-                        close_hfq = float(row[8]) if len(row) > 8 and row[8] else float(row[4])
-                        with insert_lock:
-                            insert_buffer.append((
-                                row[0], ex, code, name,
-                                float(row[1]), float(row[2]), float(row[3]), float(row[4]),
-                                close_hfq,
-                                int(float(row[5])), float(row[6]),
-                                float(row[7]) if row[7] else None,
-                            ))
-                            total_rows += 1
-                    except (ValueError, IndexError): pass
-                with fail_lock: processed += 1
-                if len(insert_buffer) >= 500:
-                    with insert_lock:
-                        self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
-                        db.commit(); insert_buffer.clear()
-                if processed % 500 == 0:
-                    elapsed = time.time() - start_time
-                    logger.info(f"  进度: {processed}/{len(codes)} | +{total_rows}行 | 错误{errors}")
+                        rows, need_relogin = self._fetch_kline(bs_code, start_date, end_date)
+                    except Exception:
+                        rows = None
+                if rows is None or need_relogin:
+                    errors += 1; failed_codes.append(code)
+                    processed += 1
+                    continue
+
+            if rows is None:
+                errors += 1; failed_codes.append(code)
+                processed += 1
+                continue
+
+            if len(rows) == 0:
+                empty_streak += 1
+                processed += 1
+                continue
+
+            # ── 有数据，重置空结果计数，写入缓冲 ──
+            empty_streak = 0
+            ex = self._exchange(code)
+            name = stock_names.get(code, code)
+            for row in rows:
+                if date_str_filter and row[0] != date_str_filter:
+                    continue
+                try:
+                    close_hfq = float(row[8]) if len(row) > 8 and row[8] else float(row[4])
+                    insert_buffer.append((
+                        row[0], ex, code, name,
+                        float(row[1]), float(row[2]), float(row[3]), float(row[4]),
+                        close_hfq,
+                        int(float(row[5])), float(row[6]),
+                        float(row[7]) if row[7] else None,
+                    ))
+                    total_rows += 1
+                except (ValueError, IndexError):
+                    pass
+            processed += 1
+
+            # ── 批量写入 DB ──
+            if len(insert_buffer) >= 500:
+                self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
+                db.commit(); insert_buffer.clear()
+
+        # 写入剩余
         if insert_buffer:
             self._batch_insert_rows(db, insert_buffer, upsert=upsert_mode)
             db.commit()
+
+        elapsed = time.time() - start_time
+        logger.info(f"  完成: {total_rows}行 | {processed}/{len(codes)}只 | "
+                   f"错误{errors} | {elapsed:.0f}秒")
         return {"rows": total_rows, "stocks": processed, "errors": errors,
-                "failed_codes": failed_codes, "elapsed_seconds": time.time() - start_time}
+                "failed_codes": failed_codes, "elapsed_seconds": elapsed}
 
     # ═══════════════════════════════════════════════════
     #  每日增量更新（A股日K线）
