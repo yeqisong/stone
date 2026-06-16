@@ -382,19 +382,40 @@ def dag_task_kline(trade_date=None, **kw):
     force = (kw.get('_node_force', {}) or {}).get('kline', kw.get('force', False))
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
-        from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler()
-        r = c.download_daily_update(date.fromisoformat(td), force=force)
-        c.logout()
-        return r
+        from crawler.adapters import get_data_source_manager
+        manager = get_data_source_manager()
+        source = manager.get_source()
+
+        if source.name == "baostock":
+            # 首选路径：baostock 高性能并行下载
+            from crawler.baostock_crawler import BaostockCrawler
+            c = BaostockCrawler()
+            r = c.download_daily_update(date.fromisoformat(td), force=force)
+            c.logout()
+            r['_source'] = 'baostock'
+            return r
+        else:
+            # Fallback 路径：通过适配器串行拉取
+            from app.db.connection import get_sync_db
+            from crawler.writers import batch_upsert_kline
+            from sqlalchemy import text as _text
+            db = get_sync_db()
+            codes = [r[0] for r in db.execute(_text(
+                "SELECT stock_code FROM stock_master WHERE status='N'"
+            )).fetchall()]
+            rows = source.fetch_stock_kline(codes, td, td)
+            saved = batch_upsert_kline(db, rows)
+            db.close()
+            return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
         fatal = r.get('fatal', '')
+        src = r.get('_source', '?')
         if fatal or rows == 0:
             write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
         else:
-            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 行')
+            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 行 (来源:{src})')
         return r
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -406,18 +427,37 @@ def dag_task_index(trade_date=None, **kw):
     force = (kw.get('_node_force', {}) or {}).get('index', kw.get('force', False))
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
-        from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler()
-        r = c.download_all_index_daily(td, force=force)
-        c.logout()
-        return r
+        from crawler.adapters import get_data_source_manager
+        manager = get_data_source_manager()
+        source = manager.get_source()
+
+        if source.name == "baostock":
+            from crawler.baostock_crawler import BaostockCrawler
+            c = BaostockCrawler()
+            r = c.download_all_index_daily(td, force=force)
+            c.logout()
+            r['_source'] = 'baostock'
+            return r
+        else:
+            from app.db.connection import get_sync_db
+            from crawler.writers import batch_upsert_index_kline
+            from sqlalchemy import text as _text
+            db = get_sync_db()
+            codes = [r[0] for r in db.execute(_text(
+                "SELECT DISTINCT index_code FROM index_daily_quote"
+            )).fetchall()]
+            rows = source.fetch_index_kline(codes, td, td)
+            saved = batch_upsert_index_kline(db, rows)
+            db.close()
+            return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0) if isinstance(r, dict) else r
+        src = r.get('_source', '?') if isinstance(r, dict) else '?'
         if rows == 0:
             write_node_log(log_id=log_id, status='failed', detail='失败: 无数据返回')
         else:
-            write_node_log(log_id=log_id, status='success', rows=rows)
+            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'(来源:{src})')
         return r
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -428,16 +468,35 @@ def dag_task_etf(trade_date=None, **kw):
     force = (kw.get('_node_force', {}) or {}).get('etf', kw.get('force', False))
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
-        from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler(); r = c.download_etf_daily(td, force=force); c.logout()
-        return r
+        from crawler.adapters import get_data_source_manager
+        manager = get_data_source_manager()
+        source = manager.get_source()
+
+        if source.name == "baostock":
+            from crawler.baostock_crawler import BaostockCrawler
+            c = BaostockCrawler(); r = c.download_etf_daily(td, force=force); c.logout()
+            r['_source'] = 'baostock'
+            return r
+        else:
+            from app.db.connection import get_sync_db
+            from crawler.writers import batch_upsert_kline
+            from sqlalchemy import text as _text
+            db = get_sync_db()
+            codes = [r[0] for r in db.execute(_text(
+                "SELECT stock_code FROM stock_master WHERE stock_type='etf'"
+            )).fetchall()]
+            rows = source.fetch_etf_kline(codes, td, td)
+            saved = batch_upsert_kline(db, rows)
+            db.close()
+            return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
+        src = r.get('_source', '?')
         if rows == 0:
             write_node_log(log_id=log_id, status='failed', detail='失败: 无数据返回')
         else:
-            write_node_log(log_id=log_id, status='success', rows=rows)
+            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'(来源:{src})')
         return r
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -454,18 +513,38 @@ def dag_task_fund(trade_date=None, **kw):
         update_node_progress(log_id=log_id, rows=n, detail=f'处理中 ({n}只)')
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
-        from crawler.baostock_crawler import BaostockCrawler
-        c = BaostockCrawler()
-        r = c.download_fundamentals(force=force, progress_cb=progress_cb)
-        c.logout()
-        return r
+        from crawler.adapters import get_data_source_manager
+        manager = get_data_source_manager()
+        source = manager.get_source()
+
+        if source.name == "baostock":
+            from crawler.baostock_crawler import BaostockCrawler
+            c = BaostockCrawler()
+            r = c.download_fundamentals(force=force, progress_cb=progress_cb)
+            c.logout()
+            if isinstance(r, dict):
+                r['_source'] = 'baostock'
+            return r
+        else:
+            from app.db.connection import get_sync_db
+            from crawler.writers import batch_upsert_fundamentals
+            from sqlalchemy import text as _text
+            db = get_sync_db()
+            codes = [r[0] for r in db.execute(_text(
+                "SELECT stock_code FROM stock_master WHERE status='N'"
+            )).fetchall()]
+            rows = source.fetch_fundamentals(codes)
+            saved = batch_upsert_fundamentals(db, rows)
+            db.close()
+            return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0) if isinstance(r, dict) else r
+        src = r.get('_source', '?') if isinstance(r, dict) else '?'
         if rows == 0:
             write_node_log(log_id=log_id, status='failed', detail='失败: 无数据返回')
         else:
-            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 只')
+            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 只 (来源:{src})')
         return r
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -833,8 +912,8 @@ def dag_task_model_signal(trade_date=None, **kw):
             db.close()
             return 0
 
-        # 先删旧信号再插新
-        db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal'"), {"d": td})
+        # 先删旧信号再插新（按版本精确清理）
+        db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
         saved = 0
         for r in rows:
             code, pct_b, rsi_val, dif, hist, vol_ratio, price, name = r
@@ -862,13 +941,13 @@ def dag_task_model_signal(trade_date=None, **kw):
 
             if direction:
                 db.execute(text("""
-                    INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference)
-                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,'balanced')
+                    INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference,model_version)
+                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,'balanced',:mv)
                 """), {
                     "d": td, "c": code, "n": name or code, "dir": direction, "st": strength,
                     "r": reason, "p": float(price) if price else 0,
                     "sa": "关注建仓" if direction == 'buy' else "考虑减仓",
-                    "ss": _json.dumps(["model_signal"]),
+                    "ss": _json.dumps(["model_signal"]), "mv": ver,
                 })
                 saved += 1
 
@@ -906,8 +985,8 @@ def dag_task_model_health(trade_date=None, **kw):
             target_date = (_date.today() - timedelta(days=days)).isoformat()
             signals = db.execute(text(f"""
                 SELECT id, stock_code, signal_date, price FROM signal_history
-                WHERE signal_date = :d AND strategy_name = 'model_signal'
-            """), {"d": target_date}).fetchall()
+                WHERE signal_date = :d AND strategy_name = 'model_signal' AND model_version = :v
+            """), {"d": target_date, "v": ver}).fetchall()
             for sig in signals:
                 close = db.execute(text(
                     "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
@@ -920,8 +999,8 @@ def dag_task_model_health(trade_date=None, **kw):
         # 2. 信号了结检查
         open_sigs = db.execute(text("""
             SELECT id, stock_code, signal_date, price, direction FROM signal_history
-            WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL
-        """)).fetchall()
+            WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL AND model_version = :v
+        """), {"v": ver}).fetchall()
         for sig in open_sigs:
             close_price = db.execute(text(
                 "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
@@ -937,12 +1016,12 @@ def dag_task_model_health(trade_date=None, **kw):
                 db.execute(text("UPDATE signal_history SET status='closed', actual_return=:r, close_reason=:c, closed_at=CURRENT_DATE WHERE id=:id"),
                            {"r": round(actual_ret, 4) if actual_ret else None, "c": reason, "id": sig.id})
 
-        # 3. 5 维度评估
-        total = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal'")).scalar() or 0
-        closed = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND status='closed'")).scalar() or 0
-        wins = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND actual_return > 0")).scalar() or 0
+        # 3. 5 维度评估（按版本过滤）
+        total = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND model_version=:v"), {"v": ver}).scalar() or 0
+        closed = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND status='closed' AND model_version=:v"), {"v": ver}).scalar() or 0
+        wins = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND actual_return > 0 AND model_version=:v"), {"v": ver}).scalar() or 0
         win_rate = wins / max(closed, 1)
-        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL")).scalar() or 0
+        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL AND model_version=:v"), {"v": ver}).scalar() or 0
 
         health = 'HEALTHY'
         if win_rate < 0.3:
