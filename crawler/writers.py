@@ -128,8 +128,54 @@ def batch_upsert_index_kline(db, rows: List[IndexKlineRow], batch_size: int = 20
     return total
 
 
+def _enrich_market_cap(db, rows: List[FundamentalRow]) -> int:
+    """从本站 daily_quote 表补全市值和总股本（不依赖 baostock K 线 API）。
+
+    依赖链：基本面模块在 DAG 中排在 K 线之后，daily_quote 已有最新数据。
+    往前查找最新一条 volume > 0 的 K 线来推算市值。
+    极端情况（完全没有交易记录）：市值保持为 None，调用方后续可设 0。
+    """
+    if not rows:
+        return 0
+    codes = [r.stock_code for r in rows if r.market_cap is None]
+    if not codes:
+        return 0
+
+    latest = db.execute(text("""
+        SELECT DISTINCT ON (stock_code) stock_code, close, volume, turnover
+        FROM daily_quote
+        WHERE stock_code = ANY(:codes) AND volume > 0 AND turnover > 0
+        ORDER BY stock_code, trade_date DESC
+    """), {"codes": codes}).fetchall()
+
+    kline_map = {}
+    for r in latest:
+        try:
+            kline_map[r[0]] = (float(r[1]), float(r[2]), float(r[3]))
+        except (ValueError, TypeError):
+            pass
+
+    enriched = 0
+    for row in rows:
+        if row.market_cap is not None:
+            continue
+        data = kline_map.get(row.stock_code)
+        if not data:
+            continue
+        close, volume, turnover = data
+        if turnover > 0:
+            total_shares = int(volume / (turnover / 100))
+            row.total_shares = total_shares
+            row.market_cap = int(close * total_shares)
+            enriched += 1
+    return enriched
+
+
 def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 100) -> int:
     """批量 UPSERT 基本面数据到 stock_fundamentals 表。
+
+    写入前自动从本站 daily_quote 补全市值（不依赖数据源 K 线 API）。
+    DAG 保证 K 线数据先于基本面完成，极端情况查不到交易数据时市值留空。
 
     Args:
         db: SQLAlchemy 同步 session
@@ -139,6 +185,10 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
     Returns:
         成功写入的行数
     """
+    # 从本站 daily_quote 补全市值
+    enriched = _enrich_market_cap(db, rows)
+    if enriched:
+        logger.info(f"[writers] 从 daily_quote 补全 {enriched} 只股票的市值")
     if not rows:
         return 0
 

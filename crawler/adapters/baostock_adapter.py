@@ -331,29 +331,22 @@ class BaostockAdapter(DataSourceAdapter):
                         pass
                 if row.roe is not None and row.revenue_yoy is not None:
                     break
-            # PE/PB/市值 → 最近7天K线
+            # PE/PB → 最近 1 天 K 线（仅取估值指标，不取 close/volume/turn）
+            # 市值计算由 writers._enrich_market_cap 从本站 daily_quote 完成
             try:
                 end_d = now.isoformat()
-                start_d = (now - __import__('datetime').timedelta(days=7)).isoformat()
+                start_d = (now - __import__('datetime').timedelta(days=5)).isoformat()
                 rs = bs.query_history_k_data_plus(
-                    bs_code, "date,close,volume,peTTM,pbMRQ,turn",
+                    bs_code, "date,peTTM,pbMRQ",
                     start_date=start_d, end_date=end_d,
                     frequency="d", adjustflag="3")
                 if rs.error_code == '0':
                     last = None
                     while rs.next():
                         last = rs.get_row_data()
-                    if last:
-                        if last[3]: row.pe_ttm = float(last[3])
-                        if last[4]: row.pb_mrq = float(last[4])
-                        if last[1] and last[2] and last[5]:
-                            close = float(last[1])
-                            vol = float(last[2])
-                            turn = float(last[5])
-                            if turn > 0:
-                                total_shares = int(vol / (turn / 100))
-                                row.total_shares = total_shares
-                                row.market_cap = int(close * total_shares)
+                    if last and len(last) >= 3:
+                        if last[1]: row.pe_ttm = float(last[1])
+                        if last[2]: row.pb_mrq = float(last[2])
             except Exception:
                 pass
             results.append(row)
