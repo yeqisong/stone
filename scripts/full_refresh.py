@@ -122,15 +122,26 @@ def step_etf():
     total = 0
     for bs_code, scode, sname, ex in etf_list:
         try:
+            # 不复权 OHLCV
             rs2 = bs.query_history_k_data_plus(bs_code, fields, start_date='2021-01-01',
                 end_date=date.today().isoformat(), frequency='d', adjustflag='3')
-            while rs2.next():
-                d = rs2.get_row_data()
+            raw_rows = []
+            while rs2.next(): raw_rows.append(rs2.get_row_data())
+            # 后复权 close
+            rs_hfq = bs.query_history_k_data_plus(bs_code, 'date,close', start_date='2021-01-01',
+                end_date=date.today().isoformat(), frequency='d', adjustflag='1')
+            hfq_map = {}
+            if rs_hfq.error_code == '0':
+                while rs_hfq.next():
+                    hd = rs_hfq.get_row_data()
+                    hfq_map[hd[0]] = hd[1]
+            for d in raw_rows:
                 if not d[0]: continue
+                close_hfq = float(hfq_map.get(d[0], d[4])) if d[4] else 0
                 db.execute(text(
                     "INSERT INTO daily_quote "
                     "(trade_date,exchange,stock_code,stock_name,open,high,low,close,close_hfq,close_qfq,volume,amount,turnover) "
-                    "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:c,:c,:v,:a,:t) "
+                    "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:ch,:c,:v,:a,:t) "
                     "ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
                     "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
                     "close=EXCLUDED.close, close_hfq=EXCLUDED.close_hfq, "
@@ -138,8 +149,9 @@ def step_etf():
                 ), {"td":d[0],"ex":ex,"sc":scode,"sn":sname,
                     "o":float(d[1]) if d[1] else 0,"h":float(d[2]) if d[2] else 0,
                     "l":float(d[3]) if d[3] else 0,"c":float(d[4]) if d[4] else 0,
+                    "ch":close_hfq,
                     "v":int(float(d[5])) if d[5] else 0,"a":float(d[6]) if d[6] else 0,
-                        "t":float(d[7]) if d[7] else None})
+                    "t":float(d[7]) if d[7] else None})
                 total += 1
             time.sleep(0.1)
             db.commit()

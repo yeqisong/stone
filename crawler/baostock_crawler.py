@@ -156,17 +156,40 @@ class BaostockCrawler:
     # ── 带重试的K线下载 ──
 
     def _fetch_kline(self, bs_code: str, start_date: str, end_date: str) -> tuple:
+        """下载 K 线数据，返回 (rows, need_relogin)。
+
+        每只股票调用两次 API：
+        - adjustflag="3"（不复权）→ OHLCV + turnover
+        - adjustflag="1"（后复权）→ close_hfq
+        合并后每行: [date, open, high, low, close, volume, amount, turn, close_hfq]
+        """
         for attempt in range(RETRY_MAX + 1):
             try:
+                # 第1次：不复权 OHLCV
                 rs = bs.query_history_k_data_plus(
                     bs_code,
                     "date,open,high,low,close,volume,amount,turn",
                     start_date=start_date, end_date=end_date,
                     frequency="d", adjustflag="3")
                 if rs.error_code == '0':
-                    rows = []
+                    raw_rows = []
                     while rs.next():
-                        rows.append(rs.get_row_data())
+                        raw_rows.append(rs.get_row_data())
+                    # 第2次：后复权 close
+                    rs_hfq = bs.query_history_k_data_plus(
+                        bs_code, "date,close",
+                        start_date=start_date, end_date=end_date,
+                        frequency="d", adjustflag="1")
+                    hfq_map = {}
+                    if rs_hfq.error_code == '0':
+                        while rs_hfq.next():
+                            d = rs_hfq.get_row_data()
+                            hfq_map[d[0]] = d[1]  # date → 后复权close
+                    # 合并：每行追加 close_hfq
+                    rows = []
+                    for r in raw_rows:
+                        close_hfq = hfq_map.get(r[0], r[4])  # 无后复权则用不复权
+                        rows.append(r + [close_hfq])
                     return (rows, False)
                 msg = rs.error_msg
                 if '未登录' in msg or 'login' in msg.lower():
@@ -216,9 +239,9 @@ class BaostockCrawler:
                     f'sc{idx}': row[2], f'sn{idx}': row[3],
                     f'o{idx}': row[4], f'h{idx}': row[5],
                     f'l{idx}': row[6], f'c{idx}': row[7],
-                    f'ch{idx}': row[7], f'cq{idx}': row[7],
-                    f'v{idx}': row[8], f'a{idx}': row[9],
-                    f't{idx}': row[10],
+                    f'ch{idx}': row[8], f'cq{idx}': row[7],  # hfq=后复权, qfq=暂用不复权
+                    f'v{idx}': row[9], f'a{idx}': row[10],
+                    f't{idx}': row[11],
                 })
             sql = (
                 "INSERT INTO daily_quote "
@@ -283,10 +306,12 @@ class BaostockCrawler:
                     if date_str_filter and row[0] != date_str_filter:
                         continue
                     try:
+                        close_hfq = float(row[8]) if len(row) > 8 and row[8] else float(row[4])
                         with insert_lock:
                             insert_buffer.append((
                                 row[0], ex, code, name,
                                 float(row[1]), float(row[2]), float(row[3]), float(row[4]),
+                                close_hfq,
                                 int(float(row[5])), float(row[6]),
                                 float(row[7]) if row[7] else None,
                             ))
@@ -413,7 +438,7 @@ class BaostockCrawler:
         result = self._download_kline_batch(
             codes=remaining, stock_names=stock_names,
             start_date=start_date, end_date=end_date,
-            db=db, upsert_mode=False, date_str_filter=None)
+            db=db, upsert_mode=True, date_str_filter=None)
         db.commit()
         mark_batch_completed(remaining, "daily_kline")
         logger.info(f"全量下载完成: {result['rows']}行 新增{result['stocks']} 失败{result['errors']}")
@@ -562,11 +587,20 @@ class BaostockCrawler:
         def fetch(item):
             bs_code, code, name, ex = item
             try:
+                # 不复权 OHLCV
                 r = bs.query_history_k_data_plus(bs_code, 'date,open,high,low,close,volume,amount,turn',
                     start_date=sd, end_date=ed, frequency='d', adjustflag='3')
-                rows = []
-                while r.next():
-                    rows.append(r.get_row_data())
+                raw_rows = []
+                while r.next(): raw_rows.append(r.get_row_data())
+                # 后复权 close
+                r2 = bs.query_history_k_data_plus(bs_code, 'date,close',
+                    start_date=sd, end_date=ed, frequency='d', adjustflag='1')
+                hfq = {}
+                if r2.error_code == '0':
+                    while r2.next():
+                        d2 = r2.get_row_data()
+                        hfq[d2[0]] = d2[1]
+                rows = [r + [hfq.get(r[0], r[4])] for r in raw_rows]
                 return (item, rows, None)
             except Exception as e:
                 return (item, None, str(e))
@@ -579,10 +613,12 @@ class BaostockCrawler:
                 for d in rows:
                     if is_single and d[0] != sd: continue
                     try:
+                        close_hfq = float(d[8]) if len(d) > 8 and d[8] else float(d[4]) if d[4] else 0
                         with lock:
                             buf.append((d[0], ex, code, name,
                                 float(d[1]) if d[1] else 0, float(d[2]) if d[2] else 0,
                                 float(d[3]) if d[3] else 0, float(d[4]) if d[4] else 0,
+                                close_hfq,
                                 int(float(d[5])) if d[5] else 0, float(d[6]) if d[6] else 0,
                                 float(d[7]) if d[7] else None))
                             total += 1

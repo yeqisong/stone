@@ -94,6 +94,7 @@ def batch_insert(db, batch):
             params.update({
                 f'td{i}': row[0], f'ex{i}': row[1], f'sc{i}': row[2], f'sn{i}': row[3],
                 f'o{i}': row[4], f'h{i}': row[5], f'l{i}': row[6], f'c{i}': row[7],
+                f'ch{i}': row[7], f'cq{i}': row[7],  # resume 脚本暂用不复权
                 f'v{i}': row[8], f'a{i}': row[9], f't{i}': row[10],
             })
         sql = ("INSERT INTO daily_quote "
