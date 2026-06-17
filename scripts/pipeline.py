@@ -919,13 +919,18 @@ def dag_task_model_signal(trade_date=None, **kw):
         if not use_predict:
             write_node_log(log_id=log_id, status='running', detail=f"规则模式 (偏好:{pref_mode}, buy>={t['buy_score_min']})")
 
-        # 读取今日指标
+        # 读取今日指标（JOIN 6 表获取全部 14 特征）
         rows = db.execute(text("""
-            SELECT b.stock_code, b.pct_b, r.rsi, m.dif, m.hist, v.vol_ratio,
+            SELECT b.stock_code, b.pct_b, b.width, r.rsi,
+                   m.dif, m.dea, m.hist, a.atr,
+                   ma.ma5, ma.ma20,
+                   v.vol_ratio, v.obv,
                    dq.close_hfq, sm.stock_name
             FROM stock_indicators_boll b
             JOIN stock_indicators_rsi r USING (stock_code, trade_date)
             JOIN stock_indicators_macd m USING (stock_code, trade_date)
+            JOIN stock_indicators_atr a USING (stock_code, trade_date)
+            JOIN stock_indicators_ma ma USING (stock_code, trade_date)
             JOIN stock_indicators_volume v USING (stock_code, trade_date)
             JOIN daily_quote dq ON dq.stock_code=b.stock_code AND dq.trade_date=b.trade_date
             JOIN stock_master sm ON sm.stock_code=b.stock_code
@@ -938,53 +943,72 @@ def dag_task_model_signal(trade_date=None, **kw):
 
         # 先删旧信号再插新（按版本精确清理）
         db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
-        saved = 0
-        for r in rows:
-            code, pct_b, rsi_val, dif, hist, vol_ratio, price, name = r
-            direction, strength, reason = None, 0, ""
+        # ── 收集特征用于批量预测 ──
+        valid_idx, valid_features = [], []
+        FEATURES = ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','bias_5_20','vol_ratio_3d','obv_slope_7d']
+        if use_predict:
+            for i, r in enumerate(rows):
+                try:
+                    _, pct_b, width, rsi_val, dif, dea, hist, atr_val, ma5, ma20, vol_ratio, obv_val, price, name = r
+                    f = [float(x if x else 0) for x in [pct_b, width, dif, dea, hist, rsi_val, atr_val, ma5, ma20, vol_ratio, obv_val]]
+                    f.append((float(ma5)/float(ma20)-1) if ma20 and float(ma20)!=0 else 0)
+                    f.append(float(vol_ratio) if vol_ratio else 0)
+                    f.append(0)
+                    valid_features.append(f); valid_idx.append(i)
+                except (ValueError, TypeError, IndexError):
+                    pass
+            if valid_features:
+                import pandas as pd
+                X_pred = pd.DataFrame(valid_features, columns=FEATURES)
+                preds = {}; scores = []
+                for label in ['5d','10d','20d']:
+                    if label in xgb_models:
+                        preds[label] = xgb_models[label].predict(X_pred)
+                if preds:
+                    scores = [0.5*preds['5d'][j]+0.3*preds['10d'][j]+0.2*preds['20d'][j] for j in range(len(valid_features))]
+                    ranked = sorted(zip(range(len(valid_features)), scores), key=lambda x:x[1], reverse=True)
+                    top_n = {valid_idx[i] for i, _ in ranked[:200]}
 
-            # 使用评分规则（预测模式优先，回退规则模式）
+        saved = 0
+        for i, r in enumerate(rows):
+            code, pct_b, width, rsi_val, dif, dea, hist, atr_val, ma5, ma20, vol_ratio, obv_val, price, name = r
             direction, strength, reason = None, 0, ""
             predict_5d, predict_10d, predict_20d, predict_score = None, None, None, None
 
-            if use_predict:
-                # ── 预测模式 ──
-                # 需要 JOIN 更多字段来构造特征（简化版：用已有指标近似）
-                # 实际部署时需要从数据库拉取完整 feature set
-                # 此处回退：预测模式需要完整特征 JOIN，当前 SQL 未拉取所有字段
-                # TODO: 更新 SQL 以 JOIN 完整的 FEATURES 字段
-                pass  # 预测模式暂时回退到规则模式
-
-            # ── 规则模式（fallback）──
-            if not use_predict:
+            if use_predict and i in valid_idx and preds:
+                j = valid_idx.index(i)
+                predict_5d = round(float(preds['5d'][j]), 4) if '5d' in preds else None
+                predict_10d = round(float(preds['10d'][j]), 4) if '10d' in preds else None
+                predict_20d = round(float(preds['20d'][j]), 4) if '20d' in preds else None
+                predict_score = round(float(scores[j]), 4) if scores else None
+                if i in top_n:
+                    direction = 'buy'; strength = min(max(int(predict_score*100) if predict_score else 1, 1), 3)
+                    reason = f"预测5d={predict_5d:.2%} 10d={predict_10d:.2%} 20d={predict_20d:.2%}"
+            else:
+                # ── 规则模式 ──
                 buy_score = 0
                 if pct_b is not None and float(pct_b) < t['boll_lower']:
-                    buy_score += 1
-                    reason += "BOLL下轨; "
+                    buy_score += 1; reason += "BOLL下轨; "
                 if rsi_val is not None and float(rsi_val) < t['rsi_oversold']:
-                    buy_score += 1
-                    reason += "RSI超卖; "
+                    buy_score += 1; reason += "RSI超卖; "
                 if dif is not None and hist is not None and float(dif) > float(hist):
-                    buy_score += 1
-                    reason += "MACD正柱; "
+                    buy_score += 1; reason += "MACD正柱; "
                 if buy_score >= t['buy_score_min']:
-                    direction = 'buy'
-                    strength = min(buy_score, 3)
+                    direction = 'buy'; strength = min(buy_score, 3)
                 elif pct_b is not None and float(pct_b) > t['sell_boll_upper'] and rsi_val is not None and float(rsi_val) > t['sell_rsi_overbought']:
-                    direction = 'sell'
-                    strength = 2
-                    reason = "BOLL上轨+RSI超买"
+                    direction = 'sell'; strength = 2; reason = "BOLL上轨+RSI超买"
 
             if direction:
                 db.execute(text("""
-                    INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference,model_version,params_snapshot)
-                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,:pref,:mv,:snap)
+                    INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference,model_version,params_snapshot,predict_5d_return,predict_10d_return,predict_20d_return,predict_score)
+                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,:pref,:mv,:snap,:p5,:p10,:p20,:ps)
                 """), {
                     "d": td, "c": code, "n": name or code, "dir": direction, "st": strength,
                     "r": reason, "p": float(price) if price else 0,
                     "sa": "关注建仓" if direction == 'buy' else "考虑减仓",
                     "ss": _json.dumps(["model_signal"]), "mv": ver, "pref": pref_mode,
                     "snap": model_snapshot.replace('"preference": ""', f'"preference": "{pref_mode}"'),
+                    "p5": predict_5d, "p10": predict_10d, "p20": predict_20d, "ps": predict_score,
                 })
                 saved += 1
 

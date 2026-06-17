@@ -25,12 +25,13 @@ def get_buy_signals(
         result = db.execute(text("""
             SELECT stock_code, stock_name, direction, strength,
                    reason, price, suggested_action,
-                   source_strategies, preference
+                   source_strategies, preference,
+                   predict_5d_return, predict_10d_return, predict_20d_return, predict_score
             FROM signal_history
             WHERE signal_date = :d
               AND direction = 'buy'
               AND combined_signal = true
-            ORDER BY strength DESC, stock_code
+            ORDER BY COALESCE(predict_score, 0) DESC, strength DESC
             LIMIT :n
         """), {"d": signal_date, "n": top_n})
         rows = result.fetchall()
@@ -56,6 +57,10 @@ def get_buy_signals(
                 "suggested_action": r.suggested_action or "",
                 "source_strategies": source,
                 "preference": r.preference or "balanced",
+                "predict_5d": float(r.predict_5d_return) if r.predict_5d_return else None,
+                "predict_10d": float(r.predict_10d_return) if r.predict_10d_return else None,
+                "predict_20d": float(r.predict_20d_return) if r.predict_20d_return else None,
+                "predict_score": float(r.predict_score) if r.predict_score else None,
             })
 
         result = db.execute(text(

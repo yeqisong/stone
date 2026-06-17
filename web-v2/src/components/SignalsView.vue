@@ -51,7 +51,9 @@ const columns = [
   { title:'现价', width:95, align:'right', render(r){return '¥'+((r.price||0).toFixed(2))} },
   { title:'方向', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
   { title:'强度', width:70, render(r){return '★'.repeat(r.strength||0)} },
-  { title:'策略', minWidth:180, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
+  { title:'预测5d', width:70, align:'right', render(r){ const v=r.predict_5d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+  { title:'预测10d', width:70, align:'right', render(r){ const v=r.predict_10d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+  { title:'策略', minWidth:140, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
 ]
 async function doGenerate() {
   genLoading.value = true
