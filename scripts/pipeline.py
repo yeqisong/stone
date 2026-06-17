@@ -550,6 +550,9 @@ def dag_task_indicator_full(trade_date=None, **kw):
                     continue
 
                 df = pd.DataFrame(rows, columns=['trade_date','open','high','low','close','volume'])
+                # PSQL NUMERIC → Python Decimal，需转为 float 避免与 numpy 运算冲突
+                for col in ['open','high','low','close','volume']:
+                    df[col] = df[col].astype(float)
                 closes = df['close']
 
                 # BOLL
@@ -652,6 +655,8 @@ def dag_task_indicator_incr(trade_date=None, **kw):
                     continue
 
                 df = pd.DataFrame(rows, columns=['trade_date','open','high','low','close','volume'])
+                for col in ['open','high','low','close','volume']:
+                    df[col] = df[col].astype(float)
                 closes = df['close']
                 last_row = rows[-1]
                 d = str(last_row[0])
