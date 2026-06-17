@@ -111,19 +111,26 @@ if pct_b > sell_boll_upper AND rsi > sell_rsi_overbought → 卖出信号
   ⑥ 评估指标(R²/MSE)存入 model_versions.evaluation_report
 ```
 
-### 3B.3 特征工程
+### 3B.3 特征工程（精选 14 个，避免过拟合）
 
-| 特征类别 | 特征 | 来源表 |
-|----------|------|--------|
-| 布林带 | pct_b, width | stock_indicators_boll |
-| MACD | dif, dea, hist | stock_indicators_macd |
-| RSI | rsi | stock_indicators_rsi |
-| ATR | atr | stock_indicators_atr |
-| 均线 | ma5, ma20, ma60, ma250, 乖离率 | stock_indicators_ma |
-| 量能 | vol_ratio, obv, obv_ma5 | stock_indicators_volume |
-| 衍生 | ma5/ma20, (close-ma20)/ma20, vol_ratio_5d_avg | 实时计算 |
+| # | 特征 | 来源 | 作用 |
+|---|------|------|------|
+| 1 | pct_b | BOLL | 标准化超买超卖 (0~1, 跨股票可比) |
+| 2 | width | BOLL | 布林带宽=波动率, 扩宽=变盘前兆 |
+| 3 | dif | MACD | 趋势强度和方向 |
+| 4 | dea | MACD | 信号线, DIF/DEA 交叉判断转折 |
+| 5 | hist | MACD | 动能柱, 正值越大=上涨动能越强 |
+| 6 | rsi | RSI | 超买超卖动量 |
+| 7 | atr | ATR | 波动率, 高ATR=高风险高收益 |
+| 8 | ma5 | MA | 短线趋势基准 |
+| 9 | ma20 | MA | 中期趋势基准 |
+| 10 | vol_ratio | Volume | 量比, 放量/缩量最直接信号 |
+| 11 | obv | Volume | 能量潮, 量价背离检测 |
+| 12 | ma5/ma20 - 1 | 衍生 | 短期乖离率 (正=短线超涨, 负=超跌) |
+| 13 | obv_7d_slope | 衍生 | OBV近7日变化率 (资金流入/流出方向) |
+| 14 | vol_ratio_3d_avg | 衍生 | 近3日平均量比 (过滤单日异常放量) |
 
-总计约 25-30 个特征。
+总计 **14 个特征**。删除了 ma60/ma250(周期太长)、upper/mid/lower(pct_b 等价)、obv_ma5/obv_ma10(冗余)。
 
 ### 3B.4 预测流程（dag_task_model_signal 改造）
 

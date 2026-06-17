@@ -155,7 +155,11 @@ CREATE TABLE IF NOT EXISTS signal_history (
     actual_return     DECIMAL(8,4),
     close_reason      VARCHAR(30),
     closed_at         TIMESTAMP,
-    model_version     VARCHAR(20)
+    model_version     VARCHAR(20),
+    predict_5d_return DECIMAL(8,4),
+    predict_10d_return DECIMAL(8,4),
+    predict_20d_return DECIMAL(8,4),
+    predict_score     DECIMAL(8,4)
 );
 CREATE INDEX IF NOT EXISTS idx_sh_date ON signal_history (signal_date);
 CREATE INDEX IF NOT EXISTS idx_sh_stock ON signal_history (stock_code, signal_date DESC);
@@ -610,6 +614,18 @@ def init_db(sync_session) -> None:
         sync_session.execute(text("ALTER TABLE model_versions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
     except Exception:
         sync_session.rollback()
+
+    # 迁移：signal_history 新增预测模型列（v2.6+）
+    for col, col_type in [
+        ('predict_5d_return', 'DECIMAL(8,4)'),
+        ('predict_10d_return', 'DECIMAL(8,4)'),
+        ('predict_20d_return', 'DECIMAL(8,4)'),
+        ('predict_score', 'DECIMAL(8,4)'),
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
 
     # 迁移：stock_master PK 改为复合主键 (stock_code, stock_type)
     try:
