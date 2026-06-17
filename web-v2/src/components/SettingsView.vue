@@ -49,7 +49,7 @@
 </template>
 <script setup>
 import { ref, onMounted } from 'vue'
-import { NCard, NRadioGroup, NRadioButton, NTag, NList, NListItem, NSwitch, NInput, NButton, NSpace, NSpin, useDialog } from 'naive-ui'
+import { NInputNumber, NCard, NRadioGroup, NRadioButton, NTag, NList, NListItem, NSwitch, NInput, NButton, NSpace, NSpin, useDialog } from 'naive-ui'
 import axios from 'axios'
 const API = window.location.origin
 const loading = ref(true)
