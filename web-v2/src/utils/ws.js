@@ -1,6 +1,6 @@
 // WebSocket 连接管理
-// 开发时直连后端端口（避免 Vite WS 代理不稳定）
-const WS_URL = 'ws://localhost:8000/api/ws/dag'
+// 用 window.location.origin 自适应环境（本地=ws://127.0.0.1:3000, 生产=wss://s.pmlab.top）
+const WS_URL = window.location.origin.replace('http', 'ws') + '/api/ws/dag'
 
 let ws = null
 let reconnectTimer = null
