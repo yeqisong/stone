@@ -6,7 +6,7 @@
       <n-button :type="cat==='index'?'primary':'default'" @click="cat='index';page=1;load()">📊 指数</n-button>
       <n-button :type="cat==='etf'?'primary':'default'" @click="cat='etf';page=1;load()">💹 ETF</n-button>
     </n-button-group>
-    <n-input v-model:value="kw" placeholder="搜索代码或名称..." size="small" style="width:160px" clearable @keyup.enter="page=1;load()" />
+    <n-input v-model:value="kw" placeholder="搜索代码或名称..." size="tiny" style="width:160px" clearable @keyup.enter="page=1;load()" />
     <n-button type="primary" size="tiny" :loading="loading" @click="page=1;load()">搜索</n-button>
     <span style="font-size:11px;color:var(--c-text-dim)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
   </n-space>

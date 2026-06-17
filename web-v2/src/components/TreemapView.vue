@@ -7,7 +7,7 @@
   <n-button :type="metric==='amount'?'primary':'default'" @click="switchMetric('amount')">💰 成交额</n-button>
   <n-button :type="metric==='pe'?'primary':'default'" @click="switchMetric('pe')">📉 PE</n-button>
 </n-button-group>
-    <n-date-picker v-model:formatted-value="selDate" type="date" value-format="yyyy-MM-dd" size="small" style="width:140px" @update:formatted-value="onDateChange" />
+    <n-date-picker v-model:formatted-value="selDate" type="date" value-format="yyyy-MM-dd" size="tiny" style="width:140px" @update:formatted-value="onDateChange" />
     <n-button size="tiny" @click="showGenModal = true">⚡ 生成</n-button>
     <n-tag v-if="!loading && !noData && levelLabel" size="small" style="margin-left:auto">{{levelLabel}}</n-tag>
     <n-button v-if="drillStack.length>0" size="tiny" @click="goBack">◀ {{drillStack.length>1?drillStack[drillStack.length-2].name:'全部行业'}}</n-button>

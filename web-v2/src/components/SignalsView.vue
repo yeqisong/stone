@@ -3,7 +3,7 @@
   <n-space align="center" style="margin-bottom:8px" wrap>
     <span style="font-size:12px;color:var(--c-text-dim)">日期:</span>
     <n-date-picker v-model:formatted-value="sigDate" type="date" value-format="yyyy-MM-dd" size="tiny" @update:formatted-value="load" />
-    <n-button size="small" @click="sigDate=todayStr();load()">今天</n-button>
+    <n-button size="tiny" @click="sigDate=todayStr();load()">今天</n-button>
     <n-button size="tiny" @click="showGenModal=true" :disabled="!activeModel">⚡ 生成</n-button>
     <span v-if="activeModel" style="font-size:10px;color:var(--c-text-faint)">模型: {{activeModel}}</span>
   </n-space>
