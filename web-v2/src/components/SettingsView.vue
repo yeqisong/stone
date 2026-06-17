@@ -23,20 +23,18 @@
           <template v-if="ind.name==='ma'">
             <div v-for="(v,idx) in ind.params.periods" :key="idx" style="display:flex;align-items:center;gap:6px">
               <span style="font-size:11px;color:var(--c-text-dim);width:36px">MA{{[5,20,60,250][idx]}}</span>
-              <n-input-number :value="v" size="tiny" style="flex:1" :min="2" :max="500" @update:value="nv=>{ind.params.periods[idx]=nv;dirty[ind.name]=true}" />
+              <n-input-number v-model:value="ind.params.periods[idx]" size="tiny" style="flex:1" :min="2" :max="500" @update:value="dirty[ind.name]=true" />
             </div>
           </template>
-          <!-- BOLL / MACD / RSI / ATR / VOLUME: 单值或多值 -->
+          <!-- BOLL / MACD / RSI / ATR / VOLUME -->
           <template v-else>
             <div v-for="(v,k) in ind.params" :key="k" style="display:flex;align-items:center;gap:6px">
               <span style="font-size:11px;color:var(--c-text-dim);width:36px;white-space:nowrap">{{paramLabel(k)}}</span>
-              <n-input-number :value="v" size="tiny" style="flex:1" :min="1" :max="k==='std_mult'?10:500" :step="k==='std_mult'?0.5:1" @update:value="nv=>{ind.params[k]=nv;dirty[ind.name]=true}" />
+              <n-input-number v-model:value="ind.params[k]" size="tiny" style="flex:1" :min="1" :max="k==='std_mult'?10:500" :step="k==='std_mult'?0.5:1" @update:value="dirty[ind.name]=true" />
             </div>
           </template>
         </div>
-        <div style="text-align:right;margin-top:8px">
-          <n-button size="tiny" type="primary" ghost @click="saveIndicator(ind.name)" :disabled="!dirty[ind.name]">保存</n-button>
-        </div>
+        <n-button v-if="dirty[ind.name]" size="tiny" type="primary" @click="saveIndicator(ind.name)" style="margin-top:8px">{{saving?'保存中...':'保存'}}</n-button>
       </div>
     </div>
     
