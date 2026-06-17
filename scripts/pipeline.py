@@ -980,14 +980,14 @@ def dag_task_model_health(trade_date=None, **kw):
             db.close()
             return 0
 
-        # 1. 回填 forward 收益（5/10/20 日前的信号）
+        # 1. 回填 forward 收益（5/10/20 日前的信号，所有版本）
         for days in [5, 10, 20]:
             col = f"forward_{days}d_return"
             target_date = (_date.today() - timedelta(days=days)).isoformat()
             signals = db.execute(text(f"""
                 SELECT id, stock_code, signal_date, price FROM signal_history
-                WHERE signal_date = :d AND strategy_name = 'model_signal' AND model_version = :v
-            """), {"d": target_date, "v": ver}).fetchall()
+                WHERE signal_date = :d AND strategy_name = 'model_signal'
+            """), {"d": target_date}).fetchall()
             for sig in signals:
                 close = db.execute(text(
                     "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
@@ -997,12 +997,12 @@ def dag_task_model_health(trade_date=None, **kw):
                     db.execute(text(f"UPDATE signal_history SET {col}=:r WHERE id=:id"),
                                {"r": round(ret, 4), "id": sig.id})
 
-        # 2. 信号了结检查（止损比例随全局偏好调整）
+        # 2. 信号了结检查（所有版本的未了结信号）
         t, pref_mode = _get_preference_thresholds(db)
         open_sigs = db.execute(text("""
             SELECT id, stock_code, signal_date, price, direction FROM signal_history
-            WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL AND model_version = :v
-        """), {"v": ver}).fetchall()
+            WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL
+        """)).fetchall()
         for sig in open_sigs:
             close_price = db.execute(text(
                 "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
