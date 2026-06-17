@@ -818,16 +818,17 @@ def dag_task_model_train(trade_date=None, **kw):
                                           'dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio'])
         update_node_progress(log_id=log_id, rows=len(df), detail=f'{len(df)} 行指标数据')
 
-        # 简易信号函数：BOLL 下轨 + RSI 超卖 → 买入
+        # 简易信号函数：使用偏好驱动的阈值
+        t, _ = _get_preference_thresholds(db)
         def simple_signal(train_df, test_df):
             signals = []
             for _, row in test_df.iterrows():
                 score = 0
-                if row['pct_b'] and row['pct_b'] < 0.2:
+                if row['pct_b'] and row['pct_b'] < t['boll_lower']:
                     score += 1
-                if row['rsi'] and row['rsi'] < 35:
+                if row['rsi'] and row['rsi'] < t['rsi_oversold']:
                     score += 1
-                if score >= 2:
+                if score >= t['buy_score_min']:
                     ret = float(row['pct_b']) * 0.05 if row['pct_b'] else 0
                     signals.append({'return': ret})
             return signals
@@ -874,8 +875,39 @@ def dag_task_model_train(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
+def _get_preference_thresholds(db) -> dict:
+    """读取全局偏好设置，返回信号生成阈值字典。"""
+    pref = db.execute(text(
+        "SELECT params FROM strategy_config WHERE strategy_name='global_preference'"
+    )).scalar()
+    import json
+    try:
+        mode = json.loads(pref).get('mode', 'balanced') if pref else 'balanced'
+    except Exception:
+        mode = 'balanced'
+
+    thresholds = {
+        'left': {
+            'buy_score_min': 1, 'boll_lower': 0.25, 'rsi_oversold': 40,
+            'sell_boll_upper': 0.75, 'sell_rsi_overbought': 60,
+            'stop_loss_pct': 0.10, 'signal_timeout_days': 30,
+        },
+        'balanced': {
+            'buy_score_min': 2, 'boll_lower': 0.20, 'rsi_oversold': 35,
+            'sell_boll_upper': 0.80, 'sell_rsi_overbought': 65,
+            'stop_loss_pct': 0.08, 'signal_timeout_days': 20,
+        },
+        'right': {
+            'buy_score_min': 3, 'boll_lower': 0.15, 'rsi_oversold': 30,
+            'sell_boll_upper': 0.85, 'sell_rsi_overbought': 70,
+            'stop_loss_pct': 0.05, 'signal_timeout_days': 10,
+        },
+    }
+    return thresholds.get(mode, thresholds['balanced']), mode
+
+
 def dag_task_model_signal(trade_date=None, **kw):
-    """模型信号生成：读 ACTIVE 模型 + 今日指标 → 评分 → 写入 signal_history。"""
+    """模型信号生成：读 ACTIVE 模型 + 全局偏好 → 评分 → 写入 signal_history。"""
     from datetime import date as _date, timedelta
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -888,12 +920,15 @@ def dag_task_model_signal(trade_date=None, **kw):
 
     try:
         db = get_sync_db()
-        # 获取 ACTIVE 模型
+        # 获取 ACTIVE 模型 + 全局偏好
         ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
         if not ver:
             write_node_log(log_id=log_id, status='failed', detail='无 ACTIVE 模型')
             db.close()
             return 0
+
+        t, pref_mode = _get_preference_thresholds(db)
+        write_node_log(log_id=log_id, status='running', detail=f"偏好: {pref_mode} (buy>={t['buy_score_min']})")
 
         # 读取今日指标
         rows = db.execute(text("""
@@ -919,22 +954,22 @@ def dag_task_model_signal(trade_date=None, **kw):
             code, pct_b, rsi_val, dif, hist, vol_ratio, price, name = r
             direction, strength, reason = None, 0, ""
 
-            # 简易评分规则
+            # 使用偏好驱动的评分规则
             buy_score = 0
-            if pct_b is not None and float(pct_b) < 0.2:
+            if pct_b is not None and float(pct_b) < t['boll_lower']:
                 buy_score += 1
                 reason += "BOLL下轨; "
-            if rsi_val is not None and float(rsi_val) < 35:
+            if rsi_val is not None and float(rsi_val) < t['rsi_oversold']:
                 buy_score += 1
                 reason += "RSI超卖; "
             if dif is not None and hist is not None and float(dif) > float(hist):
                 buy_score += 1
                 reason += "MACD正柱; "
 
-            if buy_score >= 2:
+            if buy_score >= t['buy_score_min']:
                 direction = 'buy'
                 strength = min(buy_score, 3)
-            elif pct_b is not None and float(pct_b) > 0.8 and rsi_val is not None and float(rsi_val) > 65:
+            elif pct_b is not None and float(pct_b) > t['sell_boll_upper'] and rsi_val is not None and float(rsi_val) > t['sell_rsi_overbought']:
                 direction = 'sell'
                 strength = 2
                 reason = "BOLL上轨+RSI超买"
@@ -942,18 +977,18 @@ def dag_task_model_signal(trade_date=None, **kw):
             if direction:
                 db.execute(text("""
                     INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference,model_version)
-                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,'balanced',:mv)
+                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,:pref,:mv)
                 """), {
                     "d": td, "c": code, "n": name or code, "dir": direction, "st": strength,
                     "r": reason, "p": float(price) if price else 0,
                     "sa": "关注建仓" if direction == 'buy' else "考虑减仓",
-                    "ss": _json.dumps(["model_signal"]), "mv": ver,
+                    "ss": _json.dumps(["model_signal"]), "mv": ver, "pref": pref_mode,
                 })
                 saved += 1
 
         db.commit()
         db.close()
-        write_node_log(log_id=log_id, status='success', rows=saved, detail=f'{saved} 个信号')
+        write_node_log(log_id=log_id, status='success', rows=saved, detail=f'{saved} 个信号 (偏好:{pref_mode})')
         return saved
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -996,7 +1031,8 @@ def dag_task_model_health(trade_date=None, **kw):
                     db.execute(text(f"UPDATE signal_history SET {col}=:r WHERE id=:id"),
                                {"r": round(ret, 4), "id": sig.id})
 
-        # 2. 信号了结检查
+        # 2. 信号了结检查（止损比例随全局偏好调整）
+        t, pref_mode = _get_preference_thresholds(db)
         open_sigs = db.execute(text("""
             SELECT id, stock_code, signal_date, price, direction FROM signal_history
             WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL AND model_version = :v
@@ -1009,7 +1045,7 @@ def dag_task_model_health(trade_date=None, **kw):
             actual_ret = None
             if close_price and sig.price and float(sig.price) > 0:
                 pnl = (float(close_price) - float(sig.price)) / float(sig.price)
-                if pnl < -0.08:
+                if pnl < -t['stop_loss_pct']:
                     reason = 'stop_loss'
                     actual_ret = pnl
             if reason:
@@ -1046,7 +1082,7 @@ def dag_task_model_health(trade_date=None, **kw):
         db.commit()
         db.close()
         write_node_log(log_id=log_id, status='success', rows=total,
-                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号 {closed}了结')
+                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号 {closed}了结 (偏好:{pref_mode})')
         return total
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
