@@ -555,6 +555,18 @@ def init_db(sync_session) -> None:
     # 默认策略配置
     sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
 
+    # 迁移：删除旧 strategy 节点（已从 NODE_FN_MAP 移除）
+    try:
+        sync_session.execute(text("DELETE FROM dag_config WHERE node_name='strategy'"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：更新 stats 节点依赖（去掉 strategy）
+    try:
+        sync_session.execute(text("UPDATE dag_config SET deps='treemap,model_health,index,etf' WHERE node_name='stats' AND deps LIKE '%strategy%'"))
+    except Exception:
+        sync_session.rollback()
+
     # 迁移：已有库补充基础指标配置（幂等）
     indicators = [
         ('boll', 'BOLL', True, '{"period": 20, "std_mult": 2.0}'),

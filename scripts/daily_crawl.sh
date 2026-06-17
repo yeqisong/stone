@@ -93,87 +93,13 @@ finally:
     fi
 done
 
-# ── 4. 策略计算 ──
+# ── 4. DAG 流水线（自动触发 model_signal + model_health）──
 if $download_success; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): [4/4] 策略计算..." >> "$CRAWL_LOG"
-
-    python3 -c "
-import sys, json
-sys.path.insert(0, '.')
-from datetime import date
-from sqlalchemy import text
-from app.db.connection import get_sync_db
-from crawler.data_loader import StrategyDataLoader
-from strategy.engine import StrategyEngine
-
-db = get_sync_db()
-try:
-    today = date.today()
-
-    # 获取策略配置
-    result = db.execute(text(
-        'SELECT strategy_name, enabled, params FROM strategy_config'
-    ))
-    configs = {}
-    for r in result.fetchall():
-        params = r.params
-        if isinstance(params, str):
-            try:
-                params = json.loads(params)
-            except (json.JSONDecodeError, TypeError):
-                params = {}
-        configs[r.strategy_name] = {'enabled': r.enabled, 'params': params}
-
-    pref_mode = configs.get('global_preference', {}).get('params', {}).get('mode', 'balanced')
-
-    # 获取需要扫描的股票
-    loader = StrategyDataLoader()
-    engine = StrategyEngine()
-    engine.set_preference(pref_mode)
-
-    try:
-        codes = loader.get_all_codes()
-        total = 0
-        for i, code in enumerate(codes):
-            df = loader.load_stock_data(code)
-            if df is None or df.empty:
-                continue
-            name = str(df.iloc[-1].get('stock_name', code))
-            signals = engine.run_one_stock(df, code, name, today.isoformat(), configs)
-            for s in signals:
-                src = json.dumps(s.source_strategies) if s.source_strategies else None
-                ps = getattr(s, 'params_snapshot', '') or ''
-                db.execute(text('''
-                    INSERT INTO signal_history
-                    (signal_date, stock_code, stock_name, direction, strength,
-                     strategy_name, reason, price, suggested_action, preference,
-                     combined_signal, source_strategies, params_snapshot)
-                    VALUES (:sd,:sc,:sn,:d,:st,:sn2,:r,:p,:sa,:pr,:cs,:ss,:ps)
-                '''), {
-                    'sd': s.signal_date, 'sc': s.stock_code, 'sn': s.stock_name,
-                    'd': s.direction, 'st': s.strength, 'sn2': s.strategy_name,
-                    'r': s.reason, 'p': s.price, 'sa': s.suggested_action,
-                    'pr': s.preference, 'cs': s.combined_signal, 'ss': src,
-                    'ps': ps,
-                })
-                total += 1
-            if (i + 1) % 500 == 0:
-                db.commit()
-        db.commit()
-
-        buy_count = db.execute(text(
-            \"SELECT COUNT(*) FROM signal_history WHERE signal_date=:d AND combined_signal=true AND direction='buy'\"
-        ), {'d': today.isoformat()}).scalar() or 0
-        print(f'策略计算完成: {total}信号, {buy_count}买入信号, 扫描{len(codes)}只')
-    finally:
-        loader.close()
-finally:
-    db.close()
-" >> "$STRATEGY_LOG" 2>&1
-
-    echo "$(date '+%Y-%m-%d %H:%M:%S'):   策略计算完成" >> "$CRAWL_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): [4/4] DAG 流水线..." >> "$CRAWL_LOG"
+    python3 -c "import sys; sys.path.insert(0,'.'); from scripts.pipeline import dag; dag.run('daily_update')" >> "$STRATEGY_LOG" 2>&1
+    echo "$(date '+%Y-%m-%d %H:%M:%S'):   DAG 完成" >> "$CRAWL_LOG"
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): [4/4] 采集失败，跳过策略计算" >> "$CRAWL_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): [4/4] 采集失败，跳过" >> "$CRAWL_LOG"
 fi
 
 # ── 5. 完成 ──

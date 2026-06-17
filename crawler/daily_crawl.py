@@ -25,10 +25,6 @@ sys.path.insert(0, '.')
 from app.db.connection import get_sync_db
 from crawler.baostock_crawler import BaostockCrawler
 from crawler.catch_up import catch_up
-from crawler.data_loader import StrategyDataLoader
-from strategy.engine import StrategyEngine
-
-
 def main():
     today = date.today()
     start_time = datetime.now()
@@ -148,10 +144,8 @@ def main():
         dag.run("daily_update", trade_date=str(today))
     except Exception as e:
         logger.warning(f"DAG 流水线触发失败: {e}")
-    return
-
-    # ── 4. 策略计算（以下保留旧代码作为 fallback，DAG 接管后删除）──
-    logger.info("[4/5] 加载策略配置...")
+    elapsed = (datetime.now() - start_time).total_seconds()
+    logger.info(f"=== 全部完成 耗时{elapsed:.0f}秒 ===")
     db = get_sync_db()
     try:
         result = db.execute(text(
