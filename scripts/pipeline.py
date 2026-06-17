@@ -980,12 +980,13 @@ def dag_task_model_health(trade_date=None, **kw):
             db.close()
             return 0
 
-        # 1. 回填 forward 收益（5/10/20 日前的信号，所有版本）
+        # 1. 回填 forward 收益（5/10/20 日前的信号，所有版本+方向）
+        missed = 0
         for days in [5, 10, 20]:
             col = f"forward_{days}d_return"
             target_date = (_date.today() - timedelta(days=days)).isoformat()
             signals = db.execute(text(f"""
-                SELECT id, stock_code, signal_date, price FROM signal_history
+                SELECT id, stock_code, signal_date, price, direction FROM signal_history
                 WHERE signal_date = :d AND strategy_name = 'model_signal'
             """), {"d": target_date}).fetchall()
             for sig in signals:
@@ -996,12 +997,17 @@ def dag_task_model_health(trade_date=None, **kw):
                     ret = (float(close) - float(sig.price)) / float(sig.price)
                     db.execute(text(f"UPDATE signal_history SET {col}=:r WHERE id=:id"),
                                {"r": round(ret, 4), "id": sig.id})
+                else:
+                    missed += 1
+        if missed:
+            logger.warning(f"[model_health] forward 收益回填: {missed} 条无 K 线数据(停牌/缺失)，下周期重试")
 
-        # 2. 信号了结检查（所有版本的未了结信号）
-        t, pref_mode = _get_preference_thresholds(db)
+        # 2. 信号了结检查（按信号自身偏好确定止损线）
+        # 预加载偏好的止损映射
+        sp_map = {'left': 0.10, 'balanced': 0.08, 'right': 0.05}
         open_sigs = db.execute(text("""
-            SELECT id, stock_code, signal_date, price, direction FROM signal_history
-            WHERE strategy_name='model_signal' AND direction='buy' AND status IS NULL
+            SELECT id, stock_code, signal_date, price, direction, preference FROM signal_history
+            WHERE strategy_name='model_signal' AND status IS NULL
         """)).fetchall()
         for sig in open_sigs:
             close_price = db.execute(text(
@@ -1011,9 +1017,15 @@ def dag_task_model_health(trade_date=None, **kw):
             actual_ret = None
             if close_price and sig.price and float(sig.price) > 0:
                 pnl = (float(close_price) - float(sig.price)) / float(sig.price)
-                if pnl < -t['stop_loss_pct']:
+                stop = sp_map.get(sig.preference, 0.08)  # 用信号自身偏好
+                if sig.direction == 'buy' and pnl < -stop:
                     reason = 'stop_loss'
                     actual_ret = pnl
+                elif sig.direction == 'sell':
+                    # 卖出信号：价格上涨超过止损线→了结
+                    if pnl > stop:
+                        reason = 'stop_loss'
+                        actual_ret = pnl
             if reason:
                 db.execute(text("UPDATE signal_history SET status='closed', actual_return=:r, close_reason=:c, closed_at=CURRENT_DATE WHERE id=:id"),
                            {"r": round(actual_ret, 4) if actual_ret else None, "c": reason, "id": sig.id})
