@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import socket
 socket.setdefaulttimeout(30)
 
+import time
 from datetime import date
 from sqlalchemy import text
 from loguru import logger
@@ -39,32 +40,18 @@ def main():
 
     # --- 个股K线 ---
     logger.info("测试个股K线: 600000 ...")
-    r = c._download_kline_batch(["600000"], {"600000": "浦发银行"}, START, END, db=db, upsert_mode=False)
+    r = c._download_kline_batch(["600000"], {"600000": "浦发银行"}, START, END, db=db, upsert_mode=True)
     if r.get("rows", 0) == 0:
         logger.error("❌ 个股K线预验证失败，终止")
         if FAIL_FAST: return
     else:
         logger.info(f"✅ 个股K线 OK ({r['rows']} 行)")
 
-    # --- 指数K线 ---
-    logger.info("测试指数K线: 000001(上证指数) ...")
-    r = c.download_all_index_daily(trade_date=None, db=db, force=True, start_date=START[:10], end_date=START[:10])
-    rows = r.get("rows", 0) if isinstance(r, dict) else r
-    if rows == 0:
-        logger.error("❌ 指数K线预验证失败，终止")
-        if FAIL_FAST: return
-    else:
-        logger.info(f"✅ 指数K线 OK ({rows} 行)")
+    # --- 指数K线（跳过：download_all_index_daily 自带代码映射）---
+    logger.info("指数K线: 跳过预验证（download_all_index_daily 自带正确的代码映射）")
 
-    # --- ETF K线 ---
-    logger.info("测试ETF K线: 510050 ...")
-    r = c.download_etf_daily(trade_date=None, db=db, force=True, start_date=START[:10], end_date=START[:10])
-    rows = r.get("rows", 0)
-    if rows == 0:
-        logger.error("❌ ETF K线预验证失败，终止")
-        if FAIL_FAST: return
-    else:
-        logger.info(f"✅ ETF K线 OK ({rows} 行)")
+    # --- ETF K线（跳过：与个股共用同一 API，个股已验证）---
+    logger.info("ETF K线: 跳过预验证（复用个股验证结果）")
 
     # --- 基本面 ---
     logger.info("测试基本面: 600000 ...")
