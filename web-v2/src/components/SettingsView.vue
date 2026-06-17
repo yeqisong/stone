@@ -21,10 +21,6 @@
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <span style="font-weight:600;font-size:13px;color:var(--c-text)">{{ind.display}}</span>
           <n-button v-if="editMode!==ind.name && hoverCard===ind.name" size="tiny" text @click="startEditIndicator(ind)">✎</n-button>
-          <template v-else>
-            <n-button size="tiny" type="primary" @click="saveIndicator(ind.name)">保存</n-button>
-            <n-button size="tiny" @click="editMode=''">取消</n-button>
-          </template>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px">
           <!-- MA: 多值数组 -->
@@ -52,13 +48,17 @@
             </div>
           </template>
         </div>
+        <div v-if="editMode===ind.name" style="display:flex;justify-content:flex-end;gap:6px;margin-top:10px">
+          <n-button size="tiny" @click="editMode=''">取消</n-button>
+          <n-button size="tiny" type="primary" @click="saveIndicator(ind.name)">保存</n-button>
+        </div>
       </div>
     </div>
     
     <h4 style="margin:12px 0 8px;color:var(--c-text)">🤖 DeepSeek API Key</h4>
     <form @submit.prevent="saveKey" style="display:inline">
       <n-space>
-        <n-input v-model:value="dsKey" type="password" placeholder="sk-..." show-password style="width:300px" size="small" />
+        <n-input v-model:value="dsKey" type="password" placeholder="sk-..." show-password style="width:300px" size="small" autocomplete="new-password" />
         <n-button type="primary" size="small" @click="saveKey">保存</n-button>
       </n-space>
     </form>
