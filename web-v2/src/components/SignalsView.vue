@@ -1,15 +1,22 @@
 <template>
 <div>
   <n-space align="center" style="margin-bottom:8px" wrap>
+    <n-button-group size="tiny">
+      <n-button :type="!showStats?'primary':'default'" @click="showStats=false">🔴 信号列表</n-button>
+      <n-button :type="showStats?'primary':'default'" @click="showStats=true">📈 效果追踪</n-button>
+    </n-button-group>
     <span style="font-size:12px;color:var(--c-text-dim)">日期:</span>
     <n-date-picker v-model:formatted-value="sigDate" type="date" value-format="yyyy-MM-dd" size="tiny" @update:formatted-value="load" />
     <n-button size="tiny" @click="sigDate=todayStr();load()">今天</n-button>
     <n-button size="tiny" @click="showGenModal=true" :disabled="!activeModel">⚡ 生成</n-button>
     <span v-if="activeModel" style="font-size:10px;color:var(--c-text-faint)">模型: {{activeModel}}</span>
   </n-space>
-  <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
-  <n-data-table v-if="data.signals" :columns="columns" :data="data.signals" size="small" />
-  <n-empty v-else description="暂无信号" />
+  <template v-if="!showStats">
+    <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
+    <n-data-table v-if="data.signals" :columns="columns" :data="data.signals" size="small" />
+    <n-empty v-else description="暂无信号" />
+  </template>
+  <SignalStatsView v-else />
 
   <n-modal v-model:show="showGenModal" preset="card" title="⚡ 重新生成信号" style="width:380px;max-width:85vw" :mask-closable="false">
     <div style="font-size:13px;color:var(--c-text);margin-bottom:8px">
@@ -25,12 +32,14 @@
 </template>
 <script setup>
 import { ref, reactive, h, onMounted } from 'vue'
-import { NDataTable, NDatePicker, NButton, NSpace, NTag, NEmpty, NModal } from 'naive-ui'
+import { NDataTable, NDatePicker, NButton, NButtonGroup, NSpace, NTag, NEmpty, NModal } from 'naive-ui'
 import axios from 'axios'
+import SignalStatsView from './SignalStatsView.vue'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
 const sigDate = ref(new Date().toISOString().slice(0,10))
 const data = reactive({signals:null, scanned:0, total_signals:0})
+const showStats = ref(false)
 const showGenModal = ref(false)
 const genLoading = ref(false)
 const activeModel = ref(null)

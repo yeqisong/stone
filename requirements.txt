@@ -45,6 +45,7 @@ factory-boy==3.3.1
 
 # Data Source
 baostock==0.9.2
+akshare>=1.18.0
 
 # Utils
 python-dotenv==1.0.1

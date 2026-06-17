@@ -250,6 +250,113 @@ def get_stock_kline(
         db.close()
 
 
+# ── 信号效果追踪 ──
+
+@router.get("/signal/stats")
+def get_signal_stats(days: int = Query(90, ge=30, le=365)):
+    """信号效果统计：胜率、平均收益、趋势、行业分布。"""
+    db = get_sync_db()
+    try:
+        min_date = f"CURRENT_DATE - INTERVAL '{days} days'"
+
+        # 总览
+        overview = db.execute(text(f"""
+            SELECT COUNT(*) as total,
+                   COUNT(*) FILTER (WHERE status='closed') as closed,
+                   COUNT(*) FILTER (WHERE status IS NULL) as open_sigs,
+                   COUNT(*) FILTER (WHERE status='closed' AND actual_return > 0) as wins,
+                   AVG(actual_return) FILTER (WHERE status='closed') as avg_ret,
+                   AVG(forward_5d_return) as avg_f5d,
+                   AVG(forward_10d_return) as avg_f10d,
+                   AVG(forward_20d_return) as avg_f20d
+            FROM signal_history
+            WHERE strategy_name='model_signal' AND signal_date >= {min_date}
+        """)).fetchone()
+
+        total = overview.total or 0
+        closed = overview.closed or 0
+        wins = overview.wins or 0
+
+        # 每日趋势
+        daily = db.execute(text(f"""
+            SELECT signal_date,
+                   COUNT(*) as cnt,
+                   COUNT(*) FILTER (WHERE status='closed' AND actual_return > 0) * 1.0 /
+                     NULLIF(COUNT(*) FILTER (WHERE status='closed'), 0) as win_rate
+            FROM signal_history
+            WHERE strategy_name='model_signal' AND signal_date >= {min_date}
+            GROUP BY signal_date ORDER BY signal_date
+        """)).fetchall()
+        daily_trend = [{"date": str(r[0]), "signals": r[1], "win_rate": round(float(r[2]) if r[2] else 0, 3)} for r in daily]
+
+        # 收益分布
+        dist = db.execute(text(f"""
+            SELECT width_bucket(actual_return, -0.15, 0.15, 10) as bucket, COUNT(*)
+            FROM signal_history
+            WHERE strategy_name='model_signal' AND status='closed'
+              AND actual_return IS NOT NULL AND signal_date >= {min_date}
+            GROUP BY bucket ORDER BY bucket
+        """)).fetchall()
+        buckets = [round(-0.15 + 0.03 * i, 2) for i in range(11)]
+        counts = [0] * 11
+        for r in dist:
+            if r[0] and 1 <= r[0] <= 11:
+                counts[r[0] - 1] = r[1]
+        distribution = {"buckets": [f"{b:.0%}" for b in buckets], "counts": counts}
+
+        # 按行业
+        industry = db.execute(text(f"""
+            SELECT sf.industry,
+                   COUNT(*) as signals,
+                   COUNT(*) FILTER (WHERE sh.status='closed' AND sh.actual_return > 0) * 1.0 /
+                     NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
+                   AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
+            FROM signal_history sh
+            LEFT JOIN stock_fundamentals sf ON sf.stock_code = sh.stock_code
+            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
+            GROUP BY sf.industry HAVING COUNT(*) >= 5
+            ORDER BY signals DESC LIMIT 15
+        """)).fetchall()
+        by_industry = [{"industry": r[0] or "未分类", "signals": r[1],
+                        "win_rate": round(float(r[2]) if r[2] else 0, 3),
+                        "avg_return": round(float(r[3]) if r[3] else 0, 4)} for r in industry]
+
+        # Top 个股
+        top_stocks = db.execute(text(f"""
+            SELECT sh.stock_code, sh.stock_name,
+                   COUNT(*) as signals,
+                   COUNT(*) FILTER (WHERE sh.status='closed' AND sh.actual_return > 0) * 1.0 /
+                     NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
+                   AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
+            FROM signal_history sh
+            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
+            GROUP BY sh.stock_code, sh.stock_name HAVING COUNT(*) >= 3
+            ORDER BY signals DESC LIMIT 20
+        """)).fetchall()
+        top = [{"stock_code": r[0], "stock_name": r[1], "signals": r[2],
+                "win_rate": round(float(r[3]) if r[3] else 0, 3),
+                "avg_return": round(float(r[4]) if r[4] else 0, 4)} for r in top_stocks]
+
+        return {
+            "days": days,
+            "overview": {
+                "total": total, "closed": closed, "open": overview.open_sigs or 0,
+                "wins": wins,
+                "win_rate": round(wins / max(closed, 1), 3),
+                "avg_return": round(float(overview.avg_ret) if overview.avg_ret else 0, 4),
+                "avg_forward_5d": round(float(overview.avg_f5d) if overview.avg_f5d else 0, 4),
+                "avg_forward_10d": round(float(overview.avg_f10d) if overview.avg_f10d else 0, 4),
+                "avg_forward_20d": round(float(overview.avg_f20d) if overview.avg_f20d else 0, 4),
+            },
+            "daily_trend": daily_trend,
+            "return_distribution": distribution,
+            "by_industry": by_industry,
+            "top_stocks": top,
+        }
+    finally:
+        db.close()
+
+
 # ── PE 历史数据（从本地 stock_fundamentals_history 表读取） ──
 
 @router.get("/stock/{code}/pe_history")
