@@ -2,7 +2,7 @@
 <div>
   <n-space align="center" style="margin-bottom:8px" wrap>
     <span style="font-size:12px;color:var(--c-text-dim)">日期:</span>
-    <n-date-picker v-model:formatted-value="sigDate" type="date" value-format="yyyy-MM-dd" size="small" @update:formatted-value="load" />
+    <n-date-picker v-model:formatted-value="sigDate" type="date" value-format="yyyy-MM-dd" size="tiny" @update:formatted-value="load" />
     <n-button size="small" @click="sigDate=todayStr();load()">今天</n-button>
   </n-space>
   <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
