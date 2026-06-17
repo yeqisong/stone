@@ -28,7 +28,14 @@
   ├── [6] indicator_incr ← 增量计算技术指标 (BOLL/MACD/RSI/ATR/MA/量)
   │    │                  依赖: kline (需要今日 K 线数据)
   │    │
-  │    └── [7] model_signal ← 模型信号生成
+  │    └── [7] model_signal ← 模型信号生成 (规则模式 / 预测模式)
+  │         │  规则模式: BOLL/RSI/MACD 评分 (v2.5)
+  │         │  预测模式: XGBoost 预测未来收益 → 排序 → TOP N (v2.6+)
+  │         │  ② 加载 best_params → 重建 XGBoost 模型
+  │         │  ③ 预测 5/10/20 日收益 → 综合评分
+  │         │  ④ 按评分降序，产生买入信号
+  │         │  ⑤ 写入 signal_history (含 predict_5d/10d/20d + predict_score)
+  │         │
   │         │  ① 读 ACTIVE 模型版本 + 全局偏好 (left/balanced/right)
   │         │  ② JOIN 今日指标数据 (boll/rsi/macd/volume)
   │         │  ③ 逐股评分: BOLL下轨(+1) + RSI超卖(+1) + MACD正柱(+1)
@@ -86,6 +93,73 @@ if pct_b > sell_boll_upper AND rsi > sell_rsi_overbought → 卖出信号
 
 ---
 
+## 三-B、预测模型（v2.6+ 升级）
+
+### 3B.1 目标
+
+从「规则判断」升级为「预测驱动」——训练回归模型预测每只股票 5/10/20 天后的收益率，按预测收益排序选出最优标的。
+
+### 3B.2 训练流程（dag_task_model_train 改造）
+
+```
+每日 model_train 触发:
+  ① 从 stock_indicators_* 6 张表拉取全部历史指标
+  ② 从 daily_quote 或 signal_history 计算 forward_5d/10d/20d_return 作为标签
+  ③ 切分训练集/验证集（按时间顺序，禁止随机打乱）
+  ④ 训练 XGBoost 回归模型 (learning_rate=0.05, max_depth=5, n_estimators=200)
+  ⑤ 模型参数存入 model_versions.best_params (JSON)
+  ⑥ 评估指标(R²/MSE)存入 model_versions.evaluation_report
+```
+
+### 3B.3 特征工程
+
+| 特征类别 | 特征 | 来源表 |
+|----------|------|--------|
+| 布林带 | pct_b, width | stock_indicators_boll |
+| MACD | dif, dea, hist | stock_indicators_macd |
+| RSI | rsi | stock_indicators_rsi |
+| ATR | atr | stock_indicators_atr |
+| 均线 | ma5, ma20, ma60, ma250, 乖离率 | stock_indicators_ma |
+| 量能 | vol_ratio, obv, obv_ma5 | stock_indicators_volume |
+| 衍生 | ma5/ma20, (close-ma20)/ma20, vol_ratio_5d_avg | 实时计算 |
+
+总计约 25-30 个特征。
+
+### 3B.4 预测流程（dag_task_model_signal 改造）
+
+```
+每日 model_signal 触发:
+  ① JOIN 今日指标 (同现在)
+  ② 加载 best_params → 重建 XGBoost 模型
+  ③ 逐股预测: model.predict(features) → {ret_5d, ret_10d, ret_20d}
+  ④ 综合评分: score = 0.5×ret_5d + 0.3×ret_10d + 0.2×ret_20d
+  ⑤ 按 score 降序排列
+  ⑥ score > 0 (预期正收益) → 生成买入信号 signal_strength = min(ceil(score×100), 3)
+  ⑦ 写入 signal_history (含 predict_5d/10d/20d + predict_score)
+```
+
+### 3B.5 DB 变更
+
+```sql
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS predict_5d_return DECIMAL(8,4);
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS predict_10d_return DECIMAL(8,4);
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS predict_20d_return DECIMAL(8,4);
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS predict_score DECIMAL(8,4);
+```
+
+### 3B.6 前端展示
+
+信号列表按 `predict_score` 降序展示，新增列：
+- 预测5日收益
+- 预测10日收益
+- 综合评分
+
+### 3B.7 回退策略
+
+XGBoost 不可用或未训练时，自动回退到现有的「规则评分」模式（§3.1-3.3），保证系统不中断。
+
+---
+
 ## 四、数据结构
 
 ### 4.1 signal_history 表（已有，补充说明）
@@ -98,6 +172,10 @@ if pct_b > sell_boll_upper AND rsi > sell_rsi_overbought → 卖出信号
 | preference | `'left'/'balanced'/'right'` | 信号产生时的偏好模式 |
 | combined_signal | `true` | 始终标记为融合信号（唯一信号源） |
 | source_strategies | `'[\"model_signal\"]'` | JSON 数组 |
+| **predict_5d_return** | DECIMAL(8,4) | ⚠️ v2.6+ 预测5日收益率 |
+| **predict_10d_return** | DECIMAL(8,4) | ⚠️ v2.6+ 预测10日收益率 |
+| **predict_20d_return** | DECIMAL(8,4) | ⚠️ v2.6+ 预测20日收益率 |
+| **predict_score** | DECIMAL(8,4) | ⚠️ v2.6+ 综合评分（用于排序） |
 
 ### 4.2 params_snapshot 内容（从 model_versions.config 截取关键字段）
 
