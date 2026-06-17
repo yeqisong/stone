@@ -10,28 +10,35 @@
     </n-radio-group>
     <n-tag style="margin-left:8px" :type="prefMode==='left'?'error':prefMode==='right'?'success':'warning'">{{prefMode==='left'?'左侧':prefMode==='right'?'右侧':'均衡'}}</n-tag>
     
-    <h4 style="margin:12px 0 8px;color:var(--c-text)">📊 策略启停</h4>
-    <n-list>
-      <template v-for="s in strategies" :key="s.name">
-      <n-list-item v-if="s.name!=='global_preference'">
-        <div style="display:flex;align-items:center;justify-content:space-between;width:100%;gap:10px">
-          <div style="flex:1;min-width:0">
-            <b>{{s.display||s.name}}</b>
-            <div v-if="editing!==s.name" style="font-size:11px;color:var(--c-text-dim);word-break:break-all">{{JSON.stringify(s.params)}}</div>
-            <n-input v-else v-model:value="editText" type="textarea" :rows="3" size="small" style="font-family:monospace;font-size:11px;margin-top:4px" />
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-            <n-switch :value="s.enabled" @update:value="v=>toggle(s.name,v)" />
-            <n-button v-if="editing!==s.name" size="tiny" @click="startEdit(s)">✎</n-button>
-            <template v-else>
-              <n-button size="tiny" type="primary" @click="saveParams(s.name)">保存</n-button>
-              <n-button size="tiny" @click="editing=''">取消</n-button>
-            </template>
-          </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:12px 0 8px">
+      <h4 style="margin:0;color:var(--c-text)">📐 基础指标配置</h4>
+      <n-tag size="tiny" :bordered="false" type="default" v-if="saving">保存中...</n-tag>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
+      <div v-for="ind in indicators" :key="ind.name"
+        style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px">
+        <div style="font-weight:600;font-size:13px;color:var(--c-text);margin-bottom:10px">{{ind.display}}</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <!-- MA: 多值数组 -->
+          <template v-if="ind.name==='ma'">
+            <div v-for="(v,idx) in ind.params.periods" :key="idx" style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-dim);width:36px">MA{{[5,20,60,250][idx]}}</span>
+              <n-input-number :value="v" size="tiny" style="flex:1" :min="2" :max="500" @update:value="nv=>{ind.params.periods[idx]=nv;dirty[ind.name]=true}" />
+            </div>
+          </template>
+          <!-- BOLL / MACD / RSI / ATR / VOLUME: 单值或多值 -->
+          <template v-else>
+            <div v-for="(v,k) in ind.params" :key="k" style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-dim);width:36px;white-space:nowrap">{{paramLabel(k)}}</span>
+              <n-input-number :value="v" size="tiny" style="flex:1" :min="1" :max="k==='std_mult'?10:500" :step="k==='std_mult'?0.5:1" @update:value="nv=>{ind.params[k]=nv;dirty[ind.name]=true}" />
+            </div>
+          </template>
         </div>
-      </n-list-item>
-      </template>
-    </n-list>
+        <div style="text-align:right;margin-top:8px">
+          <n-button size="tiny" type="primary" ghost @click="saveIndicator(ind.name)" :disabled="!dirty[ind.name]">保存</n-button>
+        </div>
+      </div>
+    </div>
     
     <h4 style="margin:12px 0 8px;color:var(--c-text)">🤖 DeepSeek API Key</h4>
     <n-space>
@@ -51,32 +58,38 @@ const loading = ref(true)
 const dialog = useDialog()
 const prefMode = ref('balanced')
 const strategies = ref([])
+const indicators = ref([])
+const dirty = ref({})
+const saving = ref(false)
 const dsKey = ref(''), dsConfigured = ref(false)
-const editing = ref('')
-const editText = ref('')
 
-function startEdit(s) {
-  editing.value = s.name
-  editText.value = JSON.stringify(s.params, null, 2)
-}
-async function saveParams(name) {
-  try {
-    const params = JSON.parse(editText.value)
-    await axios.post(API+'/api/settings/update_params', {strategy_name: name, params})
-    editing.value = ''
-    await load()
-  } catch(e) {
-    dialog.warning({title:'参数格式错误', content: e.message, positiveText:'确定'})
+function paramLabel(k) {
+  const labels = {
+    period:'周期', std_mult:'标准差', fast:'快线', slow:'慢线', signal:'信号',
+    vol_ma_period:'量能MA', periods:'均线',
   }
+  return labels[k]||k
+}
+
+async function saveIndicator(name) {
+  const ind = indicators.value.find(i=>i.name===name)
+  if(!ind) return
+  saving.value = true
+  try {
+    await axios.post(API+'/api/settings/update_params', {strategy_name: name, params: ind.params})
+    dirty.value[name] = false
+  } catch(e) {
+    dialog.warning({title:'保存失败', content: e.response?.data?.detail||e.message, positiveText:'确定'})
+  } finally { saving.value = false }
 }
 async function load(){
   loading.value = true
   try{
     const r = await axios.get(API+'/api/settings')
     strategies.value = r.data.strategies||[]
+    indicators.value = r.data.indicators||[]
     dsConfigured.value = r.data.deepseek_configured
-    const p = (r.data.strategies||[]).find(s=>s.name==='global_preference')
-    if(p) prefMode.value = p.params?.mode||'balanced'
+    prefMode.value = r.data.preference?.mode||'balanced'
   }catch(e){} finally { loading.value = false }
 }
 async function setPref(m){

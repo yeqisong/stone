@@ -497,7 +497,14 @@ INSERT INTO strategy_config (strategy_name, display_name, enabled, params) VALUE
 ('global_preference',       '全局偏好', true, '{"mode": "balanced"}'),
 ('bollinger_daily',         '日布林线', true, '{"period": 20, "std_mult": 2.0, "bandwidth_threshold": 0.04}'),
 ('volume_price_divergence', '量价背离', true, '{"levels": ["daily","weekly","monthly"], "lookback_daily": 20, "lookback_weekly": 24, "lookback_monthly": 12}'),
-('weekly_trend',            '周趋势',   true, '{"fast_period": 5, "slow_period": 20}')
+('weekly_trend',            '周趋势',   true, '{"fast_period": 5, "slow_period": 20}'),
+-- 基础指标配置
+('boll', 'BOLL',  true, '{"period": 20, "std_mult": 2.0}'),
+('macd', 'MACD',  true, '{"fast": 12, "slow": 26, "signal": 9}'),
+('rsi',  'RSI',   true, '{"period": 14}'),
+('atr',  'ATR',   true, '{"period": 14}'),
+('ma',   'MA',    true, '{"periods": [5, 20, 60, 250]}'),
+('volume','量能',  true, '{"vol_ma_period": 5}')
 ON CONFLICT (strategy_name) DO NOTHING;
 """
 
@@ -551,6 +558,22 @@ def init_db(sync_session) -> None:
 
     # 默认策略配置
     sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
+
+    # 迁移：已有库补充基础指标配置（幂等）
+    indicators = [
+        ('boll', 'BOLL', True, '{"period": 20, "std_mult": 2.0}'),
+        ('macd', 'MACD', True, '{"fast": 12, "slow": 26, "signal": 9}'),
+        ('rsi', 'RSI', True, '{"period": 14}'),
+        ('atr', 'ATR', True, '{"period": 14}'),
+        ('ma', 'MA', True, '{"periods": [5, 20, 60, 250]}'),
+        ('volume', '量能', True, '{"vol_ma_period": 5}'),
+    ]
+    for name, display, enabled, params in indicators:
+        try:
+            sync_session.execute(text("INSERT INTO strategy_config (strategy_name, display_name, enabled, params) VALUES (:n,:d,:e,:p) ON CONFLICT (strategy_name) DO NOTHING"),
+                                {"n": name, "d": display, "e": enabled, "p": params})
+        except Exception:
+            sync_session.rollback()
     sync_session.commit()
 
     # 迁移：signal_history 新增模型训练列（幂等）

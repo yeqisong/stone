@@ -36,7 +36,9 @@ def get_settings():
         result = db.execute(text(
             "SELECT strategy_name, display_name, enabled, params FROM strategy_config ORDER BY strategy_name"
         ))
+        indicators = []
         strategies = []
+        preference = {"mode": "balanced"}
         for r in result.fetchall():
             params = r.params
             if isinstance(params, str):
@@ -44,15 +46,20 @@ def get_settings():
                     params = json.loads(params)
                 except:
                     params = {}
-            strategies.append({
+            entry = {
                 "name": r.strategy_name, "display": r.display_name,
                 "enabled": r.enabled, "params": params,
-            })
+            }
+            if r.strategy_name == 'global_preference':
+                preference = params
+            elif r.strategy_name in ('boll','macd','rsi','atr','ma','volume'):
+                indicators.append(entry)
+            else:
+                strategies.append(entry)  # 旧策略，保留兼容
 
-        pref = next((s for s in strategies if s["name"] == "global_preference"), {})
-        deepseek_configured = bool(pref.get("params", {}).get("deepseek_key", ""))
+        deepseek_configured = bool(preference.get("deepseek_key", ""))
 
-        return {"strategies": strategies, "deepseek_configured": deepseek_configured}
+        return {"indicators": indicators, "strategies": strategies, "preference": preference, "deepseek_configured": deepseek_configured}
     finally:
         db.close()
 
