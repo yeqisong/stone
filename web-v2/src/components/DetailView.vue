@@ -28,6 +28,7 @@
             <span v-else style="font-size:12px">{{'★'.repeat(s.strength)}}</span>
           </div>
           <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
+          <div v-if="s.model_version" style="font-size:10px;color:var(--c-text-faint);margin-top:2px">📦 {{s.model_version}}</div>
         </div>
       </div>
       <n-empty v-else description="暂无信号" style="padding:10px" />

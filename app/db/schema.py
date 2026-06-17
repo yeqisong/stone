@@ -447,8 +447,7 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('etf', 'daily_update', 'ETF', 4),
     ('fund', 'kline', '基本面', 5),
     ('treemap', 'fund', '树图', 6),
-    ('strategy', 'fund', '策略', 7),
-    ('stats', 'treemap,strategy,index,etf', '统计', 8),
+    ('stats', 'treemap,model_health,index,etf', '统计', 8),
     ('daily_completeness', 'stats', '日历统计', 9),
     ('indicator_incr', 'kline', '指标增量', 10),
     ('indicator_full', '', '指标全量', 11),
@@ -495,9 +494,6 @@ CREATE INDEX IF NOT EXISTS idx_sm_status ON system_metrics (status, checked_at D
 DEFAULT_STRATEGY_CONFIG = """
 INSERT INTO strategy_config (strategy_name, display_name, enabled, params) VALUES
 ('global_preference',       '全局偏好', true, '{"mode": "balanced"}'),
-('bollinger_daily',         '日布林线', true, '{"period": 20, "std_mult": 2.0, "bandwidth_threshold": 0.04}'),
-('volume_price_divergence', '量价背离', true, '{"levels": ["daily","weekly","monthly"], "lookback_daily": 20, "lookback_weekly": 24, "lookback_monthly": 12}'),
-('weekly_trend',            '周趋势',   true, '{"fast_period": 5, "slow_period": 20}'),
 -- 基础指标配置
 ('boll', 'BOLL',  true, '{"period": 20, "std_mult": 2.0}'),
 ('macd', 'MACD',  true, '{"fast": 12, "slow": 26, "signal": 9}'),
