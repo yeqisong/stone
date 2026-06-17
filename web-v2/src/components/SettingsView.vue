@@ -17,24 +17,42 @@
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
       <div v-for="ind in indicators" :key="ind.name"
         style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px">
-        <div style="font-weight:600;font-size:13px;color:var(--c-text);margin-bottom:10px">{{ind.display}}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <span style="font-weight:600;font-size:13px;color:var(--c-text)">{{ind.display}}</span>
+          <template v-if="editMode!==ind.name">
+            <n-button size="tiny" text @click="startEditIndicator(ind)">✎</n-button>
+          </template>
+          <template v-else>
+            <n-button size="tiny" type="primary" @click="saveIndicator(ind.name)">保存</n-button>
+            <n-button size="tiny" @click="editMode=''">取消</n-button>
+          </template>
+        </div>
         <div style="display:flex;flex-direction:column;gap:6px">
           <!-- MA: 多值数组 -->
           <template v-if="ind.name==='ma'">
-            <div v-for="(v,idx) in ind.params.periods" :key="idx" style="display:flex;align-items:center;gap:6px">
-              <span style="font-size:11px;color:var(--c-text-dim);width:36px">MA{{[5,20,60,250][idx]}}</span>
-              <n-input-number v-model:value="ind.params.periods[idx]" size="tiny" style="flex:1" :min="2" :max="500" @update:value="dirty[ind.name]=true" />
+            <div v-for="(v,idx) in ind.params.periods" :key="idx" style="display:flex;align-items:center;gap:6px;font-size:12px">
+              <span style="color:var(--c-text-dim);width:36px">MA{{[5,20,60,250][idx]}}</span>
+              <template v-if="editMode===ind.name">
+                <n-input-number v-model:value="ind.params.periods[idx]" size="tiny" style="flex:1" :min="2" :max="500" />
+              </template>
+              <template v-else>
+                <span style="color:var(--c-text);font-weight:500">{{v}}</span>
+              </template>
             </div>
           </template>
-          <!-- BOLL / MACD / RSI / ATR / VOLUME -->
+          <!-- 其他指标 -->
           <template v-else>
-            <div v-for="(v,k) in ind.params" :key="k" style="display:flex;align-items:center;gap:6px">
-              <span style="font-size:11px;color:var(--c-text-dim);width:36px;white-space:nowrap">{{paramLabel(k)}}</span>
-              <n-input-number v-model:value="ind.params[k]" size="tiny" style="flex:1" :min="1" :max="k==='std_mult'?10:500" :step="k==='std_mult'?0.5:1" @update:value="dirty[ind.name]=true" />
+            <div v-for="(v,k) in ind.params" :key="k" style="display:flex;align-items:center;gap:6px;font-size:12px">
+              <span style="color:var(--c-text-dim);width:40px;white-space:nowrap">{{paramLabel(k)}}</span>
+              <template v-if="editMode===ind.name">
+                <n-input-number v-model:value="ind.params[k]" size="tiny" style="flex:1" :min="1" :max="k==='std_mult'?10:500" :step="k==='std_mult'?0.5:1" />
+              </template>
+              <template v-else>
+                <span style="color:var(--c-text);font-weight:500">{{v}}</span>
+              </template>
             </div>
           </template>
         </div>
-        <n-button v-if="dirty[ind.name]" size="tiny" type="primary" @click="saveIndicator(ind.name)" style="margin-top:8px">{{saving?'保存中...':'保存'}}</n-button>
       </div>
     </div>
     
@@ -57,7 +75,7 @@ const dialog = useDialog()
 const prefMode = ref('balanced')
 const strategies = ref([])
 const indicators = ref([])
-const dirty = ref({})
+const editMode = ref('')  // 当前正在编辑的指标名，空=查看模式
 const saving = ref(false)
 const dsKey = ref(''), dsConfigured = ref(false)
 
@@ -69,13 +87,16 @@ function paramLabel(k) {
   return labels[k]||k
 }
 
+function startEditIndicator(ind) {
+  editMode.value = ind.name
+}
 async function saveIndicator(name) {
   const ind = indicators.value.find(i=>i.name===name)
   if(!ind) return
   saving.value = true
   try {
     await axios.post(API+'/api/settings/update_params', {strategy_name: name, params: ind.params})
-    dirty.value[name] = false
+    editMode.value = ''
   } catch(e) {
     dialog.warning({title:'保存失败', content: e.response?.data?.detail||e.message, positiveText:'确定'})
   } finally { saving.value = false }
