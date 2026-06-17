@@ -538,37 +538,134 @@ def dag_task_indicator_full(trade_date=None, **kw):
         total = len(codes)
         update_node_progress(log_id=log_id, rows=0, detail=f'共 {total} 只股票')
 
+        errors = 0
         # 逐只计算指标并写入 6 张表
         for idx, code in enumerate(codes):
-            rows = db.execute(text("""
-                SELECT trade_date, open, high, low, close_hfq as close, volume
-                FROM daily_quote WHERE stock_code=:c ORDER BY trade_date ASC
-            """), {"c": code}).fetchall()
-            if len(rows) < 20:
+            try:
+                rows = db.execute(text("""
+                    SELECT trade_date, open, high, low, close_hfq as close, volume
+                    FROM daily_quote WHERE stock_code=:c ORDER BY trade_date ASC
+                """), {"c": code}).fetchall()
+                if len(rows) < 20:
+                    continue
+
+                df = pd.DataFrame(rows, columns=['trade_date','open','high','low','close','volume'])
+                closes = df['close']
+
+                # BOLL
+                mid, upper, lower, bw = bollinger_bands(closes)
+                # MACD
+                dif, dea, macd_hist = macd(closes)
+                # RSI
+                rsi_vals = calc_rsi(closes)
+                # ATR
+                atr_vals = atr(df)
+                # MA
+                ma5 = sma(closes, 5); ma20 = sma(closes, 20); ma60 = sma(closes, 60); ma250 = sma(closes, 250)
+                # Volume
+                vol_ma5 = sma(df['volume'], 5)
+                vol_ratio = df['volume'] / vol_ma5.replace(0, np.nan)
+                obv_vals = obv(df)
+                obv_ma5 = sma(obv_vals, 5); obv_ma10 = sma(obv_vals, 10)
+
+                for i, r in enumerate(rows):
+                    d = str(r[0])
+                    if not pd.isna(mid.iloc[i]):
+                        db.execute(text("""INSERT INTO stock_indicators_boll (stock_code,trade_date,upper,mid,lower,pct_b,width)
+                            VALUES (:c,:d,:u,:m,:l,:p,:w) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
+                            upper=EXCLUDED.upper,mid=EXCLUDED.mid,lower=EXCLUDED.lower,pct_b=EXCLUDED.pct_b,width=EXCLUDED.width"""),
+                            {"c":code,"d":d,"u":float(upper.iloc[i]),"m":float(mid.iloc[i]),"l":float(lower.iloc[i]),
+                             "p":float((closes.iloc[i]-lower.iloc[i])/(upper.iloc[i]-lower.iloc[i])) if upper.iloc[i]!=lower.iloc[i] else 0,
+                             "w":float(bw.iloc[i]) if not pd.isna(bw.iloc[i]) else 0})
+                    if not pd.isna(dif.iloc[i]):
+                        db.execute(text("""INSERT INTO stock_indicators_macd (stock_code,trade_date,dif,dea,hist)
+                            VALUES (:c,:d,:df,:de,:h) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
+                            dif=EXCLUDED.dif,dea=EXCLUDED.dea,hist=EXCLUDED.hist"""),
+                            {"c":code,"d":d,"df":float(dif.iloc[i]),"de":float(dea.iloc[i]),"h":float(macd_hist.iloc[i])})
+                    if not pd.isna(rsi_vals.iloc[i]):
+                        db.execute(text("""INSERT INTO stock_indicators_rsi (stock_code,trade_date,rsi)
+                            VALUES (:c,:d,:r) ON CONFLICT (stock_code,trade_date) DO UPDATE SET rsi=EXCLUDED.rsi"""),
+                            {"c":code,"d":d,"r":float(rsi_vals.iloc[i])})
+                    if not pd.isna(atr_vals.iloc[i]):
+                        db.execute(text("""INSERT INTO stock_indicators_atr (stock_code,trade_date,atr)
+                            VALUES (:c,:d,:a) ON CONFLICT (stock_code,trade_date) DO UPDATE SET atr=EXCLUDED.atr"""),
+                            {"c":code,"d":d,"a":float(atr_vals.iloc[i])})
+                    if not pd.isna(ma5.iloc[i]):
+                        db.execute(text("""INSERT INTO stock_indicators_ma (stock_code,trade_date,ma5,ma20,ma60,ma250)
+                            VALUES (:c,:d,:m5,:m20,:m60,:m250) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
+                            ma5=EXCLUDED.ma5,ma20=EXCLUDED.ma20,ma60=EXCLUDED.ma60,ma250=EXCLUDED.ma250"""),
+                            {"c":code,"d":d,"m5":float(ma5.iloc[i]),"m20":float(ma20.iloc[i]),"m60":float(ma60.iloc[i]),"m250":float(ma250.iloc[i])})
+                    if not pd.isna(vol_ma5.iloc[i]):
+                        db.execute(text("""INSERT INTO stock_indicators_volume (stock_code,trade_date,vol_ma5,vol_ratio,obv,obv_ma5,obv_ma10)
+                            VALUES (:c,:d,:v5,:vr,:o,:o5,:o10) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
+                            vol_ma5=EXCLUDED.vol_ma5,vol_ratio=EXCLUDED.vol_ratio,obv=EXCLUDED.obv,obv_ma5=EXCLUDED.obv_ma5,obv_ma10=EXCLUDED.obv_ma10"""),
+                            {"c":code,"d":d,"v5":float(vol_ma5.iloc[i]),"vr":float(vol_ratio.iloc[i]) if not pd.isna(vol_ratio.iloc[i]) else 0,
+                             "o":float(obv_vals.iloc[i]) if not pd.isna(obv_vals.iloc[i]) else 0,
+                             "o5":float(obv_ma5.iloc[i]) if not pd.isna(obv_ma5.iloc[i]) else 0,
+                             "o10":float(obv_ma10.iloc[i]) if not pd.isna(obv_ma10.iloc[i]) else 0})
+
+            except Exception as e:
+                errors += 1
+                db.rollback()
+                logger.warning(f"[indicator_full] {code} 失败: {e}")
                 continue
 
-            df = pd.DataFrame(rows, columns=['trade_date','open','high','low','close','volume'])
-            closes = df['close']
+            if (idx + 1) % 500 == 0:
+                db.commit()
+                update_node_progress(log_id=log_id, rows=idx+1, detail=f'{idx+1}/{total}')
+        db.commit()
+        db.close()
+        write_node_log(log_id=log_id, status='success', rows=total, detail=f'{total} 只 ({errors} 错误)')
+        return total
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
 
-            # BOLL
-            mid, upper, lower, bw = bollinger_bands(closes)
-            # MACD
-            dif, dea, macd_hist = macd(closes)
-            # RSI
-            rsi_vals = calc_rsi(closes)
-            # ATR
-            atr_vals = atr(df)
-            # MA
-            ma5 = sma(closes, 5); ma20 = sma(closes, 20); ma60 = sma(closes, 60); ma250 = sma(closes, 250)
-            # Volume
-            vol_ma5 = sma(df['volume'], 5)
-            vol_ratio = df['volume'] / vol_ma5.replace(0, np.nan)
-            obv_vals = obv(df)
-            obv_ma5 = sma(obv_vals, 5); obv_ma10 = sma(obv_vals, 10)
+def dag_task_indicator_incr(trade_date=None, **kw):
+    """增量更新 6 张指标表（今日 + 前 260 日回溯）。"""
+    from datetime import date, timedelta
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    from strategy.indicators import bollinger_bands, macd, rsi as calc_rsi, atr, sma, obv
+    import pandas as pd
+    import numpy as np
 
-            for i, r in enumerate(rows):
-                d = str(r[0])
-                # 批量 UPSERT（按表）
+    td = trade_date or str(date.today())
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('indicator_incr')
+    write_node_log(log_id=log_id, status='running', detail='增量更新指标…')
+
+    try:
+        min_date = (date.fromisoformat(td) - timedelta(days=300)).isoformat()
+        db = get_sync_db()
+        codes = db.execute(text("SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'")).fetchall()
+        codes = [r[0] for r in codes]
+        total = len(codes)
+        errors = 0
+
+        for idx, code in enumerate(codes):
+            try:
+                rows = db.execute(text("""
+                    SELECT trade_date, open, high, low, close_hfq as close, volume
+                    FROM daily_quote WHERE stock_code=:c AND trade_date >= :md ORDER BY trade_date ASC
+                """), {"c": code, "md": min_date}).fetchall()
+                if len(rows) < 20:
+                    continue
+
+                df = pd.DataFrame(rows, columns=['trade_date','open','high','low','close','volume'])
+                closes = df['close']
+                last_row = rows[-1]
+                d = str(last_row[0])
+
+                mid, upper, lower, bw = bollinger_bands(closes)
+                dif, dea, macd_hist = macd(closes)
+                rsi_vals = calc_rsi(closes)
+                atr_vals = atr(df)
+                ma5 = sma(closes,5); ma20 = sma(closes,20); ma60 = sma(closes,60); ma250 = sma(closes,250)
+                vol_ma5 = sma(df['volume'],5)
+                vol_ratio = df['volume'] / vol_ma5.replace(0, np.nan)
+                obv_vals = obv(df)
+
+                i = -1  # 只取最后一天
                 if not pd.isna(mid.iloc[i]):
                     db.execute(text("""INSERT INTO stock_indicators_boll (stock_code,trade_date,upper,mid,lower,pct_b,width)
                         VALUES (:c,:d,:u,:m,:l,:p,:w) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
@@ -595,109 +692,29 @@ def dag_task_indicator_full(trade_date=None, **kw):
                         ma5=EXCLUDED.ma5,ma20=EXCLUDED.ma20,ma60=EXCLUDED.ma60,ma250=EXCLUDED.ma250"""),
                         {"c":code,"d":d,"m5":float(ma5.iloc[i]),"m20":float(ma20.iloc[i]),"m60":float(ma60.iloc[i]),"m250":float(ma250.iloc[i])})
                 if not pd.isna(vol_ma5.iloc[i]):
+                    obv_ma5_incr = sma(obv_vals, 5); obv_ma10_incr = sma(obv_vals, 10)
                     db.execute(text("""INSERT INTO stock_indicators_volume (stock_code,trade_date,vol_ma5,vol_ratio,obv,obv_ma5,obv_ma10)
                         VALUES (:c,:d,:v5,:vr,:o,:o5,:o10) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
                         vol_ma5=EXCLUDED.vol_ma5,vol_ratio=EXCLUDED.vol_ratio,obv=EXCLUDED.obv,obv_ma5=EXCLUDED.obv_ma5,obv_ma10=EXCLUDED.obv_ma10"""),
                         {"c":code,"d":d,"v5":float(vol_ma5.iloc[i]),"vr":float(vol_ratio.iloc[i]) if not pd.isna(vol_ratio.iloc[i]) else 0,
                          "o":float(obv_vals.iloc[i]) if not pd.isna(obv_vals.iloc[i]) else 0,
-                         "o5":float(obv_ma5.iloc[i]) if not pd.isna(obv_ma5.iloc[i]) else 0,
-                         "o10":float(obv_ma10.iloc[i]) if not pd.isna(obv_ma10.iloc[i]) else 0})
+                         "o5":float(obv_ma5_incr.iloc[i]) if not pd.isna(obv_ma5_incr.iloc[i]) else 0,
+                         "o10":float(obv_ma10_incr.iloc[i]) if not pd.isna(obv_ma10_incr.iloc[i]) else 0})
 
-            if (idx + 1) % 500 == 0:
-                db.commit()
-                update_node_progress(log_id=log_id, rows=idx+1, detail=f'{idx+1}/{total}')
-        db.commit()
-        db.close()
-        write_node_log(log_id=log_id, status='success', rows=total, detail=f'{total} 只完成')
-        return total
-    except Exception as e:
-        write_node_log(log_id=log_id, status='failed', detail=str(e))
-        raise
-
-def dag_task_indicator_incr(trade_date=None, **kw):
-    """增量更新 6 张指标表（今日 + 前 260 日回溯）。"""
-    from datetime import date, timedelta
-    from app.db.connection import get_sync_db
-    from sqlalchemy import text
-    from strategy.indicators import bollinger_bands, macd, rsi as calc_rsi, atr, sma, obv
-    import pandas as pd
-    import numpy as np
-
-    td = trade_date or str(date.today())
-    rid = _rid(kw)
-    log_id = (kw.get('_node_log_ids', {}) or {}).get('indicator_incr')
-    write_node_log(log_id=log_id, status='running', detail='增量更新指标…')
-
-    try:
-        min_date = (date.fromisoformat(td) - timedelta(days=300)).isoformat()
-        db = get_sync_db()
-        codes = db.execute(text("SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'")).fetchall()
-        codes = [r[0] for r in codes]
-        total = len(codes)
-
-        for idx, code in enumerate(codes):
-            rows = db.execute(text("""
-                SELECT trade_date, open, high, low, close_hfq as close, volume
-                FROM daily_quote WHERE stock_code=:c AND trade_date >= :md ORDER BY trade_date ASC
-            """), {"c": code, "md": min_date}).fetchall()
-            if len(rows) < 20:
+            except Exception as e:
+                errors += 1
+                db.rollback()
+                logger.warning(f"[indicator_incr] {code} 失败: {e}")
                 continue
 
-            df = pd.DataFrame(rows, columns=['trade_date','open','high','low','close','volume'])
-            closes = df['close']
-            last_row = rows[-1]
-            d = str(last_row[0])
-
-            mid, upper, lower, bw = bollinger_bands(closes)
-            dif, dea, macd_hist = macd(closes)
-            rsi_vals = calc_rsi(closes)
-            atr_vals = atr(df)
-            ma5 = sma(closes,5); ma20 = sma(closes,20); ma60 = sma(closes,60); ma250 = sma(closes,250)
-            vol_ma5 = sma(df['volume'],5)
-            vol_ratio = df['volume'] / vol_ma5.replace(0, np.nan)
-            obv_vals = obv(df)
-
-            i = -1  # 只取最后一天
-            if not pd.isna(mid.iloc[i]):
-                db.execute(text("""INSERT INTO stock_indicators_boll (stock_code,trade_date,upper,mid,lower,pct_b,width)
-                    VALUES (:c,:d,:u,:m,:l,:p,:w) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
-                    upper=EXCLUDED.upper,mid=EXCLUDED.mid,lower=EXCLUDED.lower,pct_b=EXCLUDED.pct_b,width=EXCLUDED.width"""),
-                    {"c":code,"d":d,"u":float(upper.iloc[i]),"m":float(mid.iloc[i]),"l":float(lower.iloc[i]),
-                     "p":float((closes.iloc[i]-lower.iloc[i])/(upper.iloc[i]-lower.iloc[i])) if upper.iloc[i]!=lower.iloc[i] else 0,
-                     "w":float(bw.iloc[i]) if not pd.isna(bw.iloc[i]) else 0})
-            if not pd.isna(dif.iloc[i]):
-                db.execute(text("""INSERT INTO stock_indicators_macd (stock_code,trade_date,dif,dea,hist)
-                    VALUES (:c,:d,:df,:de,:h) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
-                    dif=EXCLUDED.dif,dea=EXCLUDED.dea,hist=EXCLUDED.hist"""),
-                    {"c":code,"d":d,"df":float(dif.iloc[i]),"de":float(dea.iloc[i]),"h":float(macd_hist.iloc[i])})
-            if not pd.isna(rsi_vals.iloc[i]):
-                db.execute(text("""INSERT INTO stock_indicators_rsi (stock_code,trade_date,rsi)
-                    VALUES (:c,:d,:r) ON CONFLICT (stock_code,trade_date) DO UPDATE SET rsi=EXCLUDED.rsi"""),
-                    {"c":code,"d":d,"r":float(rsi_vals.iloc[i])})
-            if not pd.isna(atr_vals.iloc[i]):
-                db.execute(text("""INSERT INTO stock_indicators_atr (stock_code,trade_date,atr)
-                    VALUES (:c,:d,:a) ON CONFLICT (stock_code,trade_date) DO UPDATE SET atr=EXCLUDED.atr"""),
-                    {"c":code,"d":d,"a":float(atr_vals.iloc[i])})
-            if not pd.isna(ma5.iloc[i]):
-                db.execute(text("""INSERT INTO stock_indicators_ma (stock_code,trade_date,ma5,ma20,ma60,ma250)
-                    VALUES (:c,:d,:m5,:m20,:m60,:m250) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
-                    ma5=EXCLUDED.ma5,ma20=EXCLUDED.ma20,ma60=EXCLUDED.ma60,ma250=EXCLUDED.ma250"""),
-                    {"c":code,"d":d,"m5":float(ma5.iloc[i]),"m20":float(ma20.iloc[i]),"m60":float(ma60.iloc[i]),"m250":float(ma250.iloc[i])})
-            if not pd.isna(vol_ma5.iloc[i]):
-                db.execute(text("""INSERT INTO stock_indicators_volume (stock_code,trade_date,vol_ma5,vol_ratio,obv,obv_ma5,obv_ma10)
-                    VALUES (:c,:d,:v5,:vr,:o,:o5,:o10) ON CONFLICT (stock_code,trade_date) DO UPDATE SET
-                    vol_ma5=EXCLUDED.vol_ma5,vol_ratio=EXCLUDED.vol_ratio,obv=EXCLUDED.obv,obv_ma5=EXCLUDED.obv_ma5,obv_ma10=EXCLUDED.obv_ma10"""),
-                    {"c":code,"d":d,"v5":float(vol_ma5.iloc[i]),"vr":float(vol_ratio.iloc[i]) if not pd.isna(vol_ratio.iloc[i]) else 0,
-                     "o":float(obv_vals.iloc[i]) if not pd.isna(obv_vals.iloc[i]) else 0,"o5":0,"o10":0})
-
             if (idx + 1) % 500 == 0:
                 db.commit()
         db.commit()
         db.close()
-        write_node_log(log_id=log_id, status='success', rows=total, detail=f'{total} 只完成')
+        write_node_log(log_id=log_id, status='success', rows=total, detail=f'{total} 只 ({errors} 错误)')
         return total
     except Exception as e:
-        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise
 
 def dag_task_model_train(trade_date=None, **kw):
