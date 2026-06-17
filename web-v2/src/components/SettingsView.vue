@@ -16,12 +16,11 @@
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
       <div v-for="ind in indicators" :key="ind.name"
-        style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px">
+        style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px"
+        @mouseenter="hoverCard=ind.name" @mouseleave="hoverCard=''">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <span style="font-weight:600;font-size:13px;color:var(--c-text)">{{ind.display}}</span>
-          <template v-if="editMode!==ind.name">
-            <n-button size="tiny" text @click="startEditIndicator(ind)">✎</n-button>
-          </template>
+          <n-button v-if="editMode!==ind.name && hoverCard===ind.name" size="tiny" text @click="startEditIndicator(ind)">✎</n-button>
           <template v-else>
             <n-button size="tiny" type="primary" @click="saveIndicator(ind.name)">保存</n-button>
             <n-button size="tiny" @click="editMode=''">取消</n-button>
@@ -36,7 +35,7 @@
                 <n-input-number v-model:value="ind.params.periods[idx]" size="tiny" style="flex:1" :min="2" :max="500" />
               </template>
               <template v-else>
-                <span style="color:var(--c-text);font-weight:500">{{v}}</span>
+                <span style="color:var(--c-text);font-weight:500;flex:1;text-align:right">{{v}}</span>
               </template>
             </div>
           </template>
@@ -48,7 +47,7 @@
                 <n-input-number v-model:value="ind.params[k]" size="tiny" style="flex:1" :min="1" :max="k==='std_mult'?10:500" :step="k==='std_mult'?0.5:1" />
               </template>
               <template v-else>
-                <span style="color:var(--c-text);font-weight:500">{{v}}</span>
+                <span style="color:var(--c-text);font-weight:500;flex:1;text-align:right">{{v}}</span>
               </template>
             </div>
           </template>
@@ -57,10 +56,12 @@
     </div>
     
     <h4 style="margin:12px 0 8px;color:var(--c-text)">🤖 DeepSeek API Key</h4>
-    <n-space>
-      <n-input v-model:value="dsKey" type="password" placeholder="sk-..." show-password style="width:300px" size="small" />
-      <n-button type="primary" size="small" @click="saveKey">保存</n-button>
-    </n-space>
+    <form @submit.prevent="saveKey" style="display:inline">
+      <n-space>
+        <n-input v-model:value="dsKey" type="password" placeholder="sk-..." show-password style="width:300px" size="small" />
+        <n-button type="primary" size="small" @click="saveKey">保存</n-button>
+      </n-space>
+    </form>
     <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{dsConfigured?'✅ 已配置':'⚠️ 未配置'}}</div>
   </template>
 </div>
@@ -75,7 +76,8 @@ const dialog = useDialog()
 const prefMode = ref('balanced')
 const strategies = ref([])
 const indicators = ref([])
-const editMode = ref('')  // 当前正在编辑的指标名，空=查看模式
+const editMode = ref('')
+const hoverCard = ref('')  // 鼠标悬停的卡片
 const saving = ref(false)
 const dsKey = ref(''), dsConfigured = ref(false)
 
