@@ -101,6 +101,57 @@
     <DagView />
   </div>
 
+  <!-- ══════════════════════════════════════════ -->
+  <!--  历史补数                                              -->
+  <!-- ══════════════════════════════════════════ -->
+  <div style="margin-top:14px;padding:12px 16px;background:var(--c-card-bg);border-radius:8px;border:1px solid var(--c-card-bg-hover)">
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:10px">📥 历史补数</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" @click="openBackfill(btn.type)">
+        {{ btn.icon }} {{ btn.label }}
+      </n-button>
+    </div>
+
+    <!-- Running / recent task progress -->
+    <div v-if="bfTask" style="margin-top:10px">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--c-bg);border-radius:8px;border:1px solid var(--c-border)">
+        <span style="font-size:16px">{{ bfTask.status==='running'?'●':bfTask.status==='completed'?'✅':bfTask.status==='failed'?'❌':'⏹'}}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;color:var(--c-text)">
+            {{ bfTask.task_label }}
+            <span :style="{fontSize:'10px',color:bfTask.status==='running'?'#f59e0b':bfTask.status==='completed'?'#10b981':'#ef4444'}">{{ STATUS_LABELS[bfTask.status] || bfTask.status }}</span>
+          </div>
+          <div v-if="bfTask.progress" style="margin-top:4px">
+            <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
+              <div :style="{width:bfPct+'%',height:'100%',background:bfTask.status==='running'?'#2080f0':'#10b981',borderRadius:'2px',transition:'width .3s'}"></div>
+            </div>
+            <div style="display:flex;gap:12px;font-size:10px;color:var(--c-text-dim);margin-top:3px;flex-wrap:wrap">
+              <span v-if="bfTask.progress.total_batches">批次 {{ bfTask.progress.current_batch }}/{{ bfTask.progress.total_batches }}</span>
+              <span v-if="bfTask.progress.stocks_total">{{ bfTask.progress.stocks_done }}/{{ bfTask.progress.stocks_total }} 只</span>
+              <span v-if="bfTask.progress.rows">{{ bfTask.progress.rows.toLocaleString() }} 行</span>
+              <span v-if="bfTask.progress.errors" style="color:#ef4444">失败 {{ bfTask.progress.errors }} 只</span>
+              <span>耗时 {{fmtDuration(bfTask.elapsed_seconds)}}</span>
+              <span v-if="bfTask.status==='running' && bfTask.eta_seconds">预计剩余 {{fmtDuration(bfTask.eta_seconds)}}</span>
+            </div>
+          </div>
+          <div v-if="bfTask.error_message" style="font-size:10px;color:#ef4444;margin-top:2px">{{ bfTask.error_message }}</div>
+        </div>
+        <n-button v-if="bfTask.status==='running'" size="tiny" type="warning" @click="cancelBackfill">取消</n-button>
+      </div>
+    </div>
+
+    <!-- Last completed task (if different from current) -->
+    <div v-if="bfLastTask && bfLastTask.task_id !== (bfTask?.task_id)" style="margin-top:6px;font-size:10px;color:var(--c-text-dim)">
+      <span>{{ bfLastTask.task_label }}</span>
+      <span :style="{color:bfLastTask.status==='completed'?'#10b981':'#ef4444',marginLeft:'6px'}">{{ bfLastTask.status==='completed'?'已完成':'失败'}}</span>
+      <span style="margin-left:8px">{{ bfLastTask.progress?.rows?.toLocaleString() || 0 }} 行</span>
+      <span style="margin-left:8px">耗时 {{fmtDuration(bfLastTask.elapsed_seconds)}}</span>
+    </div>
+  </div>
+
+  <!-- Backfill Modal -->
+  <BackfillModal :show="bfModalShow" :type="bfModalType" @close="bfModalShow=false" @started="onBackfillStarted" />
+
   <!-- Log History Modal -->
   <!-- Sync Mode Modal -->
   <n-modal v-model:show="showSyncModal" preset="card" title="📥 数据采集" style="width:360px;max-width:85vw" :mask-closable="false">
@@ -130,6 +181,7 @@ import { ref, computed, onMounted } from 'vue'
 import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal } from 'naive-ui'
 import axios from 'axios'
 import DagView from './DagView.vue'
+import BackfillModal from './BackfillModal.vue'
 import { addWsListener } from '../utils/ws'
 
 const API = window.location.origin
@@ -316,20 +368,86 @@ onMounted(() => {
       dlog.value = data.nodes || []
     }
     if (data.type === 'dag_status') {
-      // 刷新统计按钮：仅 stats 节点 running/pending 时转动，不跟全局 has_running
       const rs = data.run_status || {}
       statsLoading.value = rs.stats?.status === 'running' || rs.stats?.status === 'pending'
-      // 日历同步状态：任务结束后清除
       if (!data.has_running) {
         cal.value.forEach(d => { d.syncing = false })
-        // 任务过期（current_run_id 变 null）→ 清空最近记录
         if (!data.current_run_id) {
           dlog.value = []
         }
       }
     }
+    // 补数进度
+    if (data.type === 'backfill_progress') {
+      bfTask.value = data
+      // 保留最后一次完成的任务
+      if (data.status === 'completed' || data.status === 'failed') {
+        bfLastTask.value = data
+        // 30 秒后自动清空当前任务显示
+        setTimeout(() => {
+          if (bfTask.value?.task_id === data.task_id) {
+            bfTask.value = null
+          }
+        }, 30000)
+      }
+    }
   })
 })
+
+// ── 历史补数 ──
+
+const backfillBtns = [
+  { type: 'kline', label: '个股日K线', icon: '📈' },
+  { type: 'index', label: '指数日K线', icon: '📊' },
+  { type: 'etf', label: 'ETF日K线', icon: '💹' },
+  { type: 'fund', label: '基本面', icon: '📋' },
+  { type: 'indicator', label: '基础指标加工', icon: '⚙️' },
+]
+
+const STATUS_LABELS = {
+  running: '运行中', completed: '已完成', failed: '失败',
+  cancelled: '已取消', pending: '等待中',
+}
+
+const bfModalShow = ref(false)
+const bfModalType = ref('kline')
+const bfTask = ref(null)
+const bfLastTask = ref(null)
+
+const bfPct = computed(() => {
+  const t = bfTask.value
+  if (!t || !t.progress || !t.progress.stocks_total) return 0
+  return Math.round((t.progress.stocks_done || 0) / t.progress.stocks_total * 100)
+})
+
+function openBackfill(type) {
+  bfModalType.value = type
+  bfModalShow.value = true
+}
+
+function onBackfillStarted() {
+  // WS 会自动推送进度
+}
+
+function cancelBackfill() {
+  const taskId = bfTask.value?.task_id
+  if (!taskId) return
+  axios.post(API + '/api/data_status/backfill/' + taskId + '/cancel').then(r => {
+    if (r.data?.ok) {
+      // 等待 WS 推送 cancelled 状态
+    }
+  }).catch(() => {})
+}
+
+function fmtDuration(sec) {
+  if (!sec || sec < 0) return '0s'
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h) return h + 'h ' + m + 'm'
+  if (m) return m + 'm ' + s + 's'
+  return s + 's'
+}
 </script>
 
 <style>

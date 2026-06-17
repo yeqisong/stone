@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS daily_quote (
     adj_factor_qfq    NUMERIC(10,6) DEFAULT 1.000000,
     is_ex_date        BOOLEAN DEFAULT false,
     ex_date_confirmed BOOLEAN DEFAULT false,
+    is_suspended      BOOLEAN DEFAULT false,
     volume            BIGINT NOT NULL,
     amount            NUMERIC(18,2) NOT NULL,
     turnover          NUMERIC(8,4),
@@ -68,8 +69,9 @@ CREATE TABLE IF NOT EXISTS index_daily_quote (
     high       NUMERIC(10,2) NOT NULL,
     low        NUMERIC(10,2) NOT NULL,
     close      NUMERIC(10,2) NOT NULL,
-    volume     BIGINT NOT NULL,
-    amount     NUMERIC(18,2) NOT NULL,
+    volume        BIGINT NOT NULL,
+    amount        NUMERIC(18,2) NOT NULL,
+    is_suspended  BOOLEAN DEFAULT false,
     PRIMARY KEY (trade_date, index_code)
 );
 """
@@ -624,6 +626,13 @@ def init_db(sync_session) -> None:
     ]:
         try:
             sync_session.execute(text(f"ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+
+    # 迁移：daily_quote / index_daily_quote 新增 is_suspended 列
+    for table_name in ['daily_quote', 'index_daily_quote']:
+        try:
+            sync_session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN DEFAULT false"))
         except Exception:
             sync_session.rollback()
 

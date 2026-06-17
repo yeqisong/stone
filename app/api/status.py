@@ -500,6 +500,24 @@ async def broadcast_dag_status():
                         dead.add(ws)
                 _ws_clients -= dead
 
+            # ── 补数进度推送 ──
+            try:
+                from crawler.backfill import BackfillManager
+                mgr = BackfillManager.get_instance()
+                active = mgr.get_active_task()
+                if active:
+                    # 有活跃任务时每轮都推送（2s 间隔）
+                    payload = _json.dumps({"type": "backfill_progress", **active})
+                    dead = set()
+                    for ws in _ws_clients:
+                        try:
+                            await ws.send_text(payload)
+                        except:
+                            dead.add(ws)
+                    _ws_clients -= dead
+            except Exception:
+                pass
+
             db.close()
         except Exception as e:
             logger.error(f"[ws] broadcast error: {e}")
@@ -566,3 +584,59 @@ def data_sources_health():
         return manager.get_health_summary()
     except Exception as e:
         return {"sources": [], "active_source": None, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════
+#  历史补数
+# ═══════════════════════════════════════════════
+
+@router.post("/data_status/backfill")
+def backfill_start(payload: dict):
+    """启动补数任务。
+
+    Body: {"type":"kline","start_date":"2021-06-16","end_date":"2026-06-17","force":false}
+    """
+    from crawler.backfill import BackfillManager, BusyError
+
+    task_type = payload.get("type", "")
+    if task_type not in ("kline", "index", "etf", "fund", "indicator"):
+        return {"ok": False, "error": "不支持的补数类型"}
+
+    start_date = payload.get("start_date")
+    end_date = payload.get("end_date")
+    force = payload.get("force", False)
+
+    # 日期校验
+    if task_type != "fund":
+        if start_date and end_date and start_date > end_date:
+            return {"ok": False, "error": "起始日期不能晚于截止日期"}
+        today = date.today().isoformat()
+        if end_date and end_date > today:
+            return {"ok": False, "error": "截止日期不能晚于今天"}
+
+    try:
+        mgr = BackfillManager.get_instance()
+        task_id = mgr.start(task_type, start_date, end_date, force)
+        return {"ok": True, "task_id": task_id}
+    except BusyError as e:
+        return {"ok": False, "error": str(e), "busy": True, "current_task": e.current_task}
+
+
+@router.post("/data_status/backfill/{task_id}/cancel")
+def backfill_cancel(task_id: str):
+    """取消运行中的补数任务。"""
+    from crawler.backfill import BackfillManager
+    try:
+        mgr = BackfillManager.get_instance()
+        mgr.cancel(task_id)
+        return {"ok": True, "message": "终止信号已发送，当前批次完成后停止"}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/data_status/backfill/history")
+def backfill_history(limit: int = 20):
+    """获取补数历史记录。"""
+    from crawler.backfill import BackfillManager
+    mgr = BackfillManager.get_instance()
+    return {"tasks": mgr.get_history(limit)}
