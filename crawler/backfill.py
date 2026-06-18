@@ -24,7 +24,7 @@ from crawler.adapters import get_data_source_manager
 from crawler.adapters.base import KlineRow, IndexKlineRow, FundamentalRow
 import crawler.writers as writers
 
-BATCH_SIZE = 200
+BATCH_SIZE = 50  # 每批 50 只，约 2-3 分钟完成一批，进度反馈更及时
 
 LABEL_MAP = {
     "kline": "个股日K线",

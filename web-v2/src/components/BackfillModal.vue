@@ -12,8 +12,8 @@
     <!-- 强制更新开关 -->
     <div style="display:flex;align-items:center;justify-content:space-between">
       <div>
-        <div style="font-size:13px;color:var(--c-text)">强制更新</div>
-        <div style="font-size:11px;color:var(--c-text-dim)">{{ forceUpdate ? '重新下载覆盖已有数据' : '跳过已有数据（断点续传）' }}</div>
+        <div style="font-size:13px;color:var(--c-text)">{{ forceUpdate ? '🔴 强制更新' : '🟢 断点续传' }}</div>
+        <div style="font-size:11px;color:var(--c-text-dim)">{{ forceUpdate ? '重新下载并覆盖已有数据' : '跳过已有数据，仅补全缺失部分' }}</div>
       </div>
       <n-switch v-model:value="forceUpdate" />
     </div>
