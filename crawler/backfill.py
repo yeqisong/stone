@@ -621,7 +621,7 @@ class BackfillManager:
                     current_batch=EXCLUDED.current_batch, stocks_total=EXCLUDED.stocks_total,
                     stocks_done=EXCLUDED.stocks_done, rows=EXCLUDED.rows,
                     errors=EXCLUDED.errors, error_message=EXCLUDED.error_message,
-                    completed_at=EXCLUDED.completed_at
+                    started_at=EXCLUDED.started_at, completed_at=EXCLUDED.completed_at
             """), {
                 "tid": task.task_id, "tt": task.task_type, "tl": task.task_label,
                 "st": task.status, "sd": task.start_date, "ed": task.end_date,
