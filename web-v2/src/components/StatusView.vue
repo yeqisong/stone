@@ -102,6 +102,23 @@
   </div>
 
   <!-- ══════════════════════════════════════════ -->
+  <!--  服务器监控                                            -->
+  <!-- ══════════════════════════════════════════ -->
+  <div style="margin-top:14px">
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🖥 服务器监控</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div v-for="m in sysMetrics" :key="m.label" style="flex:1;min-width:100px;padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
+        <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}</div>
+        <div style="font-size:16px;font-weight:700;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size:11px;font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
+        <div v-if="m.sub" style="font-size:10px;color:var(--c-text-dim)">{{ m.sub }}</div>
+        <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
+          <div :style="{width:m.pct+'%',height:'100%',background:m.pct>80?'#ef4444':m.pct>50?'#f59e0b':'#10b981',borderRadius:'2px'}"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
   <!--  历史补数                                              -->
   <!-- ══════════════════════════════════════════ -->
   <div style="margin-top:14px">
@@ -389,6 +406,7 @@ onMounted(() => {
   loadDataStatus()
   loadDataSources()
   loadRecentLogs()
+  loadSysMetrics()
   addWsListener((data) => {
     if (data.type === 'dag_log') {
       // WS 推送的新日志：合并到现有列表头部，去重，保留最近 50 条
@@ -413,6 +431,16 @@ onMounted(() => {
       }
     }
     // 补数进度
+    if (data.type === 'sys_metrics') {
+      const d = data.data
+      sysMetrics.value = [
+        { label: '内存总量', value: (d.memory_total_mb/1024).toFixed(1), unit: 'GB', sub: null, pct: null },
+        { label: '内存剩余', value: (d.memory_avail_mb/1024).toFixed(1), unit: 'GB', sub: `已用 ${d.memory_used_pct}%`, pct: d.memory_used_pct },
+        { label: '数据盘总量', value: d.disk_total_gb, unit: 'GB', sub: null, pct: null },
+        { label: '数据盘剩余', value: d.disk_avail_gb, unit: 'GB', sub: `已用 ${d.disk_used_pct}%`, pct: d.disk_used_pct },
+        { label: 'CPU 使用率', value: d.cpu_pct, unit: '%', sub: null, pct: d.cpu_pct },
+      ]
+    }
     if (data.type === 'backfill_progress') {
       bfTask.value = data
       // 保留最后一次完成的任务
@@ -484,6 +512,37 @@ function fmtDuration(sec) {
   return s + 's'
 }
 
+// ── 服务器监控 ──
+
+const sysMetrics = ref([])
+const _cpuPrev = ref(null)
+
+async function loadSysMetrics() {
+  try {
+    const r = await axios.get(API + '/api/system/metrics')
+    const d = r.data
+
+    // CPU 使用率：需两次采样求差值
+    let cpuPct = 0
+    if (d.cpu_idle && d.cpu_total) {
+      if (_cpuPrev.value) {
+        const idleDelta = d.cpu_idle - _cpuPrev.value.idle
+        const totalDelta = d.cpu_total - _cpuPrev.value.total
+        if (totalDelta > 0) cpuPct = Math.round((1 - idleDelta / totalDelta) * 100)
+      }
+      _cpuPrev.value = { idle: d.cpu_idle, total: d.cpu_total }
+    }
+
+    sysMetrics.value = [
+      { label: '内存总量', value: (d.memory_total_mb / 1024).toFixed(1), unit: 'GB', sub: null, pct: null },
+      { label: '内存剩余', value: (d.memory_avail_mb / 1024).toFixed(1), unit: 'GB', sub: `已用 ${d.memory_used_pct}%`, pct: d.memory_used_pct },
+      { label: '数据盘总量', value: d.disk_total_gb, unit: 'GB', sub: null, pct: null },
+      { label: '数据盘剩余', value: d.disk_avail_gb, unit: 'GB', sub: `已用 ${d.disk_used_pct}%`, pct: d.disk_used_pct },
+      { label: 'CPU 使用率', value: cpuPct, unit: '%', sub: null, pct: cpuPct },
+    ]
+  } catch (e) {}
+}
+
 // ── 补数日志弹窗 ──
 
 const showBfLogModal = ref(false)
@@ -504,8 +563,8 @@ const bfLogColumns = [
     const m = { running: '⏳运行中', completed: '✅完成', failed: '❌失败', cancelled: '⏹已取消' }
     return m[r.status] || r.status
   }},
-  { title: '行数', width: 55, className: 'nowrap-cell', align: 'right', render(r) { return (r.progress?.rows || 0).toLocaleString() }},
-  { title: '耗时', width: 55, className: 'nowrap-cell', render(r) { return fmtDuration(r.elapsed_seconds) }},
+  { title: '行数', width: 72, className: 'nowrap-cell', align: 'right', render(r) { return (r.progress?.rows || 0).toLocaleString() }},
+  { title: '耗时', width: 70, className: 'nowrap-cell', render(r) { return fmtDuration(r.elapsed_seconds) }},
   { title: '错误', width: 35, className: 'nowrap-cell', align: 'right', render(r) { return r.progress?.errors || 0 }},
 ]
 

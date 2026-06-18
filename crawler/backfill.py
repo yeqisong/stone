@@ -23,6 +23,7 @@ from app.db.connection import get_sync_db
 from app import signal as app_signal
 from crawler.adapters import get_data_source_manager
 from crawler.adapters.base import KlineRow, IndexKlineRow, FundamentalRow
+from crawler.adapters.baostock_adapter import _quarter_end_date as _qed
 import crawler.writers as writers
 
 BATCH_SIZE = 20  # 每批 20 只，控制内存峰值，防止 OOM（服务器仅 1.8G 内存）
@@ -403,7 +404,7 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
 
     def _run_fund_backfill(self, task: BackfillTask):
-        """基本面补数。无日期范围概念，即时快照。"""
+        """基本面补数。按季度区间回填，写入 stock_fundamentals + stock_fundamentals_history。"""
         manager = get_data_source_manager()
         try:
             adapter = manager.get_source()
@@ -423,22 +424,20 @@ class BackfillManager:
         all_codes = [s.stock_code for s in stock_list]
         db = get_sync_db()
 
-        if not task.force:
-            rows = db.execute(text(
-                "SELECT DISTINCT stock_code FROM stock_fundamentals"
-            )).fetchall()
-            skip_set = {r[0] for r in rows}
-        else:
-            skip_set = set()
+        # ── 解析日期范围为季度列表 ──
+        quarters = self._date_range_to_quarters(task.start_date, task.end_date)
+        logger.info("[Backfill] fund {} 只, {} 个季度: {} ~ {}",
+                    len(all_codes), len(quarters),
+                    quarters[0] if quarters else '?',
+                    quarters[-1] if quarters else '?')
 
-        remaining = [c for c in all_codes if c not in skip_set]
-        task.stocks_total = len(remaining)
+        task.stocks_total = len(all_codes) * len(quarters)
         bs = task._batch_size
-        task.total_batches = max((len(remaining) + bs - 1) // bs, 1)
+        task.total_batches = max((task.stocks_total + bs - 1) // bs, 1)
 
-        if not remaining:
+        if not all_codes or not quarters:
             task.status = "completed"
-            task.error_message = "基本面数据已完整，无需补数"
+            task.error_message = "无股票数据或无效日期范围"
             db.close()
             adapter._logout()
             return
@@ -457,49 +456,108 @@ class BackfillManager:
             db.close()
             return
 
-        for batch_idx in range(0, len(remaining), bs):
+        # ── 预处理：加载行业映射（一次 API 调用）──
+        industry_map = {}
+        try:
+            _bs = __import__('baostock')
+            rs = _bs.query_stock_industry()
+            if rs.error_code == '0':
+                while rs.next():
+                    d = rs.get_row_data()
+                    if d and len(d) > 3:
+                        raw = d[1]
+                        ind = d[3]
+                        for p in ('sh.', 'sz.', 'bj.'):
+                            if raw.startswith(p):
+                                industry_map[raw[len(p):]] = ind
+                                break
+        except Exception:
+            pass
+
+        # ── 按季度 × 股票遍历 ──
+        batch_count = 0
+        for q_idx, (year, quarter, report_date) in enumerate(quarters):
             if task._stop_requested:
                 task.status = "cancelled"
                 db.close()
                 adapter._logout()
                 return
 
-            batch = remaining[batch_idx:batch_idx + bs]
-            task.current_batch = batch_idx // bs + 1
-            logger.info("[Backfill] fund 批次 {}/{}: {} 只开始拉取",
-                        task.current_batch, task.total_batches, len(batch))
+            # 断点续传：查询本季度已有记录的股票
+            if not task.force:
+                existing = db.execute(text(
+                    "SELECT DISTINCT stock_code FROM stock_fundamentals_history WHERE report_date = :rd"
+                ), {"rd": report_date}).fetchall()
+                q_skip = {r[0] for r in existing}
+            else:
+                q_skip = set()
 
-            try:
-                fund_rows = adapter.fetch_fundamentals(batch)
-                saved = writers.batch_upsert_fundamentals(db, fund_rows) if fund_rows else 0
-                task.rows += saved
-                task.stocks_done += len(batch)
-            except Exception as e:
-                logger.error(f"[Backfill] 基本面批次 {task.current_batch} 失败: {e}")
-                task.errors += len(batch)
-                task.failed_codes.extend(batch[:5])
+            q_remaining = [c for c in all_codes if c not in q_skip]
+            logger.info("[Backfill] fund Q{} {}/{}: {} stocks (skip {}, remaining {})",
+                        quarter, year, report_date, len(all_codes), len(q_skip), len(q_remaining))
 
-            task.updated_at = datetime.now().isoformat()
-            self._wake_ws()
-
-            # 批次间会话维护
-            if batch_idx + bs < len(remaining):
-                try:
+            for batch_idx in range(0, len(q_remaining), bs):
+                if task._stop_requested:
+                    task.status = "cancelled"
+                    db.close()
                     adapter._logout()
-                except Exception:
-                    pass
-                time.sleep(2)
+                    return
+
+                batch = q_remaining[batch_idx:batch_idx + bs]
+                batch_count += 1
+
                 try:
-                    if not adapter._login():
+                    rows = adapter.fetch_fundamentals(batch, year=year, quarter=quarter)
+                    if rows:
+                        # 写入 stock_fundamentals_history（带 report_date）
+                        saved = writers.batch_upsert_fundamentals(db, rows)
+                        # 补充 report_date 写入 history 表
+                        for r in rows:
+                            if r.pe_ttm is not None or r.pb_mrq is not None or r.roe is not None:
+                                db.execute(text("""
+                                    INSERT INTO stock_fundamentals_history
+                                    (stock_code, report_date, pe_ttm, pb_mrq, roe, revenue_yoy, profit_yoy)
+                                    VALUES (:c, :rd, :pe, :pb, :roe, :ry, :py)
+                                    ON CONFLICT (stock_code, report_date) DO UPDATE SET
+                                    pe_ttm=EXCLUDED.pe_ttm, pb_mrq=EXCLUDED.pb_mrq,
+                                    roe=EXCLUDED.roe, revenue_yoy=EXCLUDED.revenue_yoy,
+                                    profit_yoy=EXCLUDED.profit_yoy
+                                """), {
+                                    "c": r.stock_code, "rd": report_date,
+                                    "pe": r.pe_ttm, "pb": r.pb_mrq, "roe": r.roe,
+                                    "ry": r.revenue_yoy, "py": r.profit_yoy,
+                                })
+                        db.commit()
+                        task.rows += saved
+                    task.stocks_done += len(batch)
+                except Exception as e:
+                    logger.error(f"[Backfill] fund Q{quarter}/{year} 批次失败: {e}")
+                    task.errors += len(batch)
+                    task.failed_codes.extend(batch[:5])
+
+                task.updated_at = datetime.now().isoformat()
+                task.current_batch = batch_count
+                self._update_task_db(task)
+                self._wake_ws()
+
+                # 批次间会话维护
+                if batch_idx + bs < len(q_remaining) or q_idx < len(quarters) - 1:
+                    try:
+                        adapter._logout()
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    try:
+                        if not adapter._login():
+                            task.status = "failed"
+                            task.error_message = "数据源重连失败"
+                            db.close()
+                            return
+                    except Exception as e2:
                         task.status = "failed"
-                        task.error_message = "数据源重连失败"
+                        task.error_message = f"数据源重连异常: {e2}"
                         db.close()
                         return
-                except Exception as e:
-                    task.status = "failed"
-                    task.error_message = f"数据源重连异常: {e}"
-                    db.close()
-                    return
 
         task.status = "completed"
         try:
@@ -507,6 +565,30 @@ class BackfillManager:
         except Exception:
             pass
         db.close()
+
+    @staticmethod
+    def _date_range_to_quarters(start: str, end: str) -> list:
+        """将日期范围拆分为季度列表。
+        返回 [(year, quarter, report_date), ...] 如 [(2021,2,'2021-06-30'), ...]
+        """
+        if not start or not end:
+            from datetime import date as dt_date
+            today = dt_date.today()
+            q = (today.month - 1) // 3 + 1
+            return [(today.year, q, _qed(today.year, q))]
+        sy, sm, sd = map(int, start.split("-"))
+        ey, em, ed = map(int, end.split("-"))
+        sq = (sm - 1) // 3 + 1
+        eq = (em - 1) // 3 + 1
+        result = []
+        y, q = sy, sq
+        while y < ey or (y == ey and q <= eq):
+            result.append((y, q, _qed(y, q)))
+            q += 1
+            if q > 4:
+                q = 1
+                y += 1
+        return result
 
     # ═══════════════════════════════════════════════
     #  基础指标加工补数

@@ -151,7 +151,9 @@ def get_data_status(
                 {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")},
                 {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")},
                 {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
-                {'label':'ETF日K线','rows':round((q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") or 0) * (q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0) / max((q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')") or 1), 1)),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")},
+                {'label':'ETF日K线','rows':q("SELECT COUNT(*) FROM daily_quote dq JOIN stock_master sm ON sm.stock_code=dq.stock_code AND sm.stock_type='etf'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'"),
+                 'start':q("SELECT MIN(dq.trade_date)::text FROM daily_quote dq JOIN stock_master sm ON sm.stock_code=dq.stock_code AND sm.stock_type='etf'"),
+                 'end':q("SELECT MAX(dq.trade_date)::text FROM daily_quote dq JOIN stock_master sm ON sm.stock_code=dq.stock_code AND sm.stock_type='etf'")},
                 {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
                 {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
                 {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
@@ -444,6 +446,7 @@ async def broadcast_dag_status():
     _last_state = None
     _last_log_state = None
     _completed_since = None  # 记录全部完成的时间
+    _sys_tracker = {"last": 0, "cpu_prev": None}  # sys metrics throttle + CPU prev
 
     while True:
         try:
@@ -517,6 +520,63 @@ async def broadcast_dag_status():
                     except:
                         dead.add(ws)
                 _ws_clients -= dead
+
+            # ── 系统指标推送（每 30s）──
+            try:
+                _now = _time.time()
+                if _now - _sys_tracker["last"] >= 30:
+                    _sys_tracker["last"] = _now
+                    import subprocess, re
+
+                    def _smem():
+                        try:
+                            with open("/proc/meminfo") as f:
+                                lines = f.readlines()
+                            t = a = 0
+                            for l in lines:
+                                if l.startswith("MemTotal:"): t = int(l.split()[1]) // 1024
+                                elif l.startswith("MemAvailable:"): a = int(l.split()[1]) // 1024
+                            return t, a
+                        except: return 0, 0
+
+                    def _sdisk():
+                        try:
+                            r = subprocess.run(["df", "-BM", "/app/data"], capture_output=True, text=True, timeout=5)
+                            parts = r.stdout.strip().split("\n")[1].split()
+                            return int(parts[1].replace("M",""))//1024, int(parts[2].replace("M",""))//1024, int(parts[3].replace("M",""))//1024
+                        except: return 0,0,0
+
+                    def _scpu():
+                        try:
+                            with open("/proc/stat") as f:
+                                cols = [int(x) for x in f.readline().split()[1:8]]
+                            idle = cols[3] + cols[4]
+                            return sum(cols), idle
+                        except: return 0,0
+
+                    mt, ma = _smem()
+                    dt, du, da = _sdisk()
+                    ct, ci = _scpu()
+                    cp = 0
+                    prev = _sys_tracker["cpu_prev"]
+                    if prev and ct > prev[0]:
+                        cp = round((1 - (ci - prev[1]) / (ct - prev[0])) * 100)
+                    _sys_tracker["cpu_prev"] = (ct, ci)
+
+                    sys_payload = _json.dumps({"type": "sys_metrics", "data": {
+                        "memory_total_mb": mt, "memory_avail_mb": ma,
+                        "memory_used_pct": round((mt-ma)/mt*100,1) if mt else 0,
+                        "disk_total_gb": dt, "disk_used_gb": du, "disk_avail_gb": da,
+                        "disk_used_pct": round(du/dt*100,1) if dt else 0,
+                        "cpu_pct": cp,
+                    }})
+                    dead = set()
+                    for ws in _ws_clients:
+                        try: await ws.send_text(sys_payload)
+                        except: dead.add(ws)
+                    _ws_clients -= dead
+            except Exception:
+                pass
 
             # ── 补数进度推送 ──
             try:
@@ -674,3 +734,70 @@ def backfill_logs(page: int = 1, page_size: int = 20):
     from crawler.backfill import BackfillManager
     mgr = BackfillManager.get_instance()
     return mgr.get_logs(page, page_size)
+
+
+# ═══════════════════════════════════════════════
+#  系统监控
+# ═══════════════════════════════════════════════
+
+@router.get("/system/metrics")
+def system_metrics():
+    """服务器基本指标：内存、磁盘、CPU。"""
+    import subprocess, re
+
+    def _mem():
+        try:
+            with open("/proc/meminfo") as f:
+                lines = f.readlines()
+            total = avail = 0
+            for l in lines:
+                if l.startswith("MemTotal:"):
+                    total = int(l.split()[1]) // 1024  # kB → MB
+                elif l.startswith("MemAvailable:"):
+                    avail = int(l.split()[1]) // 1024
+            return total, avail
+        except Exception:
+            return 0, 0
+
+    def _disk():
+        try:
+            # 数据盘用量
+            r = subprocess.run(["df", "-BM", "/app/data"], capture_output=True, text=True, timeout=5)
+            lines = r.stdout.strip().split("\n")
+            if len(lines) >= 2:
+                parts = lines[1].split()
+                total = int(parts[1].replace("M", "")) // 1024  # MB → GB
+                used = int(parts[2].replace("M", "")) // 1024
+                avail = int(parts[3].replace("M", "")) // 1024
+                return total, used, avail
+        except Exception:
+            pass
+        return 0, 0, 0
+
+    def _cpu():
+        try:
+            with open("/proc/stat") as f:
+                line = f.readline()
+            cols = [int(x) for x in line.split()[1:8]]
+            idle = cols[3] + cols[4]  # idle + iowait
+            total = sum(cols)
+            return total, idle
+        except Exception:
+            return 0, 0
+
+    mem_total, mem_avail = _mem()
+    disk_total, disk_used, disk_avail = _disk()
+    cpu_total, cpu_idle = _cpu()
+
+    # CPU 需要两次采样求差值，这里只返回瞬时值由前端计算
+    return {
+        "memory_total_mb": mem_total,
+        "memory_avail_mb": mem_avail,
+        "memory_used_pct": round((mem_total - mem_avail) / mem_total * 100, 1) if mem_total else 0,
+        "disk_total_gb": disk_total,
+        "disk_used_gb": disk_used,
+        "disk_avail_gb": disk_avail,
+        "disk_used_pct": round(disk_used / disk_total * 100, 1) if disk_total else 0,
+        "cpu_idle": cpu_idle,
+        "cpu_total": cpu_total,
+    }

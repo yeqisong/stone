@@ -1,6 +1,6 @@
 # 历史补数功能模块 — 设计文档
 
-> 版本：v2.0 | 状态：设计中 | 2026-06-17
+> 版本：v3.0 | 状态：设计中 | 2026-06-18
 
 ---
 
@@ -10,6 +10,7 @@
 |------|------|----------|------|
 | 2026-06-17 | v1.0 | 初版 | — |
 | 2026-06-17 | v2.0 | 异步后台任务 + WS 进度推送；补数区域实时进度条；单日/跨日期差异化策略；停牌处理；弹窗风格统一 | — |
+| 2026-06-18 | v3.0 | 基本面补数支持日期范围 + 历史季度数据回填；PE/PB API 增加重试；stock_fundamentals_history 落库设计 | — |
 
 ---
 
@@ -123,7 +124,7 @@
 - 起始日期默认：当天 - 5 年
 - 截止日期默认：当天
 - 前端校验：起始 ≤ 截止 ≤ 今天
-- **基本面**类型隐藏日期选择器（基本面是即时快照，无日期范围概念）
+- **基本面**类型：日期范围用于指定回填的历史季度区间（默认最近 1 季度）
 
 #### 强制更新开关（n-switch）
 
@@ -190,8 +191,8 @@ POST /api/data_status/backfill
 Request:
 {
   "type": "kline",            // kline | index | etf | fund | indicator
-  "start_date": "2021-06-16", // 可选，默认 5 年前。fund 类型忽略
-  "end_date": "2026-06-17",   // 可选，默认今天。fund 类型忽略
+  "start_date": "2021-06-16", // 可选，默认 5 年前。fund 类型按季度回填
+  "end_date": "2026-06-17",   // 可选，默认今天
   "force": false              // 可选，默认 false
 }
 
@@ -373,6 +374,70 @@ ALTER TABLE index_daily_quote ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN DEFA
 - `writers.py:_enrich_market_cap()` 查询 `volume > 0 AND turnover > 0` 的最新 K 线
 - 停牌标记行 volume=0 自动被过滤
 - 极端情况（完全没有交易记录）：市值保持 None
+
+### 4.4-B 基本面补数 — 日期范围与历史季度回填
+
+#### 数据分层
+
+| 表 | 数据粒度 | 当前状态 | 补数行为 |
+|---|---------|---------|---------|
+| `stock_fundamentals` | 每只股票 1 行（最新快照） | ✅ 有数据 | 更新最新值 |
+| `stock_fundamentals_history` | 每只股票 × 每季度 1 行 | ❌ 0 行 | **本次新增回填** |
+
+#### 日期范围含义
+
+基本面补数的起始/截止日期**按季度对齐**：
+
+```
+起始日期 2021-06-16 → 对齐到 2021Q2 (2021-04-01 ~ 2021-06-30)
+截止日期 2026-06-18 → 对齐到 2026Q2 (2026-04-01 ~ 2026-06-30)
+```
+
+遍历区间内每个季度，对每只股票查询该季度的 ROE/增长率/PE/PB。
+
+#### 季度数据来源
+
+| 指标 | baostock 接口 | 参数 | 说明 |
+|------|--------------|------|------|
+| ROE | `query_profit_data(code, year, quarter)` | 年份 + 季度 | 小数，需 ×100 转 % |
+| 营收同比增长率 | `query_growth_data(code, year, quarter)` | 同上 | 第 3 列 |
+| 净利同比增长率 | `query_growth_data(code, year, quarter)` | 同上 | 第 4 列 |
+| PE(TTM) / PB(MRQ) | `query_history_k_data_plus(code, "date,peTTM,pbMRQ", ...)` | 季度末日期 | 取该季度最后交易日的值 |
+
+#### DB 写入逻辑
+
+对每个季度 Q(y, q)，report_date 固定为该季度末日：
+
+```
+2021Q2 → report_date = '2021-06-30'
+2021Q3 → report_date = '2021-09-30'
+```
+
+写入 `stock_fundamentals_history`：
+
+```sql
+INSERT INTO stock_fundamentals_history (stock_code, report_date, pe_ttm, pb_mrq, roe)
+VALUES (:code, :report_date, :pe, :pb, :roe)
+ON CONFLICT (stock_code, report_date) DO UPDATE SET ...
+```
+
+同时对**最新季度**同步更新 `stock_fundamentals`（保持两边一致）。
+
+#### PE/PB API 重试
+
+当前 `fetch_fundamentals` 中 PE/PB 的 `bs.query_history_k_data_plus` 调用**无重试**，baostock 不稳定时静默跳过导致大量股票缺失 PE/PB。改为与 `_fetch_kline_single` 同级的重试逻辑（4 次重试 + 指数退避 + login 检测）。
+
+#### 断点续传
+
+- `stock_fundamentals_history` 已有对应 (stock_code, report_date) 的记录时跳过
+- `stock_fundamentals` 已有该股票记录时，仅更新（不跳过，保证是最新值）
+
+#### 非强制模式 vs 强制模式
+
+| 模式 | `stock_fundamentals` | `stock_fundamentals_history` |
+|------|---------------------|------------------------------|
+| 非强制（续传） | 仅更新无记录的股票 | 已有 (code, quarter) 记录则跳过 |
+| 强制 | 全部重新查询覆盖 | 全部重新查询覆盖 |
 
 ### 4.5 进度存储与 WebSocket 推送
 

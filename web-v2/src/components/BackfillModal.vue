@@ -28,8 +28,8 @@
     </div>
 
     <!-- 提示信息 -->
-    <div v-if="!showDatePicker" style="font-size:11px;color:var(--c-text-dim);padding:4px 8px;background:rgba(32,128,240,0.06);border-radius:6px">
-      基本面为即时快照，无日期范围概念。非强制模式将跳过已有数据。
+    <div v-if="type==='fund'" style="font-size:11px;color:var(--c-text-dim);padding:4px 8px;background:rgba(32,128,240,0.06);border-radius:6px">
+      基本面按季度回填，日期范围自动对齐到季度起止。非强制模式跳过已有季度数据。
     </div>
   </n-space>
 
@@ -63,7 +63,7 @@ const LABELS = {
 }
 
 const title = computed(() => `📥 ${LABELS[props.type] || props.type} 补数`)
-const showDatePicker = computed(() => props.type !== 'fund')
+const showDatePicker = computed(() => true)
 
 const visible = computed({
   get: () => props.show,

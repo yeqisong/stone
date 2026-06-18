@@ -306,14 +306,17 @@ class BaostockAdapter(DataSourceAdapter):
                 return None
         return None
 
-    def fetch_fundamentals(self, codes: List[str]) -> List[FundamentalRow]:
+    def fetch_fundamentals(self, codes: List[str], year: int = None,
+                            quarter: int = None) -> List[FundamentalRow]:
+        """拉取基本面数据。默认当前季度，可指定历史季度。"""
         self._ensure_login()
         from datetime import date
         results = []
         now = date.today()
-        year = now.year
-        # 正确计算当前季度：Q1=(1-3月), Q2=(4-6月), Q3=(7-9月), Q4=(10-12月)
-        quarter = (now.month - 1) // 3 + 1
+        if year is None:
+            year = now.year
+        if quarter is None:
+            quarter = (now.month - 1) // 3 + 1
 
         # 预加载行业映射（一次 API 调用，缓存给所有股票使用）
         industry_map = {}
@@ -369,27 +372,70 @@ class BaostockAdapter(DataSourceAdapter):
                         pass
                 if row.roe is not None and row.revenue_yoy is not None:
                     break
-            # PE/PB → 最近 1 天 K 线（仅取估值指标，不取 close/volume/turn）
-            # 市值计算由 writers._enrich_market_cap 从本站 daily_quote 完成
+            # PE/PB → 取指定季度末日或最近有效值（含重试）
+            from datetime import date as dt_date
+            if year != now.year or quarter != ((now.month - 1) // 3 + 1):
+                # 历史季度：用季度末日查询 PE/PB
+                q_end = _quarter_end_date(year, quarter)
+                pe, pb = self._fetch_pe_pb(bs_code, q_end)
+            else:
+                pe, pb = self._fetch_pe_pb(bs_code)
+            row.pe_ttm = pe
+            row.pb_mrq = pb
+            results.append(row)
+            self._delay()
+        return results
+
+    def _fetch_pe_pb(self, bs_code: str, end_date: str = None) -> tuple:
+        """拉取 PE(TTM)/PB(MRQ)，含重试 + login 检测。
+        返回 (pe_ttm, pb_mrq)，无数据返回 (None, None)。
+        """
+        from datetime import date as dt_date
+        if end_date is None:
+            today = dt_date.today()
+            end_d = today.isoformat()
+            start_d = (today - __import__('datetime').timedelta(days=5)).isoformat()
+        else:
+            end_d = end_date
+            # 往前取 5 天窗口，确保有交易日数据
+            start_d = (dt_date.fromisoformat(end_date) - __import__('datetime').timedelta(days=5)).isoformat()
+
+        for attempt in range(RETRY_MAX + 1):
             try:
-                end_d = now.isoformat()
-                start_d = (now - __import__('datetime').timedelta(days=5)).isoformat()
                 rs = bs.query_history_k_data_plus(
                     bs_code, "date,peTTM,pbMRQ",
                     start_date=start_d, end_date=end_d,
                     frequency="d", adjustflag="3")
-                if rs.error_code == '0':
-                    last = None
-                    while rs.next():
-                        last = rs.get_row_data()
-                    if last and len(last) >= 3:
-                        if last[1]: row.pe_ttm = float(last[1])
-                        if last[2]: row.pb_mrq = float(last[2])
-            except Exception:
-                pass
-            results.append(row)
-            self._delay()
-        return results
+                if rs.error_code != '0':
+                    msg = rs.error_msg
+                    if '未登录' in msg or 'login' in msg.lower():
+                        self._logged_in = False
+                        self._ensure_login()
+                        continue
+                    if attempt < RETRY_MAX:
+                        time.sleep(RETRY_BACKOFF ** (attempt + 1))
+                        continue
+                    return None, None
+
+                last = None
+                while rs.next():
+                    last = rs.get_row_data()
+                if last and len(last) >= 3:
+                    pe = float(last[1]) if last[1] else None
+                    pb = float(last[2]) if last[2] else None
+                    return pe, pb
+                return None, None
+            except Exception as e:
+                msg = str(e)
+                if '未登录' in msg or 'login' in msg.lower():
+                    self._logged_in = False
+                    self._ensure_login()
+                    continue
+                if attempt < RETRY_MAX:
+                    time.sleep(RETRY_BACKOFF ** (attempt + 1))
+                    continue
+                return None, None
+        return None, None
 
     def get_stock_list(self, stock_type: str = "stock") -> List[StockInfo]:
         self._ensure_login()
@@ -447,3 +493,8 @@ class BaostockAdapter(DataSourceAdapter):
             self._logout()
         except Exception:
             pass
+
+
+def _quarter_end_date(year: int, quarter: int) -> str:
+    end_month_day = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+    return f"{year}-{end_month_day[quarter]}"
