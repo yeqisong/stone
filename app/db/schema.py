@@ -463,6 +463,28 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
 ON CONFLICT (node_name) DO NOTHING;
 """
 
+CREATE_BACKFILL_TASKS = """
+CREATE TABLE IF NOT EXISTS backfill_tasks (
+    task_id       VARCHAR(50) PRIMARY KEY,
+    task_type     VARCHAR(20) NOT NULL,
+    task_label    VARCHAR(20),
+    status        VARCHAR(20) NOT NULL DEFAULT 'pending',
+    start_date    DATE,
+    end_date      DATE,
+    force         BOOLEAN DEFAULT false,
+    total_batches INTEGER DEFAULT 0,
+    current_batch INTEGER DEFAULT 0,
+    stocks_total  INTEGER DEFAULT 0,
+    stocks_done   INTEGER DEFAULT 0,
+    rows          INTEGER DEFAULT 0,
+    errors        INTEGER DEFAULT 0,
+    error_message TEXT,
+    started_at    TIMESTAMP,
+    completed_at  TIMESTAMP,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 CREATE_DAILY_COMPLETENESS = """
 CREATE TABLE IF NOT EXISTS daily_completeness (
     trade_date DATE PRIMARY KEY,
@@ -513,6 +535,7 @@ ON CONFLICT (strategy_name) DO NOTHING;
 # ── 顺序很重要（满足外键/依赖）──
 
 ALL_TABLES = [
+    ("backfill_tasks", CREATE_BACKFILL_TASKS),
     ("trade_calendar", CREATE_TRADE_CALENDAR),
     ("stock_master", CREATE_STOCK_MASTER),
     ("daily_quote", CREATE_DAILY_QUOTE),

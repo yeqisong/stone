@@ -125,6 +125,8 @@ class BackfillManager:
         self._lock = threading.Lock()
         self._active_task: Optional[BackfillTask] = None
         self._history: List[BackfillTask] = []
+        # 启动时恢复：将上次异常终止的 running 任务标记为 failed
+        self._recover_orphaned_tasks()
 
     @classmethod
     def get_instance(cls) -> "BackfillManager":
@@ -162,6 +164,7 @@ class BackfillManager:
                 force=force,
             )
             self._active_task = task
+            self._persist_task(task)  # 落库：pending 状态
 
             thread = threading.Thread(target=self._run_task, args=(task,), daemon=True)
             thread.start()
@@ -175,43 +178,22 @@ class BackfillManager:
             if self._active_task.status != "running":
                 raise ValueError("任务不在运行中，无法取消")
             self._active_task._stop_requested = True
+            self._update_task_db(self._active_task, status="cancelling")
 
     def get_active_task(self) -> Optional[dict]:
         """获取当前运行中任务的进度（供 WS 广播使用）。"""
         if self._active_task:
             return self._active_task.to_dict()
-        return None
+        # 内存中没有，查 DB（容器重启后恢复场景）
+        return self._load_active_from_db()
 
     def get_history(self, limit: int = 20) -> List[dict]:
         """获取历史任务列表（最近 N 条）。"""
-        return [t.to_dict() for t in self._history[-limit:]]
+        return self._query_tasks_db(limit=limit, exclude_running=True)
 
     def get_logs(self, page: int = 1, page_size: int = 20) -> dict:
-        """获取分页补数日志。按 started_at 倒序，包含进行中 + 已完成任务。
-
-        Returns:
-            { "items": [...], "total": int, "page": int, "page_size": int, "total_pages": int }
-        """
-        # 合并活跃任务和历史任务，去重
-        all_tasks = list(self._history)
-        if self._active_task and self._active_task not in all_tasks:
-            all_tasks.append(self._active_task)
-
-        # 按 started_at 倒序（最新的在前）
-        all_tasks.sort(key=lambda t: t.started_at or "", reverse=True)
-
-        total = len(all_tasks)
-        total_pages = max((total + page_size - 1) // page_size, 1)
-        start = (page - 1) * page_size
-        page_items = all_tasks[start:start + page_size]
-
-        return {
-            "items": [t.to_dict() for t in page_items],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-        }
+        """获取分页补数日志。从 DB 查询，按 created_at 倒序。"""
+        return self._query_tasks_db(page=page, page_size=page_size)
 
     # ── 内部 ──
 
@@ -220,6 +202,7 @@ class BackfillManager:
         task.status = "running"
         task.started_at = datetime.now().isoformat()
         task.updated_at = task.started_at
+        self._persist_task(task)  # 落库：running 状态
         self._wake_ws()
 
         try:
@@ -238,10 +221,10 @@ class BackfillManager:
                 task.status = "completed"  # 正常结束
             task.completed_at = datetime.now().isoformat()
             task.updated_at = task.completed_at
+            self._persist_task(task)  # 落库：最终状态
             self._wake_ws()
 
             with self._lock:
-                self._history.append(task)
                 if self._active_task is task:
                     self._active_task = None
 
@@ -379,6 +362,7 @@ class BackfillManager:
                 task.failed_codes.extend(batch[:5])
 
             task.updated_at = datetime.now().isoformat()
+            self._update_task_db(task)  # 每批完成后落库进度
             self._wake_ws()
 
             # 批次间会话维护（baostock 连接退化防护）
@@ -607,6 +591,166 @@ class BackfillManager:
         except Exception as e:
             logger.warning(f"[Backfill] 停牌标记写入失败 {code}: {e}")
 
+    # ═══════════════════════════════════════════════
+    #  DB 持久化
+    # ═══════════════════════════════════════════════
+
+    @staticmethod
+    def _get_db():
+        """获取 DB 连接（用于任务持久化，与数据 DB 共用）。"""
+        try:
+            return get_sync_db()
+        except Exception:
+            return None
+
+    def _persist_task(self, task: BackfillTask):
+        """写入/更新 backfill_tasks 表。"""
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            db.execute(text("""
+                INSERT INTO backfill_tasks (task_id, task_type, task_label, status,
+                    start_date, end_date, force, total_batches, current_batch,
+                    stocks_total, stocks_done, rows, errors, error_message,
+                    started_at, completed_at)
+                VALUES (:tid, :tt, :tl, :st, :sd, :ed, :f, :tb, :cb,
+                    :sto, :sdo, :r, :e, :em, :sa, :ca)
+                ON CONFLICT (task_id) DO UPDATE SET
+                    status=EXCLUDED.status, total_batches=EXCLUDED.total_batches,
+                    current_batch=EXCLUDED.current_batch, stocks_total=EXCLUDED.stocks_total,
+                    stocks_done=EXCLUDED.stocks_done, rows=EXCLUDED.rows,
+                    errors=EXCLUDED.errors, error_message=EXCLUDED.error_message,
+                    completed_at=EXCLUDED.completed_at
+            """), {
+                "tid": task.task_id, "tt": task.task_type, "tl": task.task_label,
+                "st": task.status, "sd": task.start_date, "ed": task.end_date,
+                "f": task.force, "tb": task.total_batches, "cb": task.current_batch,
+                "sto": task.stocks_total, "sdo": task.stocks_done,
+                "r": task.rows, "e": task.errors, "em": task.error_message,
+                "sa": task.started_at, "ca": task.completed_at,
+            })
+            db.commit()
+        except Exception as e:
+            logger.warning(f"[Backfill] 落库失败 {task.task_id}: {e}")
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _update_task_db(self, task: BackfillTask, status: str = None):
+        """更新进度字段（轻量 UPDATE，批次间频繁调用）。"""
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            sets = ["current_batch=:cb", "stocks_done=:sdo", "rows=:r", "errors=:e"]
+            params = {"tid": task.task_id, "cb": task.current_batch,
+                      "sdo": task.stocks_done, "r": task.rows, "e": task.errors}
+            if status:
+                sets.append("status=:st")
+                params["st"] = status
+            db.execute(text(f"UPDATE backfill_tasks SET {', '.join(sets)} WHERE task_id=:tid"), params)
+            db.commit()
+        except Exception as e:
+            logger.warning(f"[Backfill] 更新进度失败 {task.task_id}: {e}")
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _query_tasks_db(self, page: int = 1, page_size: int = 20,
+                         limit: int = 0, exclude_running: bool = False) -> dict | list:
+        """从 DB 查询补数任务。
+
+        Returns:
+            dict (分页) 或 list (limit 模式)
+        """
+        db = self._get_db()
+        if db is None:
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
+
+        try:
+            where = "WHERE status != 'running'" if exclude_running else ""
+            count_r = db.execute(text(f"SELECT COUNT(*) FROM backfill_tasks {where}")).fetchone()
+            total = count_r[0] if count_r else 0
+
+            if limit > 0:
+                rows = db.execute(text(
+                    f"SELECT * FROM backfill_tasks {where} ORDER BY created_at DESC LIMIT :lim"
+                ), {"lim": limit}).fetchall()
+                return [_row_to_dict(r) for r in rows]
+
+            total_pages = max((total + page_size - 1) // page_size, 1)
+            offset = (page - 1) * page_size
+            rows = db.execute(text(
+                f"SELECT * FROM backfill_tasks {where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+            ), {"lim": page_size, "off": offset}).fetchall()
+
+            items = [_row_to_dict(r) for r in rows]
+            # 如果内存中有运行中的任务，插入到列表头部
+            if self._active_task and self._active_task.status == "running":
+                active_dict = self._active_task.to_dict()
+                if not any(i.get("task_id") == active_dict["task_id"] for i in items):
+                    items.insert(0, active_dict)
+                    total += 1
+
+            return {
+                "items": items, "total": total,
+                "page": page, "page_size": page_size,
+                "total_pages": max((total + page_size - 1) // page_size, 1),
+            }
+        except Exception as e:
+            logger.warning(f"[Backfill] 查询日志失败: {e}")
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _load_active_from_db(self) -> Optional[dict]:
+        """从 DB 加载运行中的任务（容器重启恢复）。"""
+        db = self._get_db()
+        if db is None:
+            return None
+        try:
+            row = db.execute(text(
+                "SELECT * FROM backfill_tasks WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+            )).fetchone()
+            if row:
+                return _row_to_dict(row)
+            return None
+        except Exception:
+            return None
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _recover_orphaned_tasks(self):
+        """启动时将上次异常终止的 'running' 任务标记为 'failed'。"""
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            result = db.execute(text(
+                "UPDATE backfill_tasks SET status='failed', error_message='服务重启，任务中断', completed_at=CURRENT_TIMESTAMP WHERE status='running'"
+            ))
+            db.commit()
+            if result.rowcount and result.rowcount > 0:
+                logger.info(f"[Backfill] 恢复: {result.rowcount} 个孤儿任务标记为 failed")
+        except Exception as e:
+            logger.warning(f"[Backfill] 恢复孤儿任务失败: {e}")
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
     @staticmethod
     def _wake_ws():
         """唤醒 WebSocket 广播循环。"""
@@ -614,3 +758,43 @@ class BackfillManager:
             app_signal.wake_dag_broadcast()
         except Exception:
             pass
+
+
+def _row_to_dict(row) -> dict:
+    """将 DB 行转为 dict（兼容 to_dict() 输出格式）。"""
+    return {
+        "task_id": row.task_id,
+        "task_type": row.task_type,
+        "task_label": row.task_label or "",
+        "status": row.status,
+        "start_date": str(row.start_date) if row.start_date else None,
+        "end_date": str(row.end_date) if row.end_date else None,
+        "force": bool(row.force),
+        "progress": {
+            "current_batch": row.current_batch or 0,
+            "total_batches": row.total_batches or 0,
+            "stocks_done": row.stocks_done or 0,
+            "stocks_total": row.stocks_total or 0,
+            "rows": row.rows or 0,
+            "errors": row.errors or 0,
+            "failed_codes": [],
+        },
+        "started_at": str(row.started_at) if row.started_at else None,
+        "completed_at": str(row.completed_at) if row.completed_at else None,
+        "updated_at": str(row.completed_at or row.started_at) if (row.completed_at or row.started_at) else None,
+        "elapsed_seconds": _calc_elapsed(row.started_at, row.completed_at),
+        "eta_seconds": 0,
+        "error_message": row.error_message,
+    }
+
+
+def _calc_elapsed(started_at, completed_at) -> int:
+    if not started_at:
+        return 0
+    try:
+        from datetime import datetime as dt
+        start = dt.fromisoformat(str(started_at))
+        end = dt.fromisoformat(str(completed_at)) if completed_at else dt.now()
+        return int((end - start).total_seconds())
+    except Exception:
+        return 0
