@@ -322,6 +322,20 @@ class BackfillManager:
         # ── IPO 日期映射（停牌检测用）──
         ipo_map = self._load_ipo_map(db, stock_type)
 
+        # ── 会话刷新：get_stock_list 后重置连接，防止 baostock TCP 连接退化 ──
+        try:
+            adapter._logout()
+        except Exception:
+            pass
+        time.sleep(2)
+        try:
+            adapter._ensure_login()
+        except Exception as e:
+            task.status = "failed"
+            task.error_message = f"数据源重连失败: {e}"
+            db.close()
+            return
+
         # ── 分批执行 ──
         for batch_idx in range(0, len(remaining), BATCH_SIZE):
             if task._stop_requested:
@@ -332,11 +346,16 @@ class BackfillManager:
 
             batch = remaining[batch_idx:batch_idx + BATCH_SIZE]
             task.current_batch = batch_idx // BATCH_SIZE + 1
+            logger.info("[Backfill] {} 批次 {}/{}: {} 只开始拉取",
+                        task.task_type, task.current_batch, task.total_batches, len(batch))
 
             try:
                 rows = fetch_fn(batch, task.start_date, task.end_date)
                 saved = write_fn(db, rows) if rows else 0
                 task.rows += saved
+                logger.info("[Backfill] {} 批次 {}/{}: {} rows → 写入 {} 行",
+                            task.task_type, task.current_batch, task.total_batches,
+                            len(rows) if rows else 0, saved)
 
                 # 停牌检测：返回 0 行但已上市 → 写入停牌标记
                 if rows:
@@ -432,6 +451,20 @@ class BackfillManager:
             adapter._logout()
             return
 
+        # ── 会话刷新 ──
+        try:
+            adapter._logout()
+        except Exception:
+            pass
+        time.sleep(2)
+        try:
+            adapter._ensure_login()
+        except Exception as e:
+            task.status = "failed"
+            task.error_message = f"数据源重连失败: {e}"
+            db.close()
+            return
+
         for batch_idx in range(0, len(remaining), BATCH_SIZE):
             if task._stop_requested:
                 task.status = "cancelled"
@@ -441,6 +474,8 @@ class BackfillManager:
 
             batch = remaining[batch_idx:batch_idx + BATCH_SIZE]
             task.current_batch = batch_idx // BATCH_SIZE + 1
+            logger.info("[Backfill] fund 批次 {}/{}: {} 只开始拉取",
+                        task.current_batch, task.total_batches, len(batch))
 
             try:
                 fund_rows = adapter.fetch_fundamentals(batch)
