@@ -31,6 +31,20 @@ class AKShareAdapter(DataSourceAdapter):
     def __init__(self):
         self._name_cache: Optional[Dict[str, str]] = None  # code → name
 
+    # ── 会话管理（AKShare 无需登录，提供空操作兼容接口）──
+
+    def _ensure_login(self):
+        """AKShare 无需登录，空操作。"""
+        pass
+
+    def _login(self) -> bool:
+        """AKShare 无需登录。"""
+        return True
+
+    def _logout(self):
+        """AKShare 无需登出。"""
+        pass
+
     # ── 工具函数 ──
 
     @staticmethod
