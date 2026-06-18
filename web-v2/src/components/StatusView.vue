@@ -157,7 +157,7 @@
     <n-space vertical>
       <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" />
+        <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" scroll-x="700" />
       </div>
       <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="loadBfLogs" />
     </n-space>
@@ -183,7 +183,7 @@
     <n-space vertical>
       <div v-if="logLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <n-data-table :columns="logColumns" :data="logPageData" size="small" :row-props="()=>({style:{fontSize:'12px'}})" />
+        <n-data-table :columns="logColumns" :data="logPageData" size="small" :row-props="()=>({style:{fontSize:'12px'}})" scroll-x="700" />
       </div>
       <n-pagination v-if="logTotalPages>1" v-model:page="logPage" :page-count="logTotalPages" size="small" />
     </n-space>

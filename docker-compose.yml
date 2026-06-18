@@ -8,6 +8,7 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://stock-redis:6379/0
+      TZ: Asia/Shanghai
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -29,6 +30,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-stock}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock123}
       POSTGRES_DB: ${POSTGRES_DB:-stock_monitor}
+      TZ: Asia/Shanghai
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
     healthcheck:
