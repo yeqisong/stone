@@ -1,45 +1,41 @@
 <template>
-<n-modal v-model:show="visible" :mask-closable="!running">
-  <n-card style="width:480px;max-width:92vw" :title="title" role="dialog" aria-modal="true">
-    <n-space vertical size="medium">
-      <!-- 日期选择（基本面隐藏） -->
-      <n-space v-if="showDatePicker" vertical size="small">
-        <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:-4px">起始日期</div>
-        <n-date-picker v-model:formatted-value="startDate" type="date" value-format="yyyy-MM-dd" :is-date-disabled="d => d > Date.now()" style="width:100%" />
-        <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:-4px">截止日期</div>
-        <n-date-picker v-model:formatted-value="endDate" type="date" value-format="yyyy-MM-dd" :is-date-disabled="d => d > Date.now()" style="width:100%" />
-      </n-space>
-
-      <!-- 强制更新开关 -->
-      <n-space align="center" justify="space-between">
-        <div>
-          <div style="font-size:13px;color:var(--c-text)">强制更新</div>
-          <div style="font-size:11px;color:var(--c-text-dim)">{{ forceUpdate ? '重新下载覆盖已有数据' : '跳过已有数据（断点续传）' }}</div>
-        </div>
-        <n-switch v-model:value="forceUpdate" />
-      </n-space>
-
-      <!-- 提示信息 -->
-      <div v-if="!showDatePicker" style="font-size:11px;color:var(--c-text-dim);padding:4px 8px;background:rgba(32,128,240,0.06);border-radius:6px">
-        基本面为即时快照，无日期范围概念。非强制模式将跳过已有数据。
-      </div>
+<n-modal v-model:show="visible" preset="card" :title="title" style="width:480px;max-width:92vw" :mask-closable="!running">
+  <n-space vertical size="medium">
+    <!-- 日期选择（基本面隐藏） -->
+    <n-space v-if="showDatePicker" vertical size="small">
+      <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:-4px">起始日期</div>
+      <n-date-picker v-model:formatted-value="startDate" type="date" value-format="yyyy-MM-dd" :is-date-disabled="d => d > Date.now()" style="width:100%" />
+      <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:-4px">截止日期</div>
+      <n-date-picker v-model:formatted-value="endDate" type="date" value-format="yyyy-MM-dd" :is-date-disabled="d => d > Date.now()" style="width:100%" />
     </n-space>
 
-    <template #footer>
-      <n-space justify="end">
-        <n-button @click="onStart" type="primary" :disabled="submitted" :loading="submitted">
-          {{ submitted ? '已提交' : '开始补数' }}
-        </n-button>
-        <n-button @click="onClose">关闭</n-button>
-      </n-space>
-    </template>
-  </n-card>
+    <!-- 强制更新开关 -->
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:13px;color:var(--c-text)">强制更新</div>
+        <div style="font-size:11px;color:var(--c-text-dim)">{{ forceUpdate ? '重新下载覆盖已有数据' : '跳过已有数据（断点续传）' }}</div>
+      </div>
+      <n-switch v-model:value="forceUpdate" />
+    </div>
+
+    <!-- 提示信息 -->
+    <div v-if="!showDatePicker" style="font-size:11px;color:var(--c-text-dim);padding:4px 8px;background:rgba(32,128,240,0.06);border-radius:6px">
+      基本面为即时快照，无日期范围概念。非强制模式将跳过已有数据。
+    </div>
+  </n-space>
+
+  <template #footer>
+    <n-button @click="onStart" type="primary" :disabled="submitted" :loading="submitted">
+      {{ submitted ? '已提交' : '开始补数' }}
+    </n-button>
+    <n-button @click="onClose">关闭</n-button>
+  </template>
 </n-modal>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { NModal, NCard, NSpace, NButton, NSwitch, NDatePicker, useMessage } from 'naive-ui'
+import { NModal, NSpace, NButton, NSwitch, NDatePicker, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const props = defineProps({
@@ -111,9 +107,7 @@ function onStart() {
 }
 
 function onClose() {
-  if (!submitted.value) {
-    emit('close')
-  }
+  emit('close')
 }
 
 // 重置状态

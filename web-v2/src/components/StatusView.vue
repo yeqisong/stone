@@ -104,8 +104,11 @@
   <!-- ══════════════════════════════════════════ -->
   <!--  历史补数                                              -->
   <!-- ══════════════════════════════════════════ -->
-  <div style="margin-top:14px;padding:12px 16px;background:var(--c-card-bg);border-radius:8px;border:1px solid var(--c-card-bg-hover)">
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:10px">📥 历史补数</div>
+  <div style="margin-top:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <span style="font-size:14px;font-weight:600;color:var(--c-text)">📥 历史补数</span>
+      <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()">📋 日志</n-button>
+    </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" @click="openBackfill(btn.type)">
         {{ btn.icon }} {{ btn.label }}
@@ -113,8 +116,8 @@
     </div>
 
     <!-- Running / recent task progress -->
-    <div v-if="bfTask" style="margin-top:10px">
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--c-bg);border-radius:8px;border:1px solid var(--c-border)">
+    <div v-if="bfTask" style="margin-top:4px">
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
         <span style="font-size:16px">{{ bfTask.status==='running'?'●':bfTask.status==='completed'?'✅':bfTask.status==='failed'?'❌':'⏹'}}</span>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:600;color:var(--c-text)">
@@ -149,6 +152,15 @@
     </div>
   </div>
 
+  <!-- Backfill Log Modal -->
+  <n-modal v-model:show="showBfLogModal" preset="card" title="📋 补数日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadBfLogs">
+    <n-space vertical>
+      <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
+      <n-data-table v-else :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" />
+      <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="loadBfLogs" />
+    </n-space>
+  </n-modal>
+
   <!-- Backfill Modal -->
   <BackfillModal :show="bfModalShow" :type="bfModalType" @close="bfModalShow=false" @started="onBackfillStarted" />
 
@@ -178,7 +190,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal } from 'naive-ui'
+import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty } from 'naive-ui'
 import axios from 'axios'
 import DagView from './DagView.vue'
 import BackfillModal from './BackfillModal.vue'
@@ -447,6 +459,55 @@ function fmtDuration(sec) {
   if (h) return h + 'h ' + m + 'm'
   if (m) return m + 'm ' + s + 's'
   return s + 's'
+}
+
+// ── 补数日志弹窗 ──
+
+const showBfLogModal = ref(false)
+const bfLogLoading = ref(false)
+const bfLogItems = ref([])
+const bfLogPage = ref(1)
+const bfLogPageSize = 20
+const bfLogTotal = ref(0)
+const bfLogTotalPages = ref(1)
+
+const bfLogColumns = [
+  { title: '开始', key: 'started_at', width: 115, ellipsis: { tooltip: true }, className: 'nowrap-cell', render(r) { return (r.started_at || '').slice(0, 16) } },
+  { title: '结束', key: 'completed_at', width: 115, ellipsis: { tooltip: true }, className: 'nowrap-cell', render(r) { return r.completed_at ? r.completed_at.slice(0, 16) : (r.status==='running'?'—':'') } },
+  { title: '类型', key: 'task_label', width: 75, className: 'nowrap-cell' },
+  { title: '日期范围', width: 150, className: 'nowrap-cell', ellipsis: { tooltip: true }, render(r) { return r.start_date ? `${r.start_date} ~ ${r.end_date || ''}` : '—' } },
+  { title: '模式', width: 40, className: 'nowrap-cell', render(r) { return r.force ? '强制' : '续传' } },
+  { title: '状态', width: 65, className: 'nowrap-cell', render(r) {
+    const m = { running: '⏳运行中', completed: '✅完成', failed: '❌失败', cancelled: '⏹已取消' }
+    return m[r.status] || r.status
+  }},
+  { title: '行数', width: 55, className: 'nowrap-cell', align: 'right', render(r) { return (r.progress?.rows || 0).toLocaleString() }},
+  { title: '耗时', width: 55, className: 'nowrap-cell', render(r) { return fmtDuration(r.elapsed_seconds) }},
+  { title: '错误', width: 35, className: 'nowrap-cell', align: 'right', render(r) { return r.progress?.errors || 0 }},
+]
+
+function bfLogRowProps(row) {
+  return {
+    style: {
+      color: row.status === 'running' ? '#f59e0b' : row.status === 'failed' ? '#ef4444' : 'var(--c-text)',
+    }
+  }
+}
+
+async function loadBfLogs() {
+  bfLogLoading.value = true
+  try {
+    const r = await axios.get(API + '/api/data_status/backfill/logs', {
+      params: { page: bfLogPage.value, page_size: bfLogPageSize }
+    })
+    bfLogItems.value = r.data?.items || []
+    bfLogTotal.value = r.data?.total || 0
+    bfLogTotalPages.value = r.data?.total_pages || 1
+  } catch (e) {
+    bfLogItems.value = []
+  } finally {
+    bfLogLoading.value = false
+  }
 }
 </script>
 

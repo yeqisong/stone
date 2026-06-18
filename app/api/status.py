@@ -416,6 +416,15 @@ async def _send_current_state(ws):
         }))
         if log_nodes:
             await ws.send_text(_json.dumps({"type": "dag_log", "nodes": log_nodes}))
+        # 首次连接时也推送当前补数任务状态
+        try:
+            from crawler.backfill import BackfillManager
+            mgr = BackfillManager.get_instance()
+            active = mgr.get_active_task()
+            if active:
+                await ws.send_text(_json.dumps({"type": "backfill_progress", **active}))
+        except Exception:
+            pass
     except: pass
 
 async def broadcast_dag_status():
@@ -522,9 +531,16 @@ async def broadcast_dag_status():
         except Exception as e:
             logger.error(f"[ws] broadcast error: {e}")
 
-        # 空闲时 30 秒，有任务时 2 秒；外部可通过 _dag_wake_event.set() 立即唤醒
+        # 空闲时 30 秒，DAG 运行中 2 秒，补数运行中 2 秒
+        has_backfill = False
         try:
-            await asyncio.wait_for(_dag_wake_event.wait(), timeout=2 if has_running else 30)
+            from crawler.backfill import BackfillManager
+            bf = BackfillManager.get_instance().get_active_task()
+            has_backfill = bf is not None
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(_dag_wake_event.wait(), timeout=2 if (has_running or has_backfill) else 30)
             _dag_wake_event.clear()
         except asyncio.TimeoutError:
             pass
@@ -640,3 +656,11 @@ def backfill_history(limit: int = 20):
     from crawler.backfill import BackfillManager
     mgr = BackfillManager.get_instance()
     return {"tasks": mgr.get_history(limit)}
+
+
+@router.get("/data_status/backfill/logs")
+def backfill_logs(page: int = 1, page_size: int = 20):
+    """分页获取补数任务日志（按时间倒序，含进行中+已完成+失败）。"""
+    from crawler.backfill import BackfillManager
+    mgr = BackfillManager.get_instance()
+    return mgr.get_logs(page, page_size)

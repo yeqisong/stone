@@ -69,12 +69,16 @@ class BackfillTask:
         if self.started_at:
             try:
                 started = datetime.fromisoformat(self.started_at)
-                elapsed = (datetime.now() - started).total_seconds()
+                if self.completed_at:
+                    ended = datetime.fromisoformat(self.completed_at)
+                    elapsed = (ended - started).total_seconds()
+                else:
+                    elapsed = (datetime.now() - started).total_seconds()
             except Exception:
                 pass
 
         eta = 0
-        if self.stocks_done > 0 and self.stocks_total > 0 and elapsed > 0:
+        if self.status == "running" and self.stocks_done > 0 and self.stocks_total > 0 and elapsed > 0:
             eta = (elapsed / self.stocks_done) * (self.stocks_total - self.stocks_done)
 
         return {
@@ -179,8 +183,35 @@ class BackfillManager:
         return None
 
     def get_history(self, limit: int = 20) -> List[dict]:
-        """获取历史任务列表。"""
+        """获取历史任务列表（最近 N 条）。"""
         return [t.to_dict() for t in self._history[-limit:]]
+
+    def get_logs(self, page: int = 1, page_size: int = 20) -> dict:
+        """获取分页补数日志。按 started_at 倒序，包含进行中 + 已完成任务。
+
+        Returns:
+            { "items": [...], "total": int, "page": int, "page_size": int, "total_pages": int }
+        """
+        # 合并活跃任务和历史任务，去重
+        all_tasks = list(self._history)
+        if self._active_task and self._active_task not in all_tasks:
+            all_tasks.append(self._active_task)
+
+        # 按 started_at 倒序（最新的在前）
+        all_tasks.sort(key=lambda t: t.started_at or "", reverse=True)
+
+        total = len(all_tasks)
+        total_pages = max((total + page_size - 1) // page_size, 1)
+        start = (page - 1) * page_size
+        page_items = all_tasks[start:start + page_size]
+
+        return {
+            "items": [t.to_dict() for t in page_items],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
 
     # ── 内部 ──
 
