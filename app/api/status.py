@@ -630,6 +630,7 @@ def backfill_start(payload: dict):
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
     force = payload.get("force", False)
+    batch_size = max(1, min(int(payload.get("batch_size", 20) or 20), 500))
 
     # 日期校验
     if task_type != "fund":
@@ -641,7 +642,7 @@ def backfill_start(payload: dict):
 
     try:
         mgr = BackfillManager.get_instance()
-        task_id = mgr.start(task_type, start_date, end_date, force)
+        task_id = mgr.start(task_type, start_date, end_date, force, batch_size)
         return {"ok": True, "task_id": task_id}
     except BusyError as e:
         return {"ok": False, "error": str(e), "busy": True, "current_task": e.current_task}

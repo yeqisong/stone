@@ -64,6 +64,7 @@ class BackfillTask:
 
     # 内部控制
     _stop_requested: bool = False
+    _batch_size: int = 20
 
     def to_dict(self) -> dict:
         elapsed = 0
@@ -138,7 +139,7 @@ class BackfillManager:
     # ── 公开接口 ──
 
     def start(self, task_type: str, start_date: str = None,
-              end_date: str = None, force: bool = False) -> str:
+              end_date: str = None, force: bool = False, batch_size: int = 20) -> str:
         """启动补数任务。返回 task_id。已有运行中任务时抛出 BusyError。"""
         with self._lock:
             if self._active_task and self._active_task.status == "running":
@@ -163,6 +164,7 @@ class BackfillManager:
                 start_date=start_date,
                 end_date=end_date,
                 force=force,
+                _batch_size=max(1, min(batch_size, 500)),
             )
             self._active_task = task
             self._persist_task(task)  # 落库：pending 状态
@@ -294,7 +296,8 @@ class BackfillManager:
 
         remaining = [c for c in all_codes if c not in skip_set]
         task.stocks_total = len(remaining)
-        task.total_batches = max((len(remaining) + BATCH_SIZE - 1) // BATCH_SIZE, 1)
+        bs = task._batch_size
+        task.total_batches = max((len(remaining) + bs - 1) // bs, 1)
 
         if not remaining:
             task.status = "completed"
@@ -321,15 +324,15 @@ class BackfillManager:
             return
 
         # ── 分批执行 ──
-        for batch_idx in range(0, len(remaining), BATCH_SIZE):
+        for batch_idx in range(0, len(remaining), bs):
             if task._stop_requested:
                 task.status = "cancelled"
                 db.close()
                 adapter._logout()
                 return
 
-            batch = remaining[batch_idx:batch_idx + BATCH_SIZE]
-            task.current_batch = batch_idx // BATCH_SIZE + 1
+            batch = remaining[batch_idx:batch_idx + bs]
+            task.current_batch = batch_idx // bs + 1
             logger.info("[Backfill] {} 批次 {}/{}: {} 只开始拉取",
                         task.task_type, task.current_batch, task.total_batches, len(batch))
 
@@ -370,7 +373,7 @@ class BackfillManager:
             gc.collect()
 
             # 批次间会话维护（baostock 连接退化防护 + 释放内部缓存）
-            if batch_idx + BATCH_SIZE < len(remaining):
+            if batch_idx + bs < len(remaining):
                 try:
                     adapter._logout()
                 except Exception:
@@ -430,7 +433,8 @@ class BackfillManager:
 
         remaining = [c for c in all_codes if c not in skip_set]
         task.stocks_total = len(remaining)
-        task.total_batches = max((len(remaining) + BATCH_SIZE - 1) // BATCH_SIZE, 1)
+        bs = task._batch_size
+        task.total_batches = max((len(remaining) + bs - 1) // bs, 1)
 
         if not remaining:
             task.status = "completed"
@@ -453,15 +457,15 @@ class BackfillManager:
             db.close()
             return
 
-        for batch_idx in range(0, len(remaining), BATCH_SIZE):
+        for batch_idx in range(0, len(remaining), bs):
             if task._stop_requested:
                 task.status = "cancelled"
                 db.close()
                 adapter._logout()
                 return
 
-            batch = remaining[batch_idx:batch_idx + BATCH_SIZE]
-            task.current_batch = batch_idx // BATCH_SIZE + 1
+            batch = remaining[batch_idx:batch_idx + bs]
+            task.current_batch = batch_idx // bs + 1
             logger.info("[Backfill] fund 批次 {}/{}: {} 只开始拉取",
                         task.current_batch, task.total_batches, len(batch))
 
@@ -479,7 +483,7 @@ class BackfillManager:
             self._wake_ws()
 
             # 批次间会话维护
-            if batch_idx + BATCH_SIZE < len(remaining):
+            if batch_idx + bs < len(remaining):
                 try:
                     adapter._logout()
                 except Exception:

@@ -18,6 +18,15 @@
       <n-switch v-model:value="forceUpdate" />
     </div>
 
+    <!-- 并发数 -->
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:13px;color:var(--c-text)">并发数</div>
+        <div style="font-size:11px;color:var(--c-text-dim)">每批拉取的股票数量，默认20。减小可避免OOM</div>
+      </div>
+      <n-input-number v-model:value="batchSize" :min="1" :max="500" size="small" style="width:80px" />
+    </div>
+
     <!-- 提示信息 -->
     <div v-if="!showDatePicker" style="font-size:11px;color:var(--c-text-dim);padding:4px 8px;background:rgba(32,128,240,0.06);border-radius:6px">
       基本面为即时快照，无日期范围概念。非强制模式将跳过已有数据。
@@ -35,7 +44,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { NModal, NSpace, NButton, NSwitch, NDatePicker, useMessage } from 'naive-ui'
+import { NModal, NSpace, NButton, NSwitch, NDatePicker, NInputNumber, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const props = defineProps({
@@ -68,6 +77,7 @@ const fiveYearsAgo = `${new Date().getFullYear() - 5}${today.slice(4)}`
 const startDate = ref(fiveYearsAgo)
 const endDate = ref(today)
 const forceUpdate = ref(false)
+const batchSize = ref(20)
 const submitted = ref(false)
 const running = ref(false)
 
@@ -89,6 +99,7 @@ function onStart() {
     start_date: showDatePicker.value ? startDate.value : undefined,
     end_date: showDatePicker.value ? endDate.value : undefined,
     force: forceUpdate.value,
+    batch_size: batchSize.value,
   }).then(r => {
     if (r.data && r.data.ok) {
       message.success(`补数任务已提交（${LABELS[props.type]}）`)
