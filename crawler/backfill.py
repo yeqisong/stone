@@ -10,6 +10,7 @@ BackfillManager 单例管理补数任务的创建、执行、取消、进度查�
   - 后台线程执行，WS 进度推送
   - 全局单任务锁（baostock 非线程安全）
 """
+import gc
 import threading
 import time
 from datetime import date, datetime
@@ -24,7 +25,7 @@ from crawler.adapters import get_data_source_manager
 from crawler.adapters.base import KlineRow, IndexKlineRow, FundamentalRow
 import crawler.writers as writers
 
-BATCH_SIZE = 50  # 每批 50 只，约 2-3 分钟完成一批，进度反馈更及时
+BATCH_SIZE = 20  # 每批 20 只，控制内存峰值，防止 OOM（服务器仅 1.8G 内存）
 
 LABEL_MAP = {
     "kline": "个股日K线",
@@ -365,7 +366,10 @@ class BackfillManager:
             self._update_task_db(task)  # 每批完成后落库进度
             self._wake_ws()
 
-            # 批次间会话维护（baostock 连接退化防护）
+            # 强制 GC 释放内存（服务器仅 1.8G，OOM 会导致容器被杀）
+            gc.collect()
+
+            # 批次间会话维护（baostock 连接退化防护 + 释放内部缓存）
             if batch_idx + BATCH_SIZE < len(remaining):
                 try:
                     adapter._logout()
