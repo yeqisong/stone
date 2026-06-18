@@ -13,7 +13,9 @@
   </n-space>
   <template v-if="!showStats">
     <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
-    <n-data-table v-if="data.signals" :columns="columns" :data="data.signals" size="small" />
+    <div v-if="data.signals" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <n-data-table :columns="columns" :data="data.signals" size="small" />
+    </div>
     <n-empty v-else description="暂无信号" />
   </template>
   <SignalStatsView v-else />

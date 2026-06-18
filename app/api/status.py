@@ -134,20 +134,29 @@ def get_data_status(
                 "created_at": ts(r[6]), "started_at": ts(r[7]), "finished_at": ts(r[8]),
             })
 
-        # ── 数据明细（直接查源表，DAG 保证时序） ──
-        def q(query):
-            try: return db.execute(text(query)).scalar()
-            except: db.rollback(); return -1
-        data_tables = [
-            {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")},
-            {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")},
-            {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
-            {'label':'ETF日K线','rows':round((q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") or 0) * (q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0) / max((q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')") or 1), 1)),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")},
-            {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
-            {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
-            {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
-        ]
-        stats_computed_at = None
+        # ── 数据明细：优先从 data_stats_cache 读（DAG stats 节点写入），无缓存时实时回退 ──
+        import json as _json2
+        cache_row = db.execute(text(
+            "SELECT stats_json, computed_at FROM data_stats_cache ORDER BY id DESC LIMIT 1"
+        )).fetchone()
+        if cache_row:
+            data_tables = _json2.loads(cache_row[0])
+            stats_computed_at = str(cache_row[1])[:19] if cache_row[1] else None
+        else:
+            # 回退：实时 COUNT（首次部署，stats 节点未执行过）
+            def q(query):
+                try: return db.execute(text(query)).scalar()
+                except: db.rollback(); return -1
+            data_tables = [
+                {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")},
+                {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")},
+                {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
+                {'label':'ETF日K线','rows':round((q("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'") or 0) * (q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0) / max((q("SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type IN ('stock','etf')") or 1), 1)),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")},
+                {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
+                {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
+                {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
+            ]
+            stats_computed_at = None
 
         return {
             "overview": overview, "calendar": calendar, "missing_dates": missing_dates,

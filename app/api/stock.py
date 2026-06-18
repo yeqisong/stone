@@ -31,12 +31,12 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
         if stype == 'index':
             result = db.execute(text("""
                 SELECT index_code as stock_code, trade_date,
-                       close, close as close_hfq, volume, 0 as turnover, amount
+                       open, high, low, close, close as close_hfq, volume, 0 as turnover, amount
                 FROM index_daily_quote WHERE index_code=:c ORDER BY trade_date DESC LIMIT 1
             """), {"c": code})
         else:
             result = db.execute(text("""
-                SELECT stock_code, trade_date, close, close_hfq, volume, turnover, amount
+                SELECT stock_code, trade_date, open, high, low, close, close_hfq, volume, turnover, amount
                 FROM daily_quote WHERE stock_code=:c ORDER BY trade_date DESC LIMIT 1
             """), {"c": code})
 
@@ -107,6 +107,9 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
             "stock_code": code,
             "stock_name": stock_name,
             "latest_trade_date": str(quote.trade_date),
+            "open": float(quote.open) if quote.open else 0,
+            "high": float(quote.high) if quote.high else 0,
+            "low": float(quote.low) if quote.low else 0,
             "close": float(quote.close) if quote.close else 0,
             "close_hfq": float(quote.close_hfq) if quote.close_hfq else None,
             "volume": quote.volume,

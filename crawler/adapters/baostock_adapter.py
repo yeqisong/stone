@@ -239,34 +239,72 @@ class BaostockAdapter(DataSourceAdapter):
         results = []
         for code in codes:
             bs_code = self._bs_index_code(code)
+            rows = self._fetch_index_single(code, bs_code, start, end)
+            if not rows:
+                self._delay()
+                continue
+            for d in rows:
+                try:
+                    results.append(IndexKlineRow(
+                        trade_date=d[0],
+                        index_code=code,
+                        index_name="",
+                        open=float(d[1]) if d[1] else 0,
+                        high=float(d[2]) if d[2] else 0,
+                        low=float(d[3]) if d[3] else 0,
+                        close=float(d[4]) if d[4] else 0,
+                        volume=int(float(d[5])) if d[5] else 0,
+                        amount=float(d[6]) if d[6] else 0,
+                    ))
+                except (ValueError, IndexError):
+                    continue
+            self._delay()
+        return results
+
+    def _fetch_index_single(self, code: str, bs_code: str,
+                             start: str, end: str) -> Optional[List[list]]:
+        """拉取单只指数 K 线，含重试 + relogin 检测。
+        返回原始行列表 [date, open, high, low, close, volume, amount] 或 None。
+        """
+        for attempt in range(RETRY_MAX + 1):
             try:
                 rs = bs.query_history_k_data_plus(
-                    bs_code, "date,code,open,high,low,close,volume,amount",
+                    bs_code, "date,open,high,low,close,volume,amount",
                     start_date=start, end_date=end,
                     frequency="d", adjustflag="3")
                 if rs.error_code != '0':
-                    logger.warning(f"[baostock] 指数 {code} 失败: {rs.error_msg}")
-                    continue
-                while rs.next():
-                    d = rs.get_row_data()
-                    try:
-                        results.append(IndexKlineRow(
-                            trade_date=d[0],
-                            index_code=code,
-                            index_name="",  # 由调用方补充
-                            open=float(d[2]) if d[2] else 0,
-                            high=float(d[3]) if d[3] else 0,
-                            low=float(d[4]) if d[4] else 0,
-                            close=float(d[5]) if d[5] else 0,
-                            volume=int(float(d[6])) if d[6] else 0,
-                            amount=float(d[7]) if d[7] else 0,
-                        ))
-                    except (ValueError, IndexError):
+                    msg = rs.error_msg
+                    if '未登录' in msg or 'login' in msg.lower():
+                        self._logged_in = False
+                        self._ensure_login()
                         continue
+                    if attempt < RETRY_MAX:
+                        time.sleep(RETRY_BACKOFF ** (attempt + 1))
+                        continue
+                    logger.warning(f"[baostock] 指数 {code} ({bs_code}) 最终失败: {msg}")
+                    return None
+
+                raw_rows = []
+                while rs.next():
+                    row = rs.get_row_data()
+                    if len(row) >= 7 and row[0]:
+                        raw_rows.append(row)
+                if not raw_rows:
+                    return []
+                return raw_rows
+
             except Exception as e:
-                logger.warning(f"[baostock] 指数 {code} 异常: {e}")
-            self._delay()
-        return results
+                msg = str(e)
+                if '未登录' in msg or 'login' in msg.lower():
+                    self._logged_in = False
+                    self._ensure_login()
+                    continue
+                if attempt < RETRY_MAX:
+                    time.sleep(RETRY_BACKOFF ** (attempt + 1))
+                    continue
+                logger.warning(f"[baostock] 指数 {code} ({bs_code}) 最终异常: {e}")
+                return None
+        return None
 
     def fetch_fundamentals(self, codes: List[str]) -> List[FundamentalRow]:
         self._ensure_login()

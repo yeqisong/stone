@@ -29,14 +29,14 @@
             <n-button size="tiny" text @click="theme.toggle" :style="{fontSize:'16px'}" :title="theme.modeHint">{{ theme.modeLabel }}</n-button>
           </div>
         </div>
-        <div :style="{padding:'6px 20px',borderBottom:'1px solid '+theme.colors.border,display:'flex',gap:'4px'}">
-          <n-button :type="nav.tab==='p'?'primary':'default'" size="small" @click="nav.switchTab('p')">💼 持仓</n-button>
-          <n-button :type="nav.tab==='m'?'primary':'default'" size="small" @click="nav.switchTab('m')">📊 选股</n-button>
-          <n-button :type="nav.tab==='s'?'primary':'default'" size="small" @click="nav.switchTab('s')">🔴 信号</n-button>
-          <n-button :type="nav.tab==='l'?'primary':'default'" size="small" @click="nav.switchTab('l')">📋 个股</n-button>
-          <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')">📊 状态</n-button>
-          <n-button :type="nav.tab==='a'?'primary':'default'" size="small" @click="nav.switchTab('a')">🧠 模型</n-button>
-          <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')">⚙️ 设置</n-button>
+        <div :style="{padding:'6px 20px',borderBottom:'1px solid '+theme.colors.border,display:'flex',gap:'4px',overflowX:'auto',flexWrap:'nowrap',WebkitOverflowScrolling:'touch',scrollbarWidth:'none'}">
+          <n-button :type="nav.tab==='p'?'primary':'default'" size="small" @click="nav.switchTab('p')" :style="{flexShrink:0}">💼 持仓</n-button>
+          <n-button :type="nav.tab==='m'?'primary':'default'" size="small" @click="nav.switchTab('m')" :style="{flexShrink:0}">📊 选股</n-button>
+          <n-button :type="nav.tab==='s'?'primary':'default'" size="small" @click="nav.switchTab('s')" :style="{flexShrink:0}">🔴 信号</n-button>
+          <n-button :type="nav.tab==='l'?'primary':'default'" size="small" @click="nav.switchTab('l')" :style="{flexShrink:0}">📋 个股</n-button>
+          <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')" :style="{flexShrink:0}">📊 状态</n-button>
+          <n-button :type="nav.tab==='a'?'primary':'default'" size="small" @click="nav.switchTab('a')" :style="{flexShrink:0}">🧠 模型</n-button>
+          <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')" :style="{flexShrink:0}">⚙️ 设置</n-button>
         </div>
         <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
           <div v-if="nav.tab==='p'"><PortfolioView @show-detail="nav.showDetail" /></div>

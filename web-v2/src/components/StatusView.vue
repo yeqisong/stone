@@ -156,7 +156,9 @@
   <n-modal v-model:show="showBfLogModal" preset="card" title="📋 补数日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadBfLogs">
     <n-space vertical>
       <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
-      <n-data-table v-else :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" />
+      <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" />
+      </div>
       <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="loadBfLogs" />
     </n-space>
   </n-modal>
@@ -180,7 +182,9 @@
   <n-modal v-model:show="showLogModal" preset="card" title="📥 运行日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadLogModal">
     <n-space vertical>
       <div v-if="logLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
-      <n-data-table v-else :columns="logColumns" :data="logPageData" size="small" :row-props="()=>({style:{fontSize:'12px'}})" />
+      <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <n-data-table :columns="logColumns" :data="logPageData" size="small" :row-props="()=>({style:{fontSize:'12px'}})" />
+      </div>
       <n-pagination v-if="logTotalPages>1" v-model:page="logPage" :page-count="logTotalPages" size="small" />
     </n-space>
   </n-modal>
@@ -372,21 +376,40 @@ async function loadDataSources() {
   } catch(e) { /* API 不可用时静默 */ }
 }
 
+async function loadRecentLogs() {
+  try {
+    const r = await axios.get(API + '/api/dag_logs')
+    if (r.data?.nodes?.length) {
+      dlog.value = r.data.nodes
+    }
+  } catch(e) {}
+}
+
 onMounted(() => {
   loadDataStatus()
   loadDataSources()
+  loadRecentLogs()
   addWsListener((data) => {
     if (data.type === 'dag_log') {
-      dlog.value = data.nodes || []
+      // WS 推送的新日志：合并到现有列表头部，去重，保留最近 50 条
+      const incoming = data.nodes || []
+      if (incoming.length) {
+        const existing = new Map(dlog.value.map(n => [n.run_id + n.node, n]))
+        for (const n of incoming) {
+          existing.set(n.run_id + n.node, n)
+        }
+        dlog.value = [...existing.values()].sort((a, b) => {
+          const da = a.created_at || a.started_at || ''
+          const db = b.created_at || b.started_at || ''
+          return db.localeCompare(da)
+        }).slice(0, 50)
+      }
     }
     if (data.type === 'dag_status') {
       const rs = data.run_status || {}
       statsLoading.value = rs.stats?.status === 'running' || rs.stats?.status === 'pending'
       if (!data.has_running) {
         cal.value.forEach(d => { d.syncing = false })
-        if (!data.current_run_id) {
-          dlog.value = []
-        }
       }
     }
     // 补数进度

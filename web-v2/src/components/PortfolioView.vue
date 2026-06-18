@@ -58,7 +58,9 @@
         <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">成本价</div><div style="font-size:16px;font-weight:700">¥{{historyPos.cost_price.toFixed(2)}}</div></div>
       </div>
       <h4 style="margin:8px 0">📜 加减仓记录</h4>
-      <n-data-table v-if="historyRecords.length" :columns="historyColumns" :data="historyRecords" size="small" />
+      <div v-if="historyRecords.length" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <n-data-table :columns="historyColumns" :data="historyRecords" size="small" />
+      </div>
       <n-empty v-else description="暂无历史记录" />
     </template>
   </n-card>

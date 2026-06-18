@@ -158,8 +158,13 @@ def generate_stats(*args, **kwargs):
     sig_sell = q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0
     for s in stats:
         if s['label'] == '交易信号': s['detail'] = f'买{sig_buy} 卖{sig_sell}'
-    db.commit(); db.close()
-    logger.info(f"[pipeline] 数据统计完成: {len(stats)} 项")
+
+    # 写入 data_stats_cache（API 从此表读取，避免每次实时 COUNT）
+    db.execute(text("INSERT INTO data_stats_cache (stats_json, computed_at) VALUES (:json, CURRENT_TIMESTAMP)"),
+               {"json": _json.dumps(stats, ensure_ascii=False)})
+    db.commit()
+    db.close()
+    logger.info(f"[pipeline] 数据统计完成并落库: {len(stats)} 项")
     return len(stats)
 
 
