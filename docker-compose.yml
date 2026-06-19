@@ -9,6 +9,10 @@ services:
     environment:
       REDIS_URL: redis://stock-redis:6379/0
       TZ: Asia/Shanghai
+    deploy:
+      resources:
+        limits:
+          memory: 1.2g
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
