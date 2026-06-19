@@ -137,8 +137,7 @@ def generate_stats(*args, **kwargs):
          ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")),
         ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")),
          ("SELECT MIN(trade_date)::text FROM index_daily_quote", "SELECT MAX(trade_date)::text FROM index_daily_quote")),
-        ('ETF日K线', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")),
-         (None, None)),
+        ('ETF日K线', None, (None, None)),  # 下面单独处理
         ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals")),
          ("SELECT MIN(updated_at)::text FROM stock_fundamentals", "SELECT MAX(updated_at)::text FROM stock_fundamentals")),
         ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history")),
@@ -149,8 +148,16 @@ def generate_stats(*args, **kwargs):
     stats = []
     for label, fn, date_q in tables:
         try:
-            rows, items = fn()
-            s = {'label': label, 'rows': rows or 0, 'items': items}
+            if fn is None and label == 'ETF日K线':
+                try:
+                    rows = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")).scalar() or 0
+                except:
+                    db.rollback(); rows = 0
+                items = q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0
+                s = {'label': label, 'rows': rows, 'items': items}
+            else:
+                rows, items = fn()
+                s = {'label': label, 'rows': rows or 0, 'items': items}
             # 补充起止日期
             if date_q:
                 sr = db.execute(text(date_q[0])).scalar()

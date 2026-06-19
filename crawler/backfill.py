@@ -939,13 +939,13 @@ class BackfillManager:
                 pass
 
     def _recover_orphaned_tasks(self):
-        """启动时将上次异常终止的 'running' 任务标记为 'failed'。"""
+        """启动时将上次异常终止的任务标记为 'failed'。"""
         db = self._get_db()
         if db is None:
             return
         try:
             result = db.execute(text(
-                "UPDATE backfill_tasks SET status='failed', error_message='服务重启，任务中断', completed_at=CURRENT_TIMESTAMP WHERE status='running'"
+                "UPDATE backfill_tasks SET status='failed', error_message='服务重启，任务中断', completed_at=CURRENT_TIMESTAMP WHERE status IN ('running','cancelling')"
             ))
             db.commit()
             if result.rowcount and result.rowcount > 0:
