@@ -164,7 +164,7 @@ def generate_stats(*args, **kwargs):
                 rows, items = fn()
                 s = {'label': label, 'rows': rows or 0, 'items': items}
             # 补充起止日期
-            if date_q:
+            if date_q and date_q[0]:
                 sr = db.execute(text(date_q[0])).scalar()
                 er = db.execute(text(date_q[1])).scalar()
                 if sr: s['start'] = str(sr)[:10]
