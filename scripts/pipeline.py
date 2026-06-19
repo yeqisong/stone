@@ -137,7 +137,7 @@ def generate_stats(*args, **kwargs):
          ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")),
         ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")),
          ("SELECT MIN(trade_date)::text FROM index_daily_quote", "SELECT MAX(trade_date)::text FROM index_daily_quote")),
-        ('ETF日K线', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE stock_code LIKE '15%' OR stock_code LIKE '5%'"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")),
+        ('ETF日K线', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE stock_code LIKE '15%%' OR stock_code LIKE '5%%'"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")),
          (None, None)),
         ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals")),
          ("SELECT MIN(updated_at)::text FROM stock_fundamentals", "SELECT MAX(updated_at)::text FROM stock_fundamentals")),
