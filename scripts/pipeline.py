@@ -123,16 +123,22 @@ def generate_stats(*args, **kwargs):
     def q(query):
         try: return db.execute(text(query)).scalar()
         except: db.rollback(); return -1
+    # 一次 GROUP BY 同时拿到上交所和深交所行数
+    dq_counts = {}
+    try:
+        rows = db.execute(text("SELECT exchange, COUNT(*) FROM daily_quote GROUP BY exchange")).fetchall()
+        for r in rows: dq_counts[r[0]] = r[1]
+    except: db.rollback()
+
     tables = [
-        ('上交所A股', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'")),
+        ('上交所A股', lambda: (dq_counts.get('SSE', 0), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'")),
          ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")),
-        ('深交所A股', lambda: (q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'")),
+        ('深交所A股', lambda: (dq_counts.get('SZSE', 0), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'")),
          ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")),
         ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")),
          ("SELECT MIN(trade_date)::text FROM index_daily_quote", "SELECT MAX(trade_date)::text FROM index_daily_quote")),
-        ('ETF日K线', lambda: (q("SELECT COUNT(*) FROM daily_quote dq JOIN stock_master sm ON sm.stock_code=dq.stock_code AND sm.stock_type='etf'"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")),
-         ("SELECT MIN(dq.trade_date)::text FROM daily_quote dq JOIN stock_master sm ON sm.stock_code=dq.stock_code AND sm.stock_type='etf'",
-          "SELECT MAX(dq.trade_date)::text FROM daily_quote dq JOIN stock_master sm ON sm.stock_code=dq.stock_code AND sm.stock_type='etf'")),
+        ('ETF日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")),
+         (None, None)),
         ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals")),
          ("SELECT MIN(updated_at)::text FROM stock_fundamentals", "SELECT MAX(updated_at)::text FROM stock_fundamentals")),
         ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history")),

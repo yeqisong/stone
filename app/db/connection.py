@@ -23,7 +23,9 @@ AsyncSessionLocal = async_sessionmaker(
 sync_engine = create_engine(
     settings.DATABASE_URL_SYNC,
     echo=False,
-    pool_size=2,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,  # 30s 超时，避免永久阻塞
 )
 
 SyncSessionLocal = sessionmaker(
