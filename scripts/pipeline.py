@@ -149,16 +149,32 @@ def generate_stats(*args, **kwargs):
     for label, fn, date_q in tables:
         try:
             if fn is None and label == 'ETF日K线':
+                # ETF 行数：直接 SQL，避免 q() 内 text() 参数转义问题
+                rows = 0
                 try:
-                    rows = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")).scalar() or 0
-                except:
-                    db.rollback(); rows = 0
+                    r = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"))
+                    rows = r.scalar() or 0
+                except Exception as e:
+                    logger.warning(f"[pipeline] ETF 行数查询失败: {e}")
+                    try: db.rollback()
+                    except: pass
                 items = q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'") or 0
                 s = {'label': label, 'rows': rows, 'items': items}
             else:
                 rows, items = fn()
                 s = {'label': label, 'rows': rows or 0, 'items': items}
             # 补充起止日期
+            if date_q:
+                sr = db.execute(text(date_q[0])).scalar()
+                er = db.execute(text(date_q[1])).scalar()
+                if sr: s['start'] = str(sr)[:10]
+                if er: s['end'] = str(er)[:10]
+            stats.append(s)
+        except Exception as e:
+            logger.warning(f"[pipeline] 统计 {label} 失败: {e}")
+            try: db.rollback()
+            except: pass
+            stats.append({'label': label, 'rows': -1, 'items': 0})
             if date_q:
                 sr = db.execute(text(date_q[0])).scalar()
                 er = db.execute(text(date_q[1])).scalar()
