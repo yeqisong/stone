@@ -712,8 +712,7 @@ def backfill_cancel(task_id: str):
     from crawler.backfill import BackfillManager
     try:
         mgr = BackfillManager.get_instance()
-        mgr.cancel(task_id)
-        return {"ok": True, "message": "终止信号已发送，当前批次完成后停止"}
+        return mgr.cancel(task_id)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
 

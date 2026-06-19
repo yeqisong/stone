@@ -193,11 +193,14 @@
 ```json
 {
   "stock_code": "000001", "stock_name": "平安银行",
-  "latest_trade_date": "2026-06-12", "close": 13.20,
+  "latest_trade_date": "2026-06-12",
+  "open": 12.80, "high": 13.50, "low": 12.60, "close": 13.20,
   "close_hfq": 15.80, "volume": 50000000, "turnover": 2.5,
+  "amount": 650000000,
   "latest_signals": [{ "direction": "buy", "strength": 3, "strategy_name": "bollinger_daily", ... }],
   "history_count": 15, "latest_signal_date": "2026-06-12",
-  "fundamentals": { "industry": "金融业", "pe_ttm": 8.5, "pb_mrq": 1.2, "roe": 12.3 }
+  "fundamentals": { "industry": "金融业", "pe_ttm": 8.5, "pb_mrq": 1.2, "roe": 12.3,
+                    "revenue_yoy": 5.2, "profit_yoy": 8.1 }
 }
 ```
 
@@ -231,13 +234,21 @@ K 线 + 技术指标。
 ```
 
 ### GET /api/stock/{code}/pe_history
-PE/PB/ROE 历史时序 + 分位数。
+PE/PB/ROE 历史时序 + 分位数（数据来源：`stock_fundamentals_history` 表）。
 
 **响应 200**
 ```json
 {
   "stock_code": "000001",
-  "data": [{ "date": "2024-03", "pe_ttm": 7.5, "pb_mrq": 1.1, "roe": 14.2, "pe_percentile": 25.0 }]
+  "data": [
+    {
+      "date": "2024-03",
+      "pe_ttm": 7.5,
+      "pb_mrq": 1.1,
+      "roe": 14.2,
+      "pe_percentile": 25.0
+    }
+  ]
 }
 ```
 
@@ -364,6 +375,154 @@ DAG 流程结构（纯拓扑，无运行状态）。
 
 ---
 
+## 7.5 历史补数
+
+### POST /api/data_status/backfill
+启动补数任务（后台异步执行，WebSocket 推送进度）。
+
+| 属性 | 值 |
+|------|-----|
+| Content-Type | `application/json` |
+
+**请求体**
+```json
+{
+  "type": "kline",
+  "start_date": "2021-06-16",
+  "end_date": "2026-06-18",
+  "force": false,
+  "batch_size": 20
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `type` | string | ✅ | `kline`(个股) / `index`(指数) / `etf` / `fund`(基本面) / `indicator`(指标) |
+| `start_date` | string | | 起始日期 YYYY-MM-DD，默认 5 年前。fund 类型按季度对齐 |
+| `end_date` | string | | 截止日期 YYYY-MM-DD，默认今天 |
+| `force` | bool | | 强制更新（跳过断点续传），默认 false |
+| `batch_size` | int | | 每批拉取股票数，1-500，默认 20 |
+
+**响应 200**
+```json
+{ "ok": true, "task_id": "bf_kline_20260618_143022" }
+```
+
+**响应 409 (busy)**
+```json
+{
+  "ok": false,
+  "error": "已有补数任务运行中，请等待完成或取消后再试",
+  "busy": true,
+  "current_task": { "task_id": "...", "type": "index", "status": "running" }
+}
+```
+
+**响应 400**
+```json
+{ "ok": false, "error": "不支持的补数类型" }
+```
+
+### POST /api/data_status/backfill/{task_id}/cancel
+取消运行中的补数任务（当前批次完成后停止）。
+
+**响应 200**
+```json
+{
+  "ok": true,
+  "message": "终止信号已发送，当前批次完成后停止（预计 2 分 30 秒）",
+  "current_batch": 5,
+  "total_batches": 28,
+  "eta_seconds": 150
+}
+```
+
+**响应 400**
+```json
+{ "ok": false, "error": "任务不在运行中，无法取消" }
+```
+
+### GET /api/data_status/backfill/history
+补数历史记录。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `limit` | int | | 返回条数，默认 20 |
+
+**响应 200**
+```json
+{
+  "tasks": [{
+    "task_id": "bf_kline_20260618_143022",
+    "task_type": "kline",
+    "task_label": "个股日K线",
+    "status": "completed",
+    "start_date": "2021-06-16",
+    "end_date": "2026-06-18",
+    "force": false,
+    "progress": { "rows": 3450000, "errors": 12 },
+    "elapsed_seconds": 3600
+  }]
+}
+```
+
+### GET /api/data_status/backfill/logs
+补数任务日志（分页，按时间倒序，含进行中任务）。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `page` | int | | 页码，默认 1 |
+| `page_size` | int | | 每页条数，默认 20 |
+
+**响应 200**
+```json
+{
+  "items": [{
+    "task_id": "bf_kline_20260618_143022",
+    "task_type": "kline",
+    "task_label": "个股日K线",
+    "status": "running",
+    "start_date": "2021-06-16",
+    "end_date": "2026-06-18",
+    "force": false,
+    "progress": {
+      "current_batch": 8,
+      "total_batches": 28,
+      "stocks_done": 400,
+      "stocks_total": 5533,
+      "rows": 245000,
+      "errors": 2,
+      "failed_codes": ["600001", "000002"]
+    },
+    "started_at": "2026-06-18T14:30:22",
+    "completed_at": null,
+    "elapsed_seconds": 750,
+    "eta_seconds": 1080,
+    "error_message": null
+  }],
+  "total": 5,
+  "page": 1,
+  "page_size": 20,
+  "total_pages": 1
+}
+```
+
+### GET /api/data-sources/health
+数据源健康状态。
+
+**响应 200**
+```json
+{
+  "sources": [
+    { "name": "akshare", "priority": 10, "healthy": true, "checked_at": "2026-06-18T08:00:12" },
+    { "name": "baostock", "priority": 20, "healthy": false, "checked_at": "2026-06-18T08:00:14" }
+  ],
+  "active_source": "akshare"
+}
+```
+
+---
+
 ## 8. 设置
 
 ### GET /api/settings
@@ -414,7 +573,7 @@ DAG 流程结构（纯拓扑，无运行状态）。
 ## 10. WebSocket
 
 ### WS /ws/dag
-DAG 状态实时推送。
+DAG 状态、补数进度、系统指标实时推送。
 
 **连接**：`ws://localhost:8000/api/ws/dag` (dev) / `wss://s.pmlab.top/api/ws/dag` (prod)
 
@@ -426,12 +585,79 @@ DAG 状态实时推送。
 |------|----------|------|
 | `dag_status` | `run_status`, `current_run_id`, `current_run_latest`, `has_running` | 有任务 2s / 空闲 30s |
 | `dag_log` | `nodes` (日志数组) | 日志变化时 |
+| `backfill_progress` | `task_id`, `task_type`, `task_label`, `status`, `progress`, `elapsed_seconds`, `eta_seconds` | 运行中 2s / 状态变更立即 |
+| `sys_metrics` | `data` (内存/磁盘/CPU) | 每 30s |
 
-**新连接**：建立后立即发送当前状态 + 日志。
+**新连接**：建立后立即发送当前 DAG 状态 + 日志 + 补数任务状态。
+
+**backfill_progress 消息体**：
+```json
+{
+  "type": "backfill_progress",
+  "task_id": "bf_kline_20260618_143022",
+  "task_type": "kline",
+  "task_label": "个股日K线",
+  "status": "running",
+  "start_date": "2021-06-16",
+  "end_date": "2026-06-18",
+  "force": false,
+  "progress": {
+    "current_batch": 8,
+    "total_batches": 28,
+    "stocks_done": 400,
+    "stocks_total": 5533,
+    "rows": 245000,
+    "errors": 2,
+    "failed_codes": ["600001"]
+  },
+  "started_at": "2026-06-18T14:30:22",
+  "elapsed_seconds": 750,
+  "eta_seconds": 1080
+}
+```
+
+**sys_metrics 消息体**：
+```json
+{
+  "type": "sys_metrics",
+  "data": {
+    "memory_total_mb": 1843,
+    "memory_avail_mb": 890,
+    "memory_used_pct": 51.7,
+    "disk_total_gb": 39,
+    "disk_used_gb": 22,
+    "disk_avail_gb": 17,
+    "disk_used_pct": 56.4,
+    "cpu_pct": 23
+  }
+}
+```
 
 ---
 
-## 11. 健康检查
+## 11. 系统监控
+
+### GET /api/system/metrics
+获取服务器基本指标（内存、磁盘、CPU），每 30 秒通过 WS 自动推送。
+
+**响应 200**
+```json
+{
+  "memory_total_mb": 1843,
+  "memory_avail_mb": 890,
+  "memory_used_pct": 51.7,
+  "disk_total_gb": 39,
+  "disk_used_gb": 22,
+  "disk_avail_gb": 17,
+  "disk_used_pct": 56.4,
+  "cpu_idle": 12345678,
+  "cpu_total": 98765432
+}
+```
+
+---
+
+## 12. 健康检查
 
 ### GET /health
 ```json

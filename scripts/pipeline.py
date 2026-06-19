@@ -628,6 +628,14 @@ def dag_task_indicator_full(trade_date=None, **kw):
             if (idx + 1) % 500 == 0:
                 db.commit()
                 update_node_progress(log_id=log_id, rows=idx+1, detail=f'{idx+1}/{total}')
+            # 每 100 只刷新 session + GC 释放 DataFrame 内存
+            if (idx + 1) % 100 == 0:
+                import gc as _gc
+                _gc.collect()
+                db.commit()
+                try: db.close()
+                except: pass
+                db = get_sync_db()
         db.commit()
         db.close()
         write_node_log(log_id=log_id, status='success', rows=total, detail=f'{total} 只 ({errors} 错误)')

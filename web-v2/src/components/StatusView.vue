@@ -139,11 +139,11 @@
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:600;color:var(--c-text)">
             {{ bfTask.task_label }}
-            <span :style="{fontSize:'10px',color:bfTask.status==='running'?'#f59e0b':bfTask.status==='completed'?'#10b981':'#ef4444'}">{{ STATUS_LABELS[bfTask.status] || bfTask.status }}</span>
+            <span :style="{fontSize:'10px',color:bfTask.status==='running'?'#f59e0b':bfTask.status==='cancelling'?'#f59e0b':bfTask.status==='completed'?'#10b981':'#ef4444'}">{{ STATUS_LABELS[bfTask.status] || bfTask.status }}</span>
           </div>
           <div v-if="bfTask.progress" style="margin-top:4px">
             <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
-              <div :style="{width:bfPct+'%',height:'100%',background:bfTask.status==='running'?'#2080f0':'#10b981',borderRadius:'2px',transition:'width .3s'}"></div>
+              <div :style="{width:bfPct+'%',height:'100%',background:bfTask.status==='running'?'#2080f0':bfTask.status==='cancelling'?'#f59e0b':'#10b981',borderRadius:'2px',transition:'width .3s'}"></div>
             </div>
             <div style="display:flex;gap:12px;font-size:10px;color:var(--c-text-dim);margin-top:3px;flex-wrap:wrap">
               <span v-if="bfTask.progress.total_batches">批次 {{ bfTask.progress.current_batch }}/{{ bfTask.progress.total_batches }}</span>
@@ -156,7 +156,7 @@
           </div>
           <div v-if="bfTask.error_message" style="font-size:10px;color:#ef4444;margin-top:2px">{{ bfTask.error_message }}</div>
         </div>
-        <n-button v-if="bfTask.status==='running'" size="tiny" type="warning" @click="cancelBackfill">取消</n-button>
+        <n-button v-if="bfTask.status==='running'||bfTask.status==='cancelling'" size="tiny" type="warning" :disabled="bfTask.status==='cancelling'" @click="cancelBackfill">{{ bfTask.status==='cancelling'?'取消中…':'取消' }}</n-button>
       </div>
     </div>
 
@@ -469,7 +469,7 @@ const backfillBtns = [
 
 const STATUS_LABELS = {
   running: '运行中', completed: '已完成', failed: '失败',
-  cancelled: '已取消', pending: '等待中',
+  cancelled: '已取消', cancelling: '取消中…', pending: '等待中',
 }
 
 const bfModalShow = ref(false)
@@ -497,6 +497,7 @@ function cancelBackfill() {
   if (!taskId) return
   axios.post(API + '/api/data_status/backfill/' + taskId + '/cancel').then(r => {
     if (r.data?.ok) {
+      alert(r.data.message || '终止信号已发送')
       // 等待 WS 推送 cancelled 状态
     }
   }).catch(() => {})

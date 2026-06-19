@@ -28,6 +28,35 @@ import crawler.writers as writers
 
 BATCH_SIZE = 20  # 每批 20 只，控制内存峰值，防止 OOM（服务器仅 1.8G 内存）
 
+
+def _mem_avail_mb() -> int:
+    """读取系统可用内存 (MB)。Linux 读 /proc/meminfo，其他平台返回 9999。"""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    return 9999  # 非 Linux 环境不限制
+
+
+def _mem_used_pct() -> float:
+    """系统内存使用百分比（基于 MemTotal / MemAvailable）。"""
+    try:
+        total = avail = 0
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    avail = int(line.split()[1])
+            if total > 0:
+                return round((total - avail) / total * 100, 1)
+    except Exception:
+        pass
+    return 0.0
+
 LABEL_MAP = {
     "kline": "个股日K线",
     "index": "指数日K线",
@@ -174,8 +203,12 @@ class BackfillManager:
             thread.start()
             return task_id
 
-    def cancel(self, task_id: str):
-        """取消运行中的任务。当前批次完成后停止。"""
+    def cancel(self, task_id: str) -> dict:
+        """取消运行中的任务。当前批次完成后停止，同时释放内存。
+
+        Returns:
+            {"ok": True, "message": "...", "current_batch": N, "total_batches": N, "eta_seconds": N}
+        """
         with self._lock:
             if not self._active_task or self._active_task.task_id != task_id:
                 raise ValueError("任务不存在或已完成")
@@ -183,6 +216,28 @@ class BackfillManager:
                 raise ValueError("任务不在运行中，无法取消")
             self._active_task._stop_requested = True
             self._update_task_db(self._active_task, status="cancelling")
+            task = self._active_task
+        gc.collect()
+
+        # 估算当前批次剩余时间（单批约 2-3 分钟）
+        eta = 0
+        if task.stocks_total > 0 and task.stocks_done > 0 and task.started_at:
+            try:
+                elapsed = (datetime.now() - datetime.fromisoformat(task.started_at)).total_seconds()
+                eta_per_batch = elapsed / max(task.current_batch, 1)
+                eta = max(int(eta_per_batch * 0.8), 10)  # 保守估计 80% 单批时间，最少 10 秒
+            except Exception:
+                pass
+        if eta == 0:
+            eta = 120  # 默认 2 分钟
+
+        return {
+            "ok": True,
+            "message": f"终止信号已发送，当前批次完成后停止（预计 {eta // 60} 分 {eta % 60} 秒）",
+            "current_batch": task.current_batch,
+            "total_batches": task.total_batches,
+            "eta_seconds": eta,
+        }
 
     def get_active_task(self) -> Optional[dict]:
         """获取当前运行中任务的进度（供 WS 广播使用）。"""
@@ -324,25 +379,45 @@ class BackfillManager:
             db.close()
             return
 
-        # ── 分批执行 ──
-        for batch_idx in range(0, len(remaining), bs):
+        # ── 分批执行（含自适应并发调整）──
+        _bs = bs  # 当前动态批次大小，初始为用户设定值
+        _bs_max = bs  # 上限为用户设定值
+        _total_stocks = len(remaining)
+        _done = 0
+        _batch_count = 0
+        while _done < _total_stocks:
             if task._stop_requested:
                 task.status = "cancelled"
-                db.close()
-                adapter._logout()
+                try: adapter._logout()
+                except: pass
+                try: db.close()
+                except: pass
+                gc.collect()
                 return
 
-            batch = remaining[batch_idx:batch_idx + bs]
-            task.current_batch = batch_idx // bs + 1
-            logger.info("[Backfill] {} 批次 {}/{}: {} 只开始拉取",
-                        task.task_type, task.current_batch, task.total_batches, len(batch))
+            # 自适应并发：内存 >90% 降 1 只，<70% 恢复 1 只
+            _mem = _mem_used_pct()
+            if _mem > 90 and _bs > 1:
+                _bs -= 1
+                logger.warning(f"[Backfill] 内存 {_mem}%>90%, 并发降为 {_bs}")
+            elif _mem < 70 and _bs < _bs_max:
+                _bs += 1
+                logger.info(f"[Backfill] 内存 {_mem}%<70%, 并发恢复为 {_bs}")
+
+            _actual_bs = min(_bs, _total_stocks - _done)
+            batch = remaining[_done:_done + _actual_bs]
+            _batch_count += 1
+            task.current_batch = _batch_count
+            task.total_batches = (_total_stocks + _bs - 1) // _bs if _bs > 0 else 1
+            logger.info("[Backfill] {} 批次 {}/{}: {} 只开始拉取 (并发={}, 内存={}%)",
+                        task.task_type, _batch_count, task.total_batches, len(batch), _bs, _mem)
 
             try:
                 rows = fetch_fn(batch, task.start_date, task.end_date)
                 saved = write_fn(db, rows) if rows else 0
                 task.rows += saved
                 logger.info("[Backfill] {} 批次 {}/{}: {} rows → 写入 {} 行",
-                            task.task_type, task.current_batch, task.total_batches,
+                            task.task_type, _batch_count, task.total_batches,
                             len(rows) if rows else 0, saved)
 
                 # 停牌检测：返回 0 行但已上市 → 写入停牌标记
@@ -362,19 +437,30 @@ class BackfillManager:
                 task.stocks_done += len(batch)
 
             except Exception as e:
-                logger.error(f"[Backfill] {task.task_type} 批次 {task.current_batch} 失败: {e}")
+                logger.error(f"[Backfill] {task.task_type} 批次 {_batch_count} 失败: {e}")
                 task.errors += len(batch)
                 task.failed_codes.extend(batch[:5])
 
+            _done += len(batch)
             task.updated_at = datetime.now().isoformat()
             self._update_task_db(task)  # 每批完成后落库进度
             self._wake_ws()
 
-            # 强制 GC 释放内存（服务器仅 1.8G，OOM 会导致容器被杀）
+            # 释放内存：显式删除 rows 引用 + 强制 GC
+            if rows:
+                del rows
             gc.collect()
 
+            # 批次间刷新 DB session（避免 session 累积数百万行导致内存膨胀）
+            if _done < _total_stocks:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+                db = get_sync_db()
+
             # 批次间会话维护（baostock 连接退化防护 + 释放内部缓存）
-            if batch_idx + bs < len(remaining):
+            if _done < _total_stocks:
                 try:
                     adapter._logout()
                 except Exception:
@@ -435,6 +521,10 @@ class BackfillManager:
         bs = task._batch_size
         task.total_batches = max((task.stocks_total + bs - 1) // bs, 1)
 
+        # 自适应并发参数
+        _bs = bs
+        _bs_max = bs
+
         if not all_codes or not quarters:
             task.status = "completed"
             task.error_message = "无股票数据或无效日期范围"
@@ -479,8 +569,11 @@ class BackfillManager:
         for q_idx, (year, quarter, report_date) in enumerate(quarters):
             if task._stop_requested:
                 task.status = "cancelled"
-                db.close()
-                adapter._logout()
+                try: adapter._logout()
+                except: pass
+                try: db.close()
+                except: pass
+                gc.collect()
                 return
 
             # 断点续传：查询本季度已有记录的股票
@@ -496,14 +589,21 @@ class BackfillManager:
             logger.info("[Backfill] fund Q{} {}/{}: {} stocks (skip {}, remaining {})",
                         quarter, year, report_date, len(all_codes), len(q_skip), len(q_remaining))
 
-            for batch_idx in range(0, len(q_remaining), bs):
+            for batch_idx in range(0, len(q_remaining), _bs):
+                # 自适应并发
+                _mem = _mem_used_pct()
+                if _mem > 90 and _bs > 1: _bs -= 1
+                elif _mem < 70 and _bs < _bs_max: _bs += 1
                 if task._stop_requested:
                     task.status = "cancelled"
-                    db.close()
-                    adapter._logout()
+                    try: adapter._logout()
+                    except: pass
+                    try: db.close()
+                    except: pass
+                    gc.collect()
                     return
 
-                batch = q_remaining[batch_idx:batch_idx + bs]
+                batch = q_remaining[batch_idx:batch_idx + _bs]
                 batch_count += 1
 
                 try:
@@ -540,8 +640,21 @@ class BackfillManager:
                 self._update_task_db(task)
                 self._wake_ws()
 
+                # 释放内存
+                if rows:
+                    del rows
+                gc.collect()
+
+                # 批次间刷新 DB session
+                if batch_idx + _bs < len(q_remaining) or q_idx < len(quarters) - 1:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+                    db = get_sync_db()
+
                 # 批次间会话维护
-                if batch_idx + bs < len(q_remaining) or q_idx < len(quarters) - 1:
+                if batch_idx + _bs < len(q_remaining) or q_idx < len(quarters) - 1:
                     try:
                         adapter._logout()
                     except Exception:
@@ -687,10 +800,14 @@ class BackfillManager:
 
     @staticmethod
     def _get_db():
-        """获取 DB 连接（用于任务持久化，与数据 DB 共用）。"""
+        """获取 DB 连接（用于任务持久化，与数据 DB 共用）。
+
+        连接池满时 30s 超时抛异常，调用方静默处理，避免阻塞。
+        """
         try:
             return get_sync_db()
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[Backfill] DB 连接获取失败: {e}")
             return None
 
     def _persist_task(self, task: BackfillTask):
