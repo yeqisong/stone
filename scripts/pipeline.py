@@ -137,7 +137,9 @@ def generate_stats(*args, **kwargs):
          ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")),
         ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")),
          ("SELECT MIN(trade_date)::text FROM index_daily_quote", "SELECT MAX(trade_date)::text FROM index_daily_quote")),
-        ('ETF日K线', None, (None, None)),  # 下面单独处理
+        ('ETF日K线', None,
+         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'",
+          "SELECT MAX(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")),  # 下面单独处理 rows
         ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals")),
          ("SELECT MIN(updated_at)::text FROM stock_fundamentals", "SELECT MAX(updated_at)::text FROM stock_fundamentals")),
         ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history")),
@@ -246,8 +248,8 @@ def write_node_log(trade_date: str = '', node_name: str = '', status: str = 'suc
 
         db.commit()
         db.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"[pipeline] write_node_log 失败: {e}")
 
 
 def update_node_progress(log_id: int = None, trade_date: str = '', node_name: str = '',
@@ -278,8 +280,8 @@ def update_node_progress(log_id: int = None, trade_date: str = '', node_name: st
         db.execute(text(f"UPDATE dag_run_log SET {','.join(parts)} {where}"), params)
         db.commit()
         db.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"[pipeline] update_node_progress 失败: {e}")
 
 
 # ══════════════════════════════════════════
@@ -551,8 +553,13 @@ def dag_task_treemap(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
-def dag_task_indicator_full(trade_date=None, **kw):
-    """全量初始化 6 张指标表。遍历全部历史 K 线，并行计算写入。"""
+def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None, **kw):
+    """全量初始化 6 张指标表。遍历全部历史 K 线，并行计算写入。
+
+    Args:
+        progress_cb: 可选回调 cb(done, total) 每 100 只调用一次
+        cancel_cb: 可选回调 cb() → bool，返回 True 表示取消
+    """
     from datetime import date, timedelta
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -576,6 +583,11 @@ def dag_task_indicator_full(trade_date=None, **kw):
         errors = 0
         # 逐只计算指标并写入 6 张表
         for idx, code in enumerate(codes):
+            if cancel_cb and cancel_cb():
+                logger.info("[indicator_full] 收到取消信号，已处理 {}/{}", idx, total)
+                write_node_log(log_id=log_id, status='cancelled', detail=f'用户取消 ({idx}/{total})')
+                db.close()
+                return 0
             try:
                 rows = db.execute(text("""
                     SELECT trade_date, open, high, low, close_hfq as close, volume
@@ -651,8 +663,15 @@ def dag_task_indicator_full(trade_date=None, **kw):
             if (idx + 1) % 500 == 0:
                 db.commit()
                 update_node_progress(log_id=log_id, rows=idx+1, detail=f'{idx+1}/{total}')
-            # 每 100 只刷新 session + GC 释放 DataFrame 内存
+            # 每 100 只回调 + 刷新 session + GC
             if (idx + 1) % 100 == 0:
+                if cancel_cb and cancel_cb():
+                    logger.info("[indicator_full] 收到取消信号，已处理 {}/{}", idx + 1, total)
+                    write_node_log(log_id=log_id, status='cancelled', detail=f'用户取消 ({idx+1}/{total})')
+                    db.close()
+                    return 0
+                if progress_cb:
+                    progress_cb(idx + 1, total)
                 import gc as _gc
                 _gc.collect()
                 db.commit()
@@ -865,8 +884,17 @@ def dag_task_model_train(trade_date=None, **kw):
             models[label] = {'model': model, 'r2': round(r2, 4)}
             logger.info(f"[train] {label}: R²={r2:.4f}")
 
-        # ── 6. 存储结果 ──
-        best_params = _json.dumps({k: {'params': params, 'r2': m['r2'], 'pickle': _pkl.dumps(m['model']).hex()} for k, m in models.items()})
+        # ── 6. 存储结果（模型存文件，DB 只存路径）──
+        import os as _os
+        model_dir = f"data/models/{ver}"
+        _os.makedirs(model_dir, exist_ok=True)
+        for label, m in models.items():
+            path = f"{model_dir}/xgb_{label}.pkl"
+            with open(path, 'wb') as f:
+                _pkl.dump(m['model'], f)
+            models[label]['model_path'] = path
+
+        best_params = _json.dumps({k: {'params': params, 'r2': m['r2'], 'model_path': m['model_path']} for k, m in models.items()})
         r2_avg = np.mean([m['r2'] for m in models.values()])
         db.execute(text("UPDATE model_versions SET status='PENDING', best_params=:bp, evaluation_report=:rep WHERE version=:v"), {
             "v": ver, "bp": best_params,
@@ -950,10 +978,13 @@ def dag_task_model_signal(trade_date=None, **kw):
         try:
             if model_cfg:
                 bp = _json.loads(model_cfg) if isinstance(model_cfg, str) else model_cfg
-                import pickle as _pkl
+                import pickle as _pkl, os as _os
                 for label in ['5d', '10d', '20d']:
-                    if label in bp and 'pickle' in bp[label]:
-                        xgb_models[label] = _pkl.loads(bytes.fromhex(bp[label]['pickle']))
+                    if label in bp and 'model_path' in bp[label]:
+                        path = bp[label]['model_path']
+                        if _os.path.exists(path):
+                            with open(path, 'rb') as f:
+                                xgb_models[label] = _pkl.load(f)
                 use_predict = len(xgb_models) == 3
                 write_node_log(log_id=log_id, status='running', detail=f"预测模式 (R²avg={bp.get('5d',{}).get('r2','?'):.3f})" if use_predict else f"规则模式 (偏好:{pref_mode})")
         except Exception as e:

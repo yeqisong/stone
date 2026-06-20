@@ -151,7 +151,9 @@ def get_data_status(
                 {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")},
                 {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")},
                 {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
-                {'label':'ETF日K线','rows':q("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'")},
+                {'label':'ETF日K线','rows':q("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'"),
+                 'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"),
+                 'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")},
                 {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
                 {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
                 {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
@@ -432,9 +434,10 @@ async def _send_current_state(ws):
             active = mgr.get_active_task()
             if active:
                 await ws.send_text(_json.dumps({"type": "backfill_progress", **active}))
-        except Exception:
-            pass
-    except: pass
+        except Exception as e:
+            logger.error(f"[ws] _send_current_state 异常: {e}")
+    except Exception as e:
+        logger.error(f"[ws] _send_current_state 异常: {e}")
 
 async def broadcast_dag_status():
     """后台任务：每 2 秒检查 DAG 状态，有变化时推送给所有 WS 客户端。"""
@@ -561,12 +564,27 @@ async def broadcast_dag_status():
                         cp = round((1 - (ci - prev[1]) / (ct - prev[0])) * 100)
                     _sys_tracker["cpu_prev"] = (ct, ci)
 
+                    # DB 总大小（每 5 分钟查一次，避免每次 WS 循环都查）
+                    _dbs = 0
+                    if _now - _sys_tracker.get("db_last", 0) >= 300:
+                        _sys_tracker["db_last"] = _now
+                        try:
+                            from app.db.connection import get_sync_db as _gsd
+                            _tdb = _gsd()
+                            _dbs = round((_tdb.execute(text("SELECT pg_database_size(current_database())")).scalar() or 0) / 1024 / 1024)
+                            _tdb.close()
+                            _sys_tracker["db_size"] = _dbs
+                        except: pass
+                    else:
+                        _dbs = _sys_tracker.get("db_size", 0)
+
                     sys_payload = _json.dumps({"type": "sys_metrics", "data": {
                         "memory_total_mb": mt, "memory_avail_mb": ma,
                         "memory_used_pct": round((mt-ma)/mt*100,1) if mt else 0,
                         "disk_total_gb": dt, "disk_used_gb": du, "disk_avail_gb": da,
                         "disk_used_pct": round(du/dt*100,1) if dt else 0,
                         "cpu_pct": cp,
+                        "db_size_mb": _dbs,
                     }})
                     dead = set()
                     for ws in _ws_clients:
@@ -596,7 +614,7 @@ async def broadcast_dag_status():
 
             db.close()
         except Exception as e:
-            logger.error(f"[ws] broadcast error: {e}")
+            logger.error(f"[ws] broadcast error: {e}", exc_info=True)
 
         # 空闲时 30 秒，DAG 运行中 2 秒，补数运行中 2 秒
         has_backfill = False
@@ -682,7 +700,7 @@ def backfill_start(payload: dict):
     from crawler.backfill import BackfillManager, BusyError
 
     task_type = payload.get("type", "")
-    if task_type not in ("kline", "index", "etf", "fund", "indicator"):
+    if task_type not in ("kline", "index", "etf", "fund", "indicator", "calendar"):
         return {"ok": False, "error": "不支持的补数类型"}
 
     start_date = payload.get("start_date")
@@ -787,6 +805,27 @@ def system_metrics():
     cpu_total, cpu_idle = _cpu()
 
     # CPU 需要两次采样求差值，这里只返回瞬时值由前端计算
+    def _db_tables():
+        try:
+            from app.db.connection import get_sync_db
+            from sqlalchemy import text
+            db = get_sync_db()
+            rows = db.execute(text("""
+                SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS size,
+                       n_live_tup
+                FROM pg_stat_user_tables
+                ORDER BY pg_total_relation_size(relid) DESC
+                LIMIT 10
+            """)).fetchall()
+            db_size = db.execute(text("SELECT pg_database_size(current_database())")).scalar() or 0
+            db.close()
+            return {
+                "db_size_mb": round(db_size / 1024 / 1024),
+                "tables": [{"name": r[0], "size": r[1], "rows": r[2]} for r in rows],
+            }
+        except Exception:
+            return {"db_size_mb": 0, "tables": []}
+
     return {
         "memory_total_mb": mem_total,
         "memory_avail_mb": mem_avail,
@@ -797,4 +836,5 @@ def system_metrics():
         "disk_used_pct": round(disk_used / disk_total * 100, 1) if disk_total else 0,
         "cpu_idle": cpu_idle,
         "cpu_total": cpu_total,
+        "db": _db_tables(),
     }

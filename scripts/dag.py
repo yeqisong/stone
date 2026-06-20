@@ -255,7 +255,7 @@ class DagExecutor:
                         self._completed[name] = time.time()
                         logger.info(f"[dag] {name} ⊗ 已终止 (跳过)")
                         continue
-                    f = executor.submit(self._run_with_hooks, node, context)
+                    f = executor.submit(self._run_with_hooks, node, dict(context))
                     future_info[f] = (name, time.time())
                 for future in concurrent.futures.as_completed(future_info):
                     name, t0 = future_info[future]

@@ -35,7 +35,7 @@
             <span v-if="dt.items!=null" style="font-size:9px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
           </div>
           <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:14px;font-weight:700;color:var(--c-text)">{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}} <span v-if="dt.detail" style="font-size:10px;color:var(--c-text-dimmer)">{{dt.detail}}</span></div>
+            <div style="font-size:14px;font-weight:700;color:var(--c-text)"><span v-if="dt.detail" style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} · </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
             <div v-if="dt.start" style="font-size:9px;color:var(--c-text-faint);white-space:nowrap">{{dt.start}} ~ {{dt.end}}</div>
             <div v-else style="font-size:9px;color:var(--c-text-faint)">暂无数据</div>
           </div>
@@ -107,8 +107,8 @@
   <div style="margin-top:14px">
     <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🖥 服务器监控</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div v-for="m in sysMetrics" :key="m.label" style="flex:1;min-width:100px;padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
-        <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}</div>
+      <div v-for="m in sysMetrics" :key="m.label" style="flex:1;min-width:100px;padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :style="{cursor: m.clickable?'pointer':'default'}" @click="m.clickable && openDbDetail()">
+        <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size:9px">↗</span></div>
         <div style="font-size:16px;font-weight:700;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size:11px;font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
         <div v-if="m.sub" style="font-size:10px;color:var(--c-text-dim)">{{ m.sub }}</div>
         <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
@@ -178,6 +178,12 @@
       </div>
       <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="loadBfLogs" />
     </n-space>
+  </n-modal>
+
+  <!-- DB 表大小弹窗 -->
+  <n-modal v-model:show="showDbDetail" preset="card" title="🗄️ 数据库表大小" style="width:500px;max-width:92vw" :mask-closable="false">
+    <n-data-table v-if="dbTables.length" :columns="dbTableCols" :data="dbTables" size="small" />
+    <n-empty v-else description="加载中..." />
   </n-modal>
 
   <!-- Backfill Modal -->
@@ -433,10 +439,11 @@ onMounted(() => {
     // 补数进度
     if (data.type === 'sys_metrics') {
       const d = data.data
+      const dbSizeGB = (d.db_size_mb / 1024).toFixed(1)
       sysMetrics.value = [
         { label: '内存总量', value: (d.memory_total_mb/1024).toFixed(1), unit: 'GB', sub: null, pct: null },
         { label: '内存剩余', value: (d.memory_avail_mb/1024).toFixed(1), unit: 'GB', sub: `已用 ${d.memory_used_pct}%`, pct: d.memory_used_pct },
-        { label: '数据盘总量', value: d.disk_total_gb, unit: 'GB', sub: null, pct: null },
+        { label: 'DB 大小', value: dbSizeGB, unit: 'GB', sub: null, pct: null, clickable: true },
         { label: '数据盘剩余', value: d.disk_avail_gb, unit: 'GB', sub: `已用 ${d.disk_used_pct}%`, pct: d.disk_used_pct },
         { label: 'CPU 使用率', value: d.cpu_pct, unit: '%', sub: null, pct: d.cpu_pct },
       ]
@@ -465,6 +472,7 @@ const backfillBtns = [
   { type: 'etf', label: 'ETF日K线', icon: '💹' },
   { type: 'fund', label: '基本面', icon: '📋' },
   { type: 'indicator', label: '基础指标加工', icon: '⚙️' },
+  { type: 'calendar', label: '日历统计', icon: '📅' },
 ]
 
 const STATUS_LABELS = {
@@ -517,6 +525,21 @@ function fmtDuration(sec) {
 
 const sysMetrics = ref([])
 const _cpuPrev = ref(null)
+const showDbDetail = ref(false)
+const dbTables = ref([])
+const dbTableCols = [
+  { title: '表名', key: 'name', width: 180, ellipsis: { tooltip: true } },
+  { title: '大小', key: 'size', width: 80, align: 'right' },
+  { title: '行数', key: 'rows', width: 80, align: 'right', render(r) { return (r.rows || 0).toLocaleString() } },
+]
+
+async function openDbDetail() {
+  showDbDetail.value = true
+  try {
+    const r = await axios.get(API + '/api/system/metrics')
+    dbTables.value = r.data?.db?.tables || []
+  } catch(e) {}
+}
 
 async function loadSysMetrics() {
   try {
@@ -534,10 +557,11 @@ async function loadSysMetrics() {
       _cpuPrev.value = { idle: d.cpu_idle, total: d.cpu_total }
     }
 
+    const dbSizeGB = ((d.db?.db_size_mb || 0) / 1024).toFixed(1)
     sysMetrics.value = [
       { label: '内存总量', value: (d.memory_total_mb / 1024).toFixed(1), unit: 'GB', sub: null, pct: null },
       { label: '内存剩余', value: (d.memory_avail_mb / 1024).toFixed(1), unit: 'GB', sub: `已用 ${d.memory_used_pct}%`, pct: d.memory_used_pct },
-      { label: '数据盘总量', value: d.disk_total_gb, unit: 'GB', sub: null, pct: null },
+      { label: 'DB 大小', value: dbSizeGB, unit: 'GB', sub: null, pct: null, clickable: true },
       { label: '数据盘剩余', value: d.disk_avail_gb, unit: 'GB', sub: `已用 ${d.disk_used_pct}%`, pct: d.disk_used_pct },
       { label: 'CPU 使用率', value: cpuPct, unit: '%', sub: null, pct: cpuPct },
     ]

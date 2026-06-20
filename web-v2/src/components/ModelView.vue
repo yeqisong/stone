@@ -19,7 +19,7 @@
                 <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
                 <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{store.statusLabel(v.status)}}</n-tag>
               </div>
-              <n-button v-if="v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型">✕</n-button>
+              <n-button v-if="!store.isMock && v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型">✕</n-button>
             </div>
             <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
             <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--c-text-faint)">

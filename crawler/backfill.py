@@ -63,6 +63,7 @@ LABEL_MAP = {
     "etf": "ETF日K线",
     "fund": "基本面",
     "indicator": "基础指标加工",
+    "calendar": "日历统计",
 }
 
 
@@ -271,6 +272,8 @@ class BackfillManager:
                 self._run_fund_backfill(task)
             elif task.task_type == "indicator":
                 self._run_indicator_backfill(task)
+            elif task.task_type == "calendar":
+                self._run_calendar_backfill(task)
         except Exception as e:
             logger.error(f"[Backfill] 任务 {task.task_id} 异常: {e}")
             task.status = "failed"
@@ -546,25 +549,7 @@ class BackfillManager:
             db.close()
             return
 
-        # ── 预处理：加载行业映射（一次 API 调用）──
-        industry_map = {}
-        try:
-            _bs = __import__('baostock')
-            rs = _bs.query_stock_industry()
-            if rs.error_code == '0':
-                while rs.next():
-                    d = rs.get_row_data()
-                    if d and len(d) > 3:
-                        raw = d[1]
-                        ind = d[3]
-                        for p in ('sh.', 'sz.', 'bj.'):
-                            if raw.startswith(p):
-                                industry_map[raw[len(p):]] = ind
-                                break
-        except Exception:
-            pass
-
-        # ── 按季度 × 股票遍历 ──
+        # ── 按季度 × 股票遍历（行业映射由 adapter.fetch_fundamentals 内部加载）──
         batch_count = 0
         for q_idx, (year, quarter, report_date) in enumerate(quarters):
             if task._stop_requested:
@@ -724,12 +709,25 @@ class BackfillManager:
         from scripts.pipeline import dag_task_indicator_full
 
         try:
+            def _indicator_progress(done, total):
+                task.stocks_done = done
+                task.stocks_total = total
+                task.total_batches = total
+                task.current_batch = done
+                task.updated_at = datetime.now().isoformat()
+                self._update_task_db(task)
+                self._wake_ws()
+
+            def _is_cancelled():
+                return task._stop_requested
+
             dag_task_indicator_full(
                 trade_date=task.end_date,
                 start_date=task.start_date,
                 force=task.force,
+                progress_cb=_indicator_progress,
+                cancel_cb=_is_cancelled,
             )
-            task.stocks_done = 1  # indicator runs in bulk
             task.status = "completed"
         except Exception as e:
             logger.error(f"[Backfill] 指标计算失败: {e}")
@@ -738,6 +736,77 @@ class BackfillManager:
 
         task.updated_at = datetime.now().isoformat()
         self._wake_ws()
+        db.close()
+
+    # ═══════════════════════════════════════════════
+    #  日历完整度补数
+    # ═══════════════════════════════════════════════
+
+    def _run_calendar_backfill(self, task: BackfillTask):
+        """日历完整度补数：遍历日期区间，计算每日各表行数并写入 daily_completeness。"""
+        from datetime import date as _dt_date, timedelta
+        db = get_sync_db()
+
+        # 获取日期范围内的交易日
+        tc_rows = db.execute(text(
+            "SELECT cal_date FROM trade_calendar WHERE cal_date BETWEEN :s AND :e AND is_trade_day=true ORDER BY cal_date"
+        ), {"s": task.start_date, "e": task.end_date}).fetchall()
+        trade_dates = [str(r[0]) for r in tc_rows]
+
+        if not trade_dates:
+            task.status = "completed"
+            task.error_message = "日期范围内无交易日"
+            db.close()
+            return
+
+        task.stocks_total = len(trade_dates)
+        task.total_batches = len(trade_dates)
+
+        for idx, td in enumerate(trade_dates):
+            if task._stop_requested:
+                task.status = "cancelled"
+                db.close()
+                return
+
+            task.current_batch = idx + 1
+
+            try:
+                # 个股
+                stock = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d"), {"d": td}).scalar() or 0
+                db.execute(text("INSERT INTO daily_completeness (trade_date, stock_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET stock_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": stock})
+
+                # 指数
+                idx_rows = db.execute(text("SELECT COUNT(*) FROM index_daily_quote WHERE trade_date=:d"), {"d": td}).scalar() or 0
+                db.execute(text("INSERT INTO daily_completeness (trade_date, index_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET index_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": idx_rows})
+
+                # ETF
+                etf = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"), {"d": td}).scalar() or 0
+                db.execute(text("INSERT INTO daily_completeness (trade_date, etf_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET etf_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": etf})
+
+                # 基本面
+                fund = db.execute(text("SELECT COUNT(*) FROM stock_fundamentals WHERE updated_at::date<=:d"), {"d": td}).scalar() or 0
+                db.execute(text("INSERT INTO daily_completeness (trade_date, fund_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET fund_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": fund})
+                db.commit()
+
+                task.rows += stock + idx_rows + etf
+                task.stocks_done = idx + 1
+
+            except Exception as e:
+                logger.warning(f"[Backfill] calendar {td} 失败: {e}")
+                task.errors += 1
+                try: db.rollback()
+                except: pass
+
+            if idx % 30 == 0:
+                task.updated_at = datetime.now().isoformat()
+                self._update_task_db(task)
+                self._wake_ws()
+                gc.collect()
+
+        task.status = "completed"
+        task.updated_at = datetime.now().isoformat()
+        task.stocks_done = len(trade_dates)
+        self._update_task_db(task)
         db.close()
 
     # ═══════════════════════════════════════════════

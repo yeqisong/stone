@@ -97,6 +97,15 @@ for i in $(seq 1 20); do
 done
 ```
 
+### 2.5 清理旧镜像
+
+```bash
+# 构建后立即清理未使用的镜像（释放磁盘空间）
+ssh myhuawei "docker image prune -f"
+```
+
+> ⚠️ 每次 `docker compose build` 产生新镜像，旧镜像若不清理会持续堆积。当前服务器 50 个镜像占用 14GB，实际只用 3 个。此步骤必须执行。
+
 ---
 
 ## 三、部署后验证
@@ -258,7 +267,10 @@ git tag v2.6
 rsync -avz --exclude '.git/' --exclude '.env' --exclude '.env.prod' --exclude '.env.local' --exclude 'data/' --exclude 'logs/' --exclude 'node_modules/' --exclude 'web-v2/dist/' --exclude '__pycache__/' --exclude '*.pyc' --exclude '.DS_Store' --exclude '*.patch' --exclude '*.orig' . myhuawei:/usr/local/htdoc/stone/
 
 # 5. 服务器构建
-ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build --no-cache app && docker compose up -d app"
+ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build app && docker compose up -d app"
+
+# 5b. 清理旧镜像
+ssh myhuawei "docker image prune -f"
 
 # 6. 等待上线（最多 10 分钟）
 for i in $(seq 1 20); do
