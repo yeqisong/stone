@@ -553,10 +553,12 @@ def dag_task_treemap(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
-def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None, **kw):
-    """全量初始化 6 张指标表。遍历全部历史 K 线，并行计算写入。
+def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None,
+                             codes=None, **kw):
+    """初始化 6 张指标表。遍历全部历史 K 线，并行计算写入。
 
     Args:
+        codes: 股票代码列表，默认从 stock_master 全量获取
         progress_cb: 可选回调 cb(done, total) 每 100 只调用一次
         cancel_cb: 可选回调 cb() → bool，返回 True 表示取消
     """
@@ -572,11 +574,23 @@ def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None, *
     log_id = (kw.get('_node_log_ids', {}) or {}).get('indicator_full')
     write_node_log(log_id=log_id, status='running', detail='全量初始化指标…')
 
+    # 参数快照（记录本次计算使用的参数，写入 indicator_calc_log）
+    import json as _json
+    params_snapshot = _json.dumps({
+        "boll": {"period": 20, "std_mult": 2.0},
+        "macd": {"fast": 12, "slow": 26, "signal": 9},
+        "rsi": {"period": 14},
+        "atr": {"period": 14},
+        "ma": {"periods": [5, 20, 60, 250]},
+        "volume": {"vol_ma_period": 5},
+    })
+
     try:
         db = get_sync_db()
-        # 获取全部 stock_code
-        codes = db.execute(text("SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'")).fetchall()
-        codes = [r[0] for r in codes]
+        # 获取股票代码（外部传入优先，否则全量）
+        if codes is None:
+            codes = db.execute(text("SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'")).fetchall()
+            codes = [r[0] for r in codes]
         total = len(codes)
         update_node_progress(log_id=log_id, rows=0, detail=f'共 {total} 只股票')
 
@@ -588,6 +602,9 @@ def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None, *
                 write_node_log(log_id=log_id, status='cancelled', detail=f'用户取消 ({idx}/{total})')
                 db.close()
                 return 0
+            # 每只开始时强制回滚，确保干净事务（防止上一只的异常残留）
+            try: db.rollback()
+            except: pass
             try:
                 rows = db.execute(text("""
                     SELECT trade_date, open, high, low, close_hfq as close, volume
@@ -654,10 +671,27 @@ def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None, *
                              "o5":float(obv_ma5.iloc[i]) if not pd.isna(obv_ma5.iloc[i]) else 0,
                              "o10":float(obv_ma10.iloc[i]) if not pd.isna(obv_ma10.iloc[i]) else 0})
 
+                # 记录参数快照
+                db.execute(text("""
+                    INSERT INTO indicator_calc_log (stock_code, calc_date, params_snapshot, row_count, status)
+                    VALUES (:c, CURRENT_DATE, CAST(:ps AS jsonb), :rc, 'success')
+                    ON CONFLICT (stock_code, calc_date) DO UPDATE SET
+                        params_snapshot=EXCLUDED.params_snapshot, row_count=EXCLUDED.row_count,
+                        status='success', error_detail=NULL
+                """), {"c": code, "ps": params_snapshot, "rc": len(rows)})
+
             except Exception as e:
                 errors += 1
                 db.rollback()
                 logger.warning(f"[indicator_full] {code} 失败: {e}")
+                try:
+                    db.execute(text("""
+                        INSERT INTO indicator_calc_log (stock_code, calc_date, params_snapshot, row_count, status, error_detail)
+                        VALUES (:c, CURRENT_DATE, CAST(:ps AS jsonb), 0, 'failed', :err)
+                        ON CONFLICT (stock_code, calc_date) DO UPDATE SET status='failed', error_detail=:err
+                    """), {"c": code, "ps": params_snapshot, "err": str(e)[:500]})
+                except Exception:
+                    pass
                 continue
 
             if (idx + 1) % 500 == 0:
@@ -699,6 +733,16 @@ def dag_task_indicator_incr(trade_date=None, **kw):
     log_id = (kw.get('_node_log_ids', {}) or {}).get('indicator_incr')
     write_node_log(log_id=log_id, status='running', detail='增量更新指标…')
 
+    import json as _json
+    params_snapshot = _json.dumps({
+        "boll": {"period": 20, "std_mult": 2.0},
+        "macd": {"fast": 12, "slow": 26, "signal": 9},
+        "rsi": {"period": 14},
+        "atr": {"period": 14},
+        "ma": {"periods": [5, 20, 60, 250]},
+        "volume": {"vol_ma_period": 5},
+    })
+
     try:
         min_date = (date.fromisoformat(td) - timedelta(days=300)).isoformat()
         db = get_sync_db()
@@ -708,6 +752,8 @@ def dag_task_indicator_incr(trade_date=None, **kw):
         errors = 0
 
         for idx, code in enumerate(codes):
+            try: db.rollback()
+            except: pass
             try:
                 rows = db.execute(text("""
                     SELECT trade_date, open, high, low, close_hfq as close, volume
@@ -768,10 +814,27 @@ def dag_task_indicator_incr(trade_date=None, **kw):
                          "o5":float(obv_ma5_incr.iloc[i]) if not pd.isna(obv_ma5_incr.iloc[i]) else 0,
                          "o10":float(obv_ma10_incr.iloc[i]) if not pd.isna(obv_ma10_incr.iloc[i]) else 0})
 
+                # 记录参数快照
+                db.execute(text("""
+                    INSERT INTO indicator_calc_log (stock_code, calc_date, params_snapshot, row_count, status)
+                    VALUES (:c, CURRENT_DATE, CAST(:ps AS jsonb), :rc, 'success')
+                    ON CONFLICT (stock_code, calc_date) DO UPDATE SET
+                        params_snapshot=EXCLUDED.params_snapshot, row_count=EXCLUDED.row_count,
+                        status='success', error_detail=NULL
+                """), {"c": code, "ps": params_snapshot, "rc": len(rows)})
+
             except Exception as e:
                 errors += 1
                 db.rollback()
                 logger.warning(f"[indicator_incr] {code} 失败: {e}")
+                try:
+                    db.execute(text("""
+                        INSERT INTO indicator_calc_log (stock_code, calc_date, params_snapshot, row_count, status, error_detail)
+                        VALUES (:c, CURRENT_DATE, CAST(:ps AS jsonb), 0, 'failed', :err)
+                        ON CONFLICT (stock_code, calc_date) DO UPDATE SET status='failed', error_detail=:err
+                    """), {"c": code, "ps": params_snapshot, "err": str(e)[:500]})
+                except Exception:
+                    pass
                 continue
 
             if (idx + 1) % 500 == 0:

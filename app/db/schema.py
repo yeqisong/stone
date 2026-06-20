@@ -351,6 +351,21 @@ CREATE TABLE IF NOT EXISTS stock_indicators_volume (
 CREATE INDEX IF NOT EXISTS idx_volume_date ON stock_indicators_volume (trade_date);
 """
 
+CREATE_INDICATOR_CALC_LOG = """
+CREATE TABLE IF NOT EXISTS indicator_calc_log (
+    id               SERIAL PRIMARY KEY,
+    stock_code       VARCHAR(10) NOT NULL,
+    calc_date        DATE NOT NULL,
+    params_snapshot  JSONB NOT NULL DEFAULT '{}',
+    row_count        INTEGER DEFAULT 0,
+    status           VARCHAR(20) NOT NULL DEFAULT 'success',
+    error_detail     TEXT,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (stock_code, calc_date)
+);
+CREATE INDEX IF NOT EXISTS idx_icl_date ON indicator_calc_log (calc_date);
+"""
+
 # ── 模型训练：版本管理 ──
 
 CREATE_MODEL_VERSIONS = """
@@ -536,6 +551,7 @@ ON CONFLICT (strategy_name) DO NOTHING;
 
 ALL_TABLES = [
     ("backfill_tasks", CREATE_BACKFILL_TASKS),
+    ("indicator_calc_log", CREATE_INDICATOR_CALC_LOG),
     ("trade_calendar", CREATE_TRADE_CALENDAR),
     ("stock_master", CREATE_STOCK_MASTER),
     ("daily_quote", CREATE_DAILY_QUOTE),

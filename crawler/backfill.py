@@ -706,13 +706,55 @@ class BackfillManager:
             db.close()
             return
 
+        # 获取全部股票代码
+        all_codes = db.execute(text(
+            "SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'"
+        )).fetchall()
+        all_codes = [r[0] for r in all_codes]
+
+        # 断点续传：对比 indicator_calc_log 中的参数快照，参数相同且 status=success 则跳过
+        import json as _json
+        import scripts.pipeline as _pp
+        current_params = _json.dumps({
+            "boll": {"period": 20, "std_mult": 2.0},
+            "macd": {"fast": 12, "slow": 26, "signal": 9},
+            "rsi": {"period": 14},
+            "atr": {"period": 14},
+            "ma": {"periods": [5, 20, 60, 250]},
+            "volume": {"vol_ma_period": 5},
+        }, sort_keys=True)
+
+        skip_set = set()
+        if not task.force:
+            # 只有参数未变化且计算成功的才跳过
+            calc_rows = db.execute(text(
+                "SELECT stock_code, params_snapshot FROM indicator_calc_log WHERE status='success'"
+            )).fetchall()
+            for r in calc_rows:
+                try:
+                    stored = _json.dumps(_json.loads(r[1]) if isinstance(r[1], str) else r[1], sort_keys=True)
+                    if stored == current_params:
+                        skip_set.add(r[0])
+                except Exception:
+                    pass
+
+        remaining = [c for c in all_codes if c not in skip_set]
+        task.stocks_total = len(remaining)
+        task.total_batches = max((len(remaining) + 99) // 100, 1)
+
+        if not remaining:
+            task.status = "completed"
+            task.error_message = "指标数据已完整，无需补数"
+            db.close()
+            return
+        db.close()
+
         from scripts.pipeline import dag_task_indicator_full
 
         try:
             def _indicator_progress(done, total):
                 task.stocks_done = done
                 task.stocks_total = total
-                task.total_batches = total
                 task.current_batch = done
                 task.updated_at = datetime.now().isoformat()
                 self._update_task_db(task)
@@ -722,9 +764,9 @@ class BackfillManager:
                 return task._stop_requested
 
             dag_task_indicator_full(
+                codes=remaining,
                 trade_date=task.end_date,
                 start_date=task.start_date,
-                force=task.force,
                 progress_cb=_indicator_progress,
                 cancel_cb=_is_cancelled,
             )
@@ -921,9 +963,10 @@ class BackfillManager:
         if db is None:
             return
         try:
-            sets = ["current_batch=:cb", "stocks_done=:sdo", "rows=:r", "errors=:e"]
+            sets = ["current_batch=:cb", "stocks_done=:sdo", "rows=:r", "errors=:e", "stocks_total=:st", "total_batches=:tb"]
             params = {"tid": task.task_id, "cb": task.current_batch,
-                      "sdo": task.stocks_done, "r": task.rows, "e": task.errors}
+                      "sdo": task.stocks_done, "r": task.rows, "e": task.errors,
+                      "st": task.stocks_total, "tb": task.total_batches}
             if status:
                 sets.append("status=:st")
                 params["st"] = status
