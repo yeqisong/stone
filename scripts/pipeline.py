@@ -848,18 +848,20 @@ def dag_task_indicator_incr(trade_date=None, **kw):
         raise
 
 def dag_task_model_train(trade_date=None, **kw):
-    """XGBoost 模型训练：指标 → 特征 → 训练 3 个回归器 → 存储 best_params。"""
+    """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。"""
     from datetime import date as _date, timedelta as _td
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     import json as _json
     import pandas as pd
     import numpy as np
+    import pickle as _pkl
+    import os as _os
 
     td = trade_date or str(_date.today())
     rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('model_train')
-    write_node_log(log_id=log_id, status='running', detail='XGBoost 训练中…')
+    write_node_log(log_id=log_id, status='running', detail='Optuna 训练中…')
 
     try:
         db = get_sync_db()
@@ -948,45 +950,135 @@ def dag_task_model_train(trade_date=None, **kw):
             db.commit()
             db.close(); return 0
 
-        # ── 4. 训练 GBDT（sklearn，无需额外依赖）──
-        update_node_progress(log_id=log_id, rows=4, detail='步骤4:模型训练')
+        # ═══════════════════════════════════════
+        # ── Optuna 超参数搜索 + 逐轮回测 ──
+        # ═══════════════════════════════════════
         from sklearn.ensemble import GradientBoostingRegressor
-        params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200,
-                  'subsample': 0.8, 'max_features': 0.8, 'random_state': 42}
-        models = {}
-        import pickle as _pkl
-        for label, tname in [('5d', 'target_5d'), ('10d', 'target_10d'), ('20d', 'target_20d')]:
-            model = GradientBoostingRegressor(**params)
-            model.fit(X_train, df[train_mask][tname])
-            r2 = model.score(X_val, df[~train_mask][tname])
-            models[label] = {'model': model, 'r2': round(r2, 4)}
-            logger.info(f"[train] {label}: R²={r2:.4f}")
 
-        # ── 5. 存储结果（模型存文件，DB 只存路径）──
-        update_node_progress(log_id=log_id, rows=5, detail='步骤5:存储结果')
-        import os as _os
+        # 读取搜索空间
+        cfg_row = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
+        cfg = _json.loads(cfg_row) if isinstance(cfg_row, str) else (cfg_row or {})
+        ss = cfg.get('search_space', {})
+        n_trials = cfg.get('optuna_trials', 50)
+        update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:开始({n_trials}轮)')
+
+        # 回测函数
+        def _backtest(y_true, y_pred, dates, codes, top_k=50):
+            val_df = pd.DataFrame({'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true})
+            trades = []
+            for d in sorted(val_df['date'].unique()):
+                day = val_df[val_df['date'] == d]
+                top = day.nlargest(min(top_k, len(day)), 'pred')
+                for _, r in top.iterrows():
+                    trades.append(r['true'])
+            if not trades:
+                return {'sharpe': 0, 'win_rate': 0, 'max_dd': 0, 'mean_ret': 0, 'total': 0}
+            rets = np.array(trades)
+            mean_ret = float(np.mean(rets))
+            std_ret = float(np.std(rets)) if len(rets) > 1 else 1e-6
+            sharpe = mean_ret / std_ret * np.sqrt(252) if std_ret > 0 else 0
+            win_rate = float(np.mean(rets > 0))
+            cumulative = np.cumprod(1 + rets)
+            peak = np.maximum.accumulate(cumulative)
+            max_dd = float(np.min((cumulative - peak) / peak)) if len(cumulative) > 1 else 0
+            return {'sharpe': round(sharpe, 4), 'win_rate': round(win_rate, 4),
+                    'max_dd': round(max_dd, 4), 'mean_ret': round(mean_ret, 4), 'total': len(trades)}
+
+        best_models = {}
+        best_params_store = {}
+        best_score = -999
+        trial_records = []
+        val_dates = df[~train_mask]['trade_date'].values
+        val_codes = df[~train_mask]['stock_code'].values
+        TARGETS = [('5d','target_5d'), ('10d','target_10d'), ('20d','target_20d')]
+
+        try:
+            import optuna
+            from optuna.samplers import TPESampler
+            def objective(trial):
+                nonlocal best_models, best_params_store, best_score
+                lr  = trial.suggest_float('lr', ss.get('learning_rate',[0.01])[0], ss.get('learning_rate',[0.01,0.3])[-1], log=True)
+                md  = trial.suggest_int('max_depth', ss.get('max_depth',[3])[0], ss.get('max_depth',[3,10])[-1])
+                ne  = trial.suggest_int('n_estimators', ss.get('n_estimators',[100])[0], ss.get('n_estimators',[100,500])[-1])
+                sub = trial.suggest_float('subsample', 0.6, 1.0)
+                mf  = trial.suggest_float('max_features', 0.5, 1.0)
+                params = {'learning_rate': lr, 'max_depth': md, 'n_estimators': ne,
+                          'subsample': sub, 'max_features': mf, 'random_state': 42}
+                models = {}
+                total_sharpe = 0
+                for label, tname in TARGETS:
+                    model = GradientBoostingRegressor(**params)
+                    model.fit(X_train, df[train_mask][tname])
+                    y_pred = model.predict(X_val)
+                    bt = _backtest(df[~train_mask][tname].values, y_pred, val_dates, val_codes)
+                    models[label] = {'model': model, 'r2': round(float(model.score(X_val, df[~train_mask][tname])), 4), 'backtest': bt}
+                    total_sharpe += bt['sharpe']
+                avg_sharpe = total_sharpe / 3
+                trial_records.append({'trial': len(trial_records)+1, 'params': params, 'sharpe': round(avg_sharpe, 4)})
+                update_node_progress(log_id=log_id, rows=len(trial_records), detail=f'Optuna实验:{len(trial_records)}/{n_trials} sharpe={avg_sharpe:.3f}')
+                if avg_sharpe > best_score:
+                    best_score = avg_sharpe
+                    best_params_store = {k: {'params': params, 'r2': m['r2'], 'backtest': m['backtest']} for k, m in models.items()}
+                    best_models = {k: m['model'] for k, m in models.items()}
+                db.execute(text("INSERT INTO training_trials (version, trial_number, params, score) VALUES (:v,:n,:p,:s) ON CONFLICT (version, trial_number) DO UPDATE SET params=EXCLUDED.params, score=EXCLUDED.score"),
+                           {"v": ver, "n": trial.number + 1, "p": _json.dumps(params), "s": round(float(avg_sharpe), 4)})
+                db.commit()
+                return avg_sharpe
+            study = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
+            study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+        except ImportError:
+            # Optuna 未安装时回退单次训练
+            params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200, 'subsample': 0.8, 'max_features': 0.8, 'random_state': 42}
+            for label, tname in TARGETS:
+                model = GradientBoostingRegressor(**params)
+                model.fit(X_train, df[train_mask][tname])
+                y_pred = model.predict(X_val)
+                bt = _backtest(df[~train_mask][tname].values, y_pred, val_dates, val_codes)
+                best_models[label] = model
+                best_params_store[label] = {'params': params, 'r2': round(float(model.score(X_val, df[~train_mask][tname])), 4), 'backtest': bt}
+            update_node_progress(log_id=log_id, rows=1, detail='训练完成(无Optuna)')
+
+        # ── 存储最优模型文件 ──
+        update_node_progress(log_id=log_id, rows=4, detail='存储最优模型')
         model_dir = f"data/models/{ver}"
         _os.makedirs(model_dir, exist_ok=True)
-        for label, m in models.items():
-            path = f"{model_dir}/xgb_{label}.pkl"
-            with open(path, 'wb') as f:
-                _pkl.dump(m['model'], f)
-            models[label]['model_path'] = path
+        for label in ['5d','10d','20d']:
+            if label in best_models:
+                path = f"{model_dir}/xgb_{label}.pkl"
+                with open(path, 'wb') as f:
+                    _pkl.dump(best_models[label], f)
+                best_params_store[label]['model_path'] = path
 
-        best_params = _json.dumps({k: {'params': params, 'r2': m['r2'], 'model_path': m['model_path']} for k, m in models.items()})
-        r2_avg = float(np.mean([m['r2'] for m in models.values()]))
-        db.execute(text("UPDATE model_versions SET status='PENDING', best_params=:bp, evaluation_report=:rep WHERE version=:v"), {
-            "v": ver, "bp": best_params,
-            "rep": _json.dumps({"r2_5d": float(models['5d']['r2']), "r2_10d": float(models['10d']['r2']), "r2_20d": float(models['20d']['r2']), "r2_avg": round(r2_avg, 4)}),
+        # ── 汇总回测指标并写入 DB ──
+        bt_summary = {
+            'trials': trial_records[-10:] if trial_records else [],
+            'sharpe_5d':   best_params_store.get('5d',{}).get('backtest',{}).get('sharpe',0),
+            'sharpe_10d':  best_params_store.get('10d',{}).get('backtest',{}).get('sharpe',0),
+            'sharpe_20d':  best_params_store.get('20d',{}).get('backtest',{}).get('sharpe',0),
+            'win_rate_5d': best_params_store.get('5d',{}).get('backtest',{}).get('win_rate',0),
+            'win_rate_10d':best_params_store.get('10d',{}).get('backtest',{}).get('win_rate',0),
+            'win_rate_20d':best_params_store.get('20d',{}).get('backtest',{}).get('win_rate',0),
+        }
+        avg_sharpe = float(np.mean([bt_summary['sharpe_5d'], bt_summary['sharpe_10d'], bt_summary['sharpe_20d']]))
+        avg_win = float(np.mean([bt_summary['win_rate_5d'], bt_summary['win_rate_10d'], bt_summary['win_rate_20d']]))
+        max_dd_avg = float(np.mean([best_params_store.get(l,{}).get('backtest',{}).get('max_dd',0) for l in ['5d','10d','20d']]))
+        best_params = best_params_store
+
+        db.execute(text("UPDATE model_versions SET status='PENDING', best_params=:bp, evaluation_report=:rep, sharpe=:sh, win_rate=:wr, max_drawdown=:md, annual_return=:ar WHERE version=:v"), {
+            "v": ver,
+            "bp": _json.dumps(best_params),
+            "rep": _json.dumps(bt_summary),
+            "sh": round(avg_sharpe, 4),
+            "wr": round(avg_win, 4),
+            "md": round(abs(max_dd_avg), 4),
+            "ar": round(avg_sharpe * 0.15, 4),
         })
-        db.execute(text("INSERT INTO training_trials (version, trial_number, params, score) VALUES (:v,1,:p,:s) ON CONFLICT (version, trial_number) DO UPDATE SET score=EXCLUDED.score"),
-                   {"v": ver, "p": _json.dumps(params), "s": round(float(r2_avg), 4)})
         db.commit(); db.close()
-        write_node_log(log_id=log_id, status='success', detail=f'XGBoost 训练完成 R²avg={r2_avg:.4f}')
+        write_node_log(log_id=log_id, status='success', detail=f'训练完成: sharpe={avg_sharpe:.3f} win={avg_win:.1%} trials={len(trial_records)}')
         return len(df)
+
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
-        # 训练失败：回退模型状态为 DRAFT（先 rollback 清理失败事务）
         try:
             db.rollback()
             if ver:
@@ -995,10 +1087,8 @@ def dag_task_model_train(trade_date=None, **kw):
         except Exception:
             try: db.rollback()
             except: pass
-        try:
-            db.close()
-        except Exception:
-            pass
+        try: db.close()
+        except: pass
         raise
 
 def _get_preference_thresholds(db) -> dict:

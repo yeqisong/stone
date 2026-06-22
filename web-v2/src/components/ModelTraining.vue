@@ -12,10 +12,14 @@
         <span v-if="s.active && !s.done" style="font-size:10px;color:#2080f0;animation:pulse 1.5s infinite">⟳</span>
       </div>
     </div>
-    <div style="font-size:11px;color:var(--c-text-faint);text-align:center">
+    <div v-if="errorDetail" style="margin-top:16px;padding:10px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px">
+      <div style="color:#ef4444;font-weight:600;margin-bottom:4px">❌ 训练失败</div>
+      <div style="color:var(--c-text-dim);word-break:break-all;max-height:200px;overflow-y:auto">{{ errorDetail }}</div>
+    </div>
+    <div style="font-size:11px;color:var(--c-text-faint);text-align:center;margin-top:12px">
       Started: {{ version.trained_at?.slice(0,19) || '—' }}
     </div>
-    <div style="text-align:center;margin-top:12px"><n-button size="small" @click="refresh">刷新状态</n-button></div>
+    <div style="text-align:center;margin-top:8px"><n-button size="small" @click="refresh">刷新状态</n-button></div>
   </div>
   <div v-else-if="version.status==='PENDING'||version.status==='ACTIVE'" style="display:flex;gap:16px;flex-wrap:wrap">
     <div v-for="c in cards" :key="c.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:100px">
@@ -36,38 +40,51 @@ import { addWsListener } from '../utils/ws'
 const props = defineProps({ version: Object })
 const store = useModelStore()
 
-const steps = [
-  { idx:1, label:'加载指标数据' },
-  { idx:2, label:'特征工程（衍生特征）' },
-  { idx:3, label:'标签计算（Forward收益）' },
-  { idx:4, label:'XGBoost 模型训练' },
-  { idx:5, label:'存储结果' },
-]
-
 const currentStep = ref(0)
+const errorDetail = ref('')
+const currentTrial = ref(0)
+const totalTrials = ref(50)
 let _wsCleanup = null
 
-const trainSteps = computed(() => steps.map(s => ({
-  ...s,
-  done: currentStep.value > s.idx,
-  active: currentStep.value === s.idx,
-})))
+const trainSteps = computed(() => {
+  const steps = []
+  const done = (idx) => currentStep.value >= idx || currentStep.value < 0
+  const active = (phase) => currentTrial.value > 0 && currentTrial.value < totalTrials.value && currentStep.value >= 0
+  // 阶段：加载数据
+  steps.push({ idx:1, label:'加载指标数据', done: done(1), active: currentStep.value === 0 })
+  // 阶段：特征工程
+  steps.push({ idx:2, label:'特征工程', done: done(2), active: currentStep.value === 1 })
+  // 阶段：Optuna 搜索
+  const trialLabel = currentTrial.value > 0 ? `${currentTrial.value}/${totalTrials.value}` : '—'
+  steps.push({ idx:3, label:`Optuna 搜索 (${trialLabel})`, done: done(4), active: active('train') })
+  // 阶段：存储
+  steps.push({ idx:4, label:'存储最优模型', done: done(0) && currentStep.value < 0 ? false : currentStep.value >= 4, active: false })
+  return steps
+})
 
 function handleWs(data) {
   if (data.type !== 'dag_log') return
   const nodes = data.nodes || []
   const trainNode = nodes.find(n => n.node_name === 'model_train')
   if (!trainNode) return
-  // Parse step from detail: "步骤1:加载指标" → step 1
   const detail = trainNode.detail || ''
+  // Optuna 格式: "Optuna实验:5/50 sharpe=1.234"
+  const ot = detail.match(/Optuna实验:(\d+)\/(\d+)/)
+  if (ot) { currentTrial.value = parseInt(ot[1]); totalTrials.value = parseInt(ot[2]); currentStep.value = 3 }
+  // 旧格式: "步骤1:加载指标"
   const m = detail.match(/步骤(\d+)/)
-  if (m) currentStep.value = parseInt(m[1])
+  if (m && !ot) { currentStep.value = parseInt(m[1]); currentTrial.value = 0 }
+  // 其他阶段
+  if (detail.includes('特征工程')) currentStep.value = 2
+  if (detail.includes('加载指标')) currentStep.value = 1
+  if (detail.includes('存储最优')) currentStep.value = 4
   if (trainNode.status === 'success') {
     currentStep.value = steps.length + 1
     setTimeout(() => store.loadVersions(), 500)
   }
   if (trainNode.status === 'failed') {
     currentStep.value = -1
+    errorDetail.value = trainNode.detail || ''
     setTimeout(() => store.loadVersions(), 500)
   }
 }
