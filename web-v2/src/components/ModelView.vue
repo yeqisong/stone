@@ -77,8 +77,8 @@
 
           </div>
           <div v-else-if="store.detailTab==='train'">
-            <div v-if="store.selected.status==='DRAFT'" style="margin-bottom:14px">
-              <n-button type="primary" @click="startTrain">开始训练</n-button>
+            <div v-if="store.selected.status==='DRAFT' || store.selected.status==='REJECTED'" style="margin-bottom:14px">
+              <n-button type="primary" @click="startTrain">{{ store.selected.status==='REJECTED' ? '重新训练' : '开始训练' }}</n-button>
             </div>
             <ModelTraining :version="store.selected" />
           </div>
@@ -287,6 +287,9 @@ const basicMetrics = computed(() => {
 
 async function startTrain() {
   try {
+    if (store.selected.status === 'REJECTED') {
+      await axios.post(window.location.origin + `/api/v1/models/${store.selectedId}/retrain`)
+    }
     await axios.post(window.location.origin + '/api/dag_trigger', { node:'model_train', include_downstream:false })
     store.selected.status = 'TRAINING'
   } catch(e) {

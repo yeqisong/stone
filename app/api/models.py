@@ -398,6 +398,28 @@ def update_model_config(version: str, body: dict):
         db.close()
 
 
+@router.post("/v1/models/{version}/retrain")
+def retrain_model(version: str):
+    """REJECTED 模型重新训练：清空旧数据，回到 DRAFT。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        if r[0] != 'REJECTED':
+            raise HTTPException(400, f"只有 REJECTED 状态可重新训练，当前为 {r[0]}")
+        db.execute(text("UPDATE model_versions SET status='DRAFT', best_params=NULL, evaluation_report=NULL, sharpe=NULL, win_rate=NULL, max_drawdown=NULL, annual_return=NULL WHERE version=:v"), {"v": version})
+        db.commit()
+        return {"ok": True, "version": version, "status": "DRAFT"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"操作失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
 @router.post("/v1/models/{version}/reject")
 def reject_model(version: str):
     """拒绝模型。"""
@@ -408,7 +430,7 @@ def reject_model(version: str):
             raise HTTPException(404, "版本不存在")
         if r[0] != 'PENDING':
             raise HTTPException(400, f"当前状态为 {r[0]}，只有 PENDING 状态可拒绝")
-        db.execute(text("UPDATE model_versions SET status='REJECTED' WHERE version=:v"), {"v": version})
+        db.execute(text("UPDATE model_versions SET status='REJECTED', best_params=NULL, evaluation_report=NULL, sharpe=NULL, win_rate=NULL, max_drawdown=NULL, annual_return=NULL WHERE version=:v"), {"v": version})
         db.commit()
         return {"ok": True, "version": version, "status": "REJECTED"}
     except HTTPException:

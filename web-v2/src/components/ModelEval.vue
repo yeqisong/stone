@@ -1,6 +1,6 @@
 <template>
 <div>
-  <div v-if="!version.evaluation_report" style="color:var(--c-text-dim);padding:20px 0;text-align:center">暂未训练，无评估数据</div>
+  <div v-if="!version.evaluation_report || version.status==='REJECTED'" style="color:var(--c-text-dim);padding:20px 0;text-align:center">暂未训练，无评估数据</div>
   <template v-else>
     <!-- Core Metrics -->
     <div style="display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap">
