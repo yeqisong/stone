@@ -2,12 +2,17 @@
 <div>
   <n-spin v-if="loading" style="padding:60px" />
   <template v-else>
-    <div style="display:flex;gap:0;height:calc(100vh - 110px)">
-      <!-- Left: Version List -->
-      <div style="width:280px;flex-shrink:0;border-right:1px solid var(--c-border);display:flex;flex-direction:column;overflow:hidden">
+    <div :style="{display:'flex',gap:0,height:'calc(100vh - 110px)'}">
+      <!-- Left: Version List (mobile collapsible, PC always visible) -->
+      <div v-if="showSidebar" :style="{width:'280px',maxWidth:'100%',flexShrink:0,borderRight:'1px solid var(--c-border)',display:'flex',flexDirection:'column',overflow:'hidden',zIndex:10,background:'var(--c-bg)'}">
         <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:13px;font-weight:600;color:var(--c-text)">模型版本</span>
-          <n-button size="tiny" type="primary" ghost @click="showCreate=true">+ 创建</n-button>
+          <div style="display:flex;gap:4px">
+            <n-button size="tiny" type="primary" ghost @click="showCreate=true">+ 创建</n-button>
+            <n-button v-if="isMobile" size="tiny" quaternary @click="showSidebar=false" style="padding:0 4px" title="收起列表">
+            <svg viewBox="0 0 1024 1024" width="18" height="18" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
+          </n-button>
+          </div>
         </div>
         <div style="flex:1;overflow-y:auto;padding:0 8px">
           <div v-for="v in store.versions" :key="v.version"
@@ -33,15 +38,18 @@
       </div>
 
       <!-- Right: Detail -->
-      <div style="flex:1;overflow-y:auto;padding:16px 24px">
+      <div style="flex:1;min-width:0;overflow-y:auto;padding:16px 12px">
+        <n-button v-if="isMobile && !showSidebar" size="tiny" quaternary @click="showSidebar=true" style="margin-bottom:8px" title="展开列表">
+          <svg viewBox="0 0 1024 1024" width="18" height="18" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
+        </n-button>
         <template v-if="store.selected">
           <div style="font-size:16px;font-weight:700;color:var(--c-text);margin-bottom:14px">
             {{store.selected.version}} · {{store.selected.model_name}}
           </div>
 
-          <div style="display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--c-border)">
+          <div style="display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--c-border);overflow-x:auto;-webkit-overflow-scrolling:touch">
             <button v-for="t in tabs" :key="t.key"
-              :style="{padding:'8px 16px',border:'none',background:'transparent',color:store.detailTab===t.key?'var(--c-text)':'var(--c-text-dim)',fontSize:'12px',cursor:'pointer',borderBottom:store.detailTab===t.key?'2px solid #2080f0':'2px solid transparent',marginBottom:'-1px'}"
+              :style="{padding:'8px 14px',border:'none',background:'transparent',color:store.detailTab===t.key?'var(--c-text)':'var(--c-text-dim)',fontSize:'12px',cursor:'pointer',borderBottom:store.detailTab===t.key?'2px solid #2080f0':'2px solid transparent',marginBottom:'-1px',flexShrink:0,whiteSpace:'nowrap'}"
               @click="store.switchTab(t.key)">{{t.label}}</button>
           </div>
 
@@ -86,8 +94,7 @@
     </div>
 
     <!-- Create Modal -->
-    <n-modal v-model:show="showCreate">
-      <n-card style="width:520px;max-width:92vw" title="✚ 创建模型版本" :mask-closable="false" role="dialog" aria-modal="true">
+    <n-modal v-model:show="showCreate" preset="card" title="✚ 创建模型版本" style="width:520px;max-width:92vw" :mask-closable="false">
         <n-space vertical>
           <n-input v-model:value="createName" placeholder="模型名称，例如：BOLL+MACD+RSI 多策略融合" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
@@ -114,11 +121,9 @@
             <n-button type="primary" @click="doCreate" :loading="creating">创建</n-button>
           </n-space>
         </template>
-      </n-card>
     </n-modal>
     <!-- Delete Confirm Modal -->
-    <n-modal v-model:show="showDeleteModal">
-      <n-card :style="{width:'420px',maxWidth:'92vw'}" :title="deleteInfo?.can_physical_delete ? '⚠️ 永久删除模型' : '🗑️ 删除模型'" role="dialog" aria-modal="true">
+    <n-modal v-model:show="showDeleteModal" preset="card" :title="deleteInfo?.can_physical_delete ? '⚠️ 永久删除模型' : '🗑️ 删除模型'" style="width:420px;max-width:92vw" :mask-closable="false">
         <template v-if="deleteInfo">
           <template v-if="deleteInfo.can_physical_delete">
             <p style="font-size:13px;color:var(--c-text);margin:0">
@@ -146,7 +151,6 @@
             </n-button>
           </n-space>
         </template>
-      </n-card>
     </n-modal>
   </template>
 </div>
@@ -154,7 +158,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { NButton, NTag, NSpin, NEmpty, NModal, NCard, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider } from 'naive-ui'
+import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import ModelTraining from './ModelTraining.vue'
@@ -171,6 +175,8 @@ const showDeleteModal = ref(false)
 const deleteInfo = ref(null)
 const deleteTarget = ref(null)
 const deleting = ref(false)
+const isMobile = ref(window.innerWidth < 768)
+const showSidebar = ref(!isMobile.value)
 const hoveredVersion = ref(null)
 const createForm = reactive({
   train_start: '2021-01-01', train_end: '2025-12-31',

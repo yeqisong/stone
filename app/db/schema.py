@@ -503,10 +503,14 @@ CREATE TABLE IF NOT EXISTS backfill_tasks (
 CREATE_DAILY_COMPLETENESS = """
 CREATE TABLE IF NOT EXISTS daily_completeness (
     trade_date DATE PRIMARY KEY,
-    stock_rows INTEGER DEFAULT 0,
-    index_rows INTEGER DEFAULT 0,
-    etf_rows  INTEGER DEFAULT 0,
-    fund_rows INTEGER DEFAULT 0,
+    stock_rows    INTEGER DEFAULT 0,
+    index_rows    INTEGER DEFAULT 0,
+    etf_rows      INTEGER DEFAULT 0,
+    fund_rows     INTEGER DEFAULT 0,
+    stock_baseline INTEGER DEFAULT 0,
+    index_baseline INTEGER DEFAULT 0,
+    etf_baseline   INTEGER DEFAULT 0,
+    fund_baseline  INTEGER DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -665,6 +669,13 @@ def init_db(sync_session) -> None:
     ]:
         try:
             sync_session.execute(text(f"ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+
+    # 迁移：daily_completeness 新增 baseline 列
+    for col in ['stock_baseline', 'index_baseline', 'etf_baseline', 'fund_baseline']:
+        try:
+            sync_session.execute(text(f"ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS {col} INTEGER DEFAULT 0"))
         except Exception:
             sync_session.rollback()
 

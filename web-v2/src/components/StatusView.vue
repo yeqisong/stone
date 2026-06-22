@@ -60,10 +60,13 @@
             <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
           </div>
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
-            <div v-for="d in cal" :key="d.date" :style="{'padding':'4px 0','borderRadius':'4px','fontSize':'10px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)">
-              <span v-if="d.day!==null" style="font-size:10px">{{d.day}}</span>
+            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)">
+              <span v-if="d.day!==null" style="font-size:10px;font-weight:500">{{d.day}}</span>
               <div v-if="d.syncing" style="position:absolute;top:0;right:2px;font-size:8px;color:#2080f0">⟳</div>
-              <div v-if="d.td&&d.cp&&!d.syncing" :style="{fontSize:'7px',marginTop:'1px',color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div>
+              <div v-if="d.td&&d.cp&&!d.syncing" style="font-size:7px;line-height:1.1">
+                <div v-if="d.cp.rows>0" style="color:var(--c-text-dim)">{{d.cp.rows}}只</div>
+                <div :style="{color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div>
+              </div>
             </div>
           </div>
         </div>

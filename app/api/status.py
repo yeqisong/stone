@@ -74,19 +74,17 @@ def get_data_status(
 
         # ── 交易日历 + 每日数据量（从 daily_completeness 表增量读取） ──
         dc_rows = db.execute(text(
-            "SELECT trade_date, stock_rows, index_rows, etf_rows, fund_rows FROM daily_completeness "
-            "WHERE trade_date BETWEEN :s AND :e ORDER BY trade_date"
+            "SELECT trade_date, stock_rows, index_rows, etf_rows, fund_rows, "
+            "stock_baseline, index_baseline, etf_baseline, fund_baseline "
+            "FROM daily_completeness WHERE trade_date BETWEEN :s AND :e ORDER BY trade_date"
         ), {"s": cal_start, "e": cal_end}).fetchall()
-        dc = {str(r[0]): {"stock": r[1] or 0, "index": r[2] or 0, "etf": r[3] or 0, "fund": r[4] or 0} for r in dc_rows}
+        dc = {str(r[0]): {"stock": r[1] or 0, "index": r[2] or 0, "etf": r[3] or 0, "fund": r[4] or 0,
+                           "sb": r[5] or 0, "ib": r[6] or 0, "eb": r[7] or 0, "fb": r[8] or 0} for r in dc_rows}
 
         tc_rows = db.execute(text(
             "SELECT cal_date, is_trade_day FROM trade_calendar WHERE cal_date BETWEEN :s AND :e ORDER BY cal_date"
         ), {"s": cal_start, "e": cal_end}).fetchall()
         calendar_dates = {str(r[0]): bool(r[1]) for r in tc_rows}
-
-        # 基线：当月正常交易日的中位数（排除 <5000 的低值，如部分更新日）
-        month_rows = sorted([r['stock'] for r in dc.values() if r['stock'] > 5000])
-        baseline = month_rows[len(month_rows)//2] if month_rows else 6000
 
         calendar = []
         missing_dates = []
@@ -96,15 +94,24 @@ def get_data_status(
             is_trade = calendar_dates.get(d, current.weekday() < 5)
             dd = dc.get(d)
             days_ago = (today - current).days
-            if dd:
+            if dd and is_trade:
+                sb = dd.get('sb', 0)
+                ib = dd.get('ib', 0)
+                eb = dd.get('eb', 0)
+                fb = dd.get('fb', 0) or sb
+                sp = min(round(dd['stock'] / sb * 100, 1), 100.0) if sb else 0
+                ip = min(round(dd['index'] / ib * 100, 1), 100.0) if ib else 0
+                ep = min(round(dd['etf']   / eb * 100, 1), 100.0) if eb else 0
+                fp = min(round(dd['fund']  / fb * 100, 1), 100.0) if fb else 0
+                parts = [p for p, b in [(sp, sb), (ip, ib), (ep, eb), (fp, fb)] if b > 0]
+                pct = round(sum(parts) / len(parts), 1) if parts else 0
                 rows = dd['stock']
-                pct = round(rows / baseline * 100, 1) if baseline and is_trade else 0
-                if is_trade and days_ago <= 7 and pct < 80 and rows > 0: missing_dates.append(d)
-                elif is_trade and days_ago <= 30 and rows == 0 and current <= today: missing_dates.append(d)
-                calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": rows, "pct": pct, "baseline": baseline} if is_trade else None, "weekday": current.weekday()})
+                if days_ago <= 7 and pct < 80 and rows > 0: missing_dates.append(d)
+                elif days_ago <= 30 and rows == 0 and current <= today: missing_dates.append(d)
+                calendar.append({"date": d, "is_trade_day": True, "completeness": {"rows": rows, "pct": pct, "baseline": sb}, "weekday": current.weekday()})
             else:
                 if is_trade and days_ago <= 30 and current <= today: missing_dates.append(d)
-                calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": 0, "pct": 0, "baseline": baseline} if is_trade else None, "weekday": current.weekday()})
+                calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": 0, "pct": 0, "baseline": 0} if is_trade else None, "weekday": current.weekday()})
             current += timedelta(days=1)
 
         # ── 今日策略 ──

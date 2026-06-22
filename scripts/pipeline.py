@@ -1278,7 +1278,7 @@ def dag_task_stats(trade_date=None, **kw):
         raise
 
 def dag_task_completeness(trade_date=None, **kw):
-    """计算当日数据完整度并写入 daily_completeness 表。"""
+    """计算当日数据完整度（含分母 baseline）并写入 daily_completeness 表。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     from datetime import date as _dd; td = trade_date or str(_dd.today()); rid = _rid(kw)
@@ -1286,25 +1286,34 @@ def dag_task_completeness(trade_date=None, **kw):
     write_node_log(log_id=log_id, status='running', detail='计算中')
     try:
         db = get_sync_db()
-        update_node_progress(log_id=log_id, rows=0, detail='查询个股数…')
-        for t, col in [('daily_quote', 'stock_rows'), ('index_daily_quote', 'index_rows')]:
-            try:
-                cnt = db.execute(text(f"SELECT COUNT(*) FROM {t} WHERE trade_date=:d"), {"d": td}).scalar() or 0
-                db.execute(text(f"INSERT INTO daily_completeness (trade_date, {col}) VALUES (:d, :c) ON CONFLICT (trade_date) DO UPDATE SET {col}=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": cnt})
-            except: db.rollback()
-        try:
-            etf = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND (stock_code LIKE '51%' OR stock_code LIKE '159%' OR stock_code LIKE '56%')"), {"d": td}).scalar() or 0
-            db.execute(text("INSERT INTO daily_completeness (trade_date, etf_rows) VALUES (:d, :c) ON CONFLICT (trade_date) DO UPDATE SET etf_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": etf})
-        except: pass
-        try:
-            fund = db.execute(text("SELECT COUNT(*) FROM stock_fundamentals WHERE updated_at::date=:d"), {"d": td}).scalar() or 0
-            db.execute(text("INSERT INTO daily_completeness (trade_date, fund_rows) VALUES (:d, :c) ON CONFLICT (trade_date) DO UPDATE SET fund_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": fund})
-        except: pass
+        # 分子
+        stock = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"), {"d": td}).scalar() or 0
+        idx_r = db.execute(text("SELECT COUNT(*) FROM index_daily_quote WHERE trade_date=:d"), {"d": td}).scalar() or 0
+        etf   = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"), {"d": td}).scalar() or 0
+        fund  = db.execute(text("SELECT COUNT(*) FROM stock_fundamentals WHERE updated_at::date=:d"), {"d": td}).scalar() or 0
+        # 分母
+        stock_bl = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N' AND ipo_date <= :d"), {"d": td}).scalar() or 0
+        index_bl = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='index' AND ipo_date <= :d"), {"d": td}).scalar() or 0
+        etf_bl   = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf' AND ipo_date <= :d"), {"d": td}).scalar() or 0
+
+        db.execute(text("""
+            INSERT INTO daily_completeness (trade_date, stock_rows, index_rows, etf_rows, fund_rows,
+                stock_baseline, index_baseline, etf_baseline, fund_baseline)
+            VALUES (:d, :sr, :ir, :er, :fr, :sb, :ib, :eb, :fb)
+            ON CONFLICT (trade_date) DO UPDATE SET
+                stock_rows=EXCLUDED.stock_rows, index_rows=EXCLUDED.index_rows,
+                etf_rows=EXCLUDED.etf_rows, fund_rows=EXCLUDED.fund_rows,
+                stock_baseline=EXCLUDED.stock_baseline, index_baseline=EXCLUDED.index_baseline,
+                etf_baseline=EXCLUDED.etf_baseline, fund_baseline=EXCLUDED.fund_baseline,
+                updated_at=CURRENT_TIMESTAMP
+        """), {"d": td, "sr": stock, "ir": idx_r, "er": etf, "fr": fund,
+               "sb": stock_bl, "ib": index_bl, "eb": etf_bl, "fb": stock_bl})
         db.commit(); db.close()
-        write_node_log(log_id=log_id, status='success', rows=4, detail='完成')
+        write_node_log(log_id=log_id, status='success', rows=4, detail=f'stock={stock} idx={idx_r} etf={etf}')
         return 4
     except Exception as e:
-        db.rollback(); db.close()
+        try: db.rollback(); db.close()
+        except: pass
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 

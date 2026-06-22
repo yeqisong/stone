@@ -462,7 +462,7 @@ class BackfillManager:
                     pass
                 db = get_sync_db()
 
-            # 批次间会话维护（baostock 连接退化防护 + 释放内部缓存）
+            # 批次间会话维护（连接退化防护 + 自适应降级切换数据源）
             if _done < _total_stocks:
                 try:
                     adapter._logout()
@@ -471,10 +471,18 @@ class BackfillManager:
                 time.sleep(2)
                 try:
                     if not adapter._login():
-                        task.status = "failed"
-                        task.error_message = "数据源重连失败，请稍后重试"
-                        db.close()
-                        return
+                        # 尝试切换备选数据源
+                        try:
+                            adapter = manager.get_source()
+                            adapter._ensure_login()
+                            fetch_fn = adapter.fetch_stock_kline if task.task_type == "kline" else (
+                                adapter.fetch_index_kline if task.task_type == "index" else adapter.fetch_etf_kline)
+                            logger.warning(f"[Backfill] {task.task_type} 切换数据源到 {adapter.name}")
+                        except Exception:
+                            task.status = "failed"
+                            task.error_message = "所有数据源均不可用"
+                            db.close()
+                            return
                 except Exception as e:
                     task.status = "failed"
                     task.error_message = f"数据源重连异常: {e}"
@@ -550,6 +558,7 @@ class BackfillManager:
             return
 
         # ── 按季度 × 股票遍历（行业映射由 adapter.fetch_fundamentals 内部加载）──
+        ipo_map = self._load_ipo_map(db, "stock")
         batch_count = 0
         for q_idx, (year, quarter, report_date) in enumerate(quarters):
             if task._stop_requested:
@@ -570,9 +579,12 @@ class BackfillManager:
             else:
                 q_skip = set()
 
-            q_remaining = [c for c in all_codes if c not in q_skip]
-            logger.info("[Backfill] fund Q{} {}/{}: {} stocks (skip {}, remaining {})",
-                        quarter, year, report_date, len(all_codes), len(q_skip), len(q_remaining))
+            # 过滤未上市股票（IPO 晚于该季度末的跳过）
+            q_end_date = report_date
+            ipo_skip = {c for c, ipo in ipo_map.items() if ipo and ipo > q_end_date} if ipo_map else set()
+            q_remaining = [c for c in all_codes if c not in q_skip and c not in ipo_skip]
+            logger.info("[Backfill] fund Q{} {}/{}: {} stocks (skip {} already, {} not listed yet, remaining {})",
+                        quarter, year, report_date, len(all_codes), len(q_skip), len(ipo_skip), len(q_remaining))
 
             for batch_idx in range(0, len(q_remaining), _bs):
                 # 自适应并发
@@ -638,7 +650,7 @@ class BackfillManager:
                         pass
                     db = get_sync_db()
 
-                # 批次间会话维护
+                # 批次间会话维护（自适应降级切换数据源）
                 if batch_idx + _bs < len(q_remaining) or q_idx < len(quarters) - 1:
                     try:
                         adapter._logout()
@@ -647,10 +659,15 @@ class BackfillManager:
                     time.sleep(2)
                     try:
                         if not adapter._login():
-                            task.status = "failed"
-                            task.error_message = "数据源重连失败"
-                            db.close()
-                            return
+                            try:
+                                adapter = manager.get_source()
+                                adapter._ensure_login()
+                                logger.warning(f"[Backfill] fund 切换数据源到 {adapter.name}")
+                            except Exception:
+                                task.status = "failed"
+                                task.error_message = "所有数据源均不可用"
+                                db.close()
+                                return
                     except Exception as e2:
                         task.status = "failed"
                         task.error_message = f"数据源重连异常: {e2}"
@@ -814,20 +831,32 @@ class BackfillManager:
 
             try:
                 # 个股
-                stock = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d"), {"d": td}).scalar() or 0
-                db.execute(text("INSERT INTO daily_completeness (trade_date, stock_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET stock_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": stock})
-
+                stock = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"), {"d": td}).scalar() or 0
                 # 指数
                 idx_rows = db.execute(text("SELECT COUNT(*) FROM index_daily_quote WHERE trade_date=:d"), {"d": td}).scalar() or 0
-                db.execute(text("INSERT INTO daily_completeness (trade_date, index_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET index_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": idx_rows})
-
                 # ETF
-                etf = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"), {"d": td}).scalar() or 0
-                db.execute(text("INSERT INTO daily_completeness (trade_date, etf_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET etf_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": etf})
-
-                # 基本面
+                etf   = db.execute(text("SELECT COUNT(*) FROM daily_quote WHERE trade_date=:d AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"), {"d": td}).scalar() or 0
+                # 基本面（当日所在季度有财报的股票数）
                 fund = db.execute(text("SELECT COUNT(*) FROM stock_fundamentals WHERE updated_at::date<=:d"), {"d": td}).scalar() or 0
-                db.execute(text("INSERT INTO daily_completeness (trade_date, fund_rows) VALUES (:d,:c) ON CONFLICT (trade_date) DO UPDATE SET fund_rows=:c, updated_at=CURRENT_TIMESTAMP"), {"d": td, "c": fund})
+
+                # 分母：当日已上市的各类型总数
+                stock_bl = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N' AND ipo_date <= :d"), {"d": td}).scalar() or 0
+                index_bl = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='index' AND ipo_date <= :d"), {"d": td}).scalar() or 0
+                etf_bl   = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf' AND ipo_date <= :d"), {"d": td}).scalar() or 0
+                fund_bl  = stock_bl  # 与个股分母相同
+
+                db.execute(text("""
+                    INSERT INTO daily_completeness (trade_date, stock_rows, index_rows, etf_rows, fund_rows,
+                        stock_baseline, index_baseline, etf_baseline, fund_baseline)
+                    VALUES (:d, :sr, :ir, :er, :fr, :sb, :ib, :eb, :fb)
+                    ON CONFLICT (trade_date) DO UPDATE SET
+                        stock_rows=EXCLUDED.stock_rows, index_rows=EXCLUDED.index_rows,
+                        etf_rows=EXCLUDED.etf_rows, fund_rows=EXCLUDED.fund_rows,
+                        stock_baseline=EXCLUDED.stock_baseline, index_baseline=EXCLUDED.index_baseline,
+                        etf_baseline=EXCLUDED.etf_baseline, fund_baseline=EXCLUDED.fund_baseline,
+                        updated_at=CURRENT_TIMESTAMP
+                """), {"d": td, "sr": stock, "ir": idx_rows, "er": etf, "fr": fund,
+                       "sb": stock_bl, "ib": index_bl, "eb": etf_bl, "fb": fund_bl})
                 db.commit()
 
                 task.rows += stock + idx_rows + etf
