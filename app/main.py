@@ -38,6 +38,14 @@ async def lifespan(app: FastAPI):
         if not dag._nodes:
             dag.load_from_db(db, NODE_FN_MAP)
             logger.info(f"DAG reloaded: {len(dag._nodes)} nodes")
+        # 恢复异常终止的模型训练任务
+        try:
+            r = db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE status='TRAINING'"))
+            db.commit()
+            if r.rowcount > 0:
+                logger.info(f"[startup] 恢复: {r.rowcount} 个模型 TRAINING→DRAFT")
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
