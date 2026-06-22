@@ -56,14 +56,20 @@ const trainSteps = computed(() => steps.map(s => ({
 function handleWs(data) {
   if (data.type !== 'dag_log') return
   const nodes = data.nodes || []
-  const trainNode = nodes.find(n => n.node === 'model_train')
+  const trainNode = nodes.find(n => n.node_name === 'model_train')
   if (!trainNode) return
   // Parse step from detail: "步骤1:加载指标" → step 1
   const detail = trainNode.detail || ''
   const m = detail.match(/步骤(\d+)/)
   if (m) currentStep.value = parseInt(m[1])
-  if (trainNode.status === 'success') { currentStep.value = steps.length + 1; store.loadVersions() }
-  if (trainNode.status === 'failed') { currentStep.value = -1; store.loadVersions() }
+  if (trainNode.status === 'success') {
+    currentStep.value = steps.length + 1
+    setTimeout(() => store.loadVersions(), 500)
+  }
+  if (trainNode.status === 'failed') {
+    currentStep.value = -1
+    setTimeout(() => store.loadVersions(), 500)
+  }
 }
 
 onMounted(() => { _wsCleanup = addWsListener(handleWs) })

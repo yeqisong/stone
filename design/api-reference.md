@@ -663,3 +663,76 @@ DAG 状态、补数进度、系统指标实时推送。
 ```json
 { "status": "ok", "database": "connected", "version": "1.0.0", "env": "dev" }
 ```
+
+---
+
+## 13. 模型版本管理
+
+### GET /v1/models
+模型版本列表，返回所有未软删除版本（按 created_at 倒序）。
+
+**响应 200**
+```json
+{
+  "versions": [{
+    "version": "v1.0", "model_name": "BOLL+MACD", "status": "DRAFT",
+    "config": {"features":["boll","macd"],"train_start":"2021-01-01",...},
+    "best_params": {"5d":{"r2":0.85,"model_path":"data/models/v1.0/xgb_5d.pkl"},...},
+    "evaluation_report": {"r2_5d":0.85,"r2_avg":0.82},
+    "sharpe": 2.15, "win_rate": 0.58,
+    "max_drawdown": null, "annual_return": null,
+    "created_at": "2026-06-21 00:08:37", "trained_at": null, "activated_at": null
+  }],
+  "count": 1
+}
+```
+
+### GET /v1/models/{version}
+单个模型版本详情（含 archived_at）。
+
+### POST /v1/models
+创建新模型版本（状态 DRAFT，自动生成版本号 v{major}.0）。
+
+**请求体**
+```json
+{
+  "model_name": "BOLL+MACD多策略",
+  "train_start": "2021-01-01", "train_end": "2025-12-31",
+  "test_start": "2026-01-01", "test_end": "",
+  "features": ["boll","macd","rsi","atr","ma","volume"],
+  "ml_enabled": false, "model_type": "xgboost",
+  "stop_loss_pct": 8.0, "signal_timeout_days": 20
+}
+```
+
+**响应 200** `{"ok":true,"version":"v1.0","model_name":"...","status":"DRAFT"}`  
+**响应 400** 模型名称为空
+
+### PUT /v1/models/{version}/config
+更新 DRAFT 状态模型的四层配置（仅 DRAFT 可编辑）。
+
+**请求体** `{...config fields...}`（完整配置对象，`...cfg` 合并保留现有字段）  
+**响应 200** `{"ok":true,"version":"v1.0"}`  
+**响应 400** 非 DRAFT 状态
+
+### POST /v1/models/{version}/approve
+审批上线：原 ACTIVE → ARCHIVED，当前 PENDING → ACTIVE。  
+**响应 400** 非 PENDING 状态
+
+### POST /v1/models/{version}/reject
+拒绝模型：PENDING → REJECTED。
+
+### DELETE /v1/models/{version}?mode=soft|hard
+删除模型。soft=逻辑删除，hard=物理删除（需无关联数据）。
+
+### GET /v1/models/{version}/delete-check
+检查是否可物理删除。返回关联数据统计。
+
+### GET /v1/models/{version}/health
+模型健康度最新记录。
+
+### GET /v1/models/{version}/signals
+模型信号明细（最近 50 条）。
+
+### GET /v1/indicators/{name}/status
+指标表状态（行数+最新日期）。name ∈ {boll,macd,rsi,atr,ma,volume}。

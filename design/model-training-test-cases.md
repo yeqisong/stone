@@ -249,10 +249,10 @@ DRAFT → TRAINING → PENDING → (审批) → ACTIVE → ARCHIVED
 
 ---
 
-## 六、未覆盖的已知缺陷
+## 六、已知缺陷与修复记录
 
-| 编号 | 场景 | 说明 |
-|------|------|------|
-| GAP-01 | 容器重启后 model_versions 状态残留 | `_recover_orphaned_tasks` 只处理 `dag_run_log` 和 `backfill_tasks`，不处理 `model_versions`。训练中重启后 status 永久卡 TRAINING |
-| GAP-02 | 训练页失败不自动刷新 | WS 推 `dag_log failed` 后步骤不动，需手动点刷新才能看到 status 变回 DRAFT |
-| GAP-03 | H5 折叠状态不记忆 | 切换页面后回到模型页，侧边栏恢复默认状态 |
+| 编号 | 场景 | 状态 | 修复 |
+|------|------|:---:|------|
+| GAP-01 | 容器重启后 model_versions 状态残留 | ✅ v2.33 | `_recover_orphaned_tasks` 增加 `UPDATE model_versions SET status='DRAFT' WHERE status='TRAINING'` |
+| GAP-02 | 训练页失败不自动刷新 | ✅ v2.33 | WS 收到 `model_train` success/failed 时自动 `store.loadVersions()` |
+| GAP-03 | H5 折叠状态不记忆 | ✅ v2.33 | `sidebarOpen` 移入 `modelStore`，跨页面保持 |

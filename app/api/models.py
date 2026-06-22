@@ -61,7 +61,7 @@ def list_models():
     try:
         try:
             rows = db.execute(text("""
-                SELECT version, model_name, status, best_params,
+                SELECT version, model_name, status, config, best_params,
                        evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
                        created_at, trained_at, activated_at
                 FROM model_versions
@@ -72,7 +72,7 @@ def list_models():
             db.rollback()
             # deleted_at 列未迁移时回退
             rows = db.execute(text("""
-                SELECT version, model_name, status, best_params,
+                SELECT version, model_name, status, config, best_params,
                        evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
                        created_at, trained_at, activated_at
                 FROM model_versions
@@ -82,15 +82,16 @@ def list_models():
         for r in rows:
             versions.append({
                 "version": r[0], "model_name": r[1], "status": r[2],
-                "best_params": r[3] if isinstance(r[3], dict) else (json.loads(r[3]) if r[3] else None),
-                "evaluation_report": r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else None),
-                "sharpe": float(r[5]) if r[5] else None,
-                "win_rate": float(r[6]) if r[6] else None,
-                "max_drawdown": float(r[7]) if r[7] else None,
-                "annual_return": float(r[8]) if r[8] else None,
-                "created_at": str(r[9]) if r[9] else None,
-                "trained_at": str(r[10]) if r[10] else None,
-                "activated_at": str(r[11]) if r[11] else None,
+                "config": r[3] if isinstance(r[3], dict) else (json.loads(r[3]) if r[3] else {}),
+                "best_params": r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else None),
+                "evaluation_report": r[5] if isinstance(r[5], dict) else (json.loads(r[5]) if r[5] else None),
+                "sharpe": float(r[6]) if r[6] else None,
+                "win_rate": float(r[7]) if r[7] else None,
+                "max_drawdown": float(r[8]) if r[8] else None,
+                "annual_return": float(r[9]) if r[9] else None,
+                "created_at": str(r[10]) if r[10] else None,
+                "trained_at": str(r[11]) if r[11] else None,
+                "activated_at": str(r[12]) if r[12] else None,
             })
         return {"versions": versions, "count": len(versions)}
     finally:
@@ -368,6 +369,34 @@ def approve_model(version: str):
         raise HTTPException(500, f"审批失败: {str(e)[:200]}")
     finally:
         db.close()
+
+@router.put("/v1/models/{version}/config")
+def update_model_config(version: str, body: dict):
+    """更新 DRAFT 状态模型的四层配置。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        if r[0] != 'DRAFT':
+            raise HTTPException(400, f"只有 DRAFT 状态可编辑，当前为 {r[0]}")
+        cfg = dict(body)
+        name = cfg.pop('model_name', None)
+        db.execute(text("UPDATE model_versions SET config=:cfg WHERE version=:v"),
+                   {"v": version, "cfg": json.dumps(cfg)})
+        if name:
+            db.execute(text("UPDATE model_versions SET model_name=:n WHERE version=:v"),
+                       {"v": version, "n": name})
+        db.commit()
+        return {"ok": True, "version": version}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"更新失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
 
 @router.post("/v1/models/{version}/reject")
 def reject_model(version: str):

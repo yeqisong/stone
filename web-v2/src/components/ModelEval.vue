@@ -20,8 +20,8 @@
               <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">#</th>
               <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">训练区间</th>
               <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">测试区间</th>
-              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">信号</th>
-              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">夏普</th>
+              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">模型文件</th>
+              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">R²</th>
             </tr>
           </thead>
           <tbody>
@@ -29,7 +29,7 @@
               <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light)">{{i+1}}</td>
               <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light)">{{t.train}}</td>
               <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light)">{{t.test}}</td>
-              <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light)">{{t.signals}}</td>
+              <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light);font-size:10px">{{t.signals}}</td>
               <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light);color:#10b981">{{t.sharpe}}</td>
             </tr>
           </tbody>
@@ -48,24 +48,32 @@ import { NEmpty } from 'naive-ui'
 const props = defineProps({ version: Object })
 
 const rep = computed(() => props.version?.evaluation_report || {})
+const bp = computed(() => props.version?.best_params || {})
 
 const metrics = computed(() => [
   { label:'夏普比率', value: props.version?.sharpe?.toFixed(2) || '—', color:'#10b981' },
   { label:'胜率', value: props.version?.win_rate ? (props.version.win_rate*100).toFixed(0)+'%' : '—' },
   { label:'最大回撤', value: props.version?.max_drawdown ? (props.version.max_drawdown*100).toFixed(1)+'%' : '—', color:'#ef4444' },
   { label:'年化收益', value: props.version?.annual_return ? (props.version.annual_return*100).toFixed(1)+'%' : '—' },
-  { label:'总信号', value: rep.value.total_signals || '—' },
-  { label:'Folds', value: rep.value.folds || '—' },
+  { label:'R²(5d)', value: bp.value?.['5d']?.r2?.toFixed(3) || '—' },
+  { label:'R² avg', value: rep.value.r2_avg?.toFixed(3) || '—' },
 ])
 
 const trials = computed(() => {
-  const params = props.version?.best_params
-  if (!Array.isArray(params)) return []
-  return params.map(p => ({
-    train: p.train || '',
-    test: p.test || '',
-    signals: p.signals || 0,
-    sharpe: p.score?.toFixed(2) || '—',
-  }))
+  const bp = props.version?.best_params
+  if (!bp) return []
+  // best_params 格式: {"5d": {"r2": 0.8, "model_path": "..."}, "10d": {...}, "20d": {...}}
+  const folds = []
+  for (const [label, info] of Object.entries(bp)) {
+    if (info && typeof info === 'object') {
+      folds.push({
+        train: label,
+        test: `R²=${(info.r2||0).toFixed(3)}`,
+        signals: info.model_path?.split('/').pop() || '—',
+        sharpe: info.r2?.toFixed(3) || '—',
+      })
+    }
+  }
+  return folds
 })
 </script>

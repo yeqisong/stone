@@ -1,6 +1,6 @@
 # 交易日历统计模块 — 设计文档
 
-> 版本：v1.0 | 状态：设计中 | 2026-06-20
+> 版本：v1.1 | 状态：已实现 | 2026-06-22
 
 ---
 
@@ -118,3 +118,14 @@ pct = sum(parts) / len(parts) if parts else 0
 
 - 日历单元格 tooltip 展示 4 个子百分比明细（信息过载，后续迭代）
 - 基本面分母细化到"当季度已出财报股票数"（需额外逻辑，初期简化）
+
+---
+
+## 四、修复记录
+
+| 版本 | 问题 | 修复 |
+|------|------|------|
+| v2.30 | baseline 列不存在 | `ALTER TABLE ADD COLUMN IF NOT EXISTS` 迁移 |
+| v2.31 | stock 分子含 ETF，百分比超 100% | `LEFT` 过滤排除 ETF 代码前缀 |
+| v2.31 | baseline 全部为 0 | `dag_task_completeness` + `_run_calendar_backfill` 增加分母查询 |
+| v2.32 | `stock_master.ipo_date` 全部 NULL → baseline 恒 0 | K 线补数时 `_sync_ipo_dates()` 同步 IPO 日期 |

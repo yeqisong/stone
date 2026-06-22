@@ -54,6 +54,9 @@
           </div>
 
           <div v-if="store.detailTab==='basic'" style="display:flex;flex-direction:column;gap:14px">
+            <div v-if="store.selected?.status==='DRAFT'" style="display:flex;gap:8px;align-items:center">
+              <n-button size="tiny" @click="startEditConfig">✎ 编辑配置</n-button>
+            </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
               <div v-for="m in basicMetrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
                 <div style="font-size:10px;color:var(--c-text-faint)">{{m.label}}</div>
@@ -63,12 +66,12 @@
             <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px">
               <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">配置详情</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
-                <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{(cfg.features||[]).join(', ')||'—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">ML增强: </span><span style="color:var(--c-text)">{{cfg.ml_enabled?'启用':'关闭'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">训练区间: </span><span style="color:var(--c-text)">{{cfg.train_start}} ~ {{cfg.train_end}}</span></div>
-                <div><span style="color:var(--c-text-faint)">测试区间: </span><span style="color:var(--c-text)">{{cfg.test_start}} ~ {{cfg.test_end||'至今'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">止损: </span><span style="color:var(--c-text)">{{cfg.risk?.stop_loss_pct||8}}%</span></div>
-                <div><span style="color:var(--c-text-faint)">信号超时: </span><span style="color:var(--c-text)">{{cfg.risk?.signal_timeout_days||20}}天</span></div>
+                <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{(cfg.features||[]).length ? (cfg.features||[]).join(', ') : '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">ML增强: </span><span style="color:var(--c-text)">{{cfg.ml_enabled ? '启用' : cfg.ml_enabled===false ? '关闭' : '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">训练区间: </span><span style="color:var(--c-text)">{{cfg.train_start || '—'}} ~ {{cfg.train_end || '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">测试区间: </span><span style="color:var(--c-text)">{{cfg.test_start || '—'}} ~ {{cfg.test_end || '至今'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">止损: </span><span style="color:var(--c-text)">{{cfg.risk?.stop_loss_pct ?? '—'}}%</span></div>
+                <div><span style="color:var(--c-text-faint)">信号超时: </span><span style="color:var(--c-text)">{{cfg.risk?.signal_timeout_days ?? '—'}}天</span></div>
               </div>
             </div>
 
@@ -94,7 +97,7 @@
     </div>
 
     <!-- Create Modal -->
-    <n-modal v-model:show="showCreate" preset="card" title="✚ 创建模型版本" style="width:520px;max-width:92vw" :mask-closable="false">
+    <n-modal v-model:show="showCreate" preset="card" :title="editMode?'✎ 编辑配置':'✚ 创建模型版本'" style="width:520px;max-width:92vw" :mask-closable="false">
         <n-space vertical>
           <n-input v-model:value="createName" placeholder="模型名称，例如：BOLL+MACD+RSI 多策略融合" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
@@ -118,7 +121,7 @@
         <template #footer>
           <n-space justify="flex-end">
             <n-button @click="showCreate=false">取消</n-button>
-            <n-button type="primary" @click="doCreate" :loading="creating">创建</n-button>
+            <n-button type="primary" @click="editMode ? doSaveConfig() : doCreate()" :loading="creating">{{ editMode ? '保存' : '创建' }}</n-button>
           </n-space>
         </template>
     </n-modal>
@@ -169,6 +172,7 @@ import ModelIndicators from './ModelIndicators.vue'
 const store = useModelStore()
 const loading = ref(true)
 const showCreate = ref(false)
+const editMode = ref(false)
 const createName = ref('')
 const creating = ref(false)
 const showDeleteModal = ref(false)
@@ -183,7 +187,7 @@ const showSidebar = computed({
 const hoveredVersion = ref(null)
 const createForm = reactive({
   train_start: '2021-01-01', train_end: '2025-12-31',
-  test_start: '2026-01-01', test_end: null,
+  test_start: '2026-01-01', test_end: null,  // null 避免 DatePicker 报 Invalid time value
   features: ['boll','macd','rsi','atr','ma','volume'],
   ml_enabled: false,
   stop_loss_pct: 8, signal_timeout_days: 20,
@@ -198,6 +202,44 @@ function toggleFeature(key) {
   if (idx >= 0) createForm.features.splice(idx, 1)
   else createForm.features.push(key)
 }
+function startEditConfig() {
+  editMode.value = true
+  const cfg = store.selected?.config || {}
+  createName.value = store.selected?.model_name || ''
+  createForm.train_start = cfg.train_start || '2021-01-01'
+  createForm.train_end = cfg.train_end || '2025-12-31'
+  createForm.test_start = cfg.test_start || '2026-01-01'
+  createForm.test_end = cfg.test_end || null
+  createForm.features = cfg.features || ['boll','macd','rsi','atr','ma','volume']
+  createForm.ml_enabled = cfg.ml_enabled || false
+  createForm.stop_loss_pct = cfg.risk?.stop_loss_pct || 8
+  createForm.signal_timeout_days = cfg.risk?.signal_timeout_days || 20
+  showCreate.value = true
+}
+
+async function doSaveConfig() {
+  creating.value = true
+  try {
+    const cfg = store.selected?.config || {}
+    await axios.put(window.location.origin + `/api/v1/models/${store.selectedId}/config`, {
+      ...cfg,  // 保留所有未修改字段
+      model_name: createName.value.trim(),
+      train_start: createForm.train_start,
+      train_end: createForm.train_end,
+      test_start: createForm.test_start,
+      test_end: createForm.test_end || null,
+      features: createForm.features,
+      ml_enabled: createForm.ml_enabled,
+      risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
+    })
+    showCreate.value = false
+    editMode.value = false
+    await store.loadVersions()
+  } catch(e) {
+    alert(e.response?.data?.detail || '保存失败')
+  } finally { creating.value = false }
+}
+
 async function doCreate() {
   if (!createName.value.trim()) return
   creating.value = true

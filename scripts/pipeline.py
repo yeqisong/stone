@@ -866,8 +866,14 @@ def dag_task_model_train(trade_date=None, **kw):
         ver = db.execute(text("SELECT version FROM model_versions WHERE status='DRAFT' ORDER BY created_at DESC LIMIT 1")).scalar()
         if not ver:
             ver = "v1.0"
-            db.execute(text("INSERT INTO model_versions (version, model_name, status) VALUES (:v, :n, 'DRAFT') ON CONFLICT DO NOTHING"),
-                       {"v": ver, "n": "自动训练模型"})
+            db.execute(text("INSERT INTO model_versions (version, model_name, status, config) VALUES (:v, :n, 'DRAFT', :cfg) ON CONFLICT DO NOTHING"),
+                       {"v": ver, "n": "自动训练模型", "cfg": _json.dumps({
+                           "features": ["boll","macd","rsi","atr","ma","volume"],
+                           "ml_enabled": False, "model_type": "xgboost",
+                           "train_start": "2021-01-01", "train_end": "2025-12-31",
+                           "test_start": "2026-01-01", "test_end": None,
+                           "risk": {"stop_loss_pct": 8, "signal_timeout_days": 20},
+                       })})
             db.commit()
         db.execute(text("UPDATE model_versions SET status='TRAINING', trained_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": ver})
         db.commit()
@@ -890,6 +896,8 @@ def dag_task_model_train(trade_date=None, **kw):
         """), {"ed": end_date}).fetchall()
         if len(rows) < 5000:
             write_node_log(log_id=log_id, status='failed', detail=f'指标数据不足({len(rows)}行)')
+            db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
+            db.commit()
             db.close(); return 0
 
         df = pd.DataFrame(rows, columns=['trade_date','stock_code','pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv'])
@@ -936,6 +944,8 @@ def dag_task_model_train(trade_date=None, **kw):
 
         if len(X_train) < 1000 or len(X_val) < 100:
             write_node_log(log_id=log_id, status='failed', detail=f'数据量不足(train={len(X_train)},val={len(X_val)})')
+            db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
+            db.commit()
             db.close(); return 0
 
         # ── 4. 训练 GBDT（sklearn，无需额外依赖）──
