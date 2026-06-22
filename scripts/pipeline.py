@@ -974,25 +974,27 @@ def dag_task_model_train(trade_date=None, **kw):
             models[label]['model_path'] = path
 
         best_params = _json.dumps({k: {'params': params, 'r2': m['r2'], 'model_path': m['model_path']} for k, m in models.items()})
-        r2_avg = np.mean([m['r2'] for m in models.values()])
+        r2_avg = float(np.mean([m['r2'] for m in models.values()]))
         db.execute(text("UPDATE model_versions SET status='PENDING', best_params=:bp, evaluation_report=:rep WHERE version=:v"), {
             "v": ver, "bp": best_params,
-            "rep": _json.dumps({"r2_5d": models['5d']['r2'], "r2_10d": models['10d']['r2'], "r2_20d": models['20d']['r2'], "r2_avg": round(r2_avg, 4)}),
+            "rep": _json.dumps({"r2_5d": float(models['5d']['r2']), "r2_10d": float(models['10d']['r2']), "r2_20d": float(models['20d']['r2']), "r2_avg": round(r2_avg, 4)}),
         })
         db.execute(text("INSERT INTO training_trials (version, trial_number, params, score) VALUES (:v,1,:p,:s) ON CONFLICT (version, trial_number) DO UPDATE SET score=EXCLUDED.score"),
-                   {"v": ver, "p": _json.dumps(params), "s": round(r2_avg, 4)})
+                   {"v": ver, "p": _json.dumps(params), "s": round(float(r2_avg), 4)})
         db.commit(); db.close()
         write_node_log(log_id=log_id, status='success', detail=f'XGBoost 训练完成 R²avg={r2_avg:.4f}')
         return len(df)
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
-        # 训练失败：回退模型状态为 DRAFT
+        # 训练失败：回退模型状态为 DRAFT（先 rollback 清理失败事务）
         try:
+            db.rollback()
             if ver:
                 db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
                 db.commit()
         except Exception:
-            pass
+            try: db.rollback()
+            except: pass
         try:
             db.close()
         except Exception:
