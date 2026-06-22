@@ -113,8 +113,8 @@ const modelParams = computed(() => {
     { label:'学习率', value: first.learning_rate, key:'learning_rate' },
     { label:'最大深度', value: first.max_depth, key:'max_depth' },
     { label:'树数量', value: first.n_estimators, key:'n_estimators' },
-    { label:'子采样', value: first.subsample?.toFixed(2), key:'subsample' },
-    { label:'特征采样', value: first.max_features?.toFixed(2), key:'max_features' },
+    { label:'子采样', value: first.subsample?.toFixed?.(2) || first.subsample, key:'subsample' },
+    { label:'列采样', value: first.colsample_bytree?.toFixed?.(2) || first.max_features?.toFixed?.(2) || '—', key:'colsample_bytree' },
   ]
 })
 

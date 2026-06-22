@@ -953,13 +953,13 @@ def dag_task_model_train(trade_date=None, **kw):
         # ═══════════════════════════════════════
         # ── Optuna 超参数搜索 + 逐轮回测 ──
         # ═══════════════════════════════════════
-        from sklearn.ensemble import GradientBoostingRegressor
+        from xgboost import XGBRegressor
 
         # 读取搜索空间
         cfg_row = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
         cfg = _json.loads(cfg_row) if isinstance(cfg_row, str) else (cfg_row or {})
         ss = cfg.get('search_space', {})
-        n_trials = cfg.get('optuna_trials', 50)
+        n_trials = cfg.get('optuna_trials', 20)  # XGBoost 多核并行，20 轮足够收敛
         update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:开始({n_trials}轮)')
 
         # 回测函数
@@ -997,17 +997,18 @@ def dag_task_model_train(trade_date=None, **kw):
             from optuna.samplers import TPESampler
             def objective(trial):
                 nonlocal best_models, best_params_store, best_score
-                lr  = trial.suggest_float('lr', ss.get('learning_rate',[0.01])[0], ss.get('learning_rate',[0.01,0.3])[-1], log=True)
+                lr  = trial.suggest_float('learning_rate', ss.get('learning_rate',[0.01])[0], ss.get('learning_rate',[0.01,0.3])[-1], log=True)
                 md  = trial.suggest_int('max_depth', ss.get('max_depth',[3])[0], ss.get('max_depth',[3,10])[-1])
-                ne  = trial.suggest_int('n_estimators', ss.get('n_estimators',[100])[0], ss.get('n_estimators',[100,500])[-1])
+                ne  = trial.suggest_int('n_estimators', ss.get('n_estimators',[100])[0], min(ss.get('n_estimators',[100,300])[-1], 300))
                 sub = trial.suggest_float('subsample', 0.6, 1.0)
-                mf  = trial.suggest_float('max_features', 0.5, 1.0)
+                cs  = trial.suggest_float('colsample_bytree', 0.5, 1.0)
                 params = {'learning_rate': lr, 'max_depth': md, 'n_estimators': ne,
-                          'subsample': sub, 'max_features': mf, 'random_state': 42}
+                          'subsample': sub, 'colsample_bytree': cs,
+                          'n_jobs': -1, 'random_state': 42, 'verbosity': 0}
                 models = {}
                 total_sharpe = 0
                 for label, tname in TARGETS:
-                    model = GradientBoostingRegressor(**params)
+                    model = XGBRegressor(**params)
                     model.fit(X_train, df[train_mask][tname])
                     y_pred = model.predict(X_val)
                     bt = _backtest(df[~train_mask][tname].values, y_pred, val_dates, val_codes)
@@ -1027,10 +1028,12 @@ def dag_task_model_train(trade_date=None, **kw):
             study = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
         except ImportError:
-            # Optuna 未安装时回退单次训练
-            params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200, 'subsample': 0.8, 'max_features': 0.8, 'random_state': 42}
+            # Optuna 未安装时回退单次训练（XGBoost）
+            params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200,
+                      'subsample': 0.8, 'colsample_bytree': 0.8,
+                      'n_jobs': -1, 'random_state': 42, 'verbosity': 0}
             for label, tname in TARGETS:
-                model = GradientBoostingRegressor(**params)
+                model = XGBRegressor(**params)
                 model.fit(X_train, df[train_mask][tname])
                 y_pred = model.predict(X_val)
                 bt = _backtest(df[~train_mask][tname].values, y_pred, val_dates, val_codes)

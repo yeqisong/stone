@@ -97,14 +97,14 @@ for i in $(seq 1 20); do
 done
 ```
 
-### 2.5 清理旧镜像
+### 2.5 清理旧镜像和构建缓存
 
 ```bash
-# 构建后立即清理未使用的镜像（释放磁盘空间）
-ssh myhuawei "docker image prune -f"
+# 构建后立即清理（释放磁盘空间 + 防止缓存旧代码）
+ssh myhuawei "docker image prune -f && docker builder prune -f"
 ```
 
-> ⚠️ 每次 `docker compose build` 产生新镜像，旧镜像若不清理会持续堆积。当前服务器 50 个镜像占用 14GB，实际只用 3 个。此步骤必须执行。
+> ⚠️ `docker compose build` 的 `COPY` 层可能被缓存，导致新代码未进入镜像。`builder prune -f` 清除构建缓存，确保下次构建必定重新 COPY 文件。
 
 ---
 
@@ -269,8 +269,8 @@ rsync -avz --exclude '.git/' --exclude '.env' --exclude '.env.prod' --exclude '.
 # 5. 服务器构建
 ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build app && docker compose up -d app"
 
-# 5b. 清理旧镜像
-ssh myhuawei "docker image prune -f"
+# 5b. 清理旧镜像 + 构建缓存
+ssh myhuawei "docker image prune -f && docker builder prune -f"
 
 # 6. 等待上线（最多 10 分钟）
 for i in $(seq 1 20); do
