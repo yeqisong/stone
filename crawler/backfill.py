@@ -322,6 +322,11 @@ class BackfillManager:
             task.error_message = f"未找到任何{LABEL_MAP[task.task_type]}代码"
             return
 
+        # 更新 stock_master 的 ipo_date（adapter 返回的数据含 IPO 日期）
+        db = get_sync_db()
+        self._sync_ipo_dates(db, stock_list, stock_type)
+        db.close()
+
         # ── 确定表、取数函数、写入函数 ──
         is_single_day = (task.start_date == task.end_date)
 
@@ -883,6 +888,27 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
     #  工具函数
     # ═══════════════════════════════════════════════
+
+    @staticmethod
+    def _sync_ipo_dates(db, stock_list, stock_type: str):
+        """批量更新 stock_master 的 ipo_date（从 adapter 返回数据中获取）。"""
+        for start in range(0, len(stock_list), 500):
+            chunk = stock_list[start:start + 500]
+            placeholders = []
+            params = {}
+            for j, s in enumerate(chunk):
+                if not s.ipo_date:
+                    continue
+                idx = start + j
+                placeholders.append(f"(:c{idx},:t{idx},:i{idx})")
+                params.update({f"c{idx}": s.stock_code, f"t{idx}": stock_type, f"i{idx}": s.ipo_date})
+            if placeholders:
+                db.execute(text(
+                    "INSERT INTO stock_master (stock_code,stock_type,ipo_date,status) "
+                    "VALUES " + ",".join(placeholders) + " "
+                    "ON CONFLICT (stock_code,stock_type) DO UPDATE SET ipo_date=EXCLUDED.ipo_date"
+                ), params)
+        db.commit()
 
     @staticmethod
     def _load_ipo_map(db, stock_type: str) -> Dict[str, str]:
