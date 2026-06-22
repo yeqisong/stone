@@ -1106,7 +1106,7 @@ class BackfillManager:
                 pass
 
     def _recover_orphaned_tasks(self):
-        """启动时将上次异常终止的任务标记为 'failed'。"""
+        """启动时将上次异常终止的任务标记为 'failed'。同时恢复 model_versions 的 TRAINING 状态。"""
         db = self._get_db()
         if db is None:
             return
@@ -1117,6 +1117,13 @@ class BackfillManager:
             db.commit()
             if result.rowcount and result.rowcount > 0:
                 logger.info(f"[Backfill] 恢复: {result.rowcount} 个孤儿任务标记为 failed")
+            # 恢复卡在 TRAINING 状态的模型版本
+            r2 = db.execute(text(
+                "UPDATE model_versions SET status='DRAFT' WHERE status='TRAINING'"
+            ))
+            db.commit()
+            if r2.rowcount and r2.rowcount > 0:
+                logger.info(f"[Backfill] 恢复: {r2.rowcount} 个模型版本 TRAINING→DRAFT")
         except Exception as e:
             logger.warning(f"[Backfill] 恢复孤儿任务失败: {e}")
         finally:

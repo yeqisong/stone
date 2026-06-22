@@ -895,9 +895,10 @@ def dag_task_model_train(trade_date=None, **kw):
         df = pd.DataFrame(rows, columns=['trade_date','stock_code','pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv'])
         for c in ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv']:
             df[c] = df[c].astype(float)
-        update_node_progress(log_id=log_id, rows=len(df), detail=f'{len(df)} 行')
+        update_node_progress(log_id=log_id, rows=1, detail='步骤1:加载指标')
 
         # ── 2. 特征工程 ──
+        update_node_progress(log_id=log_id, rows=2, detail='步骤2:特征工程')
         df['bias_5_20'] = df['ma5'] / df['ma20'] - 1                    # 短期乖离率
         df['vol_ratio_3d'] = df.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())  # 3日均量比
         df['obv_slope_7d'] = df.groupby('stock_code')['obv'].transform(lambda x: (x - x.shift(7)) / (x.shift(7).abs() + 1))  # OBV 7日斜率
@@ -924,6 +925,9 @@ def dag_task_model_train(trade_date=None, **kw):
         df['target_5d'] = labels_5; df['target_10d'] = labels_10; df['target_20d'] = labels_20
         df = df.dropna(subset=['target_5d', 'target_10d', 'target_20d'])
 
+        # ── 3. 标签 + 切分 ──
+        update_node_progress(log_id=log_id, rows=3, detail='步骤3:标签计算')
+
         # ── 4. 训练/验证按时间切分 ──
         split_date = sorted(df['trade_date'].unique())[-int(len(df['trade_date'].unique())*0.2)]
         train_mask = df['trade_date'] < split_date
@@ -934,7 +938,8 @@ def dag_task_model_train(trade_date=None, **kw):
             write_node_log(log_id=log_id, status='failed', detail=f'数据量不足(train={len(X_train)},val={len(X_val)})')
             db.close(); return 0
 
-        # ── 5. 训练 GBDT（sklearn，无需额外依赖）──
+        # ── 4. 训练 GBDT（sklearn，无需额外依赖）──
+        update_node_progress(log_id=log_id, rows=4, detail='步骤4:模型训练')
         from sklearn.ensemble import GradientBoostingRegressor
         params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200,
                   'subsample': 0.8, 'max_features': 0.8, 'random_state': 42}
@@ -947,7 +952,8 @@ def dag_task_model_train(trade_date=None, **kw):
             models[label] = {'model': model, 'r2': round(r2, 4)}
             logger.info(f"[train] {label}: R²={r2:.4f}")
 
-        # ── 6. 存储结果（模型存文件，DB 只存路径）──
+        # ── 5. 存储结果（模型存文件，DB 只存路径）──
+        update_node_progress(log_id=log_id, rows=5, detail='步骤5:存储结果')
         import os as _os
         model_dir = f"data/models/{ver}"
         _os.makedirs(model_dir, exist_ok=True)
@@ -970,6 +976,17 @@ def dag_task_model_train(trade_date=None, **kw):
         return len(df)
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
+        # 训练失败：回退模型状态为 DRAFT
+        try:
+            if ver:
+                db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
+                db.commit()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
         raise
 
 def _get_preference_thresholds(db) -> dict:

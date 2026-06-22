@@ -10,6 +10,19 @@ from app.db.connection import get_sync_db
 router = APIRouter(tags=["models"])
 
 
+def _safe_fetch_model(db, version: str):
+    """查询模型版本，兼容 deleted_at 列未迁移的情况。返回行或 None。"""
+    try:
+        return db.execute(text(
+            "SELECT status, activated_at, deleted_at FROM model_versions WHERE version = :v"
+        ), {"v": version}).fetchone()
+    except Exception:
+        db.rollback()
+        return db.execute(text(
+            "SELECT status, activated_at, NULL as deleted_at FROM model_versions WHERE version = :v"
+        ), {"v": version}).fetchone()
+
+
 from typing import Optional, List
 
 class CreateModel(BaseModel):
@@ -218,16 +231,7 @@ def check_model_delete(version: str):
     db = get_sync_db()
     try:
         # 先查模型是否存在（兼容 deleted_at 列未迁移的情况）
-        try:
-            r = db.execute(text(
-                "SELECT status, activated_at, deleted_at FROM model_versions WHERE version = :v"
-            ), {"v": version}).fetchone()
-        except Exception:
-            db.rollback()
-            # deleted_at 列不存在，回退查询
-            r = db.execute(text(
-                "SELECT status, activated_at, NULL as deleted_at FROM model_versions WHERE version = :v"
-            ), {"v": version}).fetchone()
+        r = _safe_fetch_model(db, version)
         if not r:
             raise HTTPException(404, f"版本 {version} 不存在")
         if r[2] is not None:
@@ -278,15 +282,7 @@ def delete_model(version: str, mode: str = Query("soft")):
     db = get_sync_db()
     try:
         # 兼容 deleted_at 列未迁移的情况
-        try:
-            r = db.execute(text(
-                "SELECT status, activated_at, deleted_at FROM model_versions WHERE version = :v"
-            ), {"v": version}).fetchone()
-        except Exception:
-            db.rollback()
-            r = db.execute(text(
-                "SELECT status, activated_at, NULL as deleted_at FROM model_versions WHERE version = :v"
-            ), {"v": version}).fetchone()
+        r = _safe_fetch_model(db, version)
         if not r:
             raise HTTPException(404, f"版本 {version} 不存在")
         if r[2] is not None:

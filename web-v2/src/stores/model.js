@@ -5,7 +5,8 @@ import axios from 'axios'
 export const useModelStore = defineStore('model', () => {
   const versions = ref([])
   const selectedId = ref(null)
-  const detailTab = ref('train')  // basic | train | eval | live | indicators
+  const detailTab = ref('train')
+  const sidebarOpen = ref(window.innerWidth >= 768)  // basic | train | eval | live | indicators
   const isMock = ref(false)       // 是否为 mock 数据（API 不可用时的兜底展示）
 
   const selected = computed(() => versions.value.find(v => v.version === selectedId.value) || null)
@@ -23,17 +24,10 @@ export const useModelStore = defineStore('model', () => {
       const r = await axios.get(window.location.origin + '/api/v1/models')
       versions.value = r.data?.versions || []
       isMock.value = false
-      return
     } catch(e) {
-      // API 不可用时使用 mock 数据
+      isMock.value = true
+      versions.value = []
     }
-    isMock.value = true
-    versions.value = [
-      { version: 'v2.1', model_name: '布林+MACD+RSI 多策略融合', status: 'ACTIVE', sharpe: 2.15, win_rate: 0.58, created_at: '2026-06-10' },
-      { version: 'v2.0', model_name: '布林+MACD 双策略', status: 'ARCHIVED', sharpe: 1.82, win_rate: 0.52, created_at: '2026-05-20' },
-      { version: 'v1.3', model_name: '布林+MACD+量能 三策略', status: 'PENDING', sharpe: 2.31, win_rate: 0.61, created_at: '2026-06-08' },
-      { version: 'v1.2', model_name: 'RSI+量能 实验策略', status: 'DRAFT', sharpe: null, win_rate: null, created_at: '2026-06-12' },
-    ]
   }
 
   function selectVersion(version) {
@@ -60,5 +54,5 @@ export const useModelStore = defineStore('model', () => {
     }
   }
 
-  return { versions, selectedId, detailTab, selected, statusBadge, statusLabel, isMock, loadVersions, selectVersion, switchTab, checkDelete, deleteVersion }
+  return { versions, selectedId, detailTab, selected, statusBadge, statusLabel, isMock, sidebarOpen, loadVersions, selectVersion, switchTab, checkDelete, deleteVersion }
 })

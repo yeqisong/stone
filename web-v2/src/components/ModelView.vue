@@ -176,7 +176,10 @@ const deleteInfo = ref(null)
 const deleteTarget = ref(null)
 const deleting = ref(false)
 const isMobile = ref(window.innerWidth < 768)
-const showSidebar = ref(!isMobile.value)
+const showSidebar = computed({
+  get: () => store.sidebarOpen,
+  set: (v) => { store.sidebarOpen = v }
+})
 const hoveredVersion = ref(null)
 const createForm = reactive({
   train_start: '2021-01-01', train_end: '2025-12-31',
@@ -214,7 +217,9 @@ async function doCreate() {
     createName.value = ''
     await store.loadVersions()
     if (store.versions.length) store.selectVersion(store.versions[0].version)
-  } catch(e) {} finally { creating.value = false }
+  } catch(e) {
+    alert(e.response?.data?.detail || '创建失败')
+  } finally { creating.value = false }
 }
 
 const tabs = [
@@ -242,19 +247,25 @@ async function startTrain() {
   try {
     await axios.post(window.location.origin + '/api/dag_trigger', { node:'model_train', include_downstream:false })
     store.selected.status = 'TRAINING'
-  } catch(e) {}
+  } catch(e) {
+    alert(e.response?.data?.detail || '启动训练失败')
+  }
 }
 async function approveModel() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`)
     await store.loadVersions()
-  } catch(e) {}
+  } catch(e) {
+    alert(e.response?.data?.detail || '审批失败')
+  }
 }
 async function rejectModel() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/reject`)
     await store.loadVersions()
-  } catch(e) {}
+  } catch(e) {
+    alert(e.response?.data?.detail || '操作失败')
+  }
 }
 
 async function handleDeleteClick(v) {
