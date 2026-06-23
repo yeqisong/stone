@@ -45,6 +45,10 @@ class CreateModel(BaseModel):
     max_depth_max: int = 10
     learning_rate_min: float = 0.01
     learning_rate_max: float = 0.3
+    # 训练参数
+    optuna_trials: int = 50
+    initial_cash: int = 1000000
+    max_positions: int = 5
     # 信号配置
     buy_threshold: float = 0.6
     sell_threshold: float = 0.4
@@ -155,6 +159,9 @@ def create_model(body: CreateModel):
             "features": body.features,
             "ml_enabled": body.ml_enabled,
             "model_type": body.model_type,
+            "optuna_trials": body.optuna_trials,
+            "initial_cash": body.initial_cash,
+            "max_positions": body.max_positions,
             "search_space": {
                 "n_estimators": [body.n_estimators_min, body.n_estimators_max],
                 "max_depth": [body.max_depth_min, body.max_depth_max],

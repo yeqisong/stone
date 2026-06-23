@@ -68,10 +68,12 @@
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
                 <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{(cfg.features||[]).length ? (cfg.features||[]).join(', ') : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">ML增强: </span><span style="color:var(--c-text)">{{cfg.ml_enabled ? '启用' : cfg.ml_enabled===false ? '关闭' : '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">训练区间: </span><span style="color:var(--c-text)">{{cfg.train_start || '—'}} ~ {{cfg.train_end || '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">测试区间: </span><span style="color:var(--c-text)">{{cfg.test_start || '—'}} ~ {{cfg.test_end || '至今'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">止损: </span><span style="color:var(--c-text)">{{cfg.risk?.stop_loss_pct ?? '—'}}%</span></div>
-                <div><span style="color:var(--c-text-faint)">信号超时: </span><span style="color:var(--c-text)">{{cfg.risk?.signal_timeout_days ?? '—'}}天</span></div>
+                <div><span style="color:var(--c-text-faint)">数据范围: </span><span style="color:var(--c-text)">{{cfg.train_start || '—'}} ~ 前天（自动60/20/20切分）</span></div>
+                <div><span style="color:var(--c-text-faint)">Optuna轮数: </span><span style="color:var(--c-text)">{{cfg.optuna_trials || 50}}</span></div>
+                <div><span style="color:var(--c-text-faint)">初始资金: </span><span style="color:var(--c-text)">{{(cfg.initial_cash || 1000000).toLocaleString()}}元</span></div>
+                <div><span style="color:var(--c-text-faint)">最大持仓: </span><span style="color:var(--c-text)">{{cfg.max_positions || 5}}只</span></div>
+                <div><span style="color:var(--c-text-faint)">止损: </span><span style="color:var(--c-text)">{{cfg.risk?.stop_loss_pct ?? 8}}%</span></div>
+                <div><span style="color:var(--c-text-faint)">信号超时: </span><span style="color:var(--c-text)">{{cfg.risk?.signal_timeout_days ?? 20}}天</span></div>
               </div>
             </div>
 
@@ -101,10 +103,9 @@
         <n-space vertical>
           <n-input v-model:value="createName" placeholder="模型名称，例如：BOLL+MACD+RSI 多策略融合" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
-          <n-date-picker v-model:formatted-value="createForm.train_start" type="date" value-format="yyyy-MM-dd" placeholder="训练起点" />
-          <n-date-picker v-model:formatted-value="createForm.train_end" type="date" value-format="yyyy-MM-dd" placeholder="训练终点" />
-          <n-date-picker v-model:formatted-value="createForm.test_start" type="date" value-format="yyyy-MM-dd" placeholder="测试起点" />
-          <n-date-picker v-model:formatted-value="createForm.test_end" type="date" value-format="yyyy-MM-dd" placeholder="测试终点（空=至今）" clearable />
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:2px">数据范围起点（系统自动 60/20/20 切分为训练/验证/测试集）</div>
+          <n-date-picker v-model:formatted-value="createForm.train_start" type="date" value-format="yyyy-MM-dd" placeholder="数据起点" />
+          <div style="font-size:10px;color:var(--c-text-faint);margin-top:4px">数据截止日期（自动取前天，确保数据已收盘）</div>
           <n-divider style="margin:4px 0">特征配置</n-divider>
           <n-space>
             <n-tag v-for="f in featureOptions" :key="f.key"
@@ -113,6 +114,12 @@
               {{f.label}}
             </n-tag>
           </n-space>
+          <n-divider style="margin:4px 0">训练参数</n-divider>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" placeholder="Optuna轮数" style="width:120px" />
+            <n-input-number v-model:value="createForm.initial_cash" :min="100000" :max="10000000" :step="100000" placeholder="初始资金" style="width:140px" />
+            <n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" placeholder="最大持仓数" style="width:120px" />
+          </div>
           <n-divider style="margin:4px 0">风险控制</n-divider>
           <n-input-number v-model:value="createForm.stop_loss_pct" :min="1" :max="30" placeholder="止损比例(%)" />
           <n-input-number v-model:value="createForm.signal_timeout_days" :min="5" :max="60" placeholder="信号超时(交易日)" />
@@ -190,6 +197,7 @@ const createForm = reactive({
   test_start: '2026-01-01', test_end: null,  // null 避免 DatePicker 报 Invalid time value
   features: ['boll','macd','rsi','atr','ma','volume'],
   ml_enabled: false,
+  optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
   stop_loss_pct: 8, signal_timeout_days: 20,
 })
 const featureOptions = [
@@ -212,6 +220,9 @@ function startEditConfig() {
   createForm.test_end = cfg.test_end || null
   createForm.features = cfg.features || ['boll','macd','rsi','atr','ma','volume']
   createForm.ml_enabled = cfg.ml_enabled || false
+  createForm.optuna_trials = cfg.optuna_trials || 50
+  createForm.initial_cash = cfg.initial_cash || 1000000
+  createForm.max_positions = cfg.max_positions || 5
   createForm.stop_loss_pct = cfg.risk?.stop_loss_pct || 8
   createForm.signal_timeout_days = cfg.risk?.signal_timeout_days || 20
   showCreate.value = true
@@ -252,6 +263,9 @@ async function doCreate() {
       test_end: createForm.test_end || '',
       features: createForm.features,
       ml_enabled: createForm.ml_enabled,
+      optuna_trials: createForm.optuna_trials,
+      initial_cash: createForm.initial_cash,
+      max_positions: createForm.max_positions,
       stop_loss_pct: createForm.stop_loss_pct,
       signal_timeout_days: createForm.signal_timeout_days,
     })

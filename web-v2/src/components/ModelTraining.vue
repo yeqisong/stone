@@ -19,7 +19,10 @@
     <div style="font-size:11px;color:var(--c-text-faint);text-align:center;margin-top:12px">
       Started: {{ version.trained_at?.slice(0,19) || '—' }}
     </div>
-    <div style="text-align:center;margin-top:8px"><n-button size="small" @click="refresh">刷新状态</n-button></div>
+    <div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center">
+      <n-button size="small" @click="refresh">刷新状态</n-button>
+      <n-button size="small" type="error" @click="stopTrain" :loading="stopping">停止训练</n-button>
+    </div>
   </div>
   <div v-else-if="version.status==='PENDING'||version.status==='ACTIVE'" style="display:flex;gap:16px;flex-wrap:wrap">
     <div v-for="c in cards" :key="c.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:100px">
@@ -34,6 +37,7 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { NButton } from 'naive-ui'
+import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import { addWsListener } from '../utils/ws'
 
@@ -44,6 +48,7 @@ const currentStep = ref(0)
 const errorDetail = ref('')
 const currentTrial = ref(0)
 const totalTrials = ref(50)
+const stopping = ref(false)
 let _wsCleanup = null
 
 const trainSteps = computed(() => {
@@ -105,6 +110,20 @@ const cards = computed(() => {
 
 async function refresh() {
   await store.loadVersions()
+}
+
+async function stopTrain() {
+  if (!confirm('确定要停止训练吗？训练数据将丢失，模型恢复为草稿状态。')) return
+  stopping.value = true
+  try {
+    await axios.post(window.location.origin + '/api/dag_terminate', { node: 'model_train' })
+    await axios.post(window.location.origin + `/api/v1/models/${props.version.version}/retrain`)
+    await store.loadVersions()
+  } catch(e) {
+    alert(e.response?.data?.detail || '停止失败')
+  } finally {
+    stopping.value = false
+  }
 }
 </script>
 
