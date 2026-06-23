@@ -1174,6 +1174,10 @@ def dag_task_model_train(trade_date=None, **kw):
             from optuna.samplers import TPESampler
             def objective(trial):
                 nonlocal best_models, best_params_store, best_score
+                # 检查终止信号
+                stop_event = kw.get('_stop_event')
+                if stop_event and stop_event.is_set():
+                    raise optuna.TrialPruned("用户终止训练")
                 # 检查模型是否被删除
                 r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
                 if not r or r[0] != 'TRAINING':

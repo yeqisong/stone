@@ -239,13 +239,16 @@ class DagExecutor:
                 logger.error(f"[dag] 无就绪节点，剩余: {remaining_names}")
                 break
 
+            # 为本次运行创建终止事件（线程安全）
+            run_id = context.get('run_id', '')
+            from app.signal import set_stop_event, get_stop_event
+            _stop_event = get_stop_event(run_id)
+
             # 并行执行就绪节点（启动前检查终止信号）
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(ready)) as executor:
                 future_info = {}
                 for name in ready:
                     node = self._nodes[name]
-                    # 检查终止信号：若已终止，节点自行标记 failed 并跳过
-                    run_id = context.get('run_id', '')
                     from app.signal import is_stop_requested
                     if run_id and is_stop_requested(run_id):
                         log_id = (context.get('_node_log_ids', {}) or {}).get(name)
@@ -255,7 +258,9 @@ class DagExecutor:
                         self._completed[name] = time.time()
                         logger.info(f"[dag] {name} ⊗ 已终止 (跳过)")
                         continue
-                    f = executor.submit(self._run_with_hooks, node, dict(context))
+                    node_ctx = dict(context)
+                    node_ctx['_stop_event'] = _stop_event
+                    f = executor.submit(self._run_with_hooks, node, node_ctx)
                     future_info[f] = (name, time.time())
                 for future in concurrent.futures.as_completed(future_info):
                     name, t0 = future_info[future]

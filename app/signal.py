@@ -10,15 +10,28 @@
 - set_main_loop / wake_dag_broadcast: 线程安全的唤醒接口
 """
 import asyncio
+import threading
 
 _dag_wake_event = asyncio.Event()
 _stop_requests: set = set()
+_stop_events: dict = {}  # run_id → threading.Event
 _main_loop = None
 
 
 def request_stop(run_id: str):
     """标记 run_id 为需终止（API 层调用）。"""
     _stop_requests.add(run_id)
+    # 触发 threading.Event，让阻塞中的训练线程感知到
+    evt = _stop_events.get(run_id)
+    if evt:
+        evt.set()
+
+
+def get_stop_event(run_id: str) -> threading.Event:
+    """为指定 run_id 创建或获取终止事件（DAG 执行器调用）。"""
+    if run_id not in _stop_events:
+        _stop_events[run_id] = threading.Event()
+    return _stop_events[run_id]
 
 
 def is_stop_requested(run_id: str) -> bool:

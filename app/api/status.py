@@ -644,16 +644,22 @@ async def broadcast_dag_status():
 
 @router.get("/dag_logs")
 def get_dag_logs():
-    """返回当前进行中任务的完整日志，无进行中任务返回空。"""
+    """返回最近的 DAG 运行日志（最近一次完整运行的所有节点）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     try:
         db = get_sync_db()
+        # 找最近一次运行的 run_id（优先 running，其次最近完成/失败的）
         run_id = db.execute(text("""
             SELECT run_id FROM dag_run_log
             WHERE status='running' AND heartbeat_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
             ORDER BY id DESC LIMIT 1
         """)).scalar()
+        if not run_id:
+            run_id = db.execute(text("""
+                SELECT run_id FROM dag_run_log
+                ORDER BY id DESC LIMIT 1
+            """)).scalar()
         if not run_id:
             return {"ok": True, "nodes": []}
         rows = db.execute(text("""
