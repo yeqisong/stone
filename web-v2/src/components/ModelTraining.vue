@@ -39,7 +39,7 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { NButton } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
-import { addWsListener } from '../utils/ws'
+import { addWsListener, connectWebSocket, wsState } from '../utils/ws'
 
 const props = defineProps({ version: Object })
 const store = useModelStore()
@@ -94,7 +94,10 @@ function handleWs(data) {
   }
 }
 
-onMounted(() => { _wsCleanup = addWsListener(handleWs) })
+onMounted(() => {
+  if (!wsState.connected) connectWebSocket()
+  _wsCleanup = addWsListener(handleWs)
+})
 onUnmounted(() => { if (_wsCleanup) _wsCleanup() })
 
 const cards = computed(() => {
@@ -117,7 +120,7 @@ async function stopTrain() {
   stopping.value = true
   try {
     await axios.post(window.location.origin + '/api/dag_terminate', { node: 'model_train' })
-    await axios.post(window.location.origin + `/api/v1/models/${props.version.version}/retrain`)
+    await axios.post(window.location.origin + `/api/v1/models/${props.version.version}/stop`)
     await store.loadVersions()
   } catch(e) {
     alert(e.response?.data?.detail || '停止失败')

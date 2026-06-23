@@ -53,6 +53,10 @@ class CreateModel(BaseModel):
     buy_threshold: float = 0.6
     sell_threshold: float = 0.4
     ml_confidence_threshold: float = 0.5
+    # 交易成本
+    stamp_tax: float = 0.001      # 印花税 0.1%
+    commission: float = 0.00025   # 佣金 0.025%
+    slippage: float = 0.001       # 滑点 0.1%
     # 风险控制
     stop_loss_pct: float = 8.0
     signal_timeout_days: int = 20
@@ -162,6 +166,9 @@ def create_model(body: CreateModel):
             "optuna_trials": body.optuna_trials,
             "initial_cash": body.initial_cash,
             "max_positions": body.max_positions,
+            "stamp_tax": body.stamp_tax,
+            "commission": body.commission,
+            "slippage": body.slippage,
             "search_space": {
                 "n_estimators": [body.n_estimators_min, body.n_estimators_max],
                 "max_depth": [body.max_depth_min, body.max_depth_max],
@@ -303,6 +310,13 @@ def delete_model(version: str, mode: str = Query("soft")):
                 "UPDATE model_versions SET deleted_at = CURRENT_TIMESTAMP WHERE version = :v"
             ), {"v": version})
             db.commit()
+            # 如果正在训练中，终止 DAG 节点
+            if r[0] == 'TRAINING':
+                try:
+                    from scripts.dag import dag
+                    dag.terminate('model_train')
+                except Exception:
+                    pass
             return {"ok": True, "version": version, "mode": "soft"}
 
         # mode == "hard" — 物理删除
@@ -401,6 +415,28 @@ def update_model_config(version: str, body: dict):
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"更新失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
+@router.post("/v1/models/{version}/stop")
+def stop_training(version: str):
+    """强制停止训练，模型回到 DRAFT。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        if r[0] != 'TRAINING':
+            raise HTTPException(400, f"只有 TRAINING 状态可停止，当前为 {r[0]}")
+        db.execute(text("UPDATE model_versions SET status='DRAFT', best_params=NULL, evaluation_report=NULL, sharpe=NULL, win_rate=NULL, max_drawdown=NULL, annual_return=NULL WHERE version=:v"), {"v": version})
+        db.commit()
+        return {"ok": True, "version": version, "status": "DRAFT"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"操作失败: {str(e)[:200]}")
     finally:
         db.close()
 

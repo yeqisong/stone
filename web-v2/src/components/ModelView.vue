@@ -67,11 +67,11 @@
               <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">配置详情</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
                 <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{(cfg.features||[]).length ? (cfg.features||[]).join(', ') : '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">ML增强: </span><span style="color:var(--c-text)">{{cfg.ml_enabled ? '启用' : cfg.ml_enabled===false ? '关闭' : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">数据范围: </span><span style="color:var(--c-text)">{{cfg.train_start || '—'}} ~ 前天（自动60/20/20切分）</span></div>
                 <div><span style="color:var(--c-text-faint)">Optuna轮数: </span><span style="color:var(--c-text)">{{cfg.optuna_trials || 50}}</span></div>
                 <div><span style="color:var(--c-text-faint)">初始资金: </span><span style="color:var(--c-text)">{{(cfg.initial_cash || 1000000).toLocaleString()}}元</span></div>
                 <div><span style="color:var(--c-text-faint)">最大持仓: </span><span style="color:var(--c-text)">{{cfg.max_positions || 5}}只</span></div>
+                <div><span style="color:var(--c-text-faint)">交易成本: </span><span style="color:var(--c-text)">印花{{((cfg.stamp_tax??0.001)*100).toFixed(1)}}% 佣金{{((cfg.commission??0.00025)*100).toFixed(3)}}% 滑点{{((cfg.slippage??0.001)*100).toFixed(1)}}%</span></div>
                 <div><span style="color:var(--c-text-faint)">止损: </span><span style="color:var(--c-text)">{{cfg.risk?.stop_loss_pct ?? 8}}%</span></div>
                 <div><span style="color:var(--c-text-faint)">信号超时: </span><span style="color:var(--c-text)">{{cfg.risk?.signal_timeout_days ?? 20}}天</span></div>
               </div>
@@ -120,10 +120,23 @@
             <n-input-number v-model:value="createForm.initial_cash" :min="100000" :max="10000000" :step="100000" placeholder="初始资金" style="width:140px" />
             <n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" placeholder="最大持仓数" style="width:120px" />
           </div>
+          <n-divider style="margin:4px 0">交易成本</n-divider>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <n-input-number v-model:value="createForm.stamp_tax" :min="0" :max="0.01" :step="0.0001" placeholder="印花税" style="width:110px">
+              <template #suffix>印花税</template>
+            </n-input-number>
+            <n-input-number v-model:value="createForm.commission" :min="0" :max="0.01" :step="0.0001" placeholder="佣金" style="width:110px">
+              <template #suffix>佣金</template>
+            </n-input-number>
+            <n-input-number v-model:value="createForm.slippage" :min="0" :max="0.01" :step="0.0001" placeholder="滑点" style="width:110px">
+              <template #suffix>滑点</template>
+            </n-input-number>
+          </div>
+          <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">默认: 印花0.001 佣金0.00025 滑点0.001</div>
           <n-divider style="margin:4px 0">风险控制</n-divider>
           <n-input-number v-model:value="createForm.stop_loss_pct" :min="1" :max="30" placeholder="止损比例(%)" />
           <n-input-number v-model:value="createForm.signal_timeout_days" :min="5" :max="60" placeholder="信号超时(交易日)" />
-          <n-checkbox v-model:checked="createForm.ml_enabled">ML增强</n-checkbox>
+          <n-checkbox v-model:checked="createForm.ml_enabled" disabled title="规则引擎已移除，当前仅 XGBoost，后续补充非ML预测路径">ML增强（预留）</n-checkbox>
         </n-space>
         <template #footer>
           <n-space justify="flex-end">
@@ -196,8 +209,8 @@ const createForm = reactive({
   train_start: '2021-01-01', train_end: '2025-12-31',
   test_start: '2026-01-01', test_end: null,  // null 避免 DatePicker 报 Invalid time value
   features: ['boll','macd','rsi','atr','ma','volume'],
-  ml_enabled: false,
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
+  stamp_tax: 0.001, commission: 0.00025, slippage: 0.001,
   stop_loss_pct: 8, signal_timeout_days: 20,
 })
 const featureOptions = [
@@ -219,10 +232,12 @@ function startEditConfig() {
   createForm.test_start = cfg.test_start || '2026-01-01'
   createForm.test_end = cfg.test_end || null
   createForm.features = cfg.features || ['boll','macd','rsi','atr','ma','volume']
-  createForm.ml_enabled = cfg.ml_enabled || false
   createForm.optuna_trials = cfg.optuna_trials || 50
   createForm.initial_cash = cfg.initial_cash || 1000000
   createForm.max_positions = cfg.max_positions || 5
+  createForm.stamp_tax = cfg.stamp_tax ?? 0.001
+  createForm.commission = cfg.commission ?? 0.00025
+  createForm.slippage = cfg.slippage ?? 0.001
   createForm.stop_loss_pct = cfg.risk?.stop_loss_pct || 8
   createForm.signal_timeout_days = cfg.risk?.signal_timeout_days || 20
   showCreate.value = true
@@ -240,7 +255,6 @@ async function doSaveConfig() {
       test_start: createForm.test_start,
       test_end: createForm.test_end || null,
       features: createForm.features,
-      ml_enabled: createForm.ml_enabled,
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
     })
     showCreate.value = false
@@ -262,10 +276,12 @@ async function doCreate() {
       test_start: createForm.test_start,
       test_end: createForm.test_end || '',
       features: createForm.features,
-      ml_enabled: createForm.ml_enabled,
       optuna_trials: createForm.optuna_trials,
       initial_cash: createForm.initial_cash,
       max_positions: createForm.max_positions,
+      stamp_tax: createForm.stamp_tax,
+      commission: createForm.commission,
+      slippage: createForm.slippage,
       stop_loss_pct: createForm.stop_loss_pct,
       signal_timeout_days: createForm.signal_timeout_days,
     })

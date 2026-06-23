@@ -928,7 +928,18 @@ def dag_task_model_train(trade_date=None, **kw):
         df['vol_ratio_3d'] = df.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())  # 3日均量比
         df['obv_slope_7d'] = df.groupby('stock_code')['obv'].transform(lambda x: (x - x.shift(7)) / (x.shift(7).abs() + 1))  # OBV 7日斜率
 
-        FEATURES = ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','bias_5_20','vol_ratio_3d','obv_slope_7d']
+        # 根据用户选择的指标过滤特征
+        ALL_FEATURES = {
+            'boll':   ['pct_b','width'],
+            'macd':   ['dif','dea','hist'],
+            'rsi':    ['rsi'],
+            'atr':    ['atr'],
+            'ma':     ['ma5','ma20'],
+            'volume': ['vol_ratio','obv'],
+        }
+        derived = ['bias_5_20','vol_ratio_3d','obv_slope_7d']  # 衍生特征始终保留
+        selected = cfg.get('features', ['boll','macd','rsi','atr','ma','volume'])
+        FEATURES = derived + [f for feat in selected if feat in ALL_FEATURES for f in ALL_FEATURES[feat]]
         df = df.dropna(subset=FEATURES + ['ma20'])
 
         # ── 3. 标签：forward N 日收益 ──
@@ -987,12 +998,15 @@ def dag_task_model_train(trade_date=None, **kw):
         # 读取搜索空间（cfg 已在数据加载阶段获取）
         ss = cfg.get('search_space', {})
         n_trials = cfg.get('optuna_trials', 20)  # XGBoost 多核并行，20 轮足够收敛
-        update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:开始({n_trials}轮)')
+        update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:0/{n_trials} 开始搜索')
 
         # ── 回测引擎（模块四：资金管理 + 持仓 + 止损 + T+1）──
         initial_cash = cfg.get('initial_cash', 1000000)
         max_pos = cfg.get('max_positions', 5)
         stop_loss = cfg.get('risk', {}).get('stop_loss_pct', 8) / 100.0
+        stamp_tax = cfg.get('stamp_tax', 0.001)
+        commission = cfg.get('commission', 0.00025)
+        slippage = cfg.get('slippage', 0.001)
 
         def _backtest(y_true, y_pred, dates, codes, close_prices, hold_days):
             """正确回测：模拟实际持仓周期和资金约束。
@@ -1017,6 +1031,7 @@ def dag_task_model_train(trade_date=None, **kw):
             equity_curve = [equity]
             trade_count = 0
             win_count = 0
+            trade_log = []  # M6-18: 记录每笔交易明细
 
             for di, d in enumerate(sorted_dates):
                 # ── 1. 平仓：到期或止损 ──
@@ -1032,15 +1047,35 @@ def dag_task_model_train(trade_date=None, **kw):
                     sell_price = cur_price
                     should_sell = False
 
-                    # 止损检查
+                    # 止损时卖价 ≈ 止损价
                     if cur_price <= h['buy_price'] * (1 - stop_loss):
+                        sell_price = h['buy_price'] * (1 - stop_loss)
                         should_sell = True
                     # 到期平仓
                     if hold_dur >= hold_days:
                         should_sell = True
 
                     if should_sell:
-                        cash += h['shares'] * sell_price
+                        gross = h['shares'] * sell_price
+                        sell_cost = gross * (commission + stamp_tax) + max(gross * slippage, 0)
+                        net_sell = max(gross - sell_cost, 0)
+                        cash += net_sell
+                        # 计算买入成本（含滑点+佣金）
+                        buy_gross = h['shares'] * h['buy_price']
+                        buy_cost = buy_gross * commission + max(buy_gross * (slippage / 2), 0)
+                        pnl = net_sell - (buy_gross + buy_cost)
+                        pnl_pct = pnl / (buy_gross + buy_cost) if (buy_gross + buy_cost) > 0 else 0
+                        trade_log.append({
+                            'code': h['code'],
+                            'buy_date': str(h['buy_date'])[:10],
+                            'buy_price': round(h['buy_price'], 2),
+                            'sell_date': str(d)[:10],
+                            'sell_price': round(sell_price, 2),
+                            'shares': h['shares'],
+                            'pnl': round(pnl, 2),
+                            'pnl_pct': round(pnl_pct, 4),
+                            'reason': 'stop_loss' if cur_price <= h['buy_price'] * (1 - stop_loss) else 'hold_expire',
+                        })
                         trade_count += 1
                         if sell_price > h['buy_price']:
                             win_count += 1
@@ -1075,13 +1110,18 @@ def dag_task_model_train(trade_date=None, **kw):
                     price = float(r['price'])
                     if price <= 0 or cash_per <= 0:
                         continue
-                    shares = int(cash_per / price / 100) * 100  # A 股整手
+                    # 买入价含滑点（买高卖低）
+                    buy_price = price * (1 + slippage / 2)
+                    shares = int(cash_per / buy_price / 100) * 100  # A 股整手
                     if shares == 0:
                         continue
-                    cost = shares * price
-                    if cost > cash:
+                    gross = shares * buy_price
+                    buy_cost = gross * commission + max(gross * (slippage / 2), 0)
+                    total_cost = gross + buy_cost
+                    if total_cost > cash:
                         continue
-                    cash -= cost
+                    cash -= total_cost
+                    holdings.append({'code': r['code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
                     holdings.append({'code': r['code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
 
                 # ── 3. 记录当日权益 ──
@@ -1116,7 +1156,8 @@ def dag_task_model_train(trade_date=None, **kw):
             return {
                 'sharpe': round(sharpe, 4), 'win_rate': round(win_rate, 4),
                 'max_dd': round(max_dd, 4), 'total_return': round(total_return, 4),
-                'total_trades': trade_count, 'equity_curve': [round(e, 2) for e in equity_curve[-50:]]
+                'total_trades': trade_count, 'equity_curve': [round(e, 2) for e in equity_curve[-50:]],
+                'trades': trade_log[-20:]  # 最近20笔交易明细
             }
 
         best_models = {}
@@ -1133,6 +1174,10 @@ def dag_task_model_train(trade_date=None, **kw):
             from optuna.samplers import TPESampler
             def objective(trial):
                 nonlocal best_models, best_params_store, best_score
+                # 检查模型是否被删除
+                r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
+                if not r or r[0] != 'TRAINING':
+                    raise optuna.TrialPruned("模型已被删除或状态变更")
                 lr  = trial.suggest_float('learning_rate', ss.get('learning_rate',[0.01])[0], ss.get('learning_rate',[0.01,0.3])[-1], log=True)
                 md  = trial.suggest_int('max_depth', ss.get('max_depth',[3])[0], ss.get('max_depth',[3,10])[-1])
                 ne  = trial.suggest_int('n_estimators', ss.get('n_estimators',[100])[0], min(ss.get('n_estimators',[100,300])[-1], 300))
@@ -1210,8 +1255,61 @@ def dag_task_model_train(trade_date=None, **kw):
                 best_params_store[label]['model_path'] = path
 
         # ── 汇总回测指标并写入 DB ──
+        # 合并 3 个周期的交易明细
+        all_trades = []
+        for label in ['5d','10d','20d']:
+            for t in test_results.get(label, {}).get('trades', []):
+                t['horizon'] = label
+                all_trades.append(t)
+        all_trades.sort(key=lambda t: t['sell_date'], reverse=True)
+
+        # 过拟合检测：对比 val 和 test 的夏普
+        val_sharpes = [best_params_store.get(l,{}).get('backtest',{}).get('sharpe',0) for l in ['5d','10d','20d']]
+        test_sharpes = [test_results.get(l,{}).get('sharpe',0) for l in ['5d','10d','20d']]
+        val_avg = float(np.mean(val_sharpes)) if val_sharpes else 0
+        test_avg = float(np.mean(test_sharpes)) if test_sharpes else 0
+        overfit_gap = val_avg - test_avg  # 正值=过拟合, 负值=欠拟合
+
+        # 基准对比：沪深300 同期收益（用 000300 指数数据）
+        benchmark_return = 0
+        try:
+            bm = db.execute(text(
+                "SELECT close FROM index_daily_quote WHERE index_code='000300' AND trade_date BETWEEN :s AND :e ORDER BY trade_date"
+            ), {"s": str(test_dates[0])[:10] if len(test_dates) > 0 else '2026-01-01',
+                "e": str(test_dates[-1])[:10] if len(test_dates) > 0 else '2026-06-01'}).fetchall()
+            if len(bm) >= 2:
+                benchmark_return = (float(bm[-1][0]) / float(bm[0][0]) - 1) if float(bm[0][0]) > 0 else 0
+        except Exception:
+            pass
+
+        # 质量指标：从交易明细计算
+        all_pnls = [t['pnl'] for t in all_trades]
+        all_pnl_pcts = [t['pnl_pct'] for t in all_trades]
+        wins = [p for p in all_pnls if p > 0]
+        losses = [abs(p) for p in all_pnls if p < 0]
+        profit_factor = sum(wins) / sum(losses) if losses else (999 if wins else 0)
+        avg_win = float(np.mean(wins)) if wins else 0
+        avg_loss = float(np.mean(losses)) if losses else 0
+        # 索提诺比率（只惩罚下行波动）
+        neg_rets = [r for r in [t['pnl_pct'] for t in all_trades] if r < 0]
+        sortino = (float(np.mean(all_pnl_pcts)) / (float(np.std(neg_rets)) + 1e-6)) * np.sqrt(252) if neg_rets else 0
+        # 卡玛比率 = 年化收益 / 最大回撤
+        max_dd_abs = abs(max_dd_avg)
+        calmar = avg_sharpe * 0.15 / max_dd_abs if max_dd_abs > 0 else 0
+
         bt_summary = {
             'trials': trial_records[-10:] if trial_records else [],
+            'trades': all_trades,
+            'trade_count': len(all_trades),
+            'val_sharpe': round(val_avg, 4),
+            'test_sharpe': round(test_avg, 4),
+            'overfit_gap': round(overfit_gap, 4),
+            'profit_factor': round(profit_factor, 2),
+            'avg_win': round(avg_win, 2),
+            'avg_loss': round(avg_loss, 2),
+            'sortino': round(sortino, 4),
+            'calmar': round(calmar, 4),
+            'benchmark_return': round(benchmark_return, 4),
             'sharpe_5d':   test_results.get('5d',{}).get('sharpe',0),
             'sharpe_10d':  test_results.get('10d',{}).get('sharpe',0),
             'sharpe_20d':  test_results.get('20d',{}).get('sharpe',0),
