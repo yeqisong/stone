@@ -538,44 +538,40 @@ def get_feature_data(
         feature_name = feat[0]
         entity = feat[1]
 
-        # 确定宽表名
-        table_map = {"stock": "feature_stock", "etf": "feature_etf", "index": "feature_index", "global": "feature_global"}
-        table_name = table_map.get(entity, "feature_stock")
+        # 从 feature_values 表查询特征值
+        base_params = {"fn": feature_name, "lim": page_size, "off": (page-1)*page_size}
+        if entity == "global":
+            sql = """
+                SELECT '' as stock_code, trade_date, value
+                FROM feature_values
+                WHERE feature_name = :fn
+                ORDER BY trade_date DESC
+                LIMIT :lim OFFSET :off
+            """
+            count_sql = "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
+        elif code:
+            sql = """
+                SELECT stock_code, trade_date, value
+                FROM feature_values
+                WHERE feature_name = :fn AND stock_code = :code
+                ORDER BY trade_date DESC
+                LIMIT :lim OFFSET :off
+            """
+            count_sql = "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn AND stock_code = :code"
+            base_params["code"] = code
+        else:
+            sql = """
+                SELECT stock_code, trade_date, value
+                FROM feature_values
+                WHERE feature_name = :fn
+                ORDER BY trade_date DESC, stock_code
+                LIMIT :lim OFFSET :off
+            """
+            count_sql = "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
 
-        # 尝试查询宽表（表可能尚未创建）
         try:
-            if entity == "global":
-                sql = f"""
-                    SELECT trade_date, "{feature_name}" as value
-                    FROM {table_name}
-                    ORDER BY trade_date DESC
-                    LIMIT :lim OFFSET :off
-                """
-                count_sql = f"SELECT COUNT(*) FROM {table_name}"
-                params = {"lim": page_size, "off": (page-1)*page_size}
-            else:
-                if code:
-                    sql = f"""
-                        SELECT stock_code, trade_date, "{feature_name}" as value
-                        FROM {table_name}
-                        WHERE stock_code = :code
-                        ORDER BY trade_date DESC
-                        LIMIT :lim OFFSET :off
-                    """
-                    count_sql = f"SELECT COUNT(*) FROM {table_name} WHERE stock_code = :code"
-                    params = {"code": code, "lim": page_size, "off": (page-1)*page_size}
-                else:
-                    sql = f"""
-                        SELECT stock_code, trade_date, "{feature_name}" as value
-                        FROM {table_name}
-                        ORDER BY trade_date DESC, stock_code
-                        LIMIT :lim OFFSET :off
-                    """
-                    count_sql = f"SELECT COUNT(*) FROM {table_name}"
-                    params = {"lim": page_size, "off": (page-1)*page_size}
-
-            total = db.execute(text(count_sql), {k:v for k,v in params.items() if k != "lim" and k != "off"}).scalar() or 0
-            rows = db.execute(text(sql), params).fetchall()
+            total = db.execute(text(count_sql), {k:v for k,v in base_params.items() if k not in ("lim","off")}).scalar() or 0
+            rows = db.execute(text(sql), base_params).fetchall()
 
             items = []
             for r in rows:
@@ -589,7 +585,7 @@ def get_feature_data(
         except Exception:
             # 宽表尚未创建，返回空
             db.close()
-            return {"items": [], "total": 0, "page": page, "page_size": page_size, "entity": entity, "empty_reason": "特征计算宽表尚未创建（迭代 3.2）"}
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "entity": entity, "empty_reason": "特征值尚未计算，请触发特征计算 DAG"}
     except HTTPException:
         db.close()
         raise

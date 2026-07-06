@@ -492,6 +492,21 @@ CREATE TABLE IF NOT EXISTS download_history (
 CREATE INDEX IF NOT EXISTS idx_dh_type_date ON download_history (task_type, started_at DESC);
 """
 
+# ── 特征值存储（v2.0 重构 迭代 3.2）──
+
+CREATE_FEATURE_VALUES = """
+CREATE TABLE IF NOT EXISTS feature_values (
+    feature_name    VARCHAR(64) NOT NULL,
+    stock_code      VARCHAR(6) NOT NULL,
+    trade_date      DATE NOT NULL,
+    value           NUMERIC(18,6),
+    calc_status     VARCHAR(10) DEFAULT 'OK',
+    PRIMARY KEY (feature_name, stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_fv_feature_date ON feature_values (feature_name, trade_date);
+CREATE INDEX IF NOT EXISTS idx_fv_stock_date ON feature_values (stock_code, trade_date);
+"""
+
 # ── 实体元数据（v2.0 重构 迭代 2.5）──
 
 CREATE_ENTITY_META = """
@@ -577,7 +592,8 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('indicator_full', '', '指标全量', 11),
     ('model_train', '', '模型训练', 12),
     ('model_signal', 'indicator_incr', '模型信号', 13),
-    ('model_health', 'model_signal', '模型健康', 14)
+    ('model_health', 'model_signal', '模型健康', 14),
+    ('feature_compute', 'indicator_incr', '特征计算', 15)
 ON CONFLICT (node_name) DO NOTHING;
 """
 
@@ -694,6 +710,7 @@ ALL_TABLES = [
     ("backtest_trades", CREATE_BACKTEST_TRADES),
     ("download_history", CREATE_DOWNLOAD_HISTORY),
     ("entity_meta", CREATE_ENTITY_META),
+    ("feature_values", CREATE_FEATURE_VALUES),
 ]
 
 

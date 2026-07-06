@@ -890,7 +890,7 @@ def dag_task_model_train(trade_date=None, **kw):
             SELECT b.trade_date, b.stock_code, b.pct_b, b.width,
                    m.dif, m.dea, m.hist, r.rsi, a.atr,
                    ma.ma5, ma.ma20, v.vol_ratio, v.obv,
-                   dq.close_hfq as close
+                   dq.close_hfq as close, dq.volume
             FROM stock_indicators_boll b
             JOIN stock_indicators_macd m ON b.stock_code=m.stock_code AND b.trade_date=m.trade_date
             JOIN stock_indicators_rsi r ON b.stock_code=r.stock_code AND b.trade_date=r.trade_date
@@ -907,8 +907,8 @@ def dag_task_model_train(trade_date=None, **kw):
             db.commit()
             db.close(); return 0
 
-        df = pd.DataFrame(rows, columns=['trade_date','stock_code','pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','close'])
-        for c in ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','close']:
+        df = pd.DataFrame(rows, columns=['trade_date','stock_code','pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','close','volume'])
+        for c in ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','close','volume']:
             df[c] = df[c].astype(float)
 
         # M1-3: 数据新鲜度断言（不允许包含今天或昨天的未收盘数据）
@@ -920,13 +920,39 @@ def dag_task_model_train(trade_date=None, **kw):
             db.commit()
             db.close(); return 0
 
+        # M1-1 扩展: 指标对齐质量检查
+        for tname, tlabel in [('boll','BOLL'),('macd','MACD'),('rsi','RSI'),('atr','ATR'),('ma','MA'),('volume','成交量')]:
+            tbl = f"stock_indicators_{tname}"
+            tcnt = db.execute(text(f"SELECT COUNT(*) FROM {tbl} WHERE trade_date BETWEEN :ds AND :ed"),
+                              {"ds": data_start, "ed": end_date}).scalar() or 0
+            df_tcnt = len(df)
+            if tcnt > 0 and df_tcnt > 0 and abs(tcnt/6 - df_tcnt) > df_tcnt * 0.01:
+                logger.warning(f"[train] {tlabel}行数({tcnt})与JOIN后行数({df_tcnt})偏差>1%，可能存在对齐缺口")
+
         update_node_progress(log_id=log_id, rows=1, detail='步骤1:加载指标')
 
         # ── 2. 特征工程 ──
         update_node_progress(log_id=log_id, rows=2, detail='步骤2:特征工程')
-        df['bias_5_20'] = df['ma5'] / df['ma20'] - 1                    # 短期乖离率
-        df['vol_ratio_3d'] = df.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())  # 3日均量比
-        df['obv_slope_7d'] = df.groupby('stock_code')['obv'].transform(lambda x: (x - x.shift(7)) / (x.shift(7).abs() + 1))  # OBV 7日斜率
+        df['bias_5_20'] = df['ma5'] / df['ma20'] - 1
+        df['vol_ratio_3d'] = df.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())
+        df['obv_slope_7d'] = df.groupby('stock_code')['obv'].transform(lambda x: (x - x.shift(7)) / (x.shift(7).abs() + 1))
+
+        # ── 市场过滤器：沪深300 20日动量 + 全市场涨跌比 ──
+        idx_rows = db.execute(text(
+            "SELECT trade_date, close FROM index_daily_quote WHERE index_code='000300' AND trade_date BETWEEN :ds AND :ed ORDER BY trade_date"
+        ), {"ds": data_start, "ed": end_date}).fetchall()
+        idx_df = pd.DataFrame(idx_rows, columns=['trade_date','idx_close'])
+        idx_df['trade_date'] = idx_df['trade_date'].astype(str)
+        idx_df['idx_ret_20d'] = idx_df['idx_close'].pct_change(20)
+        df = df.merge(idx_df[['trade_date','idx_ret_20d']], on='trade_date', how='left')
+        df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0)
+
+        # 全市场涨跌比（当日上涨股票数/总数，用 close > open 近似）
+        breadth = df.groupby('trade_date').apply(
+            lambda g: (g['close'] > g['close'].shift(1)).sum() / len(g) if len(g) > 0 else 0.5
+        ).reset_index(name='market_breadth')
+        df = df.merge(breadth, on='trade_date', how='left')
+        df['market_breadth'] = df['market_breadth'].fillna(0.5)
 
         # 根据用户选择的指标过滤特征
         ALL_FEATURES = {
@@ -937,34 +963,52 @@ def dag_task_model_train(trade_date=None, **kw):
             'ma':     ['ma5','ma20'],
             'volume': ['vol_ratio','obv'],
         }
-        derived = ['bias_5_20','vol_ratio_3d','obv_slope_7d']  # 衍生特征始终保留
+        derived = ['bias_5_20','vol_ratio_3d','obv_slope_7d','idx_ret_20d','market_breadth']
         selected = cfg.get('features', ['boll','macd','rsi','atr','ma','volume'])
         FEATURES = derived + [f for feat in selected if feat in ALL_FEATURES for f in ALL_FEATURES[feat]]
         df = df.dropna(subset=FEATURES + ['ma20'])
 
         # ── 3. 标签：forward N 日收益 ──
         # 从 daily_quote 批量查每只股票 N 日后的 close_hfq
-        logger.info("[train] 计算 forward 标签…")
-        labels_5, labels_10, labels_20 = [], [], []
+        logger.info("[train] 计算 Triple Barrier 标签…")
+        # 参数：止盈 +10%，止损 -5%，时间屏障 = 周期天数
+        TAKE_PROFIT = 0.10
+        STOP_LOSS = -0.05
+        labels_10, labels_20 = [], []
         for _, row in df.iterrows():
             price_today = float(row['close'])
-            for days, lst in [(5, labels_5), (10, labels_10), (20, labels_20)]:
-                fwd = (_date.fromisoformat(str(row['trade_date'])[:10]) + _td(days=days)).isoformat()
-                fwd_price = db.execute(text(
-                    "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date <= :d ORDER BY trade_date DESC LIMIT 1"
-                ), {"c": row['stock_code'], "d": fwd}).scalar()
-                if fwd_price and price_today > 0:
-                    lst.append(float(fwd_price) / price_today - 1)
-                else:
+            code = row['stock_code']
+            tdate = str(row['trade_date'])[:10]
+            for days, lst in [(10, labels_10), (20, labels_20)]:
+                # 查询未来的每日收盘价
+                fwd_rows = db.execute(text(
+                    "SELECT trade_date, close_hfq FROM daily_quote "
+                    "WHERE stock_code=:c AND trade_date > :d ORDER BY trade_date ASC LIMIT :n"
+                ), {"c": code, "d": tdate, "n": days + 5}).fetchall()
+                if not fwd_rows or price_today <= 0:
                     lst.append(None)
+                    continue
+                label = None
+                for fr in fwd_rows:
+                    ret = float(fr[1]) / price_today - 1
+                    if ret >= TAKE_PROFIT:
+                        label = TAKE_PROFIT  # 触及止盈
+                        break
+                    elif ret <= STOP_LOSS:
+                        label = STOP_LOSS   # 触及止损
+                        break
+                if label is None and len(fwd_rows) >= days:
+                    # 未触及任何屏障，按时间到期价算
+                    label = float(fwd_rows[min(days-1, len(fwd_rows)-1)][1]) / price_today - 1
+                lst.append(label)
 
-        df['target_5d'] = labels_5; df['target_10d'] = labels_10; df['target_20d'] = labels_20
-        df = df.dropna(subset=['target_5d', 'target_10d', 'target_20d'])
+        df['target_10d'] = labels_10; df['target_20d'] = labels_20
+        df = df.dropna(subset=['target_10d', 'target_20d'])
 
         # M2-5: winsorize 标签（1%~99%缩尾）
         try:
             from scipy.stats.mstats import winsorize
-            for col in ['target_5d','target_10d','target_20d']:
+            for col in ['target_10d','target_20d']:
                 df[col] = winsorize(df[col].values, limits=(0.01, 0.01))
         except ImportError:
             pass
@@ -981,8 +1025,8 @@ def dag_task_model_train(trade_date=None, **kw):
         val_mask   = (df['trade_date'] >= train_cut) & (df['trade_date'] < test_cut)
         test_mask  = df['trade_date'] >= test_cut
 
-        X_train, Y5_train = df[train_mask][FEATURES], df[train_mask]['target_5d']
-        X_val,   Y5_val   = df[val_mask][FEATURES],   df[val_mask]['target_5d']
+        X_train, Y10_train = df[train_mask][FEATURES], df[train_mask]['target_10d']
+        X_val,   Y10_val   = df[val_mask][FEATURES],   df[val_mask]['target_10d']
 
         if len(X_train) < 1000 or len(X_val) < 100:
             write_node_log(log_id=log_id, status='failed', detail=f'数据量不足(train={len(X_train)},val={len(X_val)})')
@@ -1008,20 +1052,20 @@ def dag_task_model_train(trade_date=None, **kw):
         commission = cfg.get('commission', 0.00025)
         slippage = cfg.get('slippage', 0.001)
 
-        def _backtest(y_true, y_pred, dates, codes, close_prices, hold_days):
-            """正确回测：模拟实际持仓周期和资金约束。
+        def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days):
+            """回测引擎：资金约束 + 流动性约束 + 整数手约束。
 
             Args:
                 y_true: 实际未来收益率 (hold_days 天后)
                 y_pred: 模型预测值
                 dates, codes: 对应日期和代码
-                close_prices: 当日收盘价（用于计算买入股数）
+                close_prices: 当日收盘价
+                volumes: 当日成交量（股），用于流动性约束
                 hold_days: 持仓天数 (5/10/20)
-            Returns:
-                {sharpe, win_rate, max_dd, total_trades, total_return, equity_curve}
             """
             val_df = pd.DataFrame({
-                'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true, 'price': close_prices
+                'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true,
+                'price': close_prices, 'volume': volumes
             })
             sorted_dates = sorted(val_df['date'].unique())
 
@@ -1105,23 +1149,33 @@ def dag_task_model_train(trade_date=None, **kw):
                     continue
 
                 top = day.nlargest(slots, 'pred')
-                cash_per = cash / max(slots, 1)
+                # 资金约束：总资产 × 单票仓位上限 / 买入价
+                position_pct = 1.0 / max_pos  # 每只股票占总资产比例
                 for _, r in top.iterrows():
                     price = float(r['price'])
-                    if price <= 0 or cash_per <= 0:
+                    if price <= 0:
                         continue
-                    # 买入价含滑点（买高卖低）
+                    # 约束1: 资金约束 — 当前总资产 × 仓位上限
+                    budget = equity * position_pct
                     buy_price = price * (1 + slippage / 2)
-                    shares = int(cash_per / buy_price / 100) * 100  # A 股整手
-                    if shares == 0:
+                    if buy_price <= 0 or budget <= 0:
                         continue
+                    shares = int(budget // buy_price // 100) * 100
+                    if shares <= 0:
+                        continue
+                    # 约束2: 流动性约束 — ≤ 当日成交量 × 10%
+                    daily_vol = float(r.get('volume', 0) or 0)
+                    if daily_vol > 0:
+                        shares = min(shares, int(daily_vol * 0.1 // 100) * 100)
+                    if shares <= 0:
+                        continue
+                    # 约束3: 整数手 — 已由 `// 100 * 100` 保证
                     gross = shares * buy_price
                     buy_cost = gross * commission + max(gross * (slippage / 2), 0)
                     total_cost = gross + buy_cost
                     if total_cost > cash:
                         continue
                     cash -= total_cost
-                    holdings.append({'code': r['code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
                     holdings.append({'code': r['code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
 
                 # ── 3. 记录当日权益 ──
@@ -1167,7 +1221,8 @@ def dag_task_model_train(trade_date=None, **kw):
         val_dates = df[val_mask]['trade_date'].values
         val_codes = df[val_mask]['stock_code'].values
         val_close = df[val_mask]['close'].values
-        TARGETS = [('5d','target_5d',5), ('10d','target_10d',10), ('20d','target_20d',20)]
+        val_volume = df[val_mask]['volume'].values
+        TARGETS = [('10d','target_10d',10), ('20d','target_20d',20)]
 
         try:
             import optuna
@@ -1205,7 +1260,7 @@ def dag_task_model_train(trade_date=None, **kw):
                     model = XGBRegressor(**params, early_stopping_rounds=20)
                     model.fit(X_tr, Y_tr[tname], eval_set=[(X_es, Y_es[tname])], verbose=False)
                     y_pred = model.predict(X_val)
-                    bt = _backtest(df[val_mask][tname].values, y_pred, val_dates, val_codes, val_close, hdays)
+                    bt = _backtest(df[val_mask][tname].values, y_pred, val_dates, val_codes, val_close, val_volume, hdays)
                     models[label] = {'model': model, 'r2': round(float(model.score(X_val, df[val_mask][tname])), 4), 'backtest': bt}
                     total_sharpe += bt['sharpe']
                 avg_sharpe = total_sharpe / 3
@@ -1230,7 +1285,7 @@ def dag_task_model_train(trade_date=None, **kw):
                 model = XGBRegressor(**params)
                 model.fit(X_train, df[train_mask][tname])
                 y_pred = model.predict(X_val)
-                bt = _backtest(df[val_mask][tname].values, y_pred, val_dates, val_codes, val_close, hdays)
+                bt = _backtest(df[val_mask][tname].values, y_pred, val_dates, val_codes, val_close, val_volume, hdays)
                 best_models[label] = model
                 best_params_store[label] = {'params': params, 'r2': round(float(model.score(X_val, df[val_mask][tname])), 4), 'backtest': bt}
             update_node_progress(log_id=log_id, rows=1, detail='训练完成(无Optuna)')
@@ -1240,18 +1295,20 @@ def dag_task_model_train(trade_date=None, **kw):
         test_dates = df[test_mask]['trade_date'].values
         test_codes = df[test_mask]['stock_code'].values
         test_close = df[test_mask]['close'].values
+        test_volume = df[test_mask]['volume'].values
+        test_idx_ret = df[test_mask]['idx_ret_20d'].values
         test_results = {}
         for label, tname, hdays in TARGETS:
             if label in best_models:
                 y_pred = best_models[label].predict(df[test_mask][FEATURES])
-                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, hdays)
+                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, test_volume, hdays)
                 test_results[label] = bt
 
         # ── 存储最优模型文件 ──
         update_node_progress(log_id=log_id, rows=5, detail='存储最优模型')
         model_dir = f"data/models/{ver}"
         _os.makedirs(model_dir, exist_ok=True)
-        for label in ['5d','10d','20d']:
+        for label in ['10d','20d']:
             if label in best_models:
                 path = f"{model_dir}/xgb_{label}.pkl"
                 with open(path, 'wb') as f:
@@ -1261,15 +1318,24 @@ def dag_task_model_train(trade_date=None, **kw):
         # ── 汇总回测指标并写入 DB ──
         # 合并 3 个周期的交易明细
         all_trades = []
-        for label in ['5d','10d','20d']:
+        for label in ['10d','20d']:
             for t in test_results.get(label, {}).get('trades', []):
                 t['horizon'] = label
                 all_trades.append(t)
+        # 去重：同股票同买入日只保留一笔（不同周期可能重复买入）
+        seen = set()
+        deduped = []
+        for t in all_trades:
+            key = (t['code'], t['buy_date'])
+            if key not in seen:
+                seen.add(key)
+                deduped.append(t)
+        all_trades = deduped
         all_trades.sort(key=lambda t: t['sell_date'], reverse=True)
 
         # 过拟合检测：对比 val 和 test 的夏普
-        val_sharpes = [best_params_store.get(l,{}).get('backtest',{}).get('sharpe',0) for l in ['5d','10d','20d']]
-        test_sharpes = [test_results.get(l,{}).get('sharpe',0) for l in ['5d','10d','20d']]
+        val_sharpes = [best_params_store.get(l,{}).get('backtest',{}).get('sharpe',0) for l in ['10d','20d']]
+        test_sharpes = [test_results.get(l,{}).get('sharpe',0) for l in ['10d','20d']]
         val_avg = float(np.mean(val_sharpes)) if val_sharpes else 0
         test_avg = float(np.mean(test_sharpes)) if test_sharpes else 0
         overfit_gap = val_avg - test_avg  # 正值=过拟合, 负值=欠拟合
@@ -1294,36 +1360,32 @@ def dag_task_model_train(trade_date=None, **kw):
         profit_factor = sum(wins) / sum(losses) if losses else (999 if wins else 0)
         avg_win = float(np.mean(wins)) if wins else 0
         avg_loss = float(np.mean(losses)) if losses else 0
-        # 索提诺比率（只惩罚下行波动）
-        neg_rets = [r for r in [t['pnl_pct'] for t in all_trades] if r < 0]
-        sortino = (float(np.mean(all_pnl_pcts)) / (float(np.std(neg_rets)) + 1e-6)) * np.sqrt(252) if neg_rets else 0
-        # 卡玛比率 = 年化收益 / 最大回撤
-        max_dd_abs = abs(max_dd_avg)
-        calmar = avg_sharpe * 0.15 / max_dd_abs if max_dd_abs > 0 else 0
+        max_dd_avg = float(np.mean([test_results.get(l,{}).get('max_dd',0) for l in ['10d','20d']]))
+
+        # 集中度分析：前 3 笔最大盈利占总收益的比例
+        sorted_pnls = sorted([t['pnl'] for t in all_trades if t['pnl'] > 0], reverse=True)
+        total_profit = sum(sorted_pnls)
+        top3_pct = sum(sorted_pnls[:3]) / total_profit * 100 if total_profit > 0 else 0
 
         bt_summary = {
             'trials': trial_records[-10:] if trial_records else [],
             'trades': all_trades,
             'trade_count': len(all_trades),
+            'top3_concentration': round(top3_pct, 1),
             'val_sharpe': round(val_avg, 4),
             'test_sharpe': round(test_avg, 4),
             'overfit_gap': round(overfit_gap, 4),
             'profit_factor': round(profit_factor, 2),
             'avg_win': round(avg_win, 2),
             'avg_loss': round(avg_loss, 2),
-            'sortino': round(sortino, 4),
-            'calmar': round(calmar, 4),
             'benchmark_return': round(benchmark_return, 4),
-            'sharpe_5d':   test_results.get('5d',{}).get('sharpe',0),
             'sharpe_10d':  test_results.get('10d',{}).get('sharpe',0),
             'sharpe_20d':  test_results.get('20d',{}).get('sharpe',0),
-            'win_rate_5d': test_results.get('5d',{}).get('win_rate',0),
             'win_rate_10d':test_results.get('10d',{}).get('win_rate',0),
             'win_rate_20d':test_results.get('20d',{}).get('win_rate',0),
         }
-        avg_sharpe = float(np.mean([bt_summary['sharpe_5d'], bt_summary['sharpe_10d'], bt_summary['sharpe_20d']]))
-        avg_win = float(np.mean([bt_summary['win_rate_5d'], bt_summary['win_rate_10d'], bt_summary['win_rate_20d']]))
-        max_dd_avg = float(np.mean([test_results.get(l,{}).get('max_dd',0) for l in ['5d','10d','20d']]))
+        avg_sharpe = float(np.mean([bt_summary['sharpe_10d'], bt_summary['sharpe_20d']]))
+        avg_win = float(np.mean([bt_summary['win_rate_10d'], bt_summary['win_rate_20d']]))
         best_params = best_params_store
 
         db.execute(text("UPDATE model_versions SET status='PENDING', best_params=:bp, evaluation_report=:rep, sharpe=:sh, win_rate=:wr, max_drawdown=:md, annual_return=:ar WHERE version=:v"), {
@@ -1479,7 +1541,7 @@ def dag_task_model_signal(trade_date=None, **kw):
                 import pandas as pd
                 X_pred = pd.DataFrame(valid_features, columns=FEATURES)
                 preds = {}; scores = []
-                for label in ['5d','10d','20d']:
+                for label in ['10d','20d']:
                     if label in xgb_models:
                         preds[label] = xgb_models[label].predict(X_pred)
                 if preds:
@@ -1732,6 +1794,31 @@ def dag_task_daily_update(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
+def dag_task_feature_compute(log_id: int, trade_date: str, force: bool = False, **kwargs) -> bool:
+    """DAG 节点：计算所有已启用特征值。"""
+    from app.db.connection import get_sync_db
+    from app.db.schema import write_node_log
+    from scripts.feature_compute import compute_all_features
+    from datetime import date as dt, timedelta
+
+    write_node_log(log_id=log_id, status='running', detail='启动特征计算')
+    db = get_sync_db()
+    try:
+        today = dt.today().strftime("%Y-%m-%d")
+        # 增量：仅计算最近 10 天（首次运行可改为全量）
+        start = force and "2020-01-01" or (dt.today() - timedelta(days=10)).strftime("%Y-%m-%d")
+        result = compute_all_features(db, target_entity="stock", start_date=start, end_date=today)
+        msg = f"完成: {result['features']}个特征, {result['rows']}行"
+        if result.get("errors"):
+            msg += f", {len(result['errors'])}个失败"
+        write_node_log(log_id=log_id, status='success', detail=msg, rows=result.get("rows", 0))
+        return True
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+    finally:
+        db.close()
+
 # 节点名 → 执行函数映射表（dag_config 表定义拓扑，本表只绑定函数）
 NODE_FN_MAP = {
     'cron':               dag_task_cron,
@@ -1748,6 +1835,7 @@ NODE_FN_MAP = {
     'model_train':        dag_task_model_train,
     'model_signal':       dag_task_model_signal,
     'model_health':       dag_task_model_health,
+    'feature_compute':    dag_task_feature_compute,
 }
 
 # 从 dag_config 表动态加载拓扑（唯一来源），绑定 fn_map 中的函数
