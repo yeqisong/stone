@@ -2,7 +2,10 @@
 <div style="padding:20px;max-width:1200px;margin:0 auto">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">特征管理（Feature Registry）</div>
-    <n-button type="primary" size="small" @click="openCreate">+ 新增特征</n-button>
+    <div style="display:flex;gap:6px">
+      <n-button size="small" quaternary @click="openDepGraph">🔗 依赖图</n-button>
+      <n-button type="primary" size="small" @click="openCreate">+ 新增特征</n-button>
+    </div>
   </div>
 
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
@@ -148,6 +151,11 @@
       </n-space>
     </template>
   </n-modal>
+
+  <!-- Full Dependency Graph Modal -->
+  <n-modal v-model:show="showDepGraph" preset="card" title="🔗 特征依赖关系图" style="width:96vw;max-width:96vw;height:90vh" :mask-closable="true">
+    <div ref="depGraphContainer" style="width:100%;height:calc(90vh - 120px)"></div>
+  </n-modal>
 </div>
 </template>
 
@@ -156,6 +164,7 @@ import { ref, computed, h } from 'vue'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
+import * as echarts from 'echarts'
 import axios from 'axios'
 
 const API = window.location.origin
@@ -204,6 +213,35 @@ function openCreate() {
 }
 
 const nav = useNavStore()
+
+// ── 依赖图 ──
+const showDepGraph = ref(false)
+const depGraphContainer = ref(null)
+
+async function openDepGraph() {
+  showDepGraph.value = true
+  await nextTick()
+  if (!depGraphContainer.value) return
+  try {
+    const r = await axios.get(API + '/api/features/dependency-graph')
+    const { nodes, edges } = r.data
+    const chart = echarts.init(depGraphContainer.value)
+    const colors = {0:'#9ca3af',1:'#2080f0',2:'#f59e0b',3:'#ef4444'}
+    chart.setOption({
+      tooltip: { formatter(p) { return p.data.name + (p.data.display_name?'<br/>'+p.data.display_name:'') } },
+      series: [{
+        type: 'graph', layout: 'force', roam: true, draggable: true,
+        force: { repulsion: 200, edgeLength: [80,200] },
+        data: nodes.map(n => ({ name:n.id, display_name:n.display_name, itemStyle:{color:colors[n.level]||colors[0]}, symbolSize:12 })),
+        links: edges.map(e => ({ source: e.source, target: e.target })),
+        lineStyle: { color:'#6b7280', curveness:0.1, opacity:0.4 },
+        label: { show:true, fontSize:9, color:'var(--c-text)' },
+      }]
+    })
+  } catch(e) { console.error(e) }
+}
+
+import { nextTick } from 'vue'
 
 function openDetail(id) {
   nav.showFeatureDetail(id)
