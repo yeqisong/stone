@@ -234,7 +234,7 @@ def create_feature(body: CreateFeature):
 
 @router.get("/{feature_id}")
 def get_feature(feature_id: int):
-    """获取特征详情。"""
+    """获取特征详情（含上游依赖 + 下游引用）。"""
     db = get_sync_db()
     try:
         from sqlalchemy import text
@@ -246,12 +246,22 @@ def get_feature(feature_id: int):
                    created_at, updated_at
             FROM features WHERE id = :id
         """), {"id": feature_id}).fetchone()
-        db.close()
         if not r:
+            db.close()
             raise HTTPException(404, "特征不存在")
+
+        name = r[1]
         deps = r[6]
         if isinstance(deps, str):
             deps = json.loads(deps)
+
+        # 查询下游依赖（哪些特征依赖本特征）
+        ds_rows = db.execute(text(
+            "SELECT feature_name, display_name, status FROM features WHERE status != 'deprecated' AND depends_on @> :dep"
+        ), {"dep": json.dumps([name])}).fetchall()
+        downstream = [{"feature_name": d[0], "display_name": d[1], "status": d[2]} for d in ds_rows]
+
+        db.close()
         return {
             "id": r[0],
             "feature_name": r[1],
@@ -260,6 +270,7 @@ def get_feature(feature_id: int):
             "description": r[4],
             "formula": r[5],
             "depends_on": deps or [],
+            "downstream": downstream,
             "status": r[7],
             "total_effective_cells": r[8] or 0,
             "missing_cells_total": r[9] or 0,
@@ -269,6 +280,49 @@ def get_feature(feature_id: int):
             "data_anomaly_reason": r[13],
             "created_at": str(r[14])[:19] if r[14] else None,
             "updated_at": str(r[15])[:19] if r[15] else None,
+        }
+    except HTTPException:
+        db.close()
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{feature_id}/quality")
+def get_feature_quality(feature_id: int):
+    """获取特征数据质量指标。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        r = db.execute(text("""
+            SELECT feature_name, status,
+                   total_effective_cells, missing_cells_total, pending_cells_total,
+                   data_completeness, latest_computed_date, data_anomaly_reason
+            FROM features WHERE id = :id
+        """), {"id": feature_id}).fetchone()
+        db.close()
+        if not r:
+            raise HTTPException(404, "特征不存在")
+
+        # 计算新鲜度（距今天数）
+        fresh = None
+        if r[6]:
+            from datetime import date
+            fresh = (date.today() - r[6]).days
+
+        return {
+            "feature_name": r[0],
+            "status": r[1],
+            "total_effective_cells": r[2] or 0,
+            "missing_cells_total": r[3] or 0,
+            "pending_cells_total": r[4] or 0,
+            "data_completeness": float(r[5]) if r[5] else 0,
+            "latest_computed_date": str(r[6]) if r[6] else None,
+            "stale_days": fresh,  # 距上次计算的天数；None 表示从未计算
+            "stale_warning": fresh is not None and fresh > 5,
+            "completeness_warning": float(r[5] or 0) < 0.8,
+            "data_anomaly_reason": r[7],
         }
     except HTTPException:
         db.close()

@@ -62,12 +62,98 @@
       </n-space>
     </template>
   </n-modal>
+
+  <!-- Detail Modal -->
+  <n-modal v-model:show="showDetail" preset="card" :title="detailItem?.feature_name" style="width:700px;max-width:92vw" :mask-closable="true">
+    <n-spin v-if="detailLoading" style="padding:40px" />
+    <template v-else-if="detailItem">
+      <!-- 信息卡 -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint)">实体</div>
+          <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{ entityLabel[detailItem.target_entity] || detailItem.target_entity }}</div>
+        </div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint)">状态</div>
+          <n-tag :type="statusTypeMap[detailItem.status]||'default'" size="tiny" :bordered="false">{{ statusMap[detailItem.status] }}</n-tag>
+        </div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint)">中文名</div>
+          <div style="font-size:13px;font-weight:600;color:var(--c-text)">{{ detailItem.display_name || '—' }}</div>
+        </div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint)">创建</div>
+          <div style="font-size:12px;color:var(--c-text)">{{ (detailItem.created_at||'').slice(0,10) }}</div>
+        </div>
+      </div>
+
+      <!-- 公式 -->
+      <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">KEPL 公式</div>
+        <code style="font-size:13px;color:var(--c-text);word-break:break-all">{{ detailItem.formula }}</code>
+      </div>
+
+      <!-- 质量仪表盘 -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 数据完整度</div>
+          <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=80?'#10b981':completenessPct>=50?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
+          <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
+            <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=80?'#10b981':completenessPct>=50?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 有效格</div>
+          <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
+        </div>
+        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">⏳ 待计算</div>
+          <div style="font-size:20px;font-weight:700;color:#f59e0b">{{ (detailItem.pending_cells_total||0).toLocaleString() }}</div>
+        </div>
+        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📅 最近计算</div>
+          <div :style="{fontSize:'13px',fontWeight:600,color:detailStale?'#f59e0b':'var(--c-text)'}">{{ detailItem.latest_computed_date || '—' }}</div>
+          <div v-if="detailStale" style="font-size:10px;color:#f59e0b;margin-top:2px">⚠ 超过5天未更新</div>
+        </div>
+      </div>
+
+      <!-- 依赖关系 -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬆ 上游依赖（本特征依赖谁）</div>
+          <div v-if="(detailItem.depends_on||[]).length">
+            <n-tag v-for="d in detailItem.depends_on" :key="d" size="tiny" :bordered="false" type="info" style="margin-right:4px;margin-bottom:4px">{{ d }}</n-tag>
+          </div>
+          <div v-else style="font-size:11px;color:var(--c-text-faint)">无（仅依赖原始字段）</div>
+        </div>
+        <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬇ 下游引用（谁依赖本特征）</div>
+          <div v-if="(detailItem.downstream||[]).length">
+            <div v-for="ds in detailItem.downstream" :key="ds.feature_name" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+              <span style="font-size:12px;color:var(--c-text)">{{ ds.feature_name }}</span>
+              <n-tag :type="statusTypeMap[ds.status]||'default'" size="tiny" :bordered="false">{{ statusMap[ds.status] }}</n-tag>
+            </div>
+          </div>
+          <div v-else style="font-size:11px;color:var(--c-text-faint)">无下游引用</div>
+        </div>
+      </div>
+    </template>
+    <template #footer>
+      <n-space justify="space-between">
+        <span v-if="detailItem?.description" style="font-size:11px;color:var(--c-text-dim)">{{ detailItem.description }}</span>
+        <div style="display:flex;gap:8px">
+          <n-button size="small" @click="showDetail=false">关闭</n-button>
+          <n-button v-if="detailItem" size="small" type="primary" @click="showDetail=false; openEdit(detailItem)">✎ 编辑</n-button>
+        </div>
+      </n-space>
+    </template>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
 import { ref, computed, h } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch } from 'naive-ui'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 
@@ -88,6 +174,13 @@ const validating = ref(false)
 const validateResult = ref(null)
 const parseDeps = ref([])
 
+// ── Detail modal state ──
+const showDetail = ref(false)
+const detailItem = ref(null)
+const detailLoading = ref(false)
+const detailStale = ref(false)
+const completenessPct = ref(0)
+
 const form = ref({
   feature_name: '',
   display_name: '',
@@ -107,6 +200,26 @@ function resetForm() {
 function openCreate() {
   resetForm()
   showCreate.value = true
+}
+
+async function openDetail(id) {
+  detailLoading.value = true
+  detailItem.value = null
+  showDetail.value = true
+  try {
+    const r = await axios.get(API + `/api/features/${id}`)
+    const d = r.data
+    detailItem.value = d
+    completenessPct.value = Math.round((d.data_completeness || 0) * 100)
+    detailStale.value = d.latest_computed_date && (() => {
+      const d1 = new Date(d.latest_computed_date)
+      const d2 = new Date()
+      return (d2 - d1) / 86400000 > 5
+    })()
+  } catch (e) {
+    console.error('openDetail:', e)
+  }
+  detailLoading.value = false
 }
 
 function openEdit(row) {
@@ -188,7 +301,9 @@ const statusOptions = [
 const entityOpts = Object.entries(entityLabel).map(([k,v]) => ({ label:v, value:k }))
 
 const columns = [
-  { title:'英文名', key:'feature_name', width:100, ellipsis:{tooltip:true} },
+  { title:'英文名', key:'feature_name', width:100, ellipsis:{tooltip:true}, render(row) {
+    return h('span', { style:{cursor:'pointer',color:'#2080f0',textDecoration:'underline'}, onClick:() => openDetail(row.id) }, row.feature_name)
+  }},
   { title:'中文名', key:'display_name', width:90, ellipsis:{tooltip:true} },
   { title:'实体', key:'target_entity', width:60, render:(row) => entityLabel[row.target_entity] || row.target_entity },
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
