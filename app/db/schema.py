@@ -989,6 +989,33 @@ def init_db(sync_session) -> None:
         except Exception:
             sync_session.rollback()
 
+    # 回填已有系统特征的 feature_group / tags
+    import json as _j
+    BACKFILL_FG = {
+        'ma_5':'ma','ma_10':'ma','ma_20':'ma','ma_30':'ma','ma_60':'ma','ma_90':'ma','ma_120':'ma','ma_180':'ma',
+        'ema_12':'ema','ema_26':'ema',
+        'dif':'macd','dea':'macd','macd_hist':'macd',
+        'rsi_14':'oscillator',
+        'boll_upper':'boll','boll_mid':'boll','boll_lower':'boll',
+        'atr_14':'volatility',
+        'pct_1d':'momentum','pct_5d':'momentum','pct_20d':'momentum',
+        'bias_5':'bias','bias_20':'bias',
+    }
+    BACKFILL_TAGS = {
+        'ma':['均线','趋势'], 'ema':['均线','趋势'], 'macd':['MACD','动量'],
+        'oscillator':['震荡','超买超卖'], 'boll':['布林','波动'], 'volatility':['波动'],
+        'momentum':['动量','涨跌'], 'bias':['乖离','动量'],
+    }
+    for fn, fg in BACKFILL_FG.items():
+        tags = BACKFILL_TAGS.get(fg, [])
+        try:
+            sync_session.execute(text(
+                "UPDATE features SET feature_group=:fg, tags=:tags WHERE feature_name=:fn AND feature_group IS NULL"
+            ), {"fn": fn, "fg": fg, "tags": _j.dumps(tags)})
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
+
     # 迁移：daily_quote / index_daily_quote 新增 is_suspended 列
     for table_name in ['daily_quote', 'index_daily_quote']:
         try:

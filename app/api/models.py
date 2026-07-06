@@ -221,7 +221,7 @@ def get_model_diagnosis(version: str):
     try:
         from app.db.connection import get_sync_db as gdb
         mv = db.execute(text(
-            "SELECT sharpe, win_rate, max_drawdown, annual_return, evaluation FROM model_versions WHERE version=:v"
+            "SELECT sharpe, win_rate, max_drawdown, annual_return, evaluation_report FROM model_versions WHERE version=:v"
         ), {"v": version}).fetchone()
         if not mv:
             raise HTTPException(404, "模型版本不存在")

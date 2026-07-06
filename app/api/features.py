@@ -253,6 +253,94 @@ def create_feature(body: CreateFeature):
         raise HTTPException(500, str(e))
 
 
+# ── 2.4 特征族 / 标签 / 全屏依赖图 ──
+
+@router.get("/groups")
+def list_feature_groups():
+    """获取所有特征族列表。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        rows = db.execute(text(
+            "SELECT DISTINCT feature_group FROM features WHERE feature_group IS NOT NULL AND feature_group != '' ORDER BY feature_group"
+        )).fetchall()
+        db.close()
+        return {"groups": [r[0] for r in rows]}
+    except Exception as e:
+        db.close()
+        return {"groups": []}
+
+
+@router.get("/tags")
+def list_feature_tags():
+    """获取所有标签列表。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        rows = db.execute(text(
+            "SELECT tags FROM features WHERE tags IS NOT NULL"
+        )).fetchall()
+        db.close()
+        all_tags = set()
+        for r in rows:
+            t = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
+            all_tags.update(t)
+        return {"tags": sorted(all_tags)}
+    except Exception:
+        db.close()
+        return {"tags": []}
+
+
+@router.get("/dependency-graph")
+def get_dependency_graph():
+    """获取全量依赖图（用于 D3/ECharts 渲染）。返回 nodes + edges。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        rows = db.execute(text(
+            "SELECT feature_name, display_name, target_entity, status, depends_on, feature_group, tags FROM features"
+        )).fetchall()
+        db.close()
+
+        nodes = []
+        node_map = {}
+        edges = []
+
+        for r in rows:
+            name = r[0]
+            deps = json.loads(r[4]) if isinstance(r[4], str) else (r[4] or [])
+            tags = json.loads(r[6]) if isinstance(r[6], str) else (r[6] or [])
+
+            # 节点分层：原始字段(0) / 基础特征(1) / 复合特征(2) / 顶层(3)
+            level = 0 if not deps else 1
+            if any(d not in ('close','open','high','low','volume','amount','turnover') for d in deps):
+                level = 2
+
+            nodes.append({
+                "id": name,
+                "name": name,
+                "display_name": r[1] or name,
+                "entity": r[2],
+                "status": r[3],
+                "group": r[5] or "",
+                "tags": tags,
+                "level": level,
+            })
+            node_map[name] = True
+
+            for dep in deps:
+                edges.append({"source": dep, "target": name})
+
+        # 过滤 edges 中 source 不存在的边（原始字段不在 nodes 中）
+        edges = [e for e in edges if e["source"] in node_map]
+
+        return {"nodes": nodes, "edges": edges}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+
 @router.get("/{feature_id}")
 def get_feature(feature_id: int):
     """获取特征详情（含上游依赖 + 下游引用）。"""
@@ -694,93 +782,6 @@ def update_feature_status(feature_id: int, body: StatusBody):
     except HTTPException:
         db.close()
         raise
-    except Exception as e:
-        db.close()
-        raise HTTPException(500, str(e))
-
-
-# ── 2.4 特征族 / 标签 / 全屏依赖图 ──
-
-@router.get("/groups")
-def list_feature_groups():
-    """获取所有特征族列表。"""
-    db = get_sync_db()
-    try:
-        from sqlalchemy import text
-        rows = db.execute(text(
-            "SELECT DISTINCT feature_group FROM features WHERE feature_group IS NOT NULL AND feature_group != '' ORDER BY feature_group"
-        )).fetchall()
-        db.close()
-        return {"groups": [r[0] for r in rows]}
-    except Exception as e:
-        db.close()
-        return {"groups": []}
-
-
-@router.get("/tags")
-def list_feature_tags():
-    """获取所有标签列表。"""
-    db = get_sync_db()
-    try:
-        from sqlalchemy import text
-        rows = db.execute(text(
-            "SELECT tags FROM features WHERE tags IS NOT NULL"
-        )).fetchall()
-        db.close()
-        all_tags = set()
-        for r in rows:
-            t = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
-            all_tags.update(t)
-        return {"tags": sorted(all_tags)}
-    except Exception:
-        db.close()
-        return {"tags": []}
-
-
-@router.get("/dependency-graph")
-def get_dependency_graph():
-    """获取全量依赖图（用于 D3/ECharts 渲染）。返回 nodes + edges。"""
-    db = get_sync_db()
-    try:
-        from sqlalchemy import text
-        rows = db.execute(text(
-            "SELECT feature_name, display_name, target_entity, status, depends_on, feature_group, tags FROM features"
-        )).fetchall()
-        db.close()
-
-        nodes = []
-        node_map = {}
-        edges = []
-
-        for r in rows:
-            name = r[0]
-            deps = json.loads(r[4]) if isinstance(r[4], str) else (r[4] or [])
-            tags = json.loads(r[6]) if isinstance(r[6], str) else (r[6] or [])
-
-            # 节点分层：原始字段(0) / 基础特征(1) / 复合特征(2) / 顶层(3)
-            level = 0 if not deps else 1
-            if any(d not in ('close','open','high','low','volume','amount','turnover') for d in deps):
-                level = 2
-
-            nodes.append({
-                "id": name,
-                "name": name,
-                "display_name": r[1] or name,
-                "entity": r[2],
-                "status": r[3],
-                "group": r[5] or "",
-                "tags": tags,
-                "level": level,
-            })
-            node_map[name] = True
-
-            for dep in deps:
-                edges.append({"source": dep, "target": name})
-
-        # 过滤 edges 中 source 不存在的边（原始字段不在 nodes 中）
-        edges = [e for e in edges if e["source"] in node_map]
-
-        return {"nodes": nodes, "edges": edges}
     except Exception as e:
         db.close()
         raise HTTPException(500, str(e))
