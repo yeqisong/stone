@@ -201,6 +201,16 @@ def create_feature(body: CreateFeature):
         # 4. 提取依赖
         deps = extract_deps_from_ast(parsed.get("ast", {}))
 
+        # 4.5 检查依赖的函数是否已发布（draft 函数不可引用）
+        fn_names = [f["name"] for f in parsed.get("ast", {}).get("functions", []) if f.get("type") == "custom"]
+        if fn_names:
+            draft_fns = db.execute(text(
+                "SELECT name FROM functions WHERE name = ANY(:names) AND status = 'draft'"
+            ), {"names": fn_names}).fetchall()
+            if draft_fns:
+                names = [r[0] for r in draft_fns]
+                raise HTTPException(400, f"依赖的函数未发布: {', '.join(names)}。请先将函数发布后再创建特征。")
+
         # 5. 循环检测（enabled 状态强制；draft 仅警告不阻塞）
         cycle = check_cycle(db, body.feature_name, deps)
         if cycle:
@@ -386,6 +396,17 @@ def update_feature(feature_id: int, body: UpdateFeature):
                 raise HTTPException(400, f"KEPL 公式语法错误: {msg}")
 
             new_deps = extract_deps_from_ast(parsed.get("ast", {}))
+
+            # 检查依赖函数是否已发布
+            fn_names = [f["name"] for f in parsed.get("ast", {}).get("functions", []) if f.get("type") == "custom"]
+            if fn_names:
+                draft_fns = db.execute(text(
+                    "SELECT name FROM functions WHERE name = ANY(:names) AND status = 'draft'"
+                ), {"names": fn_names}).fetchall()
+                if draft_fns:
+                    names = [r[0] for r in draft_fns]
+                    db.close()
+                    raise HTTPException(400, f"依赖的函数未发布: {', '.join(names)}。请先将函数发布后再创建特征。")
 
             # 循环检测
             cycle = check_cycle(db, current_name, new_deps)
