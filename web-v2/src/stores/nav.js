@@ -5,6 +5,7 @@ import { useMarketStore } from './market'
 export const useNavStore = defineStore('nav', () => {
   const tab = ref('p')
   const dcode = ref('')
+  const fid = ref(null)   // feature detail id
   const prevTab = ref('')
 
   // URL hash 路由
@@ -13,6 +14,10 @@ export const useNavStore = defineStore('nav', () => {
     if (hash.startsWith('/detail/')) {
       const code = hash.split('/')[2]
       if (code) { dcode.value = code; tab.value = 'd'; return }
+    }
+    if (hash.startsWith('/feature/')) {
+      const id = parseInt(hash.split('/')[2])
+      if (id) { fid.value = id; tab.value = 'v'; return }
     }
     if (hash.startsWith('/market/')) {
       tab.value = 'm'
@@ -28,7 +33,7 @@ export const useNavStore = defineStore('nav', () => {
   }
 
   function syncHash() {
-    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',d:'/detail/'+dcode.value}
+    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
     const target = map[tab.value] || '/'
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
   }
@@ -47,13 +52,24 @@ export const useNavStore = defineStore('nav', () => {
     tab.value = prevTab.value || 'l'
   }
 
+  function showFeatureDetail(id) {
+    prevTab.value = tab.value
+    fid.value = id
+    tab.value = 'v'
+  }
+
+  function backFromFeatureDetail() {
+    tab.value = prevTab.value || 'e'
+  }
+
   // tab 变化时同步 URL
   watch(tab, syncHash)
   watch(dcode, () => { if (tab.value === 'd') syncHash() })
+  watch(fid, () => { if (tab.value === 'v') syncHash() })
 
   // 页面加载时解析 URL
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, prevTab, switchTab, showDetail, backFromDetail, parseHash }
+  return { tab, dcode, fid, prevTab, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, parseHash }
 })

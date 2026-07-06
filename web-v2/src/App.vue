@@ -50,6 +50,7 @@
           <div v-if="nav.tab==='a'"><ModelView /></div>
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
+          <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => nav.backFromFeatureDetail()" /></div>
           <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>
       </div>
@@ -89,6 +90,7 @@ import SettingsView from './components/SettingsView.vue'
 import ModelView from './components/ModelView.vue'
 import FunctionView from './components/FunctionView.vue'
 import FeatureView from './components/FeatureView.vue'
+import FeatureDetail from './components/FeatureDetail.vue'
 
 const auth = useAuthStore()
 const nav = useNavStore()

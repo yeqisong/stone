@@ -478,6 +478,207 @@ def delete_feature(feature_id: int):
         raise HTTPException(500, str(e))
 
 
+# ── 数据预览 / 状态管理 ──
+
+class StatsBody(BaseModel):
+    total_effective_cells: int = 0
+    missing_cells_total: int = 0
+    pending_cells_total: int = 0
+    data_completeness: Optional[float] = None
+    latest_computed_date: Optional[str] = None
+
+
+class StatusBody(BaseModel):
+    status: str = Field(..., pattern="^(draft|enabled|pending_recalc|deprecated|data_anomaly)$")
+
+
+@router.get("/{feature_id}/data")
+def get_feature_data(
+    feature_id: int,
+    code: Optional[str] = Query(None, description="实体代码，如 000001"),
+    page: int = 1,
+    page_size: int = 50,
+):
+    """分页预览特征在宽表中的实际数值（按日期降序）。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        # 查特征信息
+        feat = db.execute(text(
+            "SELECT feature_name, target_entity FROM features WHERE id = :id"
+        ), {"id": feature_id}).fetchone()
+        if not feat:
+            db.close()
+            raise HTTPException(404, "特征不存在")
+
+        feature_name = feat[0]
+        entity = feat[1]
+
+        # 确定宽表名
+        table_map = {"stock": "feature_stock", "etf": "feature_etf", "index": "feature_index", "global": "feature_global"}
+        table_name = table_map.get(entity, "feature_stock")
+
+        # 尝试查询宽表（表可能尚未创建）
+        try:
+            if entity == "global":
+                sql = f"""
+                    SELECT trade_date, "{feature_name}" as value
+                    FROM {table_name}
+                    ORDER BY trade_date DESC
+                    LIMIT :lim OFFSET :off
+                """
+                count_sql = f"SELECT COUNT(*) FROM {table_name}"
+                params = {"lim": page_size, "off": (page-1)*page_size}
+            else:
+                if code:
+                    sql = f"""
+                        SELECT stock_code, trade_date, "{feature_name}" as value
+                        FROM {table_name}
+                        WHERE stock_code = :code
+                        ORDER BY trade_date DESC
+                        LIMIT :lim OFFSET :off
+                    """
+                    count_sql = f"SELECT COUNT(*) FROM {table_name} WHERE stock_code = :code"
+                    params = {"code": code, "lim": page_size, "off": (page-1)*page_size}
+                else:
+                    sql = f"""
+                        SELECT stock_code, trade_date, "{feature_name}" as value
+                        FROM {table_name}
+                        ORDER BY trade_date DESC, stock_code
+                        LIMIT :lim OFFSET :off
+                    """
+                    count_sql = f"SELECT COUNT(*) FROM {table_name}"
+                    params = {"lim": page_size, "off": (page-1)*page_size}
+
+            total = db.execute(text(count_sql), {k:v for k,v in params.items() if k != "lim" and k != "off"}).scalar() or 0
+            rows = db.execute(text(sql), params).fetchall()
+
+            items = []
+            for r in rows:
+                if entity == "global":
+                    items.append({"trade_date": str(r[0]), "value": float(r[1]) if r[1] is not None else None})
+                else:
+                    items.append({"stock_code": r[0], "trade_date": str(r[1]), "value": float(r[2]) if r[2] is not None else None})
+
+            db.close()
+            return {"items": items, "total": total, "page": page, "page_size": page_size, "entity": entity}
+        except Exception:
+            # 宽表尚未创建，返回空
+            db.close()
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "entity": entity, "empty_reason": "特征计算宽表尚未创建（迭代 3.2）"}
+    except HTTPException:
+        db.close()
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+@router.post("/{feature_id}/stats")
+def update_feature_stats(feature_id: int, body: StatsBody):
+    """DAG 回写特征数据质量统计。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        current = db.execute(text("SELECT id FROM features WHERE id = :id"), {"id": feature_id}).fetchone()
+        if not current:
+            db.close()
+            raise HTTPException(404, "特征不存在")
+
+        # 自动计算完整度
+        completeness = body.data_completeness
+        if completeness is None and body.total_effective_cells > 0:
+            completeness = 1.0 - body.missing_cells_total / body.total_effective_cells
+            completeness = round(max(0, min(1, completeness)), 4)
+
+        date_val = body.latest_computed_date
+
+        db.execute(text("""
+            UPDATE features SET
+                total_effective_cells = :tot,
+                missing_cells_total = :miss,
+                pending_cells_total = :pend,
+                data_completeness = COALESCE(:comp, data_completeness),
+                latest_computed_date = COALESCE(:dt, latest_computed_date),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """), {
+            "id": feature_id,
+            "tot": body.total_effective_cells,
+            "miss": body.missing_cells_total,
+            "pend": body.pending_cells_total,
+            "comp": completeness,
+            "dt": date_val,
+        })
+
+        # 自动质量监控规则
+        if completeness is not None:
+            if completeness < 0.8:
+                db.execute(text(
+                    "UPDATE features SET status='data_anomaly', data_anomaly_reason='数据完整度低于80%，请检查数据源' WHERE id=:id AND status='enabled'"
+                ), {"id": feature_id})
+            elif completeness >= 0.9:
+                db.execute(text(
+                    "UPDATE features SET status='enabled', data_anomaly_reason=NULL WHERE id=:id AND status='data_anomaly'"
+                ), {"id": feature_id})
+
+        db.commit()
+        db.close()
+        return {"ok": True}
+    except HTTPException:
+        db.close()
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+@router.patch("/{feature_id}/status")
+def update_feature_status(feature_id: int, body: StatusBody):
+    """手动切换特征状态（含下游检查）。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        current = db.execute(text("SELECT feature_name, status FROM features WHERE id = :id"), {"id": feature_id}).fetchone()
+        if not current:
+            db.close()
+            raise HTTPException(404, "特征不存在")
+
+        name = current[0]
+        old_status = current[1]
+
+        if body.status == old_status:
+            db.close()
+            return {"ok": True, "message": "状态未变化"}
+
+        # 弃用检查
+        if body.status == "deprecated":
+            downstream = db.execute(text(
+                "SELECT feature_name FROM features WHERE status != 'deprecated' AND depends_on @> :dep"
+            ), {"dep": json.dumps([name])}).fetchall()
+            if downstream:
+                names = [d[0] for d in downstream]
+                db.close()
+                raise HTTPException(400, f"无法弃用 '{name}'，以下特征依赖它: {', '.join(names)}")
+
+        # 执行状态更新
+        db.execute(text("UPDATE features SET status=:st, updated_at=CURRENT_TIMESTAMP WHERE id=:id"), {"st": body.status, "id": feature_id})
+
+        # 级联：弃用时标记下游
+        if body.status == "deprecated":
+            _cascade_pending(db, name)
+
+        db.commit()
+        db.close()
+        return {"ok": True, "new_status": body.status}
+    except HTTPException:
+        db.close()
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
 def _cascade_pending(db, upstream_name: str):
     """递归标记所有依赖 upstream_name 的下游特征为 pending_recalc。"""
     from sqlalchemy import text

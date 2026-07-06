@@ -155,6 +155,7 @@
 import { ref, computed, h } from 'vue'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
+import { useNavStore } from '../stores/nav'
 import axios from 'axios'
 
 const API = window.location.origin
@@ -202,24 +203,10 @@ function openCreate() {
   showCreate.value = true
 }
 
-async function openDetail(id) {
-  detailLoading.value = true
-  detailItem.value = null
-  showDetail.value = true
-  try {
-    const r = await axios.get(API + `/api/features/${id}`)
-    const d = r.data
-    detailItem.value = d
-    completenessPct.value = Math.round((d.data_completeness || 0) * 100)
-    detailStale.value = d.latest_computed_date && (() => {
-      const d1 = new Date(d.latest_computed_date)
-      const d2 = new Date()
-      return (d2 - d1) / 86400000 > 5
-    })()
-  } catch (e) {
-    console.error('openDetail:', e)
-  }
-  detailLoading.value = false
+const nav = useNavStore()
+
+function openDetail(id) {
+  nav.showFeatureDetail(id)
 }
 
 function openEdit(row) {
