@@ -10,7 +10,7 @@ import json
 from app.db.connection import get_sync_db
 from app.kepl.parser import parse_kepl
 
-router = APIRouter(prefix="/api/features", tags=["features"])
+router = APIRouter(prefix="/features", tags=["features"])
 
 
 # ── Pydantic 模型 ──
