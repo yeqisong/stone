@@ -70,7 +70,7 @@ const trainSteps = computed(() => {
 function handleWs(data) {
   if (data.type !== 'dag_log') return
   const nodes = data.nodes || []
-  const trainNode = nodes.find(n => n.node_name === 'model_train')
+  const trainNode = nodes.find(n => (n.node_name || n.node) === 'model_train')
   if (!trainNode) return
   const detail = trainNode.detail || ''
   // Optuna 格式: "Optuna实验:5/50 sharpe=1.234"
@@ -83,7 +83,9 @@ function handleWs(data) {
   if (detail.includes('特征工程')) currentStep.value = 2
   if (detail.includes('加载指标')) currentStep.value = 1
   if (detail.includes('存储最优')) currentStep.value = 4
-  if (trainNode.status === 'success') {
+  if (detail.includes('Optuna 训练') || detail.includes('XGBoost 训练')) currentStep.value = 1
+  // 失败或数据不足
+  if (trainNode.status === 'failed') {
     currentStep.value = steps.length + 1
     setTimeout(() => store.loadVersions(), 500)
   }
@@ -94,9 +96,16 @@ function handleWs(data) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!wsState.connected) connectWebSocket()
   _wsCleanup = addWsListener(handleWs)
+  // 初始拉取一次 DAG 状态（避免 WS 连接前已失败）
+  try {
+    const r = await axios.get(window.location.origin + '/api/dag_logs')
+    const nodes = r.data?.nodes || []
+    const tn = nodes.find(n => n.node === 'model_train' || n.node_name === 'model_train')
+    if (tn) handleWs({ type: 'dag_log', nodes })
+  } catch(e) {}
 })
 onUnmounted(() => { if (_wsCleanup) _wsCleanup() })
 

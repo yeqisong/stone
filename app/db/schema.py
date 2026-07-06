@@ -623,7 +623,8 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('model_train', '', '模型训练', 12),
     ('model_signal', 'indicator_incr', '模型信号', 13),
     ('model_health', 'model_signal', '模型健康', 14),
-    ('feature_compute', 'indicator_incr', '特征计算', 15)
+    ('feature_compute', 'indicator_incr', '特征计算', 15),
+    ('feature_backfill', '', '特征补数', 16)
 ON CONFLICT (node_name) DO NOTHING;
 """
 

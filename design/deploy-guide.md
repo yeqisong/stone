@@ -75,10 +75,28 @@ rsync -avz \
   . myhuawei:/usr/local/htdoc/stone/
 ```
 
-### 2.3 服务器构建 + 上线
+### 2.3 部署代码（优先 docker cp，仅有依赖变更时 build）
 
 ```bash
-ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build --no-cache app && docker compose up -d app"
+# 方式一：仅代码变更（推荐，秒级完成）
+ssh myhuawei "\
+  docker cp /usr/local/htdoc/stone/app stock-app:/app/ && \
+  docker cp /usr/local/htdoc/stone/crawler stock-app:/app/ && \
+  docker cp /usr/local/htdoc/stone/strategy stock-app:/app/ && \
+  docker cp /usr/local/htdoc/stone/scripts stock-app:/app/ && \
+  docker cp /usr/local/htdoc/stone/web-v2/dist stock-app:/app/web-v2/ && \
+  docker restart stock-app"
+
+# 方式二：依赖变更时（如 pip install 新包）
+# ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build app && docker compose up -d app --force-recreate"
+```
+
+### 2.3b 验证代码已生效（必须）
+
+```bash
+# 检查关键函数是否在容器中
+ssh myhuawei "docker exec stock-app grep -c 'def _backtest.*close_prices' /app/scripts/pipeline.py"
+# 应返回 >0，返回 0 表示代码未更新！
 ```
 
 ### 2.4 等待启动完成
@@ -266,11 +284,11 @@ git tag v2.6
 # 4. 同步代码
 rsync -avz --exclude '.git/' --exclude '.env' --exclude '.env.prod' --exclude '.env.local' --exclude 'data/' --exclude 'logs/' --exclude 'node_modules/' --exclude 'web-v2/dist/' --exclude '__pycache__/' --exclude '*.pyc' --exclude '.DS_Store' --exclude '*.patch' --exclude '*.orig' . myhuawei:/usr/local/htdoc/stone/
 
-# 5. 服务器构建
-ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build app && docker compose up -d app"
+# 5. 部署代码（docker cp，秒级生效）
+ssh myhuawei "docker cp /usr/local/htdoc/stone/app stock-app:/app/ && docker cp /usr/local/htdoc/stone/crawler stock-app:/app/ && docker cp /usr/local/htdoc/stone/scripts stock-app:/app/ && docker cp /usr/local/htdoc/stone/web-v2/dist stock-app:/app/web-v2/ && docker restart stock-app"
 
-# 5b. 清理旧镜像 + 构建缓存
-ssh myhuawei "docker image prune -f && docker builder prune -f"
+# 5b. 验证代码生效
+ssh myhuawei "docker exec stock-app grep -c '关键字' /app/scripts/pipeline.py"
 
 # 6. 等待上线（最多 10 分钟）
 for i in $(seq 1 20); do

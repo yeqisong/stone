@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+RUN pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 COPY app/ ./app/
 COPY crawler/ ./crawler/

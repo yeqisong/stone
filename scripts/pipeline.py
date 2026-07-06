@@ -1794,6 +1794,28 @@ def dag_task_daily_update(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
+def dag_task_feature_backfill(log_id: int, trade_date: str, force: bool = False, **kwargs) -> bool:
+    """DAG 节点：历史特征补数（3.4）。"""
+    from app.db.connection import get_sync_db
+    from app.db.schema import write_node_log
+    from scripts.feature_compute import compute_all_features
+
+    write_node_log(log_id=log_id, status='running', detail='启动历史特征补数')
+    db = get_sync_db()
+    try:
+        result = compute_all_features(db, target_entity="stock", start_date="2020-01-01")
+        msg = f"全量补数完成: {result['features']}个特征, {result['rows']}行"
+        if result.get("errors"):
+            msg += f", {len(result['errors'])}个失败"
+        write_node_log(log_id=log_id, status='success', detail=msg, rows=result.get("rows", 0))
+        return True
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+    finally:
+        db.close()
+
+
 def dag_task_feature_compute(log_id: int, trade_date: str, force: bool = False, **kwargs) -> bool:
     """DAG 节点：计算所有已启用特征值。"""
     from app.db.connection import get_sync_db
@@ -1836,6 +1858,7 @@ NODE_FN_MAP = {
     'model_signal':       dag_task_model_signal,
     'model_health':       dag_task_model_health,
     'feature_compute':    dag_task_feature_compute,
+    'feature_backfill':  dag_task_feature_backfill,
 }
 
 # 从 dag_config 表动态加载拓扑（唯一来源），绑定 fn_map 中的函数

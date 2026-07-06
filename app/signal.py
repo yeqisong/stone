@@ -27,6 +27,11 @@ def request_stop(run_id: str):
         evt.set()
 
 
+def set_stop_event(run_id: str, event: threading.Event):
+    """存储 run_id 对应的终止事件（DAG 创建 run 时调用）。"""
+    _stop_events[run_id] = event
+
+
 def get_stop_event(run_id: str) -> threading.Event:
     """为指定 run_id 创建或获取终止事件（DAG 执行器调用）。"""
     if run_id not in _stop_events:
