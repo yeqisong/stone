@@ -807,28 +807,45 @@ def init_db(sync_session) -> None:
 
     # 预置系统特征 — 个股均线（迭代 2.2 优化）
     SYS_FEATURES = [
-        ('ma_5',  '5日均线',  5),
-        ('ma_10', '10日均线', 10),
-        ('ma_20', '20日均线', 20),
-        ('ma_30', '30日均线', 30),
-        ('ma_60', '60日均线', 60),
-        ('ma_90', '90日均线', 90),
-        ('ma_120','120日均线',120),
-        ('ma_180','180日均线',180),
+        # ── 均线 ──
+        ('ma_5',   '5日均线',   '个股5日简单移动平均',    'ma(close, 5)',   '["ma","close"]'),
+        ('ma_10',  '10日均线',  '个股10日简单移动平均',   'ma(close, 10)',  '["ma","close"]'),
+        ('ma_20',  '20日均线',  '个股20日简单移动平均',   'ma(close, 20)',  '["ma","close"]'),
+        ('ma_30',  '30日均线',  '个股30日简单移动平均',   'ma(close, 30)',  '["ma","close"]'),
+        ('ma_60',  '60日均线',  '个股60日简单移动平均',   'ma(close, 60)',  '["ma","close"]'),
+        ('ma_90',  '90日均线',  '个股90日简单移动平均',   'ma(close, 90)',  '["ma","close"]'),
+        ('ma_120', '120日均线', '个股120日简单移动平均',  'ma(close, 120)', '["ma","close"]'),
+        ('ma_180', '180日均线', '个股180日简单移动平均',  'ma(close, 180)', '["ma","close"]'),
+        # ── 指数均线 ──
+        ('ema_12', '12日EMA',  '个股12日指数移动平均（MACD快线）', 'ema(close, 12)', '["ema","close"]'),
+        ('ema_26', '26日EMA',  '个股26日指数移动平均（MACD慢线）', 'ema(close, 26)', '["ema","close"]'),
+        # ── MACD ──
+        ('dif',       'MACD快线',   'MACD快慢线差值(DIF)',  'dif(close)',      '["dif","close"]'),
+        ('dea',       'MACD信号线', 'DIF的9日EMA(DEA)',     'dea(close)',      '["dea","close"]'),
+        ('macd_hist', 'MACD柱',     'MACD柱状线(DIF-DEA)',  'macd_hist(close)','["macd_hist","close"]'),
+        # ── RSI ──
+        ('rsi_14', '14日RSI', '个股14日相对强弱指标', 'rsi(close, 14)', '["rsi","close"]'),
+        # ── 布林带 ──
+        ('boll_upper', '布林上轨', '布林带上轨(MA+2σ)', 'boll_upper(close)', '["boll_upper","close"]'),
+        ('boll_mid',   '布林中轨', '布林带中轨(20MA)',  'boll_mid(close)',   '["boll_mid","close"]'),
+        ('boll_lower', '布林下轨', '布林带下轨(MA-2σ)', 'boll_lower(close)', '["boll_lower","close"]'),
+        # ── ATR ──
+        ('atr_14', '14日ATR', '个股14日平均真实波幅', 'atr(close, 14)', '["atr","close"]'),
+        # ── 涨跌幅 ──
+        ('pct_1d',  '1日涨跌幅',  '个股1日涨跌幅',  'pct_change(close, 1)',  '["pct_change","close"]'),
+        ('pct_5d',  '5日涨跌幅',  '个股5日涨跌幅',  'pct_change(close, 5)',  '["pct_change","close"]'),
+        ('pct_20d', '20日涨跌幅', '个股20日涨跌幅', 'pct_change(close, 20)', '["pct_change","close"]'),
+        # ── 乖离率 ──
+        ('bias_5',  '5日乖离率',  '个股收盘价相对5日均线的偏离度',  '(close - ma(close,5)) / ma(close,5)',  '["ma","close"]'),
+        ('bias_20', '20日乖离率', '个股收盘价相对20日均线的偏离度', '(close - ma(close,20)) / ma(close,20)', '["ma","close"]'),
     ]
-    for fn, dn, window in SYS_FEATURES:
+    for fn, dn, desc, formula, deps in SYS_FEATURES:
         try:
             sync_session.execute(text(
                 "INSERT INTO features (feature_name, display_name, target_entity, description, formula, depends_on, status) "
                 "VALUES (:fn, :dn, 'stock', :desc, :formula, :deps, 'enabled') "
                 "ON CONFLICT (feature_name) DO NOTHING"
-            ), {
-                "fn": fn,
-                "dn": dn,
-                "desc": f"个股{window}日简单移动平均",
-                "formula": f"ma(close, {window})",
-                "deps": '["ma", "close"]',
-            })
+            ), {"fn": fn, "dn": dn, "desc": desc, "formula": formula, "deps": deps})
         except Exception:
             sync_session.rollback()
     sync_session.commit()
