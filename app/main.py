@@ -21,6 +21,7 @@ from app.api.functions import router as functions_router
 from app.api.features import router as features_router
 from app.api.kepl import router as kepl_router
 from app.api.dag_types import router as dag_types_router
+from app.api.dag_flows import router as dag_flows_router
 from app.feishu.webhook import router as feishu_router
 from app.auth.auth import verify_password, create_token
 
@@ -97,6 +98,7 @@ app.include_router(functions_router, prefix="/api")
 app.include_router(features_router, prefix="/api")
 app.include_router(kepl_router, prefix="/api")
 app.include_router(dag_types_router)  # /api/dag 已含前缀
+app.include_router(dag_flows_router)  # /api/dag 已含前缀
 app.include_router(feishu_router)  # /webhook/feishu 不带 /api 前缀
 
 @app.post("/api/login")

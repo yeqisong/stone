@@ -38,6 +38,7 @@
           <n-button :type="nav.tab==='a'?'primary':'default'" size="small" @click="nav.switchTab('a')" :style="{flexShrink:0}">🧠 模型</n-button>
           <n-button :type="nav.tab==='f'?'primary':'default'" size="small" @click="nav.switchTab('f')" :style="{flexShrink:0}">🔧 函数</n-button>
           <n-button :type="nav.tab==='e'?'primary':'default'" size="small" @click="nav.switchTab('e')" :style="{flexShrink:0}">🔬 特征</n-button>
+          <n-button :type="nav.tab==='g'?'primary':'default'" size="small" @click="nav.switchTab('g')" :style="{flexShrink:0}">🔀 DAG</n-button>
           <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')" :style="{flexShrink:0}">⚙️ 设置</n-button>
         </div>
         <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
@@ -51,6 +52,7 @@
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
           <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => nav.backFromFeatureDetail()" /></div>
+          <div v-if="nav.tab==='g'"><DagFlowEdit /></div>
           <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>
       </div>
@@ -91,6 +93,7 @@ import ModelView from './components/ModelView.vue'
 import FunctionView from './components/FunctionView.vue'
 import FeatureView from './components/FeatureView.vue'
 import FeatureDetail from './components/FeatureDetail.vue'
+import DagFlowEdit from './components/DagFlowEdit.vue'
 
 const auth = useAuthStore()
 const nav = useNavStore()

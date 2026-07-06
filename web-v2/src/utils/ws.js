@@ -1,4 +1,9 @@
-// WebSocket 连接管理
+// WebSocket 连接管理 — 统一消息格式 v2.0 (迭代 6.1)
+//
+// 消息格式规范:
+//   { topic: "dag", task_id: "run-xxx", event: "status|log|progress",
+//     timestamp: "2026-07-06T22:00:00", data: { ... } }
+//
 // 用 window.location.origin 自适应环境（本地=ws://127.0.0.1:3000, 生产=wss://s.pmlab.top）
 const WS_URL = window.location.origin.replace('http', 'ws') + '/api/ws/dag'
 

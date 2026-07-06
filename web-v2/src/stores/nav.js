@@ -28,12 +28,12 @@ export const useNavStore = defineStore('nav', () => {
       }
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o','/functions':'f','/features':'e'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o','/functions':'f','/features':'e','/dag-flows':'g'}
     tab.value = map[hash] || 'p'
   }
 
   function syncHash() {
-    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
+    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',g:'/dag-flows',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
     const target = map[tab.value] || '/'
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
   }

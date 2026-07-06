@@ -507,6 +507,36 @@ CREATE INDEX IF NOT EXISTS idx_fv_feature_date ON feature_values (feature_name, 
 CREATE INDEX IF NOT EXISTS idx_fv_stock_date ON feature_values (stock_code, trade_date);
 """
 
+# ── DAG 流程编排（v2.0 重构 迭代 4.1）──
+
+CREATE_DAG_FLOWS = """
+CREATE TABLE IF NOT EXISTS dag_flows (
+    id              SERIAL PRIMARY KEY,
+    flow_name       VARCHAR(64) NOT NULL UNIQUE,
+    description     TEXT,
+    nodes           JSONB NOT NULL DEFAULT '[]',
+    edges           JSONB NOT NULL DEFAULT '[]',
+    cron_expr       VARCHAR(32),
+    status          VARCHAR(16) DEFAULT 'draft',
+    is_active       BOOLEAN DEFAULT false,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_DAG_FLOW_VERSIONS = """
+CREATE TABLE IF NOT EXISTS dag_flow_versions (
+    id              SERIAL PRIMARY KEY,
+    flow_id         INTEGER NOT NULL REFERENCES dag_flows(id) ON DELETE CASCADE,
+    version         INTEGER NOT NULL DEFAULT 1,
+    nodes           JSONB NOT NULL DEFAULT '[]',
+    edges           JSONB NOT NULL DEFAULT '[]',
+    change_log      TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (flow_id, version)
+);
+"""
+
 # ── 实体元数据（v2.0 重构 迭代 2.5）──
 
 CREATE_ENTITY_META = """
@@ -711,6 +741,8 @@ ALL_TABLES = [
     ("download_history", CREATE_DOWNLOAD_HISTORY),
     ("entity_meta", CREATE_ENTITY_META),
     ("feature_values", CREATE_FEATURE_VALUES),
+    ("dag_flows", CREATE_DAG_FLOWS),
+    ("dag_flow_versions", CREATE_DAG_FLOW_VERSIONS),
 ]
 
 
