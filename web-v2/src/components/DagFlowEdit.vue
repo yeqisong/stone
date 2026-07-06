@@ -1,155 +1,235 @@
 <template>
-<div style="padding:16px;max-width:1100px;margin:0 auto">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-    <div style="font-size:17px;font-weight:700;color:var(--c-text)">DAG 流程编排</div>
+<div style="padding:16px;max-width:100%;margin:0 auto;height:calc(100vh - 100px);display:flex;flex-direction:column">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-shrink:0">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:17px;font-weight:700;color:var(--c-text)">DAG 流程编排</span>
+      <n-select v-if="!editMode" v-model:value="selectedFlow" :options="flowOptions" size="small" style="width:180px" placeholder="选择流程" @update:value="openEdit" />
+      <n-input v-if="editMode" v-model:value="flowName" size="small" style="width:180px" placeholder="流程名称" />
+      <n-input v-if="editMode" v-model:value="flowCron" size="small" style="width:140px" placeholder="Cron 表达式" />
+    </div>
     <div style="display:flex;gap:6px">
-      <n-button size="small" @click="loadFlows">🔄 刷新</n-button>
-      <n-button size="small" type="primary" @click="openCreate">+ 新建流程</n-button>
+      <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">🔍 校验</n-button>
+      <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">💾 保存</n-button>
+      <n-button v-if="editMode" size="small" quaternary @click="editMode=false">← 返回</n-button>
+      <n-button v-if="!editMode" size="small" type="primary" @click="editMode=true;flowName='';flowCron='';initGraph()">+ 新建</n-button>
     </div>
   </div>
 
-  <n-data-table v-if="!editFlow" :columns="flowCols" :data="flows" size="small" :loading="loading" />
+  <!-- Validation -->
+  <div v-if="validation" :style="{flexShrink:0,marginBottom:'8px',padding:'6px 10px',borderRadius:'6px',fontSize:'11px',background:validation.ok?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)',border:'1px solid '+(validation.ok?'rgba(16,185,129,.2)':'rgba(239,68,68,.2)')}">
+    <span v-if="validation.ok" style="color:#10b981">✅ 校验通过</span>
+    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#ef4444;margin-right:12px">❌ {{ e }}</span>
+  </div>
 
-  <!-- Editor View -->
-  <div v-if="editFlow" style="display:flex;flex-direction:column;gap:12px">
-    <div style="display:flex;align-items:center;gap:8px">
-      <n-button size="small" quaternary @click="editFlow=null">← 返回</n-button>
-      <n-input v-model:value="flowForm.name" size="small" style="width:200px" placeholder="流程名称" :disabled="!!editFlow.id" />
-      <n-input v-model:value="flowForm.cron" size="small" style="width:140px" placeholder="Cron (如 0 18 * * 1-5)" />
-      <n-tag :type="flowForm.status==='published'?'success':'warning'" size="small">{{ flowForm.status || 'draft' }}</n-tag>
-    </div>
-
-    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <span style="font-size:12px;font-weight:600;color:var(--c-text-dim)">节点列表</span>
-        <n-button size="tiny" @click="addNode">+ 添加节点</n-button>
-      </div>
-      <div v-for="(n,i) in flowForm.nodes" :key="i" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--c-bg);border-radius:6px">
-        <span style="font-size:11px;color:var(--c-text-faint);width:20px">{{ i+1 }}</span>
-        <n-input v-model:value="n.node_name" size="tiny" style="width:150px" placeholder="节点名" />
-        <span style="font-size:10px;color:var(--c-text-dim)">依赖:</span>
-        <n-input v-model:value="n.depsStr" size="tiny" style="width:200px" placeholder="逗号分隔，如 kline,index" />
-        <n-button size="tiny" type="error" quaternary @click="flowForm.nodes.splice(i,1)">✕</n-button>
+  <!-- Editor Area -->
+  <div v-if="editMode" style="display:flex;flex:1;min-height:0;gap:0;border:1px solid var(--c-border);border-radius:8px;overflow:hidden">
+    <!-- Node Palette -->
+    <div style="width:160px;flex-shrink:0;background:var(--c-card-bg);border-right:1px solid var(--c-border);padding:10px;overflow-y:auto">
+      <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">节点类型</div>
+      <div v-for="nt in nodeTypes" :key="nt.name"
+        :style="{padding:'8px 10px',marginBottom:'4px',borderRadius:'6px',border:'1px solid var(--c-border)',cursor:'grab',fontSize:'11px',background:'var(--c-bg)',color:'var(--c-text)'}"
+        @mousedown="startDrag(nt)">
+        {{ nt.label || nt.name }}
       </div>
     </div>
+    <!-- X6 Canvas -->
+    <div ref="canvasRef" style="flex:1;min-width:0"></div>
+  </div>
 
-    <!-- Validation -->
-    <div v-if="validation" :style="{background:validation.ok?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)',border:'1px solid '+(validation.ok?'rgba(16,185,129,.2)':'rgba(239,68,68,.2)'),borderRadius:'6px',padding:'8px',fontSize:'11px'}">
-      <div v-if="validation.ok" style="color:#10b981">✅ 校验通过</div>
-      <div v-else v-for="(e,i) in (validation.errors||[])" :key="i" style="color:#ef4444">❌ {{ e }}</div>
-    </div>
-
-    <div style="display:flex;gap:8px">
-      <n-button size="small" @click="doValidate">🔍 校验</n-button>
-      <n-button size="small" type="primary" @click="doSave" :loading="saving">💾 保存</n-button>
-      <n-button v-if="editFlow.id" size="small" type="error" quaternary @click="doDelete" :loading="saving">🗑 删除</n-button>
-    </div>
-
-    <!-- Versions -->
-    <div v-if="editFlow.id && editFlow.versions?.length">
-      <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin:8px 0">版本历史</div>
-      <div v-for="v in editFlow.versions" :key="v.version" style="font-size:11px;color:var(--c-text-dim);padding:3px 0;border-bottom:1px solid var(--c-border-light)">
-        v{{ v.version }} — {{ (v.created_at||'').slice(0,16) }} — {{ v.change_log || '无说明' }}
-      </div>
-    </div>
+  <!-- Flow List -->
+  <div v-else style="flex:1;overflow-y:auto">
+    <n-data-table :columns="flowCols" :data="flows" size="small" :loading="loading" />
   </div>
 </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { NButton, NDataTable, NInput, NTag } from 'naive-ui'
+import { ref, onMounted, nextTick, h } from 'vue'
+import { NButton, NSelect, NInput, NDataTable } from 'naive-ui'
+import { Graph } from '@antv/x6'
 import axios from 'axios'
 
 const API = window.location.origin
 const loading = ref(false)
 const flows = ref([])
-const editFlow = ref(null)
-const flowForm = ref({ name:'', cron:'', nodes:[], status:'draft' })
+const selectedFlow = ref(null)
+const editMode = ref(false)
+const flowName = ref('')
+const flowCron = ref('')
 const validation = ref(null)
 const saving = ref(false)
+const canvasRef = ref(null)
 
+let graph = null
+const nodeTypes = ref([])
+let dragNodeType = null
+
+const flowOptions = ref([])
 const flowCols = [
   { title:'流程名', key:'flow_name', width:160 },
-  { title:'状态', key:'status', width:70, render(row) { return row.status === 'published' ? '✅ 已发布' : '📝 草稿' } },
-  { title:'Cron', key:'cron_expr', width:130, render(row) { return row.cron_expr || '—' } },
-  { title:'创建', key:'created_at', width:100 },
-  { title:'操作', key:'actions', width:120, render(row) {
-    return h('div', { style:{display:'flex',gap:'4px'} }, [
-      h(NButton, {size:'tiny',quaternary:true,onClick:() => openEdit(row.id)}, () => '编辑'),
-    ])
-  }},
+  { title:'状态', key:'status', width:80, render(r){ return r.status==='published'?'✅ 已发布':'📝 '+r.status } },
+  { title:'Cron', key:'cron_expr', width:130 },
+  { title:'操作', key:'actions', width:100, render(r){ return h(NButton,{size:'tiny',quaternary:true,onClick:()=>openEdit(r.id)},()=>'编辑') } },
 ]
-
-import { h } from 'vue'
 
 async function loadFlows() {
   loading.value = true
   try {
     const r = await axios.get(API + '/api/dag/flows')
     flows.value = r.data.items || []
+    flowOptions.value = flows.value.map(f => ({ label: f.flow_name, value: f.id }))
   } catch(e) { console.error(e) }
   loading.value = false
 }
 
-function openCreate() {
-  editFlow.value = { id: null }
-  flowForm.value = { name:'', cron:'', nodes:[], status:'draft' }
-  validation.value = null
-}
-
-async function openEdit(id) {
+async function loadNodeTypes() {
   try {
-    const r = await axios.get(API + `/api/dag/flows/${id}`)
-    editFlow.value = r.data
-    flowForm.value = {
-      name: r.data.flow_name,
-      cron: r.data.cron_expr || '',
-      nodes: (r.data.nodes||[]).map(n => ({ node_name:n.node_name, depsStr:(n.deps||[]).join(',') })),
-      status: r.data.status,
-    }
-    validation.value = null
+    const r = await axios.get(API + '/api/dag/node-types')
+    nodeTypes.value = r.data.items || []
   } catch(e) { console.error(e) }
 }
 
-function addNode() {
-  flowForm.value.nodes.push({ node_name:'', depsStr:'' })
+function initGraph() {
+  if (graph) { graph.dispose(); graph = null }
+  if (!canvasRef.value) return
+
+  graph = new Graph({
+    container: canvasRef.value,
+    autoResize: true,
+    grid: { visible: true, size: 20, args: { color: 'var(--c-border)' } },
+    panning: { enabled: true, modifiers: 'shift' },
+    mousewheel: { enabled: true, modifiers: ['ctrl','meta'] },
+    connecting: { snap: true, allowBlank: false, connector: { name: 'smooth' } },
+    selecting: { enabled: true, multiple: false },
+    keyboard: { enabled: true },
+    history: { enabled: true },
+  })
+
+  // Delete key removes selected node
+  graph.bindKey('delete', () => {
+    const cells = graph.getSelectedCells()
+    cells.forEach(c => graph.removeCell(c))
+  })
+
+  // Drop handler
+  graph.on('node:mouseup', ({ node }) => {
+    node.setData({ selected: true })
+  })
+}
+
+function startDrag(nt) {
+  dragNodeType = nt
+  // Add node at center of visible area on next click
+  if (!graph) return
+  const center = graph.getGraphArea().getCenter()
+  graph.addNode({
+    x: center.x - 60 + Math.random() * 100,
+    y: center.y - 20 + Math.random() * 60,
+    width: 120, height: 40,
+    shape: 'rect',
+    label: nt.label || nt.name,
+    data: { node_name: nt.name },
+    attrs: {
+      body: { rx: 8, ry: 8, fill: '#1e293b', stroke: '#475569', strokeWidth: 2 },
+      label: { fill: '#e2e8f0', fontSize: 11, fontWeight: 600 },
+    },
+    ports: {
+      groups: {
+        top: { position: 'top', attrs: { circle: { r: 4, fill: '#60a5fa' } } },
+        bottom: { position: 'bottom', attrs: { circle: { r: 4, fill: '#f59e0b' } } },
+      },
+      items: [{ group: 'top' }, { group: 'bottom' }],
+    },
+  })
+}
+
+async function openEdit(id) {
+  editMode.value = true
+  try {
+    const r = await axios.get(API + `/api/dag/flows/${id}`)
+    const d = r.data
+    flowName.value = d.flow_name
+    flowCron.value = d.cron_expr || ''
+    selectedFlow.value = id
+    await nextTick()
+    initGraph()
+    // Load existing nodes
+    const nodeMap = {}
+    for (const n of d.nodes || []) {
+      const node = graph.addNode({
+        x: 100 + Math.random() * 400, y: 50 + Math.random() * 300,
+        width: 120, height: 40,
+        shape: 'rect',
+        label: n.node_name,
+        data: { node_name: n.node_name },
+        attrs: {
+          body: { rx: 8, ry: 8, fill: '#1e293b', stroke: '#475569', strokeWidth: 2 },
+          label: { fill: '#e2e8f0', fontSize: 11, fontWeight: 600 },
+        },
+        ports: {
+          groups: {
+            top: { position: 'top', attrs: { circle: { r: 4, fill: '#60a5fa' } } },
+            bottom: { position: 'bottom', attrs: { circle: { r: 4, fill: '#f59e0b' } } },
+          },
+          items: [{ group: 'top' }, { group: 'bottom' }],
+        },
+      })
+      nodeMap[n.node_name] = node
+    }
+    // Draw edges
+    for (const n of d.nodes || []) {
+      for (const dep of n.deps || []) {
+        if (nodeMap[dep] && nodeMap[n.node_name]) {
+          graph.addEdge({
+            source: { cell: nodeMap[dep].id, port: 'bottom' },
+            target: { cell: nodeMap[n.node_name].id, port: 'top' },
+            attrs: { line: { stroke: '#6b7280', strokeWidth: 2, targetMarker: { name:'block',width:8,height:6 } } },
+          })
+        }
+      }
+    }
+  } catch(e) { console.error(e) }
+}
+
+function getFlowData() {
+  if (!graph) return { nodes: [], edges: [] }
+  const nodes = graph.getNodes().map(n => {
+    const incoming = graph.getIncomingEdges(n.id) || []
+    const deps = incoming.map(e => graph.getCell(e.getSourceCellId())?.getData()?.node_name).filter(Boolean)
+    return { node_name: n.getData()?.node_name || '', deps: [...new Set(deps)] }
+  })
+  return { nodes }
 }
 
 async function doValidate() {
-  const nodes = flowForm.value.nodes.map(n => ({
-    node_name: n.node_name,
-    deps: (n.depsStr||'').split(',').map(s => s.trim()).filter(Boolean),
-  }))
+  const data = getFlowData()
   try {
-    const r = await axios.post(API + '/api/dag/flows/validate', { nodes })
+    const r = await axios.post(API + '/api/dag/flows/validate', data)
     validation.value = r.data
   } catch(e) {
-    validation.value = { ok:false, errors:[e.response?.data?.detail||e.message] }
+    validation.value = { ok: false, errors: [e.response?.data?.detail || e.message] }
   }
 }
 
 async function doSave() {
   saving.value = true
-  const nodes = flowForm.value.nodes.map(n => ({
-    node_name: n.node_name,
-    deps: (n.depsStr||'').split(',').map(s => s.trim()).filter(Boolean),
-  }))
+  const data = getFlowData()
   try {
-    if (editFlow.value?.id) {
-      await axios.put(API + `/api/dag/flows/${editFlow.value.id}`, {
-        nodes,
-        cron_expr: flowForm.value.cron,
-        change_log: '手动编辑',
+    if (selectedFlow.value) {
+      await axios.put(API + `/api/dag/flows/${selectedFlow.value}`, {
+        nodes: data.nodes,
+        cron_expr: flowCron.value,
+        change_log: 'X6 编辑器编辑',
       })
     } else {
       await axios.post(API + '/api/dag/flows', {
-        flow_name: flowForm.value.name,
-        nodes,
-        cron_expr: flowForm.value.cron,
+        flow_name: flowName.value,
+        nodes: data.nodes,
+        cron_expr: flowCron.value,
       })
     }
-    editFlow.value = null
+    validation.value = { ok: true, errors: [] }
+    editMode.value = false
     loadFlows()
   } catch(e) {
     alert(e.response?.data?.detail || '保存失败')
@@ -157,16 +237,8 @@ async function doSave() {
   saving.value = false
 }
 
-async function doDelete() {
-  if (!confirm('确定删除？')) return
-  saving.value = true
-  try {
-    await axios.delete(API + `/api/dag/flows/${editFlow.value.id}`)
-    editFlow.value = null
-    loadFlows()
-  } catch(e) { alert(e.response?.data?.detail||e.message) }
-  saving.value = false
-}
-
-onMounted(loadFlows)
+onMounted(() => {
+  loadFlows()
+  loadNodeTypes()
+})
 </script>
