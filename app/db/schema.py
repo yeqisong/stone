@@ -431,6 +431,31 @@ CREATE TABLE IF NOT EXISTS model_health (
 CREATE INDEX IF NOT EXISTS idx_mh_version_date ON model_health (version, check_date DESC);
 """
 
+# ── 特征管理（v2.0 重构 迭代 2.2）──
+
+CREATE_FEATURES = """
+CREATE TABLE IF NOT EXISTS features (
+    id              BIGSERIAL PRIMARY KEY,
+    feature_name    VARCHAR(64) NOT NULL UNIQUE,
+    display_name    VARCHAR(64),
+    target_entity   VARCHAR(16) NOT NULL,
+    description     TEXT,
+    formula         TEXT NOT NULL,
+    depends_on      JSONB DEFAULT '[]',
+    status          VARCHAR(16) DEFAULT 'draft',
+    total_effective_cells   BIGINT DEFAULT 0,
+    missing_cells_total     BIGINT DEFAULT 0,
+    pending_cells_total     BIGINT DEFAULT 0,
+    data_completeness       DECIMAL(5,4) DEFAULT 0,
+    latest_computed_date    DATE,
+    data_anomaly_reason     VARCHAR(128),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_features_entity ON features (target_entity);
+CREATE INDEX IF NOT EXISTS idx_features_status ON features (status);
+"""
+
 # ── DAG 日志 + 配置 ──
 
 CREATE_DAG_RUN_LOG = """
@@ -586,6 +611,7 @@ ALL_TABLES = [
     ("training_trials", CREATE_MODEL_TRIALS),
     ("version_comparisons", CREATE_MODEL_COMPARISONS),
     ("model_health", CREATE_MODEL_HEALTH),
+    ("features", CREATE_FEATURES),
 ]
 
 
@@ -678,6 +704,106 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS {col} INTEGER DEFAULT 0"))
         except Exception:
             sync_session.rollback()
+
+    # 迁移：function_versions 表（v2.0 重构）
+    try:
+        sync_session.execute(text("""
+            CREATE TABLE IF NOT EXISTS function_versions (
+                id            SERIAL PRIMARY KEY,
+                function_id   INTEGER NOT NULL REFERENCES functions(id) ON DELETE CASCADE,
+                version       INTEGER NOT NULL DEFAULT 1,
+                source_code   TEXT NOT NULL,
+                parameters    JSONB DEFAULT '[]',
+                change_log    TEXT,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：functions 表（v2.0 重构）
+    try:
+        sync_session.execute(text("""
+            CREATE TABLE IF NOT EXISTS functions (
+                id              SERIAL PRIMARY KEY,
+                name            VARCHAR(64) NOT NULL UNIQUE,
+                display_name    VARCHAR(30),
+                description     TEXT,
+                category        VARCHAR(20) DEFAULT 'other',
+                parameters      JSONB NOT NULL DEFAULT '[]',
+                source_code     TEXT NOT NULL,
+                lookback        INTEGER DEFAULT 5,
+                dependencies    JSONB DEFAULT '[]',
+                is_builtin      BOOLEAN DEFAULT false,
+                status          VARCHAR(16) DEFAULT 'draft',
+                version         INTEGER DEFAULT 1,
+                avg_runtime_ms  DOUBLE PRECISION,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 预置系统内置函数
+    BUILTINS = [
+        ('ma', '移动平均', '计算N周期简单移动平均', 'time_series', '[{"name":"field","type":"field","desc":"价格字段"},{"name":"window","type":"numeric","default":5,"desc":"周期"}]',
+         'def ma(df, window=5):\n    return df.rolling(window).mean()', 5, True),
+        ('ema', '指数移动平均', '计算N周期指数移动平均', 'time_series', '[{"name":"field","type":"field","desc":"价格字段"},{"name":"window","type":"numeric","default":12,"desc":"周期"}]',
+         'def ema(df, window=12):\n    return df.ewm(span=window).mean()', 12, True),
+        ('rsi', '相对强弱', '计算N周期RSI指标', 'time_series', '[{"name":"field","type":"field","desc":"价格字段"},{"name":"window","type":"numeric","default":14,"desc":"周期"}]',
+         'def rsi(df, window=14):\n    d=df.diff();u=d.clip(lower=0);l=-d.clip(upper=0);rs=u.rolling(window).mean()/l.rolling(window).mean();return 100-100/(1+rs)', 14, True),
+        ('std', '标准差', '计算N周期标准差', 'statistical', '[{"name":"field","type":"field","desc":"字段"},{"name":"window","type":"numeric","default":20,"desc":"周期"}]',
+         'def std(df, window=20):\n    return df.rolling(window).std()', 20, True),
+        ('avg', '全市场均值', '全市场某字段均值，默认排除自身', 'cross_sectional',
+         '[{"name":"field","type":"series","desc":"数据源字段如stock.close"},{"name":"exclude_self","type":"scalar","default":"True","desc":"是否排除当前行"}]',
+         'def avg(df, exclude_self=True):\n    return df.mean()', 1, True),
+        ('rank', '排名百分位', '全市场排名，pct=True返回百分位(0~1)', 'cross_sectional',
+         '[{"name":"field","type":"series","desc":"数据源字段"},{"name":"pct","type":"scalar","default":"True","desc":"是否返回百分位"},{"name":"exclude_self","type":"scalar","default":"True","desc":"是否排除当前行"}]',
+         'def rank(df, pct=True, exclude_self=True):\n    return df.rank(pct=pct)', 1, True),
+        ('sum', '全市场求和', '全市场某字段总和,排除自身', 'cross_sectional',
+         '[{"name":"field","type":"series","desc":"数据源字段如stock.volume"},{"name":"exclude_self","type":"scalar","default":"True","desc":"是否排除当前行"}]',
+         'def sum_func(df, exclude_self=True):\n    return df.sum()', 1, True),
+        ('cs_max', '全市场最大值', '全市场当日某字段最大值', 'cross_sectional',
+         '[{"name":"field","type":"series","desc":"数据源字段如stock.high"}]',
+         'def cs_max(df):\n    return df.max()', 1, True),
+        ('cs_min', '全市场最小值', '全市场当日某字段最小值', 'cross_sectional',
+         '[{"name":"field","type":"series","desc":"数据源字段如stock.low"}]',
+         'def cs_min(df):\n    return df.min()', 1, True),
+        ('quantile', '分位数', '全市场某字段的Q分位数值', 'cross_sectional',
+         '[{"name":"field","type":"series","desc":"数据源字段如stock.pe"},{"name":"q","type":"scalar","default":"0.8","desc":"分位数(0~1)"}]',
+         'def quantile(df, q=0.8):\n    return df.quantile(q)', 1, True),
+        ('dif', 'MACD快线', '计算MACD的DIF线（12日EMA - 26日EMA）', 'time_series',
+         '[{"name":"field","type":"field","desc":"价格字段"},{"name":"fast","type":"numeric","default":12,"desc":"快线周期"},{"name":"slow","type":"numeric","default":26,"desc":"慢线周期"}]',
+         'def dif(df, fast=12, slow=26):\n    return df.ewm(span=fast).mean() - df.ewm(span=slow).mean()', 26, True),
+        ('dea', 'MACD信号线', '计算MACD的DEA线（DIF的9日EMA）', 'time_series',
+         '[{"name":"field","type":"field","desc":"价格字段"},{"name":"fast","type":"numeric","default":12,"desc":"快线周期"},{"name":"slow","type":"numeric","default":26,"desc":"慢线周期"},{"name":"signal","type":"numeric","default":9,"desc":"信号线周期"}]',
+         'def dea(df, fast=12, slow=26, signal=9):\n    d = df.ewm(span=fast).mean() - df.ewm(span=slow).mean()\n    return d.ewm(span=signal).mean()', 35, True),
+        ('macd_hist', 'MACD柱', '计算MACD柱状线（DIF - DEA）', 'time_series',
+         '[{"name":"field","type":"field","desc":"价格字段"},{"name":"fast","type":"numeric","default":12,"desc":"快线周期"},{"name":"slow","type":"numeric","default":26,"desc":"慢线周期"},{"name":"signal","type":"numeric","default":9,"desc":"信号线周期"}]',
+         'def macd_hist(df, fast=12, slow=26, signal=9):\n    d = df.ewm(span=fast).mean() - df.ewm(span=slow).mean()\n    de = d.ewm(span=signal).mean()\n    return d - de', 35, True),
+        ('boll_upper', '布林上轨', '计算布林带上轨（MA + K×σ）', 'time_series',
+         '[{"name":"field","type":"field","desc":"价格字段"},{"name":"window","type":"numeric","default":20,"desc":"均线周期"},{"name":"k","type":"numeric","default":2,"desc":"标准差倍数"}]',
+         'def boll_upper(df, window=20, k=2):\n    return df.rolling(window).mean() + k * df.rolling(window).std()', 20, True),
+        ('boll_mid', '布林中轨', '计算布林带中轨（MA）', 'time_series',
+         '[{"name":"field","type":"field","desc":"价格字段"},{"name":"window","type":"numeric","default":20,"desc":"均线周期"}]',
+         'def boll_mid(df, window=20):\n    return df.rolling(window).mean()', 20, True),
+        ('boll_lower', '布林下轨', '计算布林带下轨（MA - K×σ）', 'time_series',
+         '[{"name":"field","type":"field","desc":"价格字段"},{"name":"window","type":"numeric","default":20,"desc":"均线周期"},{"name":"k","type":"numeric","default":2,"desc":"标准差倍数"}]',
+         'def boll_lower(df, window=20, k=2):\n    return df.rolling(window).mean() - k * df.rolling(window).std()', 20, True),
+    ]
+    for name, dname, desc, cat, params, code, lookback, builtin in BUILTINS:
+        try:
+            import json as _j
+            sync_session.execute(text(
+                "INSERT INTO functions (name,display_name,description,category,parameters,source_code,lookback,is_builtin,status) "
+                "VALUES (:n,:d,:desc,:c,:p,:s,:l,:b,'published') ON CONFLICT (name) DO NOTHING"
+            ), {"n":name,"d":dname,"desc":desc,"c":cat,"p":_j.dumps(eval(params)),"s":code,"l":lookback,"b":builtin})
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
 
     # 迁移：daily_quote / index_daily_quote 新增 is_suspended 列
     for table_name in ['daily_quote', 'index_daily_quote']:

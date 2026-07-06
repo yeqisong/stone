@@ -17,6 +17,9 @@ from app.api.status import router as status_router
 from app.api.stocks import router as stocks_router
 from app.api.settings import router as settings_router
 from app.api.models import router as models_router
+from app.api.functions import router as functions_router
+from app.api.features import router as features_router
+from app.api.kepl import router as kepl_router
 from app.feishu.webhook import router as feishu_router
 from app.auth.auth import verify_password, create_token
 
@@ -89,6 +92,9 @@ app.include_router(status_router, prefix="/api")
 app.include_router(stocks_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(models_router, prefix="/api")
+app.include_router(functions_router, prefix="/api")
+app.include_router(features_router, prefix="/api")
+app.include_router(kepl_router, prefix="/api")
 app.include_router(feishu_router)  # /webhook/feishu 不带 /api 前缀
 
 @app.post("/api/login")

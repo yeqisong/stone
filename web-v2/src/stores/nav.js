@@ -23,12 +23,12 @@ export const useNavStore = defineStore('nav', () => {
       }
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o','/functions':'f','/features':'e'}
     tab.value = map[hash] || 'p'
   }
 
   function syncHash() {
-    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',d:'/detail/'+dcode.value}
+    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',d:'/detail/'+dcode.value}
     const target = map[tab.value] || '/'
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
   }

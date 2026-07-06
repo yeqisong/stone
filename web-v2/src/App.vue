@@ -36,6 +36,8 @@
           <n-button :type="nav.tab==='l'?'primary':'default'" size="small" @click="nav.switchTab('l')" :style="{flexShrink:0}">📋 个股</n-button>
           <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')" :style="{flexShrink:0}">📊 状态</n-button>
           <n-button :type="nav.tab==='a'?'primary':'default'" size="small" @click="nav.switchTab('a')" :style="{flexShrink:0}">🧠 模型</n-button>
+          <n-button :type="nav.tab==='f'?'primary':'default'" size="small" @click="nav.switchTab('f')" :style="{flexShrink:0}">🔧 函数</n-button>
+          <n-button :type="nav.tab==='e'?'primary':'default'" size="small" @click="nav.switchTab('e')" :style="{flexShrink:0}">🔬 特征</n-button>
           <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')" :style="{flexShrink:0}">⚙️ 设置</n-button>
         </div>
         <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
@@ -46,6 +48,8 @@
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
           <div v-if="nav.tab==='a'"><ModelView /></div>
+          <div v-if="nav.tab==='f'"><FunctionView /></div>
+          <div v-if="nav.tab==='e'"><FeatureView /></div>
           <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>
       </div>
@@ -83,6 +87,8 @@ import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 import SettingsView from './components/SettingsView.vue'
 import ModelView from './components/ModelView.vue'
+import FunctionView from './components/FunctionView.vue'
+import FeatureView from './components/FeatureView.vue'
 
 const auth = useAuthStore()
 const nav = useNavStore()
@@ -107,6 +113,8 @@ const titleMap = {
   d: '个股详情 - K道',
   x: '数据状态 - K道',
   a: '模型管理 - K道',
+  f: '函数管理 - K道',
+  e: '特征管理 - K道',
   o: '系统设置 - K道',
 }
 
