@@ -21,6 +21,8 @@ class CreateFeature(BaseModel):
     target_entity: str = Field(..., pattern="^(stock|etf|index|global)$")
     description: str = ""
     formula: str = Field(..., min_length=1)
+    feature_group: str = ""
+    tags: list = []
     status: str = "draft"  # draft / enabled
 
 
@@ -28,6 +30,8 @@ class UpdateFeature(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     formula: Optional[str] = None
+    feature_group: Optional[str] = None
+    tags: Optional[list] = None
     status: Optional[str] = None
 
 
@@ -120,7 +124,7 @@ def list_features(
         total = db.execute(text(f"SELECT COUNT(*) FROM features WHERE {' AND '.join(where)}"), params).scalar() or 0
         rows = db.execute(text(f"""
             SELECT id, feature_name, display_name, target_entity, description, formula,
-                   depends_on, status,
+                   depends_on, feature_group, tags, status,
                    total_effective_cells, missing_cells_total, pending_cells_total,
                    data_completeness, latest_computed_date, data_anomaly_reason,
                    created_at, updated_at
@@ -134,6 +138,9 @@ def list_features(
             deps = r[6]
             if isinstance(deps, str):
                 deps = json.loads(deps)
+            tags = r[8]
+            if isinstance(tags, str):
+                tags = json.loads(tags)
             items.append({
                 "id": r[0],
                 "feature_name": r[1],
@@ -142,15 +149,17 @@ def list_features(
                 "description": r[4],
                 "formula": r[5],
                 "depends_on": deps or [],
-                "status": r[7],
-                "total_effective_cells": r[8] or 0,
-                "missing_cells_total": r[9] or 0,
-                "pending_cells_total": r[10] or 0,
-                "data_completeness": float(r[11]) if r[11] else 0,
-                "latest_computed_date": str(r[12]) if r[12] else None,
-                "data_anomaly_reason": r[13],
-                "created_at": str(r[14])[:19] if r[14] else None,
-                "updated_at": str(r[15])[:19] if r[15] else None,
+                "feature_group": r[7] or "",
+                "tags": tags or [],
+                "status": r[9],
+                "total_effective_cells": r[10] or 0,
+                "missing_cells_total": r[11] or 0,
+                "pending_cells_total": r[12] or 0,
+                "data_completeness": float(r[13]) if r[13] else 0,
+                "latest_computed_date": str(r[14]) if r[14] else None,
+                "data_anomaly_reason": r[15],
+                "created_at": str(r[16])[:19] if r[16] else None,
+                "updated_at": str(r[17])[:19] if r[17] else None,
             })
         db.close()
         return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -220,8 +229,8 @@ def create_feature(body: CreateFeature):
 
         # 6. 写入
         db.execute(text("""
-            INSERT INTO features (feature_name, display_name, target_entity, description, formula, depends_on, status)
-            VALUES (:fn, :dn, :te, :desc, :formula, :deps, :st)
+            INSERT INTO features (feature_name, display_name, target_entity, description, formula, depends_on, feature_group, tags, status)
+            VALUES (:fn, :dn, :te, :desc, :formula, :deps, :fg, :tags, :st)
         """), {
             "fn": body.feature_name,
             "dn": body.display_name,
@@ -229,6 +238,8 @@ def create_feature(body: CreateFeature):
             "desc": body.description,
             "formula": body.formula,
             "deps": json.dumps(deps),
+            "fg": body.feature_group or None,
+            "tags": json.dumps(body.tags or []),
             "st": body.status or "draft",
         })
         db.commit()
@@ -250,7 +261,7 @@ def get_feature(feature_id: int):
         from sqlalchemy import text
         r = db.execute(text("""
             SELECT id, feature_name, display_name, target_entity, description, formula,
-                   depends_on, status,
+                   depends_on, feature_group, tags, status,
                    total_effective_cells, missing_cells_total, pending_cells_total,
                    data_completeness, latest_computed_date, data_anomaly_reason,
                    created_at, updated_at
@@ -261,11 +272,14 @@ def get_feature(feature_id: int):
             raise HTTPException(404, "特征不存在")
 
         name = r[1]
-        deps = r[6]
-        if isinstance(deps, str):
-            deps = json.loads(deps)
+        deps_raw = r[6]
+        if isinstance(deps_raw, str):
+            deps_raw = json.loads(deps_raw)
+        tags_raw = r[8]
+        if isinstance(tags_raw, str):
+            tags_raw = json.loads(tags_raw)
 
-        # 查询下游依赖（哪些特征依赖本特征）
+        # 查询下游依赖
         ds_rows = db.execute(text(
             "SELECT feature_name, display_name, status FROM features WHERE status != 'deprecated' AND depends_on @> :dep"
         ), {"dep": json.dumps([name])}).fetchall()
@@ -279,17 +293,19 @@ def get_feature(feature_id: int):
             "target_entity": r[3],
             "description": r[4],
             "formula": r[5],
-            "depends_on": deps or [],
+            "depends_on": deps_raw or [],
+            "feature_group": r[7] or "",
+            "tags": tags_raw or [],
             "downstream": downstream,
-            "status": r[7],
-            "total_effective_cells": r[8] or 0,
-            "missing_cells_total": r[9] or 0,
-            "pending_cells_total": r[10] or 0,
-            "data_completeness": float(r[11]) if r[11] else 0,
-            "latest_computed_date": str(r[12]) if r[12] else None,
-            "data_anomaly_reason": r[13],
-            "created_at": str(r[14])[:19] if r[14] else None,
-            "updated_at": str(r[15])[:19] if r[15] else None,
+            "status": r[9],
+            "total_effective_cells": r[10] or 0,
+            "missing_cells_total": r[11] or 0,
+            "pending_cells_total": r[12] or 0,
+            "data_completeness": float(r[13]) if r[13] else 0,
+            "latest_computed_date": str(r[14]) if r[14] else None,
+            "data_anomaly_reason": r[15],
+            "created_at": str(r[16])[:19] if r[16] else None,
+            "updated_at": str(r[17])[:19] if r[17] else None,
         }
     except HTTPException:
         db.close()
@@ -372,6 +388,14 @@ def update_feature(feature_id: int, body: UpdateFeature):
         if body.description is not None:
             updates.append("description = :desc")
             params["desc"] = body.description
+
+        if body.feature_group is not None:
+            updates.append("feature_group = :fg")
+            params["fg"] = body.feature_group or None
+
+        if body.tags is not None:
+            updates.append("tags = :tags")
+            params["tags"] = json.dumps(body.tags or [])
 
         if body.status is not None:
             # 状态流转校验：弃用时检查下游
@@ -674,6 +698,93 @@ def update_feature_status(feature_id: int, body: StatusBody):
     except HTTPException:
         db.close()
         raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+# ── 2.4 特征族 / 标签 / 全屏依赖图 ──
+
+@router.get("/groups")
+def list_feature_groups():
+    """获取所有特征族列表。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        rows = db.execute(text(
+            "SELECT DISTINCT feature_group FROM features WHERE feature_group IS NOT NULL AND feature_group != '' ORDER BY feature_group"
+        )).fetchall()
+        db.close()
+        return {"groups": [r[0] for r in rows]}
+    except Exception as e:
+        db.close()
+        return {"groups": []}
+
+
+@router.get("/tags")
+def list_feature_tags():
+    """获取所有标签列表。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        rows = db.execute(text(
+            "SELECT tags FROM features WHERE tags IS NOT NULL"
+        )).fetchall()
+        db.close()
+        all_tags = set()
+        for r in rows:
+            t = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
+            all_tags.update(t)
+        return {"tags": sorted(all_tags)}
+    except Exception:
+        db.close()
+        return {"tags": []}
+
+
+@router.get("/dependency-graph")
+def get_dependency_graph():
+    """获取全量依赖图（用于 D3/ECharts 渲染）。返回 nodes + edges。"""
+    db = get_sync_db()
+    try:
+        from sqlalchemy import text
+        rows = db.execute(text(
+            "SELECT feature_name, display_name, target_entity, status, depends_on, feature_group, tags FROM features"
+        )).fetchall()
+        db.close()
+
+        nodes = []
+        node_map = {}
+        edges = []
+
+        for r in rows:
+            name = r[0]
+            deps = json.loads(r[4]) if isinstance(r[4], str) else (r[4] or [])
+            tags = json.loads(r[6]) if isinstance(r[6], str) else (r[6] or [])
+
+            # 节点分层：原始字段(0) / 基础特征(1) / 复合特征(2) / 顶层(3)
+            level = 0 if not deps else 1
+            if any(d not in ('close','open','high','low','volume','amount','turnover') for d in deps):
+                level = 2
+
+            nodes.append({
+                "id": name,
+                "name": name,
+                "display_name": r[1] or name,
+                "entity": r[2],
+                "status": r[3],
+                "group": r[5] or "",
+                "tags": tags,
+                "level": level,
+            })
+            node_map[name] = True
+
+            for dep in deps:
+                edges.append({"source": dep, "target": name})
+
+        # 过滤 edges 中 source 不存在的边（原始字段不在 nodes 中）
+        edges = [e for e in edges if e["source"] in node_map]
+
+        return {"nodes": nodes, "edges": edges}
     except Exception as e:
         db.close()
         raise HTTPException(500, str(e))

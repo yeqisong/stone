@@ -442,6 +442,8 @@ CREATE TABLE IF NOT EXISTS features (
     description     TEXT,
     formula         TEXT NOT NULL,
     depends_on      JSONB DEFAULT '[]',
+    feature_group   VARCHAR(64),
+    tags            JSONB DEFAULT '[]',
     status          VARCHAR(16) DEFAULT 'draft',
     total_effective_cells   BIGINT DEFAULT 0,
     missing_cells_total     BIGINT DEFAULT 0,
@@ -807,48 +809,55 @@ def init_db(sync_session) -> None:
 
     # 预置系统特征 — 个股均线（迭代 2.2 优化）
     SYS_FEATURES = [
-        # ── 均线 ──
-        ('ma_5',   '5日均线',   '个股5日简单移动平均',    'ma(close, 5)',   '["ma","close"]'),
-        ('ma_10',  '10日均线',  '个股10日简单移动平均',   'ma(close, 10)',  '["ma","close"]'),
-        ('ma_20',  '20日均线',  '个股20日简单移动平均',   'ma(close, 20)',  '["ma","close"]'),
-        ('ma_30',  '30日均线',  '个股30日简单移动平均',   'ma(close, 30)',  '["ma","close"]'),
-        ('ma_60',  '60日均线',  '个股60日简单移动平均',   'ma(close, 60)',  '["ma","close"]'),
-        ('ma_90',  '90日均线',  '个股90日简单移动平均',   'ma(close, 90)',  '["ma","close"]'),
-        ('ma_120', '120日均线', '个股120日简单移动平均',  'ma(close, 120)', '["ma","close"]'),
-        ('ma_180', '180日均线', '个股180日简单移动平均',  'ma(close, 180)', '["ma","close"]'),
-        # ── 指数均线 ──
-        ('ema_12', '12日EMA',  '个股12日指数移动平均（MACD快线）', 'ema(close, 12)', '["ema","close"]'),
-        ('ema_26', '26日EMA',  '个股26日指数移动平均（MACD慢线）', 'ema(close, 26)', '["ema","close"]'),
-        # ── MACD ──
-        ('dif',       'MACD快线',   'MACD快慢线差值(DIF)',  'dif(close)',      '["dif","close"]'),
-        ('dea',       'MACD信号线', 'DIF的9日EMA(DEA)',     'dea(close)',      '["dea","close"]'),
-        ('macd_hist', 'MACD柱',     'MACD柱状线(DIF-DEA)',  'macd_hist(close)','["macd_hist","close"]'),
+        # ── 均线 (feature_group: ma) ──
+        ('ma_5',   '5日均线',   '个股5日简单移动平均',    'ma(close, 5)',   '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_10',  '10日均线',  '个股10日简单移动平均',   'ma(close, 10)',  '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_20',  '20日均线',  '个股20日简单移动平均',   'ma(close, 20)',  '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_30',  '30日均线',  '个股30日简单移动平均',   'ma(close, 30)',  '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_60',  '60日均线',  '个股60日简单移动平均',   'ma(close, 60)',  '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_90',  '90日均线',  '个股90日简单移动平均',   'ma(close, 90)',  '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_120', '120日均线', '个股120日简单移动平均',  'ma(close, 120)', '["ma","close"]',   'ma', '["均线","趋势"]'),
+        ('ma_180', '180日均线', '个股180日简单移动平均',  'ma(close, 180)', '["ma","close"]',   'ma', '["均线","趋势"]'),
+        # ── 指数均线 (feature_group: ema) ──
+        ('ema_12', '12日EMA',  '个股12日指数移动平均', 'ema(close, 12)', '["ema","close"]', 'ema', '["均线","趋势"]'),
+        ('ema_26', '26日EMA',  '个股26日指数移动平均', 'ema(close, 26)', '["ema","close"]', 'ema', '["均线","趋势"]'),
+        # ── MACD (feature_group: macd) ──
+        ('dif',       'MACD快线',   'MACD快慢线差值',  'dif(close)',      '["dif","close"]',       'macd', '["MACD","动量"]'),
+        ('dea',       'MACD信号线', 'DIF的9日EMA',     'dea(close)',      '["dea","close"]',       'macd', '["MACD","动量"]'),
+        ('macd_hist', 'MACD柱',     'MACD柱状线',      'macd_hist(close)','["macd_hist","close"]', 'macd', '["MACD","动量"]'),
         # ── RSI ──
-        ('rsi_14', '14日RSI', '个股14日相对强弱指标', 'rsi(close, 14)', '["rsi","close"]'),
-        # ── 布林带 ──
-        ('boll_upper', '布林上轨', '布林带上轨(MA+2σ)', 'boll_upper(close)', '["boll_upper","close"]'),
-        ('boll_mid',   '布林中轨', '布林带中轨(20MA)',  'boll_mid(close)',   '["boll_mid","close"]'),
-        ('boll_lower', '布林下轨', '布林带下轨(MA-2σ)', 'boll_lower(close)', '["boll_lower","close"]'),
+        ('rsi_14', '14日RSI', '个股14日相对强弱', 'rsi(close, 14)', '["rsi","close"]', 'oscillator', '["震荡","超买超卖"]'),
+        # ── 布林带 (feature_group: boll) ──
+        ('boll_upper', '布林上轨', '布林带上轨', 'boll_upper(close)', '["boll_upper","close"]', 'boll', '["布林","波动"]'),
+        ('boll_mid',   '布林中轨', '布林带中轨', 'boll_mid(close)',   '["boll_mid","close"]',   'boll', '["布林","波动"]'),
+        ('boll_lower', '布林下轨', '布林带下轨', 'boll_lower(close)', '["boll_lower","close"]', 'boll', '["布林","波动"]'),
         # ── ATR ──
-        ('atr_14', '14日ATR', '个股14日平均真实波幅', 'atr(close, 14)', '["atr","close"]'),
+        ('atr_14', '14日ATR', '个股14日平均真实波幅', 'atr(close, 14)', '["atr","close"]', 'volatility', '["波动"]'),
         # ── 涨跌幅 ──
-        ('pct_1d',  '1日涨跌幅',  '个股1日涨跌幅',  'pct_change(close, 1)',  '["pct_change","close"]'),
-        ('pct_5d',  '5日涨跌幅',  '个股5日涨跌幅',  'pct_change(close, 5)',  '["pct_change","close"]'),
-        ('pct_20d', '20日涨跌幅', '个股20日涨跌幅', 'pct_change(close, 20)', '["pct_change","close"]'),
+        ('pct_1d',  '1日涨跌幅',  '个股1日涨跌幅',  'pct_change(close, 1)',  '["pct_change","close"]', 'momentum', '["动量","涨跌"]'),
+        ('pct_5d',  '5日涨跌幅',  '个股5日涨跌幅',  'pct_change(close, 5)',  '["pct_change","close"]', 'momentum', '["动量","涨跌"]'),
+        ('pct_20d', '20日涨跌幅', '个股20日涨跌幅', 'pct_change(close, 20)', '["pct_change","close"]', 'momentum', '["动量","涨跌"]'),
         # ── 乖离率 ──
-        ('bias_5',  '5日乖离率',  '个股收盘价相对5日均线的偏离度',  '(close - ma(close,5)) / ma(close,5)',  '["ma","close"]'),
-        ('bias_20', '20日乖离率', '个股收盘价相对20日均线的偏离度', '(close - ma(close,20)) / ma(close,20)', '["ma","close"]'),
+        ('bias_5',  '5日乖离率',  '收盘价相对5日均线偏离度',  '(close - ma(close,5)) / ma(close,5)',  '["ma","close"]', 'bias', '["乖离","动量"]'),
+        ('bias_20', '20日乖离率', '收盘价相对20日均线偏离度', '(close - ma(close,20)) / ma(close,20)', '["ma","close"]', 'bias', '["乖离","动量"]'),
     ]
-    for fn, dn, desc, formula, deps in SYS_FEATURES:
+    for fn, dn, desc, formula, deps, fg, tags in SYS_FEATURES:
         try:
             sync_session.execute(text(
-                "INSERT INTO features (feature_name, display_name, target_entity, description, formula, depends_on, status) "
-                "VALUES (:fn, :dn, 'stock', :desc, :formula, :deps, 'enabled') "
+                "INSERT INTO features (feature_name, display_name, target_entity, description, formula, depends_on, feature_group, tags, status) "
+                "VALUES (:fn, :dn, 'stock', :desc, :formula, :deps, :fg, :tags, 'enabled') "
                 "ON CONFLICT (feature_name) DO NOTHING"
-            ), {"fn": fn, "dn": dn, "desc": desc, "formula": formula, "deps": deps})
+            ), {"fn": fn, "dn": dn, "desc": desc, "formula": formula, "deps": deps, "fg": fg, "tags": tags})
         except Exception:
             sync_session.rollback()
     sync_session.commit()
+
+    # 迁移：features 表新增 feature_group / tags 列（v2.4）
+    for col, col_type in [('feature_group', 'VARCHAR(64)'), ('tags', 'JSONB DEFAULT \'[]\'')]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE features ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
 
     # 迁移：daily_quote / index_daily_quote 新增 is_suspended 列
     for table_name in ['daily_quote', 'index_daily_quote']:
