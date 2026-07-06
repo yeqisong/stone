@@ -431,6 +431,82 @@ CREATE TABLE IF NOT EXISTS model_health (
 CREATE INDEX IF NOT EXISTS idx_mh_version_date ON model_health (version, check_date DESC);
 """
 
+# ── 回测记录（v2.0 重构 迭代 5.3）──
+
+CREATE_BACKTEST_RECORDS = """
+CREATE TABLE IF NOT EXISTS backtest_records (
+    id              SERIAL PRIMARY KEY,
+    version         VARCHAR(20) NOT NULL REFERENCES model_versions(version),
+    start_date      DATE,
+    end_date        DATE,
+    initial_cash    NUMERIC(18,2) DEFAULT 1000000,
+    final_equity    NUMERIC(18,2),
+    sharpe_ratio    DECIMAL(8,4),
+    win_rate        DECIMAL(5,4),
+    max_drawdown    DECIMAL(5,4),
+    annual_return   DECIMAL(5,4),
+    total_trades    INTEGER DEFAULT 0,
+    winning_trades  INTEGER DEFAULT 0,
+    detail          JSONB DEFAULT '{}',
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_BACKTEST_TRADES = """
+CREATE TABLE IF NOT EXISTS backtest_trades (
+    id              SERIAL PRIMARY KEY,
+    version         VARCHAR(20) NOT NULL REFERENCES model_versions(version),
+    stock_code      VARCHAR(6) NOT NULL,
+    trade_date      DATE NOT NULL,
+    direction       VARCHAR(4) NOT NULL CHECK (direction IN ('BUY','SELL')),
+    price           NUMERIC(10,2) NOT NULL,
+    shares          INTEGER NOT NULL,
+    cost            NUMERIC(10,2) DEFAULT 0,
+    profit_loss     NUMERIC(10,2),
+    equity_before   NUMERIC(18,2),
+    equity_after    NUMERIC(18,2),
+    position_before INTEGER DEFAULT 0,
+    position_after  INTEGER DEFAULT 0,
+    reason          VARCHAR(30),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bt_version ON backtest_trades (version, trade_date);
+"""
+
+# ── 下载历史（v2.0 重构 迭代 3.1）──
+
+CREATE_DOWNLOAD_HISTORY = """
+CREATE TABLE IF NOT EXISTS download_history (
+    id              SERIAL PRIMARY KEY,
+    task_type       VARCHAR(20) NOT NULL,
+    data_source     VARCHAR(20),
+    start_date      DATE,
+    end_date        DATE,
+    status          VARCHAR(10) DEFAULT 'running',
+    rows_downloaded INTEGER DEFAULT 0,
+    elapsed_ms      INTEGER,
+    error_message   TEXT,
+    started_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at     TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_dh_type_date ON download_history (task_type, started_at DESC);
+"""
+
+# ── 实体元数据（v2.0 重构 迭代 2.5）──
+
+CREATE_ENTITY_META = """
+CREATE TABLE IF NOT EXISTS entity_meta (
+    stock_code      VARCHAR(6) NOT NULL,
+    stock_type      VARCHAR(10) NOT NULL DEFAULT 'stock',
+    ipo_date        DATE,
+    delist_date     DATE,
+    listing_status  VARCHAR(16) DEFAULT 'ACTIVE',
+    total_shares    BIGINT,
+    PRIMARY KEY (stock_code, stock_type)
+);
+CREATE INDEX IF NOT EXISTS idx_em_status ON entity_meta (listing_status);
+"""
+
 # ── 特征管理（v2.0 重构 迭代 2.2）──
 
 CREATE_FEATURES = """
@@ -614,6 +690,10 @@ ALL_TABLES = [
     ("version_comparisons", CREATE_MODEL_COMPARISONS),
     ("model_health", CREATE_MODEL_HEALTH),
     ("features", CREATE_FEATURES),
+    ("backtest_records", CREATE_BACKTEST_RECORDS),
+    ("backtest_trades", CREATE_BACKTEST_TRADES),
+    ("download_history", CREATE_DOWNLOAD_HISTORY),
+    ("entity_meta", CREATE_ENTITY_META),
 ]
 
 
