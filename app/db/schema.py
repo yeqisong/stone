@@ -805,6 +805,34 @@ def init_db(sync_session) -> None:
             sync_session.rollback()
     sync_session.commit()
 
+    # 预置系统特征 — 个股均线（迭代 2.2 优化）
+    SYS_FEATURES = [
+        ('ma_5',  '5日均线',  5),
+        ('ma_10', '10日均线', 10),
+        ('ma_20', '20日均线', 20),
+        ('ma_30', '30日均线', 30),
+        ('ma_60', '60日均线', 60),
+        ('ma_90', '90日均线', 90),
+        ('ma_120','120日均线',120),
+        ('ma_180','180日均线',180),
+    ]
+    for fn, dn, window in SYS_FEATURES:
+        try:
+            sync_session.execute(text(
+                "INSERT INTO features (feature_name, display_name, target_entity, description, formula, depends_on, status) "
+                "VALUES (:fn, :dn, 'stock', :desc, :formula, :deps, 'enabled') "
+                "ON CONFLICT (feature_name) DO NOTHING"
+            ), {
+                "fn": fn,
+                "dn": dn,
+                "desc": f"个股{window}日简单移动平均",
+                "formula": f"ma(close, {window})",
+                "deps": '["ma", "close"]',
+            })
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
+
     # 迁移：daily_quote / index_daily_quote 新增 is_suspended 列
     for table_name in ['daily_quote', 'index_daily_quote']:
         try:
