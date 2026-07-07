@@ -326,6 +326,29 @@ function onExpand(keys) { expandedKeys.value = keys }
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
+// URL hash 参数同步
+function syncHash() {
+  const parts = ['/functions']
+  const qs = []
+  if (page.value > 1) qs.push('page=' + page.value)
+  if (filterCategory.value && filterCategory.value !== 'all') qs.push('category=' + filterCategory.value)
+  if (filterStatus.value && filterStatus.value !== 'all') qs.push('status=' + filterStatus.value)
+  if (searchText.value) qs.push('search=' + encodeURIComponent(searchText.value))
+  const target = parts[0] + (qs.length ? '?' + qs.join('&') : '')
+  if (location.hash.slice(1) !== target) history.replaceState(null, '', '#' + target)
+}
+
+function parseHashParams() {
+  const hash = location.hash.slice(1)
+  const q = hash.includes('?') ? hash.split('?')[1] : ''
+  if (!q) return
+  const sp = new URLSearchParams(q)
+  if (sp.has('page')) page.value = parseInt(sp.get('page')) || 1
+  if (sp.has('category')) filterCategory.value = sp.get('category')
+  if (sp.has('status')) filterStatus.value = sp.get('status')
+  if (sp.has('search')) searchText.value = sp.get('search')
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -349,6 +372,7 @@ async function loadData() {
       }
     })
     total.value = r.data.total
+    syncHash()
   } catch(e) {} finally { loading.value = false }
 }
 
@@ -584,5 +608,12 @@ async function doRollback(v) {
   }
 }
 
-onMounted(loadData)
+onMounted(() => {
+  parseHashParams()
+  loadData()
+})
+window.addEventListener('popstate', () => {
+  parseHashParams()
+  loadData()
+})
 </script>
