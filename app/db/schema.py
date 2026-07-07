@@ -273,6 +273,7 @@ CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, paren
 # ── 模型训练：共享指标池（6张窄表，按指标类型分表） ──
 
 CREATE_INDICATORS_BOLL = """
+-- ↓ 以下 6 张 indicators 表 + indicator_calc_log 已停用（v2.6 KEPL feature_compute 替代），保留 DDL 仅因模型训练代码仍 JOIN 它们
 CREATE TABLE IF NOT EXISTS stock_indicators_boll (
     stock_code VARCHAR(10) NOT NULL,
     trade_date DATE NOT NULL,
@@ -621,7 +622,7 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('model_train', '', '模型训练', 12),
     ('model_signal', 'feature_compute', '模型信号', 13),
     ('model_health', 'model_signal', '模型健康', 14),
-    ('feature_compute', 'indicator_incr', '特征计算', 15),
+    ('feature_compute', 'kline', '特征计算', 15),
     ('feature_backfill', '', '特征补数', 16)
 ON CONFLICT (node_name) DO NOTHING;
 """

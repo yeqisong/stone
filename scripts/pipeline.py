@@ -554,9 +554,16 @@ def dag_task_treemap(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e))
         raise
 
-def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None,
+# indicator_incr / indicator_full 已下线（v2.6），函数保留为 stub 以兼容旧引用
+def dag_task_indicator_full(trade_date=None, **kw):
+    return True
+
+def dag_task_indicator_incr(trade_date=None, **kw):
+    return True
+
+def _OLD_dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None,
                              codes=None, **kw):
-    """初始化 6 张指标表。遍历全部历史 K 线，并行计算写入。
+    """[已下线] 初始化 6 张指标表。遍历全部历史 K 线，并行计算写入。
 
     Args:
         codes: 股票代码列表，默认从 stock_master 全量获取
@@ -720,8 +727,8 @@ def dag_task_indicator_full(trade_date=None, progress_cb=None, cancel_cb=None,
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
 
-def dag_task_indicator_incr(trade_date=None, **kw):
-    """增量更新 6 张指标表（今日 + 前 260 日回溯）。"""
+def _OLD_dag_task_indicator_incr(trade_date=None, **kw):
+    """[已下线] 增量更新 6 张指标表（今日 + 前 260 日回溯）。"""
     from datetime import date, timedelta
     from app.db.connection import get_sync_db
     from sqlalchemy import text
