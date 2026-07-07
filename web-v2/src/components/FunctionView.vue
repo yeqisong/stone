@@ -552,7 +552,8 @@ function verRowProps(row) {
 }
 
 async function openVersionsFromDetail() {
-  const d = detailItem
+  const d = detailItem.value
+  if (!d) return
   showDetail.value = false
   await nextTick()
   openVersions(d)
