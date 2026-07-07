@@ -12,6 +12,15 @@ export const useAuthStore = defineStore('auth', () => {
     axios.defaults.headers.common['Authorization'] = 'Bearer ' + token.value
   }
 
+  // 请求拦截器：每次请求自动从 localStorage 读取最新 token
+  axios.interceptors.request.use(config => {
+    const t = localStorage.getItem('token')
+    if (t) {
+      config.headers.Authorization = 'Bearer ' + t
+    }
+    return config
+  })
+
   function setToken(t) {
     token.value = t
     localStorage.setItem('token', t)
