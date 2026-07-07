@@ -125,13 +125,35 @@
     <n-space vertical>
       <n-input v-model:value="editForm.display_name" placeholder="中文名" />
       <n-input v-model:value="editForm.description" type="textarea" placeholder="描述" :rows="2" />
-      <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:2px">KEPL 公式</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
+        <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px">🤖 AI 生成</n-button>
+      </div>
       <MonacoEditor v-model="editForm.formula" />
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showEditModal = false">取消</n-button>
         <n-button type="primary" @click="saveEdit" :loading="editSaving">保存</n-button>
+      </n-space>
+    </template>
+  </n-modal>
+
+  <!-- AI 生成公式弹窗 -->
+  <n-modal v-model:show="showAiPrompt" preset="card" title="🤖 AI 生成 KEPL 公式" style="width:520px;max-width:92vw">
+    <n-space vertical>
+      <div style="font-size:12px;color:var(--c-text-dim)">描述你需要的特征计算逻辑，AI 会根据 KEPL 语法规范和已有函数生成公式。</div>
+      <n-input v-model:value="aiRequirement" type="textarea" placeholder="例如：计算收盘价相对于5日均线的偏离度，即 (close - ma(close,5)) / ma(close,5)" :rows="4" />
+      <div v-if="aiResult" style="margin-top:8px">
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:160px;overflow-y:auto">{{ aiResult }}</div>
+        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult">✅ 填入公式框</n-button>
+      </div>
+    </n-space>
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button @click="showAiPrompt = false">取消</n-button>
+        <n-button type="primary" @click="callAiGenerate" :loading="aiLoading">生成</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -195,6 +217,10 @@ const statsLoading = ref(false)
 const showEditModal = ref(false)
 const editSaving = ref(false)
 const editForm = ref({ display_name:'', description:'', formula:'' })
+const showAiPrompt = ref(false)
+const aiRequirement = ref('')
+const aiResult = ref('')
+const aiLoading = ref(false)
 
 function openEditInline() {
   editForm.value = {
@@ -387,6 +413,58 @@ async function loadPreview() {
   } finally {
     previewLoading.value = false
   }
+}
+
+// KEPL 语法规范摘要（给 AI 的上下文）
+const KEPL_SPEC = `KEPL 语法规则：
+- 裸字段直接引用当前股票：close, open, high, low, volume
+- 时间序列函数（参数必须是裸字段）：ma(close,5), ema(close,12), macd(close), rsi(close,14), boll(close), atr(high,low,close,14)
+- 横截面聚合（参数必须是 stock.字段）：avg(stock.close), rank(stock.close), std(stock.pe), max(stock.high)
+- 算术运算：+ - * / ( )
+- 比较运算：> < >= <= == !=
+- 逻辑运算：& | !
+- 条件表达式：if(condition, true_val, false_val)
+- 示例：close / ma(close, 5) - 1  表示收盘价相对于5日均线的偏离度`
+
+async function callAiGenerate() {
+  if (!aiRequirement.value.trim()) return
+  aiLoading.value = true
+  aiResult.value = ''
+  try {
+    // 获取已有函数列表
+    const fr = await axios.get(API + '/api/functions?page_size=200')
+    const funcList = (fr.data.items || []).map(f =>
+      `${f.name}(${(f.parameters||[]).map(p=>p.name+(p.default!==undefined?'='+p.default:'')).join(',')}): ${f.description||f.display_name||''}`
+    ).join('\n')
+
+    const prompt = `${KEPL_SPEC}
+
+【可用函数列表】
+${funcList}
+
+【用户需求】
+${aiRequirement.value}
+
+请根据 KEPL 语法和可用函数，生成一个特征计算公式。只返回公式本身，不要解释。`
+
+    const r = await axios.post(API + '/api/functions/ai-chat', {
+      messages: [{ role: 'user', content: prompt }],
+    }, { headers: authHeaders() })
+    const content = r.data?.content?.content || r.data?.content || r.data?.message || ''
+    const codeMatch = content.match(/```(?:python)?\s*\n?([\s\S]*?)\n?```/)
+    aiResult.value = codeMatch ? codeMatch[1].trim() : content.trim()
+  } catch(e) {
+    aiResult.value = '# 生成失败: ' + (e.response?.data?.detail || e.message)
+  } finally {
+    aiLoading.value = false
+  }
+}
+
+function applyAiResult() {
+  editForm.value.formula = aiResult.value
+  showAiPrompt.value = false
+  aiRequirement.value = ''
+  aiResult.value = ''
 }
 
 onMounted(loadDetail)
