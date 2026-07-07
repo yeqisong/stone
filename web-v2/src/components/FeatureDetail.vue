@@ -10,7 +10,7 @@
     </div>
 
     <!-- 3 Tab 切换 -->
-    <n-tabs v-model:value="activeTab" type="line" size="small" @update:value="onTabChange">
+    <n-tabs v-model:value="activeTab" type="line" size="small">
       <n-tab-pane name="info" tab="基本信息">
         <!-- 信息卡行 -->
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
@@ -135,18 +135,17 @@ const pieChart = ref(null)
 const heatmapChart = ref(null)
 let pieInstance = null, heatmapInstance = null
 
-function onTabChange(name) {
-  if (name === 'diagnosis') {
+// 监听 Tab 切换：切到诊断时渲染图表
+watch(activeTab, (tab) => {
+  if (tab === 'diagnosis') {
     nextTick(() => {
-      // 每次切换都检查：实例是否被销毁（切换 Tab 时 DOM 可能重建）
-      if (pieInstance && !pieInstance.isDisposed()) {
-        pieInstance.resize()
-      } else {
+      // 延迟一帧确保 Naive UI 完成 display 切换
+      setTimeout(() => {
         renderDiagnosis()
-      }
+      }, 50)
     })
   }
-}
+})
 
 // 数据预览
 const previewCode = ref('')
@@ -204,12 +203,13 @@ async function loadDetail() {
 }
 
 function renderDiagnosis() {
-  // 清理旧实例
-  if (pieInstance) { try { pieInstance.dispose() } catch(e) {} }
-  if (heatmapInstance) { try { heatmapInstance.dispose() } catch(e) {} }
-  // 饼图
-  if (pieChart.value) {
-    pieInstance = echarts.init(pieChart.value); const pie = pieInstance
+  // 饼图：先清理 DOM 上的旧实例
+  const pieDom = pieChart.value
+  if (pieDom) {
+    const old = echarts.getInstanceByDom(pieDom)
+    if (old) old.dispose()
+    pieInstance = echarts.init(pieDom)
+    const pie = pieInstance
     // Mock 数据（实际应从后端获取停牌/非停牌缺失统计）
     const suspended = 35
     const abnormal = 65
@@ -228,8 +228,12 @@ function renderDiagnosis() {
   }
 
   // 热力图 (mock)
-  if (heatmapChart.value) {
-    heatmapInstance = echarts.init(heatmapChart.value); const hm = heatmapInstance
+  const hmDom = heatmapChart.value
+  if (hmDom) {
+    const old = echarts.getInstanceByDom(hmDom)
+    if (old) old.dispose()
+    heatmapInstance = echarts.init(hmDom)
+    const hm = heatmapInstance
     const days = 120
     const stocks = 40
     const data = []
