@@ -1185,6 +1185,7 @@ def dag_task_model_train(trade_date=None, **kw):
                         buy_cost = buy_gross * commission + max(buy_gross * (slippage / 2), 0)
                         pnl = net_sell - (buy_gross + buy_cost)
                         pnl_pct = pnl / (buy_gross + buy_cost) if (buy_gross + buy_cost) > 0 else 0
+                        equity_at_buy = equity_curve[h['eq_idx']] if 'eq_idx' in h else equity
                         trade_log.append({
                             'code': h['code'],
                             'buy_date': str(h['buy_date'])[:10],
@@ -1192,9 +1193,16 @@ def dag_task_model_train(trade_date=None, **kw):
                             'sell_date': str(d)[:10],
                             'sell_price': round(sell_price, 2),
                             'shares': h['shares'],
+                            'buy_amount': round(h.get('buy_amount', buy_gross + buy_cost), 2),
+                            'sell_amount': round(net_sell, 2),
+                            'position_pct': round(h.get('position_pct', 0), 4),
+                            'equity_at_buy': round(h.get('equity_at_buy', 0), 2),
+                            'equity_at_sell': round(equity, 2),
                             'pnl': round(pnl, 2),
                             'pnl_pct': round(pnl_pct, 4),
                             'reason': 'stop_loss' if cur_price <= h['buy_price'] * (1 - stop_loss) else 'hold_expire',
+                            'signal_source': h.get('signal_source', ''),
+                            'hold_days': (d - h['buy_date']).days,
                         })
                         trade_count += 1
                         if sell_price > h['buy_price']:
@@ -1252,7 +1260,17 @@ def dag_task_model_train(trade_date=None, **kw):
                     if total_cost > cash:
                         continue
                     cash -= total_cost
-                    holdings.append({'code': r['code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
+                    holdings.append({
+                        'code': r['code'],
+                        'buy_price': price,
+                        'buy_date': d,
+                        'shares': shares,
+                        'buy_amount': total_cost,
+                        'position_pct': round(total_cost / max(equity, 1), 4),
+                        'equity_at_buy': round(equity, 2),
+                        'eq_idx': len(equity_curve),
+                        'signal_source': str(hdays) + 'd',
+                    })
 
                 # ── 3. 记录当日权益 ──
                 equity = cash
