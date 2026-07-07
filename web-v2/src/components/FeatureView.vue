@@ -490,16 +490,19 @@ function parseHashParams() {
   if (sp.has('search')) searchText.value = sp.get('search')
 }
 
-onMounted(async () => {
+onMounted(() => {
   parseHashParams()
-  await loadData()
-  // 从详情页点编辑时，自动打开编辑弹窗
-  const editId = nav.pendingEditFeatureId
-  if (editId) {
-    nav.pendingEditFeatureId = null
-    const row = items.value.find(i => i.id === editId)
-    if (row) openEdit(row)
-  }
+  loadData().then(() => {
+    const editId = nav.pendingEditFeatureId
+    if (editId) {
+      nav.pendingEditFeatureId = null
+      // 延迟确保列表渲染完毕
+      setTimeout(() => {
+        const row = items.value.find(i => i.id === editId)
+        if (row) openEdit(row)
+      }, 200)
+    }
+  })
 })
 
 onUnmounted(() => {

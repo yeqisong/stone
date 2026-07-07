@@ -8,7 +8,7 @@
       <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ feat.feature_name }}</span>
       <n-tag :type="statusTypeMap[feat.status]||'default'" size="small" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
       <div style="flex:1" />
-      <n-button size="small" @click="$emit('edit', feat.id)">✎ 编辑</n-button>
+      <n-button size="small" @click="openEditInline">✎ 编辑</n-button>
     </div>
 
     <!-- 3 Tab 切换 -->
@@ -119,6 +119,21 @@
     </n-tabs>
 
   </template>
+
+  <!-- 编辑弹窗 -->
+  <n-modal v-if="feat" v-model:show="showEditModal" preset="card" title="编辑特征" style="width:700px;max-width:95vw" :mask-closable="false">
+    <n-space vertical>
+      <n-input v-model:value="editForm.display_name" placeholder="中文名" />
+      <n-input v-model:value="editForm.description" type="textarea" placeholder="描述" :rows="2" />
+      <n-input v-model:value="editForm.formula" type="textarea" placeholder="KEPL 公式" :rows="3" />
+    </n-space>
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button @click="showEditModal = false">取消</n-button>
+        <n-button type="primary" @click="saveEdit" :loading="editSaving">保存</n-button>
+      </n-space>
+    </template>
+  </n-modal>
 </div>
 </template>
 
@@ -175,6 +190,35 @@ const previewPage = ref(1)
 const previewLoading = ref(false)
 const previewEmptyReason = ref('')
 const statsLoading = ref(false)
+const showEditModal = ref(false)
+const editSaving = ref(false)
+const editForm = ref({ display_name:'', description:'', formula:'' })
+
+function openEditInline() {
+  editForm.value = {
+    display_name: feat.value?.display_name || '',
+    description: feat.value?.description || '',
+    formula: feat.value?.formula || '',
+  }
+  showEditModal.value = true
+}
+
+async function saveEdit() {
+  editSaving.value = true
+  try {
+    await axios.put(API + `/api/features/${props.featureId}`, {
+      display_name: editForm.value.display_name,
+      description: editForm.value.description,
+      formula: editForm.value.formula,
+    }, { headers: authHeaders() })
+    showEditModal.value = false
+    await loadDetail()
+  } catch(e) {
+    alert(e.response?.data?.detail || '保存失败')
+  } finally {
+    editSaving.value = false
+  }
+}
 
 function authHeaders() {
   const t = localStorage.getItem('token')
