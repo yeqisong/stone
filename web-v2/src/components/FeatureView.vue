@@ -27,6 +27,10 @@
       <n-input v-model:value="form.feature_name" placeholder="特征英文名（小写字母开头，如 ma_5, rsi_14）" :disabled="!!editId" />
       <n-input v-model:value="form.display_name" placeholder="特征中文名" />
       <n-select v-model:value="form.target_entity" :options="entityOpts" placeholder="目标实体" :disabled="!!editId" />
+      <div style="display:flex;gap:8px">
+        <n-select v-model:value="form.feature_group" :options="groupOptions" placeholder="特征族（可选）" size="small" style="flex:1" clearable filterable tag @create="createGroup" />
+        <n-select v-model:value="form.tags" :options="tagOptions" placeholder="标签（多选）" size="small" style="flex:1" multiple clearable filterable tag @create="createTag" />
+      </div>
       <n-input v-model:value="form.description" type="textarea" placeholder="功能描述，如：5日均线偏离度" :rows="2" />
 
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -244,15 +248,37 @@ const form = ref({
   target_entity: 'stock',
   description: '',
   formula: '',
+  feature_group: '',
+  tags: [],
   enabled: false,
 })
 
 function resetForm() {
   editId.value = null
-  form.value = { feature_name:'', display_name:'', target_entity:'stock', description:'', formula:'', enabled:false }
+  form.value = { feature_name:'', display_name:'', target_entity:'stock', description:'', formula:'', feature_group:'', tags:[], enabled:false }
   validateResult.value = null
   parseDeps.value = []
 }
+
+// ── 特征族 / 标签 ──
+const groupOptions = ref([])
+const tagOptions = ref([])
+
+async function loadGroupAndTags() {
+  try {
+    const [gr, tr] = await Promise.all([
+      axios.get(API + '/api/features/groups'),
+      axios.get(API + '/api/features/tags'),
+    ])
+    groupOptions.value = (gr.data.groups || []).map(g => ({ label: g, value: g }))
+    tagOptions.value = (tr.data.tags || []).map(t => ({ label: t, value: t }))
+  } catch(e) {}
+}
+
+function createGroup(label) { return { label, value: label } }
+function createTag(label) { return { label, value: label } }
+
+loadGroupAndTags()
 
 function openCreate() {
   resetForm()
@@ -410,6 +436,8 @@ function openEdit(row) {
     target_entity: row.target_entity,
     description: row.description || '',
     formula: row.formula || '',
+    feature_group: row.feature_group || '',
+    tags: row.tags || [],
     enabled: row.status === 'enabled',
   }
   parseDeps.value = row.depends_on || []
@@ -444,6 +472,8 @@ async function doCreate(status) {
       target_entity: form.value.target_entity,
       description: form.value.description,
       formula: form.value.formula,
+      feature_group: form.value.feature_group || null,
+      tags: form.value.tags || [],
       status,
     }
     if (editId.value) {
@@ -485,6 +515,7 @@ const columns = [
     return h('span', { style:{cursor:'pointer',color:'#2080f0',textDecoration:'underline'}, onClick:() => openDetail(row.id) }, row.feature_name)
   }},
   { title:'中文名', key:'display_name', width:90, ellipsis:{tooltip:true} },
+  { title:'族', key:'feature_group', width:70, render:(row) => row.feature_group || '—' },
   { title:'实体', key:'target_entity', width:60, render:(row) => entityLabel[row.target_entity] || row.target_entity },
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
   { title:'完整度', key:'data_completeness', width:80, render:(row) => {
