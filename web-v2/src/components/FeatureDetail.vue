@@ -139,7 +139,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NDataTable, NEmpty, NPagination } from 'naive-ui'
+import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NDataTable, NEmpty, NPagination, NModal, NSpace } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 
