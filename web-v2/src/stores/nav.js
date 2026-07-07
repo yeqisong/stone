@@ -28,8 +28,10 @@ export const useNavStore = defineStore('nav', () => {
       }
       return
     }
+    // 去掉 query 参数进行路径匹配
+    const path = hash.includes('?') ? hash.split('?')[0] : hash
     const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o','/functions':'f','/features':'e','/dag-flows':'g'}
-    tab.value = map[hash] || 'p'
+    tab.value = map[path] || 'p'
   }
 
   function syncHash() {

@@ -15,8 +15,11 @@
     <n-button size="small" @click="loadData">查询</n-button>
   </div>
 
-  <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :pagination="pagination"
-    :row-props="rowProps" />
+  <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" />
+  <div style="display:flex;justify-content:center;margin-top:10px">
+    <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
+  </div>
+  <div v-if="total" style="text-align:center;margin-top:4px;font-size:11px;color:var(--c-text-dim)">共 {{ total }} 条</div>
 
   <!-- Create/Edit Modal -->
   <n-modal v-model:show="showCreate" preset="card" :title="editId ? '编辑特征' : '新增特征'" style="width:800px;max-width:95vw" :mask-closable="false">
@@ -160,8 +163,8 @@
 </template>
 
 <script setup>
-import { ref, computed, h } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin } from 'naive-ui'
+import { ref, computed, h, onMounted } from 'vue'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
 import * as echarts from 'echarts'
@@ -172,7 +175,7 @@ const loading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const PAGE_SIZE = 20
 const filterEntity = ref(null)
 const filterStatus = ref(null)
 const searchText = ref('')
@@ -351,10 +354,7 @@ const columns = [
   }},
 ]
 
-const pagination = computed(() => ({
-  page: page.value, pageSize: pageSize.value, itemCount: total.value,
-  onChange(p) { page.value = p; loadData() },
-}))
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 function rowProps(row) {
   const colors = { enabled:'#10b981', draft:'#f59e0b', pending_recalc:'#2080f0', deprecated:'#9ca3af', data_anomaly:'#ef4444' }
@@ -364,18 +364,48 @@ function rowProps(row) {
 async function loadData() {
   loading.value = true
   try {
-    const params = { page: page.value, page_size: pageSize.value }
+    const params = { page: page.value, page_size: PAGE_SIZE }
     if (filterEntity.value && filterEntity.value !== 'all') params.entity = filterEntity.value
     if (filterStatus.value && filterStatus.value !== 'all') params.status = filterStatus.value
     if (searchText.value) params.search = searchText.value
     const r = await axios.get(API + '/api/features', { params })
     items.value = r.data.items || []
     total.value = r.data.total || 0
+    syncHash()
   } catch (e) {
     console.error('loadData:', e)
   }
   loading.value = false
 }
 
-loadData()
+// URL hash 参数同步
+function syncHash() {
+  const qs = []
+  if (page.value > 1) qs.push('page=' + page.value)
+  if (filterEntity.value && filterEntity.value !== 'all') qs.push('entity=' + filterEntity.value)
+  if (filterStatus.value && filterStatus.value !== 'all') qs.push('status=' + filterStatus.value)
+  if (searchText.value) qs.push('search=' + encodeURIComponent(searchText.value))
+  const target = '/features' + (qs.length ? '?' + qs.join('&') : '')
+  if (location.hash.slice(1) !== target) history.replaceState(null, '', '#' + target)
+}
+
+function parseHashParams() {
+  const hash = location.hash.slice(1)
+  const q = hash.includes('?') ? hash.split('?')[1] : ''
+  if (!q) return
+  const sp = new URLSearchParams(q)
+  if (sp.has('page')) page.value = parseInt(sp.get('page')) || 1
+  if (sp.has('entity')) filterEntity.value = sp.get('entity')
+  if (sp.has('status')) filterStatus.value = sp.get('status')
+  if (sp.has('search')) searchText.value = sp.get('search')
+}
+
+onMounted(() => {
+  parseHashParams()
+  loadData()
+})
+window.addEventListener('popstate', () => {
+  parseHashParams()
+  loadData()
+})
 </script>
