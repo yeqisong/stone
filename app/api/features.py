@@ -954,6 +954,13 @@ def _update_feature_stats_after_compute(feature_id: int):
     from sqlalchemy import text
     db = get_sync_db()
     try:
+        # 确保列存在（兜底迁移；独立事务）
+        try:
+            db.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS abnormal_missing_cells BIGINT DEFAULT 0"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
         feat = db.execute(text(
             "SELECT f.feature_name, f.target_entity, f.depends_on "
             "FROM features f WHERE f.id = :id"
@@ -987,16 +994,15 @@ def _update_feature_stats_after_compute(feature_id: int):
             else:
                 ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
 
-            # 用 entity_meta 的 ipo_date/delist_date 精确计算
+            # 优先用 entity_meta 的 ipo_date/delist_date，为空则回退到 stock_master
             total_cells = db.execute(text(f"""
                 SELECT COALESCE(SUM(
                     (SELECT COUNT(*) FROM trade_calendar tc
-                     WHERE tc.cal_date BETWEEN COALESCE(em.ipo_date, '2000-01-01')
-                         AND COALESCE(em.delist_date, CURRENT_DATE)
+                     WHERE tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01')
+                         AND CURRENT_DATE
                      AND tc.is_trade_day = true)
                 ), 0)
-                FROM entity_meta em
-                JOIN stock_master sm ON sm.stock_code = em.stock_code AND sm.stock_type = em.stock_type
+                FROM stock_master sm
                 WHERE sm.status = 'N' {ent_filter}
             """)).scalar() or 0
 
@@ -1010,7 +1016,6 @@ def _update_feature_stats_after_compute(feature_id: int):
         ), {"fn": fn}).scalar() or 0
 
         # 3. 正常缺失 = 停牌格 + lookback 窗口
-        # 停牌格：用 is_suspended 列（如果有）或从 trade_calendar 反推
         suspended_cells = 0
         try:
             suspended_cells = db.execute(text("""
@@ -1021,11 +1026,10 @@ def _update_feature_stats_after_compute(feature_id: int):
                 AND tc.is_suspended = true
             """)).scalar() or 0
             if entity != 'global' and stock_count > 0:
-                # 停牌是 per-stock 的，简化：取停牌日数 × 股票数近似
-                # 精确实现需要逐股票关联，此处用 DAG stats 节点做
                 suspended_cells = suspended_cells * stock_count
         except Exception:
-            pass
+            db.rollback()
+            suspended_cells = 0
 
         # lookback 窗口缺失 = 每只股票前 lookback 天无数据
         lookback_missing = max_lookback * stock_count if entity != 'global' else max_lookback
@@ -1053,7 +1057,8 @@ def _update_feature_stats_after_compute(feature_id: int):
         })
         db.commit()
     except Exception as e:
-        pass
+        from loguru import logger as _log
+        _log.error(f"[stats] update failed for feature_id={feature_id}: {e}")
     finally:
         db.close()
 
