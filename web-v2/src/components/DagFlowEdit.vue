@@ -34,6 +34,30 @@
     </div>
     <!-- X6 Canvas -->
     <div ref="canvasRef" style="flex:1;min-width:0"></div>
+
+    <!-- 节点详情侧边栏 -->
+    <div v-if="showNodeDetail && nodeDetail" style="width:260px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-weight:700;color:var(--c-text)">{{ nodeDetail.label || nodeDetail.node_name }}</span>
+        <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="showNodeDetail=false">✕</span>
+      </div>
+      <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'" style="margin-bottom:8px">{{ nodeDetail.has_function ? '✅ 已注册' : '⏸ 未注册' }}</n-tag>
+      <div v-if="nodeDetail.deps?.length" style="margin-bottom:10px">
+        <div style="color:var(--c-text-dim);margin-bottom:2px">上游依赖</div>
+        <n-tag v-for="d in nodeDetail.deps" :key="d" size="tiny" style="margin:1px">{{ d }}</n-tag>
+      </div>
+      <div v-if="nodeDetail.sub_steps?.length">
+        <div style="color:var(--c-text-dim);margin-bottom:6px">内部依赖子图</div>
+        <div v-for="(s,i) in nodeDetail.sub_steps" :key="i" style="padding:5px 0;border-bottom:1px solid var(--c-border)">
+          <div style="font-weight:600;color:var(--c-text)">{{ i+1 }}. {{ s.name }}</div>
+          <div style="font-size:10px;color:var(--c-text-dim)">{{ s.desc }}</div>
+        </div>
+      </div>
+      <div v-if="nodeDetail.downstream?.length" style="margin-top:10px">
+        <div style="color:var(--c-text-dim);margin-bottom:2px">下游节点</div>
+        <n-tag v-for="d in nodeDetail.downstream" :key="d.node_name" size="tiny" style="margin:1px">{{ d.label || d.node_name }}</n-tag>
+      </div>
+    </div>
   </div>
 
   <!-- Flow List -->
@@ -45,7 +69,7 @@
 
 <script setup>
 import { ref, onMounted, nextTick, h } from 'vue'
-import { NButton, NSelect, NInput, NDataTable } from 'naive-ui'
+import { NButton, NSelect, NInput, NDataTable, NTag } from 'naive-ui'
 import { Graph } from '@antv/x6'
 import axios from 'axios'
 
@@ -62,6 +86,8 @@ const canvasRef = ref(null)
 
 let graph = null
 const nodeTypes = ref([])
+const showNodeDetail = ref(false)
+const nodeDetail = ref(null)
 
 const flowOptions = ref([])
 const flowCols = [
@@ -116,16 +142,17 @@ function initGraph() {
   })
 
   // Drop handler
-  // Double-click node → show detail
+  // Double-click node → show detail sidebar
   graph.on('node:dblclick', ({ node }) => {
     const name = node.getData()?.node_name
     if (!name) return
     axios.get(API + `/api/dag/node-types/${name}`).then(r => {
-      const d = r.data
-      const steps = (d.sub_steps || []).map(s => `${s.name}: ${s.desc}`).join('\n')
-      alert(`${d.label || d.node_name}\n\n上游: ${d.deps.join(', ') || '无'}\n\n内部子图:\n${steps || '无子步骤'}`)
+      nodeDetail.value = r.data
+      showNodeDetail.value = true
     }).catch(() => {})
   })
+  // Click canvas → close sidebar
+  graph.on('blank:click', () => { showNodeDetail.value = false })
 }
 
 function makeNode(name, label, x, y) {
