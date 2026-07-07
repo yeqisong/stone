@@ -3,79 +3,81 @@
   <n-spin v-if="loading" style="padding:60px" />
   <template v-else-if="feat">
     <!-- 顶部导航 -->
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
       <n-button size="small" quaternary @click="$emit('back')">← 返回列表</n-button>
       <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ feat.feature_name }}</span>
       <n-tag :type="statusTypeMap[feat.status]||'default'" size="small" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
     </div>
 
-    <!-- 信息卡行 -->
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      <div v-for="m in infoCards" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
-        <div style="font-size:10px;color:var(--c-text-faint)">{{ m.label }}</div>
-        <div :style="{fontSize:m.size||'14px',fontWeight:600,color:m.color||'var(--c-text)'}">{{ m.value }}</div>
-      </div>
-    </div>
-
-    <!-- 公式 -->
-    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;margin-bottom:14px">
-      <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">📐 KEPL 公式</div>
-      <code style="font-size:14px;color:var(--c-text);word-break:break-all">{{ feat.formula }}</code>
-    </div>
-
-    <!-- 质量仪表盘 4 卡片 -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-      <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 数据完整度</div>
-        <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=90?'#10b981':completenessPct>=80?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
-        <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
-          <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=90?'#10b981':completenessPct>=80?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
-        </div>
-      </div>
-      <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 有效格总数</div>
-        <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
-      </div>
-      <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">⏳ 待计算</div>
-        <div :style="{fontSize:'20px',fontWeight:700,color:feat.pending_cells_total>0?'#f59e0b':'var(--c-text)'}">{{ (feat.pending_cells_total||0).toLocaleString() }}</div>
-      </div>
-      <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">🚫 不适用格</div>
-        <div style="font-size:20px;font-weight:700;color:var(--c-text-dim)">{{ ((feat.total_effective_cells||0) - (feat.missing_cells_total||0) - (feat.pending_cells_total||0)).toLocaleString() }}</div>
-      </div>
-    </div>
-
-    <!-- 最近计算 -->
-    <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:14px">
-      📅 最近计算日：<span :style="{color:feat.latest_computed_date?(staleDays>5?'#f59e0b':'var(--c-text)'):'var(--c-text-faint)'}">{{ feat.latest_computed_date || '从未计算' }}</span>
-      <span v-if="staleDays>5" style="color:#f59e0b;margin-left:8px">⚠ 超过 {{ staleDays }} 天未更新</span>
-    </div>
-
-    <!-- 依赖关系 -->
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬆ 上游依赖</div>
-        <div v-if="(feat.depends_on||[]).length">
-          <n-tag v-for="d in feat.depends_on" :key="d" size="tiny" :bordered="false" type="info" style="margin-right:4px;margin-bottom:4px">{{ d }}</n-tag>
-        </div>
-        <div v-else style="font-size:11px;color:var(--c-text-faint)">无（仅依赖原始字段）</div>
-      </div>
-      <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬇ 下游引用</div>
-        <div v-if="(feat.downstream||[]).length">
-          <div v-for="ds in feat.downstream" :key="ds.feature_name" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-            <span style="font-size:12px;color:var(--c-text)">{{ ds.feature_name }}</span>
-            <n-tag :type="statusTypeMap[ds.status]||'default'" size="tiny" :bordered="false">{{ statusMap[ds.status] }}</n-tag>
+    <!-- 3 Tab 切换 -->
+    <n-tabs v-model:value="activeTab" type="line" size="small" @update:value="onTabChange">
+      <n-tab-pane name="info" tab="基本信息">
+        <!-- 信息卡行 -->
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+          <div v-for="m in infoCards" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
+            <div style="font-size:10px;color:var(--c-text-faint)">{{ m.label }}</div>
+            <div :style="{fontSize:m.size||'14px',fontWeight:600,color:m.color||'var(--c-text)'}">{{ m.value }}</div>
           </div>
         </div>
-        <div v-else style="font-size:11px;color:var(--c-text-faint)">无下游引用</div>
-      </div>
-    </div>
 
-    <!-- 数据缺失诊断面板 -->
-    <n-collapse style="margin-bottom:14px">
-      <n-collapse-item title="🔬 数据缺失诊断" name="diagnosis">
+        <!-- 公式 -->
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">📐 KEPL 公式</div>
+          <code style="font-size:14px;color:var(--c-text);word-break:break-all">{{ feat.formula }}</code>
+        </div>
+
+        <!-- 质量仪表盘 4 卡片 -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+          <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 数据完整度</div>
+            <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=90?'#10b981':completenessPct>=80?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
+            <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
+              <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=90?'#10b981':completenessPct>=80?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
+            </div>
+          </div>
+          <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 有效格总数</div>
+            <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
+          </div>
+          <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">⏳ 待计算</div>
+            <div :style="{fontSize:'20px',fontWeight:700,color:feat.pending_cells_total>0?'#f59e0b':'var(--c-text)'}">{{ (feat.pending_cells_total||0).toLocaleString() }}</div>
+          </div>
+          <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">🚫 不适用格</div>
+            <div style="font-size:20px;font-weight:700;color:var(--c-text-dim)">{{ ((feat.total_effective_cells||0) - (feat.missing_cells_total||0) - (feat.pending_cells_total||0)).toLocaleString() }}</div>
+          </div>
+        </div>
+
+        <!-- 最近计算 -->
+        <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:14px">
+          📅 最近计算日：<span :style="{color:feat.latest_computed_date?(staleDays>5?'#f59e0b':'var(--c-text)'):'var(--c-text-faint)'}">{{ feat.latest_computed_date || '从未计算' }}</span>
+          <span v-if="staleDays>5" style="color:#f59e0b;margin-left:8px">⚠ 超过 {{ staleDays }} 天未更新</span>
+        </div>
+
+        <!-- 依赖关系 -->
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬆ 上游依赖</div>
+            <div v-if="(feat.depends_on||[]).length">
+              <n-tag v-for="d in feat.depends_on" :key="d" size="tiny" :bordered="false" type="info" style="margin-right:4px;margin-bottom:4px">{{ d }}</n-tag>
+            </div>
+            <div v-else style="font-size:11px;color:var(--c-text-faint)">无（仅依赖原始字段）</div>
+          </div>
+          <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬇ 下游引用</div>
+            <div v-if="(feat.downstream||[]).length">
+              <div v-for="ds in feat.downstream" :key="ds.feature_name" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+                <span style="font-size:12px;color:var(--c-text)">{{ ds.feature_name }}</span>
+                <n-tag :type="statusTypeMap[ds.status]||'default'" size="tiny" :bordered="false">{{ statusMap[ds.status] }}</n-tag>
+              </div>
+            </div>
+            <div v-else style="font-size:11px;color:var(--c-text-faint)">无下游引用</div>
+          </div>
+        </div>
+      </n-tab-pane>
+
+      <n-tab-pane name="diagnosis" tab="数据缺失诊断">
         <div style="display:flex;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:300px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">缺失归因饼图</div>
@@ -89,12 +91,9 @@
             <div ref="heatmapChart" style="width:100%;height:360px"></div>
           </div>
         </div>
-      </n-collapse-item>
-    </n-collapse>
+      </n-tab-pane>
 
-    <!-- 数据预览 -->
-    <n-collapse>
-      <n-collapse-item title="📋 数据预览" name="preview">
+      <n-tab-pane name="preview" tab="数据预览">
         <div v-if="feat.target_entity!=='global'" style="margin-bottom:10px">
           <n-input v-model:value="previewCode" placeholder="输入股票代码，如 000001" size="small" style="width:160px" clearable @keyup.enter="loadPreview" />
           <n-button size="small" @click="loadPreview" style="margin-left:8px">查询</n-button>
@@ -102,8 +101,8 @@
         <n-data-table v-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" :pagination="previewPagination" />
         <n-empty v-else-if="previewLoaded" description="暂无数据" style="padding:20px" />
         <div v-else style="font-size:12px;color:var(--c-text-dim);padding:12px">输入代码后点击「查询」加载数据</div>
-      </n-collapse-item>
-    </n-collapse>
+      </n-tab-pane>
+    </n-tabs>
 
     <!-- 底部操作 -->
     <div style="display:flex;gap:8px;margin-top:16px">
@@ -115,7 +114,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { NButton, NTag, NSpin, NCollapse, NCollapseItem, NInput, NDataTable, NEmpty } from 'naive-ui'
+import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NDataTable, NEmpty } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 
@@ -129,9 +128,21 @@ const staleDays = ref(0)
 const completenessPct = ref(0)
 const abnormalPct = ref(0)
 
+const activeTab = ref('info')
+
 // 图表 refs
 const pieChart = ref(null)
 const heatmapChart = ref(null)
+let pieInstance = null, heatmapInstance = null
+
+function onTabChange(name) {
+  if (name === 'diagnosis') {
+    nextTick(() => {
+      if (pieInstance) pieInstance.resize()
+      if (heatmapInstance) heatmapInstance.resize()
+    })
+  }
+}
 
 // 数据预览
 const previewCode = ref('')
@@ -184,6 +195,8 @@ async function loadDetail() {
     }
     await nextTick()
     renderDiagnosis()
+    // 延迟渲染诊断图表（等待 Tab 容器就绪）
+    setTimeout(() => { if (pieInstance) pieInstance.resize(); if (heatmapInstance) heatmapInstance.resize() }, 100)
   } catch (e) {
     console.error(e)
   }
@@ -193,7 +206,7 @@ async function loadDetail() {
 function renderDiagnosis() {
   // 饼图
   if (pieChart.value) {
-    const pie = echarts.init(pieChart.value)
+    pieInstance = echarts.init(pieChart.value); const pie = pieInstance
     // Mock 数据（实际应从后端获取停牌/非停牌缺失统计）
     const suspended = 35
     const abnormal = 65
@@ -213,7 +226,7 @@ function renderDiagnosis() {
 
   // 热力图 (mock)
   if (heatmapChart.value) {
-    const hm = echarts.init(heatmapChart.value)
+    heatmapInstance = echarts.init(heatmapChart.value); const hm = heatmapInstance
     const days = 120
     const stocks = 40
     const data = []
