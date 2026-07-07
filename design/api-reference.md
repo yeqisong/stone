@@ -736,3 +736,93 @@ DAG 状态、补数进度、系统指标实时推送。
 
 ### GET /v1/indicators/{name}/status
 指标表状态（行数+最新日期）。name ∈ {boll,macd,rsi,atr,ma,volume}。
+
+---
+
+## 14. 特征管理
+
+### GET /api/features
+特征列表（分页+筛选）。支持 `entity`/`status`/`search` 筛选。
+
+### POST /api/features
+新增特征。KEPL 公式自动解析依赖，循环依赖检测。
+
+### GET /api/features/{id}
+特征详情（含上游依赖 + 下游引用）。
+
+### PUT /api/features/{id}
+更新特征。修改公式时重新解析依赖并级联标记下游 `pending_recalc`。
+
+### DELETE /api/features/{id}
+软删除特征。
+
+### POST /api/features/validate
+验证 KEPL 公式语法（不保存），返回依赖列表。
+
+### GET /api/features/groups
+特征族列表。
+
+### GET /api/features/tags
+标签列表。
+
+### GET /api/features/dependency-graph
+全量依赖图（nodes + edges），用于 ECharts/D3 渲染。
+
+### GET /api/features/{id}/quality
+特征数据质量指标（完整度、新鲜度、stale 警告）。
+
+### GET /api/features/{id}/data
+分页预览特征在 `feature_values` 中的实际数值。支持 `code` 筛选。
+
+### POST /api/features/{id}/stats
+DAG 回写特征统计。
+
+### PATCH /api/features/{id}/status
+手动切换特征状态（含下游检查）。
+
+### POST /api/features/{id}/compute-range
+**手动补数**：对单特征在指定日期范围内重新计算。
+
+**请求体**
+```json
+{ "start_date": "2026-01-01", "end_date": "2026-07-07", "force": false }
+```
+
+force=true 全量覆盖已有数据；force=false 跳过已有（ON CONFLICT DO UPDATE）。
+
+**响应**
+```json
+{ "ok": true, "task_id": "a1b2c3d4", "feature_name": "ma_5", "status": "started" }
+```
+
+进度通过 WebSocket `feature_compute_progress` 消息实时推送。
+
+### GET /api/features/{id}/compute-status
+查询补数进度。
+
+### POST /api/features/{id}/recompute-stats
+**原子级重新诊断**：基于 `feature_values` 现有数据重算总格子/完整度/缺失，不触发计算。
+
+### GET /api/features/{id}/missing-heatmap
+缺失热力图数据：最近 N 日 × 缺失率最高 M 只股票的缺失矩阵。
+
+```
+GET /api/features/1/missing-heatmap?days=120&top_n=50
+→ { days_labels: [...], stock_labels: [...], matrix: [[di,si,0|1],...] }
+```
+
+### POST /api/features/check-stats-integrity
+全量校验：对比 `features` 表元数据与 `feature_values` 实际行数，不一致的自动标记 `data_anomaly` + 归零。
+
+## 15. 统计模型
+
+### 总格子计算规则
+```
+总格子 = Σ 每只股票[上市日, min(退市日,今天)] 之间的交易日数
+正常缺失 = 停牌天数×股票数 + 股票数×依赖函数最大 lookback
+异常缺失 = 总格子 - 正常缺失 - 已计算
+完整度 = 已计算 / 总格子
+```
+- 已剔除未上市/已退市日期
+- 停牌和 lookback 窗口期归入正常缺失
+- 计算完成后自动恢复 `data_anomaly` → `enabled`（完整度 ≥ 60%）

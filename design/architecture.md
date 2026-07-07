@@ -1,7 +1,7 @@
 # 个股买卖点监测系统 (K道) — 架构设计文档
 
-> **版本**: v2.2  
-> **最后更新**: 2026-07-07  
+> **版本**: v2.3  
+> **最后更新**: 2026-07-08  
 > **生产地址**: https://s.pmlab.top
 
 ---
@@ -1132,7 +1132,44 @@ pytest tests/e2e/ -v --headed             # headed 模式观察浏览器
 
 ---
 
-## 19. 开发命令速查
+## 19. 特征补数与数据诊断 (v2.3 新增)
+
+### 19.1 手动补数
+
+特征列表操作列 📥 按钮 → 选择日期范围 → 后台计算 → WebSocket 实时进度。
+
+```
+POST /api/features/{id}/compute-range
+→ 后台线程调用 compute_feature() 批量计算
+→ feature_values 写入 (ON CONFLICT DO UPDATE)
+→ _update_feature_stats_after_compute() 更新统计
+→ WS 推送 feature_compute_progress 消息
+```
+
+进度阶段：拉取行情(5%) → 计算特征值(20%) → 写入(70%) → 诊断统计(80%) → 完成(100%)
+
+### 19.2 总格子计算模型
+
+```
+总格子 = Σ 每只股票[上市日, min(退市日,今天)] 之间的交易日数
+正常缺失 = 停牌格 + 股票数 × 依赖函数最大 lookback
+异常缺失 = 总格子 - 正常缺失 - 已计算 (feature_values 行数)
+完整度 = 已计算 / 总格子
+```
+
+- 已剔除未上市/已退市（通过 stock_master.ipo_date）
+- 停牌和 lookback 窗口期归入正常缺失，不触发告警
+- 完整度 ≥ 60% 自动从 data_anomaly 恢复为 enabled
+
+### 19.3 原子级重新诊断
+
+详情页 🔄 按钮 → `POST /api/features/{id}/recompute-stats` → 基于现有数据重算统计（不触发计算）。
+
+### 19.4 全量完整性校验
+
+`POST /api/features/check-stats-integrity` → 遍历所有特征 → COUNT feature_values 对比 metadata → 不一致自动标记 data_anomaly + 归零。
+
+## 20. 开发命令速查
 
 ```bash
 # 后端
