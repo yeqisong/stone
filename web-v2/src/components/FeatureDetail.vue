@@ -287,21 +287,37 @@ function renderDiagnosis() {
     }
   }
 
-  // 热力图替换为文字摘要（没有逐股票缺失明细时，用总数概览代替）
+  // 热力图：缺失分布（最近120日 × 缺失率最高的前50只股票）
   const hmDom = heatmapChart.value
   if (hmDom && feat.value?.total_effective_cells > 0) {
     const old = echarts.getInstanceByDom(hmDom)
     if (old) old.dispose()
     heatmapInstance = echarts.init(hmDom)
-    const actual = feat.value.total_effective_cells - feat.value.missing_cells_total - (feat.value.abnormal_missing_cells || 0)
-    heatmapInstance.setOption({
-      title: { text:'数据概览', left:'center', top:10, textStyle:{fontSize:13,color:'var(--c-text)'} },
-      graphic: [
-        { type:'text', left:'center', top:'35%',
-          style:{ text:`总格子 ${(feat.value.total_effective_cells||0).toLocaleString()}\n已计算 ${Math.max(0,actual).toLocaleString()}\n正常缺失 ${(feat.value.missing_cells_total||0).toLocaleString()}\n异常缺失 ${(feat.value.abnormal_missing_cells||0).toLocaleString()}`,
-            fontSize:12, fill:'var(--c-text-dim)', lineHeight:22, textAlign:'left' }
-        }
-      ]
+    // 从后端获取热力图数据
+    axios.get(API + `/api/features/${props.featureId}/missing-heatmap`).then(r => {
+      const { days_labels, stock_labels, matrix } = r.data
+      if (matrix && matrix.length) {
+        heatmapInstance.setOption({
+          tooltip: {
+            formatter(p) {
+              return `${stock_labels[p.data[1]] || '#N'}<br/>${days_labels[p.data[0]] || ''}<br/>${p.data[2] ? '🟥 缺失' : '🟩 有值'}`
+            }
+          },
+          grid: { left:70, right:20, top:20, bottom:40 },
+          xAxis: { type:'category', data: days_labels, axisLabel:{fontSize:8,interval:Math.max(1,Math.floor(days_labels.length/6))} },
+          yAxis: { type:'category', data: stock_labels, axisLabel:{fontSize:8}, inverse:true },
+          visualMap: { min:0, max:1, inRange:{color:['#10b981','#ef4444']}, show:false },
+          series: [{ type:'heatmap', data: matrix, label:{show:false} }],
+        })
+      } else {
+        heatmapInstance.setOption({
+          title: { text:'暂无缺失明细数据', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
+        })
+      }
+    }).catch(() => {
+      heatmapInstance.setOption({
+        title: { text:'热力图数据加载失败', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
+      })
     })
   }
 }

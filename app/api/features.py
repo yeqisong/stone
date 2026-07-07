@@ -876,6 +876,81 @@ def compute_range(feature_id: int, body: ComputeRangeBody, user: str = Depends(g
         raise HTTPException(500, str(e))
 
 
+@router.get("/{feature_id}/missing-heatmap")
+def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_n: int = Query(50, ge=10, le=100)):
+    """返回缺失热力图数据：最近 N 个交易日 × 缺失率最高的 top_n 只股票。
+
+    Returns:
+        { days_labels: [str], stock_labels: [str], matrix: [[day_idx, stock_idx, 0|1]] }
+    """
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        feat = db.execute(text("SELECT feature_name, target_entity FROM features WHERE id=:id"),
+                         {"id": feature_id}).fetchone()
+        if not feat:
+            raise HTTPException(404, "特征不存在")
+        fn, entity = feat[0], feat[1]
+        if entity == 'global':
+            return {"days_labels": [], "stock_labels": [], "matrix": [], "message": "全局特征无热力图"}
+
+        # 最近 N 个交易日
+        dates = db.execute(text("""
+            SELECT cal_date FROM trade_calendar
+            WHERE cal_date <= CURRENT_DATE AND is_trade_day = true
+            ORDER BY cal_date DESC LIMIT :n
+        """), {"n": days}).fetchall()
+        days_labels = [str(r[0]) for r in reversed(dates)]
+        if not days_labels:
+            return {"days_labels": [], "stock_labels": [], "matrix": []}
+
+        # 缺失率最高的 top_n 只股票
+        ent_filter = "AND sm.stock_type='stock' AND sm.exchange IN ('SSE','SZSE')"
+        if entity == 'index':
+            ent_filter = "AND sm.stock_type='index'"
+        elif entity == 'etf':
+            ent_filter = "AND sm.stock_type='etf'"
+
+        stocks = db.execute(text(f"""
+            SELECT sm.stock_code,
+                   (COUNT(tc.cal_date) - COALESCE(fv_cnt.cnt, 0)) as missing
+            FROM stock_master sm
+            CROSS JOIN (SELECT cal_date FROM trade_calendar WHERE cal_date = ANY(:dates)) tc
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) as cnt FROM feature_values fv
+                WHERE fv.feature_name = :fn AND fv.stock_code = sm.stock_code
+                AND fv.trade_date = tc.cal_date
+            ) fv_cnt ON true
+            WHERE sm.status = 'N' {ent_filter}
+            GROUP BY sm.stock_code, fv_cnt.cnt
+            ORDER BY missing DESC
+            LIMIT :top
+        """), {"fn": fn, "dates": days_labels, "top": top_n}).fetchall()
+
+        stock_labels = [r[0] for r in stocks]
+
+        # 构建矩阵：对每只股票查询哪些日期有数据
+        matrix = []
+        stock_set = set(stock_labels)
+        # 批量查询 feature_values
+        fv_rows = db.execute(text("""
+            SELECT stock_code, trade_date FROM feature_values
+            WHERE feature_name = :fn AND stock_code = ANY(:codes) AND trade_date = ANY(:dates)
+        """), {"fn": fn, "codes": stock_labels, "dates": days_labels}).fetchall()
+        has_data = set((r[0], str(r[1])) for r in fv_rows)
+
+        for si, stock in enumerate(stock_labels):
+            for di, day in enumerate(days_labels):
+                if (stock, day) not in has_data:
+                    matrix.append([di, si, 1])
+
+        db.close()
+        return {"days_labels": days_labels, "stock_labels": stock_labels, "matrix": matrix}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
 @router.post("/{feature_id}/recompute-stats")
 def recompute_stats(feature_id: int, user: str = Depends(get_current_user)):
     """原子级重算特征统计（不触发计算，仅基于 feature_values 现有数据更新诊断）。"""
