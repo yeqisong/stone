@@ -12,14 +12,30 @@
           :stroke-dasharray="e.state==='running'?'6,4':'none'"
           :class="e.state==='running'?'flow-line':''" />
       </g>
-      <g v-for="n in nodesWithPos" :key="n.name">
-        <rect v-if="n.x!=null" :x="n.x-48" :y="n.y-18" width="96" height="36" rx="8" ry="8" :fill="nodeBg(n.state)" :stroke="nodeBd(n.state)" stroke-width="2" :class="n.state==='running'?'node-breathing':''" />
+      <g v-for="n in nodesWithPos" :key="n.name" style="cursor:pointer" @click="selectNode(n)">
+        <rect v-if="n.x!=null" :x="n.x-48" :y="n.y-18" width="96" height="36" rx="8" ry="8" :fill="nodeBg(n.state)" :stroke="selectedNode?.name===n.name?'#60a5fa':nodeBd(n.state)" stroke-width="2" :class="n.state==='running'?'node-breathing':''" />
         <text v-if="n.x!=null" :x="n.x" :y="n.y+5" text-anchor="middle" :fill="nodeText(n.state)" font-size="12" font-weight="600">{{n.label}}</text>
         <text v-if="n.state!=='default' && n.x!=null" :x="n.x" :y="n.y+14" text-anchor="middle" :fill="nodeSub(n.state)" font-size="9">{{n.name==='cron'?'2026-06-12':''}}</text>
       </g>
     </svg>
+    <!-- 节点详情面板 -->
+    <div v-if="selectedNode" style="margin-top:10px;padding:10px 14px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-weight:700;color:var(--c-text)">{{ selectedNode.label }}</span>
+        <n-tag :type="selectedNode.state==='running'?'info':selectedNode.state==='success'?'success':selectedNode.state==='failed'?'error':'default'" size="tiny">{{ selectedNode.state }}</n-tag>
+        <span style="font-size:11px;color:var(--c-text-dim);cursor:pointer" @click="selectedNode=null">✕</span>
+      </div>
+      <div v-if="nodeSubSteps.length" style="margin-top:4px">
+        <div style="font-size:10px;color:var(--c-text-dim);margin-bottom:4px">内部依赖子图</div>
+        <div v-for="(s,i) in nodeSubSteps" :key="i" style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:10px">
+          <span :style="{color: i < completedSubStep ? '#10b981' : '#6b7280'}">{{ i+1 }}. {{ s.name }}</span>
+          <span style="color:var(--c-text-faint)">— {{ s.desc }}</span>
+        </div>
+      </div>
+    </div>
+
     <div v-if="store.hasRunning" style="text-align:center;margin-top:6px">
-      <n-button size="tiny" text style="font-size:10px;color:var(--c-text-faint)" @click="terminateTask">终止任务 #{{store.currentRunId}}</n-button>
+      <n-button size="tiny" text style="font-size:10px;color:var(--c-text-faint)" @click="terminateTask">⏹ 终止任务 #{{store.currentRunId}}</n-button>
     </div>
   </div>
 </div>
@@ -31,9 +47,26 @@ import { useDagStore } from '../stores/dag'
 import { useThemeStore } from '../stores/theme'
 import { connectWebSocket } from '../utils/ws'
 import axios from 'axios'
-import { NButton } from 'naive-ui'
+import { NButton, NTag } from 'naive-ui'
 
 const store = useDagStore()
+const selectedNode = ref(null)
+const nodeSubSteps = ref([])
+const completedSubStep = ref(0)
+
+async function selectNode(n) {
+  if (selectedNode.value?.name === n.name) {
+    selectedNode.value = null; nodeSubSteps.value = []; return
+  }
+  selectedNode.value = n
+  // 加载节点内部子步骤
+  try {
+    const r = await axios.get(window.location.origin + '/api/dag/node-types/' + n.name)
+    nodeSubSteps.value = r.data.sub_steps || []
+    // running 节点默认显示全部步骤为进行中
+    completedSubStep.value = n.state === 'success' ? nodeSubSteps.value.length : 0
+  } catch(e) { nodeSubSteps.value = [] }
+}
 const theme = useThemeStore()
 const svgW = ref(700)
 const svgH = ref(400)
@@ -273,7 +306,7 @@ async function init() {
 
 async function terminateTask() {
   const rid = store.currentRunId
-  if (!rid) return
+  if (!rid || !confirm('确定终止任务 #' + rid + '？')) return
   try {
     await axios.post(window.location.origin + '/api/dag_terminate', {run_id: rid})
   } catch(e) {}
