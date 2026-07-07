@@ -915,7 +915,7 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
             SELECT sm.stock_code,
                    (COUNT(tc.cal_date) - COALESCE(fv_cnt.cnt, 0)) as missing
             FROM stock_master sm
-            CROSS JOIN (SELECT cal_date FROM trade_calendar WHERE cal_date = ANY(:dates)) tc
+            CROSS JOIN (SELECT cal_date FROM trade_calendar WHERE cal_date::text = ANY(:dates)) tc
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) as cnt FROM feature_values fv
                 WHERE fv.feature_name = :fn AND fv.stock_code = sm.stock_code
@@ -934,8 +934,8 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
         stock_set = set(stock_labels)
         # 批量查询 feature_values
         fv_rows = db.execute(text("""
-            SELECT stock_code, trade_date FROM feature_values
-            WHERE feature_name = :fn AND stock_code = ANY(:codes) AND trade_date = ANY(:dates)
+            SELECT stock_code, trade_date::text FROM feature_values
+            WHERE feature_name = :fn AND stock_code = ANY(:codes) AND trade_date::text = ANY(:dates)
         """), {"fn": fn, "codes": stock_labels, "dates": days_labels}).fetchall()
         has_data = set((r[0], str(r[1])) for r in fv_rows)
 
