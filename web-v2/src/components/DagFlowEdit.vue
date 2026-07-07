@@ -9,13 +9,52 @@
         <template #trigger>
           <n-input :value="flowCron || '点击设置Cron'" size="small" style="width:130px;cursor:pointer" readonly />
         </template>
-        <div style="padding:8px;font-size:12px">
-          <div style="font-weight:600;margin-bottom:8px;color:var(--c-text)">⏰ Cron 表达式</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
-            <n-button v-for="p in cronPresets" :key="p.value" size="tiny" :type="flowCron===p.value?'primary':'default'" @click="flowCron=p.value">{{ p.label }}</n-button>
+        <div style="padding:10px;font-size:12px;width:380px">
+          <div style="font-weight:600;margin-bottom:8px;color:var(--c-text)">⏰ Cron 定时</div>
+          <n-tabs v-model:value="cronTab" type="segment" size="small" @update:value="onCronTab">
+            <n-tab-pane name="day" tab="每天" />
+            <n-tab-pane name="week" tab="每周" />
+            <n-tab-pane name="month" tab="每月" />
+            <n-tab-pane name="custom" tab="自定义" />
+          </n-tabs>
+          <div style="margin-top:8px">
+            <!-- 每天 -->
+            <div v-if="cronTab==='day'" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <span>每天</span>
+              <n-select v-model:value="cronHour" :options="hourOpts" size="tiny" style="width:64px" />
+              <span>:</span>
+              <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="width:64px" />
+              <span>执行</span>
+            </div>
+            <!-- 每周 -->
+            <div v-if="cronTab==='week'">
+              <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+                <span>每周</span>
+                <n-select v-model:value="cronWeekDay" :options="weekOpts" size="tiny" style="width:80px" />
+                <n-select v-model:value="cronHour" :options="hourOpts" size="tiny" style="width:64px" />
+                <span>:</span>
+                <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="width:64px" />
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:2px">
+                <n-button v-for="d in quickWeekDays" :key="d.value" size="tiny" :type="cronWeekDay==d.value?'primary':'default'" @click="cronWeekDay=d.value;applyCron()">{{ d.label }}</n-button>
+              </div>
+            </div>
+            <!-- 每月 -->
+            <div v-if="cronTab==='month'" style="display:flex;gap:6px;align-items:center">
+              <span>每月</span>
+              <n-select v-model:value="cronMonthDay" :options="monthDayOpts" size="tiny" style="width:64px" />
+              <span>号</span>
+              <n-select v-model:value="cronHour" :options="hourOpts" size="tiny" style="width:64px" />
+              <span>:</span>
+              <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="width:64px" />
+            </div>
+            <!-- 自定义 -->
+            <div v-if="cronTab==='custom'">
+              <n-input v-model:value="flowCron" size="tiny" placeholder="0 8 * * 1-5" @keyup.enter="applyCustom" />
+              <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">分 时 日 月 周</div>
+            </div>
           </div>
-          <n-input v-model:value="flowCron" size="tiny" placeholder="或手动输入，如 0 8 * * 1-5" />
-          <div style="font-size:10px;color:var(--c-text-faint);margin-top:4px">格式: 分 时 日 月 周 (0=周日)</div>
+          <div style="margin-top:6px;font-size:11px;color:var(--c-text-dim)">预览: {{ flowCron || '未设置' }}</div>
         </div>
       </n-popover>
     </div>
@@ -100,7 +139,7 @@
 
 <script setup>
 import { ref, onMounted, nextTick, h } from 'vue'
-import { NButton, NSelect, NInput, NDataTable, NTag, NModal, NSpace, NDatePicker, NPopover } from 'naive-ui'
+import { NButton, NSelect, NInput, NDataTable, NTag, NModal, NSpace, NDatePicker, NPopover, NTabs, NTabPane } from 'naive-ui'
 import { Graph } from '@antv/x6'
 import axios from 'axios'
 
@@ -111,14 +150,32 @@ const selectedFlow = ref(null)
 const editMode = ref(false)
 const flowName = ref('')
 const flowCron = ref('')
-const cronPresets = [
-  { label:'每天 8:00', value:'0 8 * * *' },
-  { label:'每天 18:00', value:'0 18 * * *' },
-  { label:'工作日 8:00', value:'0 8 * * 1-5' },
-  { label:'每周一 8:00', value:'0 8 * * 1' },
-  { label:'每小时', value:'0 * * * *' },
-  { label:'每30分钟', value:'*/30 * * * *' },
+const cronTab = ref('day')
+const cronMin = ref('0')
+const cronHour = ref('8')
+const cronWeekDay = ref('1')
+const cronMonthDay = ref('1')
+
+const hourOpts = Array.from({length:24},(_,i)=> ({label:String(i).padStart(2,'0')+':00', value:String(i)}))
+const minOpts = Array.from({length:60},(_,i)=> ({label:String(i).padStart(2,'0'), value:String(i)}))
+const weekOpts = [
+  {label:'周一',value:'1'},{label:'周二',value:'2'},{label:'周三',value:'3'},
+  {label:'周四',value:'4'},{label:'周五',value:'5'},{label:'周六',value:'6'},{label:'周日',value:'0'},
 ]
+const monthDayOpts = Array.from({length:28},(_,i)=> ({label:(i+1)+'号', value:String(i+1)}))
+const quickWeekDays = [
+  {label:'周一',value:'1'},{label:'周二',value:'2'},{label:'周三',value:'3'},
+  {label:'周四',value:'4'},{label:'周五',value:'5'},{label:'六日',value:'6,0'},
+]
+
+function applyCron() {
+  if (cronTab.value === 'day') flowCron.value = `${cronMin.value} ${cronHour.value} * * *`
+  else if (cronTab.value === 'week') flowCron.value = `${cronMin.value} ${cronHour.value} * * ${cronWeekDay.value}`
+  else if (cronTab.value === 'month') flowCron.value = `${cronMin.value} ${cronHour.value} ${cronMonthDay.value} * *`
+}
+
+function onCronTab() { applyCron() }
+function applyCustom() {} // flowCron already bound
 const validation = ref(null)
 const saving = ref(false)
 const flowStatus = ref('draft')
