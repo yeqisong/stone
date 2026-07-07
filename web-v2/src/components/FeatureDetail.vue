@@ -107,7 +107,11 @@
           <n-button size="small" @click="doLoadPreview">查询</n-button>
         </div>
         <n-spin v-if="previewLoading" style="padding:40px" />
-        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" :pagination="previewPagination" />
+        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" />
+        <div v-if="previewItems.length" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
+          <span>共 {{ previewTotal }} 条</span>
+          <n-pagination v-if="previewTotalPages > 1" :page="previewPage" :page-count="previewTotalPages" @update:page="p => { previewPage = p; loadPreview() }" size="small" />
+        </div>
         <n-empty v-else :description="previewEmptyReason || '暂无数据'" style="padding:20px" />
       </n-tab-pane>
     </n-tabs>
@@ -122,7 +126,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NDataTable, NEmpty } from 'naive-ui'
+import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NDataTable, NEmpty, NPagination } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 
@@ -217,11 +221,7 @@ const previewCols = computed(() => {
   return cols
 })
 
-const previewPagination = computed(() => ({
-  page: previewPage.value, pageSize: 50, itemCount: previewTotal.value,
-  prefix({ itemCount }) { return `共 ${itemCount} 条` },
-  onChange(p) { previewPage.value = p; loadPreview() },
-}))
+const previewTotalPages = computed(() => Math.max(1, Math.ceil(previewTotal.value / 50)))
 
 import { h } from 'vue'
 
