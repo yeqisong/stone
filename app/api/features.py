@@ -982,3 +982,51 @@ def _update_feature_stats_after_compute(feature_id: int):
 def get_active_compute_tasks():
     with _compute_lock:
         return [{"task_id": k, **v} for k, v in _compute_tasks.items() if v["status"] == "running"]
+
+
+@router.post("/check-stats-integrity")
+def check_stats_integrity(user: str = Depends(get_current_user)):
+    """轻量校验：对每个特征，用 feature_values 的实际行数与存储的 total_effective_cells 对比。
+    使用 feature_name 索引，单特征 O(log N)，不扫全表。
+    """
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT id, feature_name, total_effective_cells, data_completeness, status
+            FROM features WHERE total_effective_cells > 0
+        """)).fetchall()
+
+        fixed = []
+        for r in rows:
+            fid, name, stored_cells, stored_comp, status = r
+            # 用索引查询该特征在 feature_values 中的实际行数
+            actual = db.execute(text(
+                "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
+            ), {"fn": name}).scalar() or 0
+
+            if actual == 0 and stored_cells > 0:
+                # 严重不一致：元数据有值但实际表为空
+                db.execute(text("""
+                    UPDATE features SET status='data_anomaly',
+                        data_anomaly_reason='feature_values 无数据，请执行特征计算',
+                        total_effective_cells=0, data_completeness=0,
+                        updated_at=CURRENT_TIMESTAMP WHERE id=:id
+                """), {"id": fid})
+                fixed.append(name)
+            elif actual > 0:
+                ratio = stored_cells / max(actual, 1)
+                if (ratio < 0.8 or ratio > 1.2) and status != 'data_anomaly':
+                    db.execute(text("""
+                        UPDATE features SET status='data_anomaly',
+                            data_anomaly_reason='统计不一致：存储=' || :c || ' 实际=' || :a,
+                            updated_at=CURRENT_TIMESTAMP WHERE id=:id
+                    """), {"c": str(stored_cells), "a": str(actual), "id": fid})
+                    fixed.append(name)
+
+        db.commit()
+        db.close()
+        return {"ok": True, "checked": len(rows), "fixed": len(fixed), "names": fixed}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
