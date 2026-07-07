@@ -16,10 +16,10 @@
   </div>
 
   <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" />
-  <div style="display:flex;justify-content:center;margin-top:10px">
+  <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
+    <span>共 {{ total }} 条</span>
     <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
   </div>
-  <div v-if="total" style="text-align:center;margin-top:4px;font-size:11px;color:var(--c-text-dim)">共 {{ total }} 条</div>
 
   <!-- Create/Edit Modal -->
   <n-modal v-model:show="showCreate" preset="card" :title="editId ? '编辑特征' : '新增特征'" style="width:800px;max-width:95vw" :mask-closable="false">

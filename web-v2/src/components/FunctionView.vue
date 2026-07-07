@@ -14,7 +14,8 @@
 
   <n-data-table :columns="columns" :data="items" :loading="loading" size="small"
     :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" />
-  <div style="display:flex;justify-content:center;margin-top:10px">
+  <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
+    <span>共 {{ total }} 条</span>
     <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
   </div>
 
