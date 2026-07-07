@@ -211,6 +211,7 @@ def delete_flow(flow_id: int, user: str = Depends(get_current_user)):
 def publish_flow(flow_id: int, user: str = Depends(get_current_user)):
     """发布流程：draft → published。"""
     from app.db.connection import get_sync_db
+    from sqlalchemy import text
     db = get_sync_db()
     try:
         r = db.execute(text("SELECT status FROM dag_flows WHERE id=:id"), {"id": flow_id}).fetchone()
@@ -231,6 +232,7 @@ def publish_flow(flow_id: int, user: str = Depends(get_current_user)):
 def unpublish_flow(flow_id: int, user: str = Depends(get_current_user)):
     """下线流程：published → draft。"""
     from app.db.connection import get_sync_db
+    from sqlalchemy import text
     db = get_sync_db()
     try:
         r = db.execute(text("SELECT status FROM dag_flows WHERE id=:id"), {"id": flow_id}).fetchone()
