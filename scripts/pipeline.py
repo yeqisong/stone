@@ -1128,7 +1128,7 @@ def dag_task_model_train(trade_date=None, **kw):
         commission = cfg.get('commission', 0.00025)
         slippage = cfg.get('slippage', 0.001)
 
-        def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days):
+        def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days, bt_ver='', bt_label=''):
             """回测引擎：资金约束 + 流动性约束 + 整数手约束。
 
             Args:
@@ -1138,6 +1138,8 @@ def dag_task_model_train(trade_date=None, **kw):
                 close_prices: 当日收盘价
                 volumes: 当日成交量（股），用于流动性约束
                 hold_days: 持仓天数 (5/10/20)
+                bt_ver: 模型版本号
+                bt_label: 标签名 (5d/10d/20d)
             """
             val_df = pd.DataFrame({
                 'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true,
@@ -1216,7 +1218,8 @@ def dag_task_model_train(trade_date=None, **kw):
                             'cumulative_pnl': round(cumulative_pnl, 2),
                             'cumulative_return': round(cumulative_return, 6),
                             'reason': 'stop_loss' if cur_price <= h['buy_price'] * (1 - stop_loss) else 'hold_expire',
-                            'signal_source': h.get('signal_source', ''),
+                            'model_version': bt_ver,
+                            'signal_label': bt_label,
                             'hold_days': (d - h['buy_date']).days,
                             'buy_trade_id': trade_id,
                         })
@@ -1302,7 +1305,9 @@ def dag_task_model_train(trade_date=None, **kw):
                         'cash_after': round(cash, 2),
                         'market_value': round(market_value, 2),
                         'position_pct': round(total_cost / max(equity, 1), 4),
-                        'signal_source': str(hdays) + 'd',
+                        'model_version': bt_ver,
+                        'signal_label': bt_label,
+                        'signal_reason': f'pred_rank_top{max_pos}',
                     })
 
                     holdings.append({
@@ -1435,7 +1440,7 @@ def dag_task_model_train(trade_date=None, **kw):
         for label, tname, hdays in TARGETS:
             if label in best_models:
                 y_pred = best_models[label].predict(df[test_mask][FEATURES])
-                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, test_volume, hdays)
+                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, test_volume, hdays, bt_ver=ver, bt_label=label)
                 test_results[label] = bt
 
         # ── 存储最优模型文件 ──
