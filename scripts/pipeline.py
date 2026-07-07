@@ -855,6 +855,108 @@ def _OLD_dag_task_indicator_incr(trade_date=None, **kw):
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise
 
+# ── 宽表构建（v2.6 — 从 feature_values 长格式 PIVOT 为模型输入宽表）──
+
+def build_feature_wide_table(db, feature_names: list, start_date: str, end_date: str,
+                              entity: str = 'stock') -> 'pd.DataFrame':
+    """从 feature_values 表构建模型训练/预测用宽表。
+
+    Args:
+        db: SQLAlchemy sync session
+        feature_names: ['ma_5', 'rsi_14', 'boll_pct_b', ...]
+        start_date/end_date: 日期范围
+        entity: stock/etf/index
+
+    Returns:
+        DataFrame with columns [trade_date, stock_code, {feature_names}..., close, volume]
+        缺失特征值填 NaN
+    """
+    import pandas as pd
+
+    if not feature_names:
+        return pd.DataFrame()
+
+    # 1. 批量拉取 feature_values
+    rows = db.execute(text("""
+        SELECT stock_code, trade_date, feature_name, value
+        FROM feature_values
+        WHERE feature_name = ANY(:names)
+          AND trade_date BETWEEN :sd AND :ed
+        ORDER BY stock_code, trade_date
+    """), {"names": feature_names, "sd": start_date, "ed": end_date}).fetchall()
+
+    if not rows:
+        return pd.DataFrame()
+
+    df_fv = pd.DataFrame(rows, columns=['stock_code', 'trade_date', 'feature_name', 'value'])
+    df_fv['trade_date'] = pd.to_datetime(df_fv['trade_date'])
+
+    # 2. PIVOT: 长格式 → 宽表
+    df_wide = df_fv.pivot_table(
+        index=['stock_code', 'trade_date'],
+        columns='feature_name',
+        values='value',
+        aggfunc='first'
+    ).reset_index()
+
+    # 补齐缺失的特征列
+    for fn in feature_names:
+        if fn not in df_wide.columns:
+            df_wide[fn] = None
+
+    # 3. JOIN daily_quote 获取 close/volume
+    table = 'daily_quote'
+    code_col = 'stock_code'
+    ent_filter = "AND exchange IN ('SSE','SZSE')"
+    if entity == 'index':
+        table = 'index_daily_quote'
+        code_col = 'index_code'
+        ent_filter = ''
+    elif entity == 'etf':
+        ent_filter = "AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"
+
+    quotes = db.execute(text(f"""
+        SELECT {code_col} as stock_code, trade_date, close_hfq as close, volume
+        FROM {table}
+        WHERE trade_date BETWEEN :sd AND :ed {ent_filter}
+        ORDER BY stock_code, trade_date
+    """), {"sd": start_date, "ed": end_date}).fetchall()
+
+    df_q = pd.DataFrame(quotes, columns=['stock_code', 'trade_date', 'close', 'volume'])
+    df_q['trade_date'] = pd.to_datetime(df_q['trade_date'])
+
+    # 4. LEFT JOIN 行情
+    df_merged = df_wide.merge(df_q, on=['stock_code', 'trade_date'], how='left')
+
+    # 按日期排序
+    df_merged = df_merged.sort_values(['trade_date', 'stock_code']).reset_index(drop=True)
+
+    return df_merged
+
+
+def _resolve_legacy_features(db, groups: list) -> list:
+    """将旧版指标组名映射为 feature_values 中的特征英文名。"""
+    import json as _j
+    mapping = {
+        'boll': ['boll_pct_b', 'boll_width', 'boll_upper', 'boll_mid', 'boll_lower'],
+        'macd': ['macd_dif', 'macd_dea', 'macd_hist'],
+        'rsi': ['rsi_14'],
+        'atr': ['atr_14'],
+        'ma': ['ma_5', 'ma_20', 'ma_60'],
+        'volume': ['vol_ratio', 'vol_ma5'],
+    }
+    names = []
+    for g in groups:
+        names.extend(mapping.get(g, []))
+    # 只保留实际存在于 features 表的
+    if names:
+        rows = db.execute(text(
+            "SELECT feature_name FROM features WHERE feature_name = ANY(:names) AND status = 'enabled'"
+        ), {"names": names}).fetchall()
+        return [r[0] for r in rows]
+    return names
+
+
 def dag_task_model_train(trade_date=None, **kw):
     """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。"""
     from datetime import date as _date, timedelta as _td
@@ -888,36 +990,36 @@ def dag_task_model_train(trade_date=None, **kw):
         db.execute(text("UPDATE model_versions SET status='TRAINING', trained_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": ver})
         db.commit()
 
-        # ── 1. 加载数据（使用用户配置的日期范围）──
-        update_node_progress(log_id=log_id, rows=0, detail='加载指标…')
+        # ── 1. 加载数据（v2.6: 从 feature_values 宽表读取，替代旧 indicator JOIN）──
+        update_node_progress(log_id=log_id, rows=0, detail='加载特征宽表…')
         cfg_row = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
         cfg = _json.loads(cfg_row) if isinstance(cfg_row, str) else (cfg_row or {})
-        data_start = cfg.get('train_start', '2021-01-01')
+        data_start = cfg.get('train_start', '2024-01-01')
         end_date = (_date.today() - _td(days=2)).isoformat()
-        rows = db.execute(text("""
-            SELECT b.trade_date, b.stock_code, b.pct_b, b.width,
-                   m.dif, m.dea, m.hist, r.rsi, a.atr,
-                   ma.ma5, ma.ma20, v.vol_ratio, v.obv,
-                   dq.close_hfq as close, dq.volume
-            FROM stock_indicators_boll b
-            JOIN stock_indicators_macd m ON b.stock_code=m.stock_code AND b.trade_date=m.trade_date
-            JOIN stock_indicators_rsi r ON b.stock_code=r.stock_code AND b.trade_date=r.trade_date
-            JOIN stock_indicators_atr a ON b.stock_code=a.stock_code AND b.trade_date=a.trade_date
-            JOIN stock_indicators_ma ma ON b.stock_code=ma.stock_code AND b.trade_date=ma.trade_date
-            JOIN stock_indicators_volume v ON b.stock_code=v.stock_code AND b.trade_date=v.trade_date
-            JOIN daily_quote dq ON b.stock_code=dq.stock_code AND b.trade_date=dq.trade_date
-            WHERE b.trade_date >= :ds AND b.trade_date <= :ed
-            ORDER BY b.trade_date ASC
-        """), {"ds": data_start, "ed": end_date}).fetchall()
-        if len(rows) < 5000:
-            write_node_log(log_id=log_id, status='failed', detail=f'指标数据不足({len(rows)}行)')
+
+        # 特征列表：优先用 feature_names（v2.6），回退 features 指标组映射
+        feature_names = cfg.get('feature_names', [])
+        if not feature_names:
+            # 兼容旧配置：从 features 指标组名查找已注册特征
+            legacy_groups = cfg.get('features', ['boll','macd','rsi','atr','ma','volume'])
+            feature_names = _resolve_legacy_features(db, legacy_groups)
+            if not feature_names:
+                feature_names = ['boll_pct_b','boll_width','macd_dif','macd_dea','macd_hist',
+                               'rsi_14','atr_14','ma_5','ma_20','vol_ratio']
+
+        df = build_feature_wide_table(db, feature_names, data_start, end_date, 'stock')
+        if len(df) < 5000:
+            write_node_log(log_id=log_id, status='failed', detail=f'特征数据不足({len(df)}行)，请先执行特征计算')
             db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
             db.commit()
             db.close(); return 0
 
-        df = pd.DataFrame(rows, columns=['trade_date','stock_code','pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','close','volume'])
-        for c in ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','close','volume']:
-            df[c] = df[c].astype(float)
+        # 只保留数值列
+        feature_cols = [c for c in feature_names if c in df.columns]
+        df = df[['trade_date','stock_code'] + feature_cols + ['close','volume']].copy()
+        for c in feature_cols + ['close','volume']:
+            if c in df.columns:
+                df[c] = df[c].astype(float)
 
         # M1-3: 数据新鲜度断言（不允许包含今天或昨天的未收盘数据）
         max_d = str(df['trade_date'].max())[:10]
@@ -1507,106 +1609,80 @@ def dag_task_model_signal(trade_date=None, **kw):
         if not use_predict:
             write_node_log(log_id=log_id, status='running', detail=f"规则模式 (偏好:{pref_mode}, buy>={t['buy_score_min']})")
 
-        # 读取今日指标（JOIN 6 表获取全部 14 特征）
-        rows = db.execute(text("""
-            SELECT b.stock_code, b.pct_b, b.width, r.rsi,
-                   m.dif, m.dea, m.hist, a.atr,
-                   ma.ma5, ma.ma20,
-                   v.vol_ratio, v.obv,
-                   dq.close_hfq, sm.stock_name
-            FROM stock_indicators_boll b
-            JOIN stock_indicators_rsi r USING (stock_code, trade_date)
-            JOIN stock_indicators_macd m USING (stock_code, trade_date)
-            JOIN stock_indicators_atr a USING (stock_code, trade_date)
-            JOIN stock_indicators_ma ma USING (stock_code, trade_date)
-            JOIN stock_indicators_volume v USING (stock_code, trade_date)
-            JOIN daily_quote dq ON dq.stock_code=b.stock_code AND dq.trade_date=b.trade_date
-            JOIN stock_master sm ON sm.stock_code=b.stock_code
-            WHERE b.trade_date = :d
-        """), {"d": td}).fetchall()
-        if not rows:
-            write_node_log(log_id=log_id, status='failed', detail=f'{td} 无指标数据')
-            db.close()
-            return 0
+        # 读取今日特征（v2.6: feature_values 宽表替代旧 indicator JOIN）
+        today_str = str(_date.today())
+        model_cfg_json = db.execute(text(
+            "SELECT config FROM model_versions WHERE version=:v"
+        ), {"v": active_ver}).scalar()
+        model_cfg_obj = _json.loads(model_cfg_json) if isinstance(model_cfg_json, str) else (model_cfg_json or {})
+        feature_names = model_cfg_obj.get('feature_names', [])
+        if not feature_names:
+            legacy_groups = model_cfg_obj.get('features', ['boll','macd','rsi','atr','ma','volume'])
+            feature_names = _resolve_legacy_features(db, legacy_groups)
+            if not feature_names:
+                feature_names = ['boll_pct_b','boll_width','macd_dif','macd_dea','macd_hist',
+                               'rsi_14','atr_14','ma_5','ma_20','vol_ratio']
 
-        # 先删旧信号再插新（按版本精确清理）
+        df_today = build_feature_wide_table(db, feature_names, today_str, today_str, 'stock')
+        if df_today.empty:
+            write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
+            db.close(); return 0
+
+        # 准备 stock_name
+        codes = df_today['stock_code'].unique().tolist()
+        names_map = {}
+        if codes:
+            nr = db.execute(text("SELECT stock_code, stock_name FROM stock_master WHERE stock_code = ANY(:c)"),
+                           {"c": codes}).fetchall()
+            names_map = {r[0]: r[1] for r in nr}
+
+        rows = []
+        for _, r in df_today.iterrows():
+            d = {'stock_code': r['stock_code'], 'stock_name': names_map.get(r['stock_code'], '')}
+            for fn in feature_names:
+                d[fn] = float(r[fn]) if fn in r and pd.notna(r[fn]) else 0
+            d['close'] = float(r.get('close', 0)) if pd.notna(r.get('close', 0)) else 0
+            rows.append(type('Row', (), d)())
+
+        # 先删旧信号再插新
         db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
-        # ── 收集特征用于批量预测 ──
-        valid_idx, valid_features = [], []
-        FEATURES = ['pct_b','width','dif','dea','hist','rsi','atr','ma5','ma20','vol_ratio','obv','bias_5_20','vol_ratio_3d','obv_slope_7d']
-        if use_predict:
-            for i, r in enumerate(rows):
-                try:
-                    _, pct_b, width, rsi_val, dif, dea, hist, atr_val, ma5, ma20, vol_ratio, obv_val, price, name = r
-                    f = [float(x if x else 0) for x in [pct_b, width, dif, dea, hist, rsi_val, atr_val, ma5, ma20, vol_ratio, obv_val]]
-                    f.append((float(ma5)/float(ma20)-1) if ma20 and float(ma20)!=0 else 0)
-                    f.append(float(vol_ratio) if vol_ratio else 0)
-                    f.append(0)
-                    valid_features.append(f); valid_idx.append(i)
-                except (ValueError, TypeError, IndexError):
-                    pass
-            if valid_features:
-                import pandas as pd
-                X_pred = pd.DataFrame(valid_features, columns=FEATURES)
-                preds = {}; scores = []
-                for label in ['10d','20d']:
-                    if label in xgb_models:
-                        preds[label] = xgb_models[label].predict(X_pred)
-                if preds:
-                    scores = [0.5*preds['5d'][j]+0.3*preds['10d'][j]+0.2*preds['20d'][j] for j in range(len(valid_features))]
-                    ranked = sorted(zip(range(len(valid_features)), scores), key=lambda x:x[1], reverse=True)
-                    top_n = {valid_idx[i] for i, _ in ranked[:200]}
 
-        saved = 0
-        for i, r in enumerate(rows):
-            code, pct_b, width, rsi_val, dif, dea, hist, atr_val, ma5, ma20, vol_ratio, obv_val, price, name = r
-            direction, strength, reason = None, 0, ""
-            predict_5d, predict_10d, predict_20d, predict_score = None, None, None, None
+        # 评分信号生成（规则模式）
+        buy_count = 0
+        for r in rows:
+            code = r.stock_code
+            name = r.stock_name
+            price = r.close
+            if not price or price == 0:
+                continue
+            # 规则评分
+            score = 0
+            reasons = []
+            pct_b = getattr(r, 'boll_pct_b', 0) or 0
+            rsi_val = getattr(r, 'rsi_14', 50) or 50
+            dif = getattr(r, 'macd_dif', 0) or 0
+            hist = getattr(r, 'macd_hist', 0) or 0
 
-            if use_predict and i in valid_idx and preds:
-                j = valid_idx.index(i)
-                predict_5d = round(float(preds['5d'][j]), 4) if '5d' in preds else None
-                predict_10d = round(float(preds['10d'][j]), 4) if '10d' in preds else None
-                predict_20d = round(float(preds['20d'][j]), 4) if '20d' in preds else None
-                predict_score = round(float(scores[j]), 4) if scores else None
-                if i in top_n:
-                    direction = 'buy'; strength = min(max(int(predict_score*100) if predict_score else 1, 1), 3)
-                    reason = f"预测5d={predict_5d:.2%} 10d={predict_10d:.2%} 20d={predict_20d:.2%}"
-            else:
-                # ── 规则模式 ──
-                buy_score = 0
-                if pct_b is not None and float(pct_b) < t['boll_lower']:
-                    buy_score += 1; reason += "BOLL下轨; "
-                if rsi_val is not None and float(rsi_val) < t['rsi_oversold']:
-                    buy_score += 1; reason += "RSI超卖; "
-                if dif is not None and hist is not None and float(dif) > float(hist):
-                    buy_score += 1; reason += "MACD正柱; "
-                if buy_score >= t['buy_score_min']:
-                    direction = 'buy'; strength = min(buy_score, 3)
-                elif pct_b is not None and float(pct_b) > t['sell_boll_upper'] and rsi_val is not None and float(rsi_val) > t['sell_rsi_overbought']:
-                    direction = 'sell'; strength = 2; reason = "BOLL上轨+RSI超买"
+            if pct_b < t['boll_lower']: score += 1; reasons.append('BOLL超卖')
+            if rsi_val < t['rsi_oversold']: score += 1; reasons.append('RSI超卖')
+            if dif > hist: score += 1; reasons.append('MACD正柱')
 
+            direction = 'buy' if score >= t['buy_score_min'] else ''
             if direction:
                 db.execute(text("""
-                    INSERT INTO signal_history (signal_date,stock_code,stock_name,direction,strength,strategy_name,reason,price,suggested_action,combined_signal,source_strategies,preference,model_version,params_snapshot,predict_5d_return,predict_10d_return,predict_20d_return,predict_score)
-                    VALUES (:d,:c,:n,:dir,:st,'model_signal',:r,:p,:sa,true,:ss,:pref,:mv,:snap,:p5,:p10,:p20,:ps)
-                """), {
-                    "d": td, "c": code, "n": name or code, "dir": direction, "st": strength,
-                    "r": reason, "p": float(price) if price else 0,
-                    "sa": "关注建仓" if direction == 'buy' else "考虑减仓",
-                    "ss": _json.dumps(["model_signal"]), "mv": ver, "pref": pref_mode,
-                    "snap": model_snapshot.replace('"preference": ""', f'"preference": "{pref_mode}"'),
-                    "p5": predict_5d, "p10": predict_10d, "p20": predict_20d, "ps": predict_score,
-                })
-                saved += 1
+                    INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference)
+                    VALUES (:d,:c,:n,:dir,:s,:p,'model_signal',:r,true,:v,:sn,:pref)
+                """), {"d": td, "c": code, "n": name, "dir": direction, "s": score, "p": price, "r": ';'.join(reasons), "v": ver, "sn": model_snapshot, "pref": pref_mode})
+                buy_count += 1
 
         db.commit()
+        write_node_log(log_id=log_id, status='success', rows=buy_count, detail=f'{buy_count} 买入 {len(rows)} 扫描')
         db.close()
-        write_node_log(log_id=log_id, status='success', rows=saved, detail=f'{saved} 个信号 (偏好:{pref_mode})')
-        return saved
+        return buy_count
     except Exception as e:
-        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise
+
 
 def dag_task_model_health(trade_date=None, **kw):
     """模型健康度评估：回填 forward 收益 + 了结信号 + 5 维度评估。"""
