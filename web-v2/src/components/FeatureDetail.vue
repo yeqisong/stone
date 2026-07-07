@@ -121,11 +121,12 @@
   </template>
 
   <!-- 编辑弹窗 -->
-  <n-modal v-if="feat" v-model:show="showEditModal" preset="card" title="编辑特征" style="width:700px;max-width:95vw" :mask-closable="false">
+  <n-modal v-if="feat" v-model:show="showEditModal" preset="card" title="编辑特征" style="width:800px;max-width:95vw" :mask-closable="false">
     <n-space vertical>
       <n-input v-model:value="editForm.display_name" placeholder="中文名" />
       <n-input v-model:value="editForm.description" type="textarea" placeholder="描述" :rows="2" />
-      <n-input v-model:value="editForm.formula" type="textarea" placeholder="KEPL 公式" :rows="3" />
+      <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:2px">KEPL 公式</div>
+      <MonacoEditor v-model="editForm.formula" />
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
@@ -140,6 +141,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NDataTable, NEmpty, NPagination, NModal, NSpace } from 'naive-ui'
+import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 import * as echarts from 'echarts'
 
