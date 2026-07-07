@@ -104,6 +104,36 @@
     <DagView />
   </div>
 
+  <!-- DAG 节点类型 -->
+  <div style="margin-top:14px">
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🔧 节点注册中心</div>
+    <n-data-table v-if="nodeTypes.length" :columns="nodeTypeCols" :data="nodeTypes" size="small" :row-props="nodeTypeRowProps" />
+  </div>
+
+  <!-- 节点详情弹窗 -->
+  <n-modal v-model:show="showNodeDetail" preset="card" :title="'节点: ' + nodeDetail?.node_name" style="width:500px;max-width:92vw">
+    <template v-if="nodeDetail">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'">{{ nodeDetail.has_function ? '✅ 已注册' : '⏸ 未注册' }}</n-tag>
+        <n-tag size="tiny" v-if="nodeDetail.deps.length">上游: {{ nodeDetail.deps.join(', ') }}</n-tag>
+      </div>
+      <div v-if="nodeDetail.sub_steps?.length" style="margin-top:8px">
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">📋 内部依赖子图</div>
+        <div v-for="(s, i) in nodeDetail.sub_steps" :key="i" style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--c-border)">
+          <span style="font-size:11px;font-weight:600;color:var(--c-text);min-width:20px">{{ i+1 }}.</span>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--c-text)">{{ s.name }}</div>
+            <div style="font-size:10px;color:var(--c-text-dim)">{{ s.desc }}</div>
+          </div>
+        </div>
+      </div>
+      <div v-if="nodeDetail.downstream?.length" style="margin-top:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">⬇ 下游节点</div>
+        <n-tag v-for="d in nodeDetail.downstream" :key="d.node_name" size="tiny" style="margin:2px">{{ d.label || d.node_name }}</n-tag>
+      </div>
+    </template>
+  </n-modal>
+
   <!-- ══════════════════════════════════════════ -->
   <!--  服务器监控                                            -->
   <!-- ══════════════════════════════════════════ -->
@@ -219,8 +249,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty } from 'naive-ui'
+import { ref, computed, onMounted, h } from 'vue'
+import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag } from 'naive-ui'
 import axios from 'axios'
 import DagView from './DagView.vue'
 import BackfillModal from './BackfillModal.vue'
@@ -411,11 +441,49 @@ async function loadRecentLogs() {
   } catch(e) {}
 }
 
+// ── 节点类型 ──
+const nodeTypes = ref([])
+const showNodeDetail = ref(false)
+const nodeDetail = ref(null)
+
+async function loadNodeTypes() {
+  try {
+    const r = await axios.get(API + '/api/dag/node-types')
+    nodeTypes.value = r.data.items || []
+  } catch(e) {}
+}
+
+async function openNodeDetail(row) {
+  try {
+    const r = await axios.get(API + `/api/dag/node-types/${row.node_name}`)
+    nodeDetail.value = r.data
+  } catch(e) {
+    nodeDetail.value = row
+  }
+  showNodeDetail.value = true
+}
+
+const nodeTypeCols = [
+  { title:'节点', key:'node_name', width:120, render(row) {
+    return h('span', { style:{cursor:'pointer',color:'#2080f0',textDecoration:'underline'}, onClick:() => openNodeDetail(row) }, row.node_name)
+  }},
+  { title:'标签', key:'label', width:100 },
+  { title:'状态', key:'status', width:80, render(row) {
+    return h(NTag, { size:'tiny', type:row.has_function?'success':'default' }, () => row.has_function?'已注册':'未注册')
+  }},
+  { title:'排序', key:'sort_order', width:50 },
+]
+
+function nodeTypeRowProps(row) {
+  return { style: 'cursor:pointer', onClick: () => openNodeDetail(row) }
+}
+
 onMounted(() => {
   loadDataStatus()
   loadDataSources()
   loadRecentLogs()
   loadSysMetrics()
+  loadNodeTypes()
   addWsListener((data) => {
     if (data.type === 'dag_log') {
       // WS 推送的新日志：合并到现有列表头部，去重，保留最近 50 条
