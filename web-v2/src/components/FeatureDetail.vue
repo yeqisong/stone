@@ -94,13 +94,13 @@
       </n-tab-pane>
 
       <n-tab-pane name="preview" tab="数据预览">
-        <div v-if="feat.target_entity!=='global'" style="margin-bottom:10px">
-          <n-input v-model:value="previewCode" placeholder="输入股票代码，如 000001" size="small" style="width:160px" clearable @keyup.enter="loadPreview" />
-          <n-button size="small" @click="loadPreview" style="margin-left:8px">查询</n-button>
+        <div v-if="feat.target_entity!=='global'" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <n-input v-model:value="previewCode" placeholder="输入股票代码筛选，如 000001" size="small" style="width:180px" clearable @keyup.enter="doLoadPreview" />
+          <n-button size="small" @click="doLoadPreview">查询</n-button>
         </div>
-        <n-data-table v-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" :pagination="previewPagination" />
-        <n-empty v-else-if="previewLoaded" description="暂无数据" style="padding:20px" />
-        <div v-else style="font-size:12px;color:var(--c-text-dim);padding:12px">输入代码后点击「查询」加载数据</div>
+        <n-spin v-if="previewLoading" style="padding:40px" />
+        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" :pagination="previewPagination" />
+        <n-empty v-else description="暂无数据" style="padding:20px" />
       </n-tab-pane>
     </n-tabs>
 
@@ -135,15 +135,17 @@ const pieChart = ref(null)
 const heatmapChart = ref(null)
 let pieInstance = null, heatmapInstance = null
 
-// 监听 Tab 切换：切到诊断时渲染图表
+// 监听 Tab 切换
 watch(activeTab, (tab) => {
   if (tab === 'diagnosis') {
     nextTick(() => {
-      // 延迟一帧确保 Naive UI 完成 display 切换
-      setTimeout(() => {
-        renderDiagnosis()
-      }, 50)
+      setTimeout(() => { renderDiagnosis() }, 50)
     })
+  } else if (tab === 'preview') {
+    // 首次切换到预览 Tab 时自动加载数据
+    if (!previewItems.value.length && !previewLoading.value) {
+      loadPreview()
+    }
   }
 })
 
@@ -152,7 +154,7 @@ const previewCode = ref('')
 const previewItems = ref([])
 const previewTotal = ref(0)
 const previewPage = ref(1)
-const previewLoaded = ref(false)
+const previewLoading = ref(false)
 
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
 const statusTypeMap = { draft:'warning', enabled:'success', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
@@ -182,6 +184,7 @@ const previewCols = computed(() => {
 
 const previewPagination = computed(() => ({
   page: previewPage.value, pageSize: 50, itemCount: previewTotal.value,
+  prefix({ itemCount }) { return `共 ${itemCount} 条` },
   onChange(p) { previewPage.value = p; loadPreview() },
 }))
 
@@ -253,8 +256,13 @@ function renderDiagnosis() {
   }
 }
 
+function doLoadPreview() {
+  previewPage.value = 1
+  loadPreview()
+}
+
 async function loadPreview() {
-  previewLoaded.value = false
+  previewLoading.value = true
   try {
     const params = { page: previewPage.value, page_size: 50 }
     if (previewCode.value) params.code = previewCode.value
@@ -263,8 +271,11 @@ async function loadPreview() {
     previewTotal.value = r.data.total || 0
   } catch (e) {
     console.error(e)
+    previewItems.value = []
+    previewTotal.value = 0
+  } finally {
+    previewLoading.value = false
   }
-  previewLoaded.value = true
 }
 
 onMounted(loadDetail)
