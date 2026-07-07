@@ -30,22 +30,23 @@
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
             <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 数据完整度</div>
-            <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=90?'#10b981':completenessPct>=80?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
+            <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=60?'#10b981':completenessPct>=30?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
             <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
-              <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=90?'#10b981':completenessPct>=80?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
+              <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=60?'#10b981':completenessPct>=30?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
             </div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 有效格总数</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 总格子</div>
             <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
+            <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">交易日×股票数</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">⏳ 待计算</div>
-            <div :style="{fontSize:'20px',fontWeight:700,color:feat.pending_cells_total>0?'#f59e0b':'var(--c-text)'}">{{ (feat.pending_cells_total||0).toLocaleString() }}</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">✅ 已计算</div>
+            <div style="font-size:20px;font-weight:700;color:#10b981">{{ ((feat.total_effective_cells||0) - (feat.missing_cells_total||0)).toLocaleString() }}</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">🚫 不适用格</div>
-            <div style="font-size:20px;font-weight:700;color:var(--c-text-dim)">{{ ((feat.total_effective_cells||0) - (feat.missing_cells_total||0) - (feat.pending_cells_total||0)).toLocaleString() }}</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">❌ 缺失</div>
+            <div :style="{fontSize:'20px',fontWeight:700,color:feat.missing_cells_total>0?'#ef4444':'var(--c-text-dim)'}">{{ (feat.missing_cells_total||0).toLocaleString() }}</div>
           </div>
         </div>
 

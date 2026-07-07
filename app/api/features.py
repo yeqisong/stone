@@ -437,7 +437,7 @@ def get_feature_quality(feature_id: int):
             "latest_computed_date": str(r[6]) if r[6] else None,
             "stale_days": fresh,  # 距上次计算的天数；None 表示从未计算
             "stale_warning": fresh is not None and fresh > 5,
-            "completeness_warning": float(r[5] or 0) < 0.8,
+            "completeness_warning": float(r[5] or 0) < 0.6,
             "data_anomaly_reason": r[7],
         }
     except HTTPException:
@@ -947,31 +947,67 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
 
 
 def _update_feature_stats_after_compute(feature_id: int):
-    """计算完成后更新特征的数据统计。"""
+    """计算完成后更新特征的数据统计。
+
+    总格子 = 2000-01-01 至今的交易日数 × 活跃股票数（理论全量）
+    完整度 = 实际入库行数 / 总格子
+    """
     from app.db.connection import get_sync_db
     from sqlalchemy import text
+    from datetime import date as _dt
     db = get_sync_db()
     try:
-        # 统计 feature_values 中的有效数据
-        r = db.execute(text("""
-            SELECT COUNT(*) as total,
-                   COUNT(DISTINCT trade_date) as dates,
-                   COUNT(DISTINCT stock_code) as stocks
-            FROM feature_values
-            WHERE feature_name = (SELECT feature_name FROM features WHERE id = :id)
-        """), {"id": feature_id}).fetchone()
-        if r and r[0] > 0:
-            t = r[0]; d = r[1] or 1; s = r[2] or 1
-            completeness = round(min(1.0, t / (d * s)), 4)
-            db.execute(text("""
-                UPDATE features SET
-                    total_effective_cells = :tot,
-                    data_completeness = :comp,
-                    latest_computed_date = CURRENT_DATE,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
-            """), {"tot": t, "comp": completeness, "id": feature_id})
-            db.commit()
+        feat_name = db.execute(text(
+            "SELECT feature_name, target_entity FROM features WHERE id = :id"
+        ), {"id": feature_id}).fetchone()
+        if not feat_name:
+            return
+        fn = feat_name[0]; entity = feat_name[1]
+
+        # 理论总格子：交易日数 × 活跃股票数
+        total_dates = db.execute(text(
+            "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= CURRENT_DATE AND is_trade_day = true"
+        )).scalar() or 1
+
+        if entity == 'global':
+            total_stocks = 1
+        elif entity == 'index':
+            total_stocks = db.execute(text(
+                "SELECT COUNT(*) FROM stock_master WHERE stock_type='index' AND status='N'"
+            )).scalar() or 1
+        elif entity == 'etf':
+            total_stocks = db.execute(text(
+                "SELECT COUNT(*) FROM stock_master WHERE stock_type='etf' AND status='N'"
+            )).scalar() or 1
+        else:
+            total_stocks = db.execute(text(
+                "SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N' AND exchange IN ('SSE','SZSE')"
+            )).scalar() or 1
+
+        total_cells = total_dates * total_stocks
+
+        # 实际入库行数
+        actual = db.execute(text(
+            "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
+        ), {"fn": fn}).scalar() or 0
+
+        completeness = round(actual / total_cells, 4) if total_cells > 0 else 0
+        missing = max(0, total_cells - actual)
+
+        db.execute(text("""
+            UPDATE features SET
+                total_effective_cells = :tot,
+                data_completeness = :comp,
+                missing_cells_total = :miss,
+                pending_cells_total = 0,
+                latest_computed_date = CURRENT_DATE,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """), {
+            "tot": total_cells, "comp": completeness,
+            "miss": missing, "id": feature_id,
+        })
+        db.commit()
     except Exception as e:
         pass
     finally:

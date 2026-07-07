@@ -109,12 +109,12 @@
           </div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 有效格</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 总格子</div>
           <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">⏳ 待计算</div>
-          <div style="font-size:20px;font-weight:700;color:#f59e0b">{{ (detailItem.pending_cells_total||0).toLocaleString() }}</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">❌ 缺失</div>
+          <div :style="{fontSize:'20px',fontWeight:700,color:detailItem.missing_cells_total>0?'#ef4444':'var(--c-text-dim)'}">{{ (detailItem.missing_cells_total||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
           <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📅 最近计算</div>
@@ -425,14 +425,14 @@ const columns = [
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
   { title:'完整度', key:'data_completeness', width:80, render:(row) => {
     const pct = Math.round((row.data_completeness||0)*100)
-    const color = pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444'
+    const color = pct >= 60 ? '#10b981' : pct >= 30 ? '#f59e0b' : '#ef4444'
     return h('div', {}, [
       h('div', { style:{fontSize:'10px',color:'var(--c-text-dim)',marginBottom:'2px'} }, pct+'%'),
       h('div', { style:{background:'var(--c-border)',borderRadius:'3px',height:'4px',overflow:'hidden'} },
         [h('div', { style:{width:pct+'%',height:'100%',background:color,borderRadius:'3px'} })])
     ])
   }},
-  { title:'待计算', key:'pending_cells_total', width:70, align:'right', render:(row) => (row.pending_cells_total||0).toLocaleString() },
+  { title:'缺失', key:'missing_cells_total', width:70, align:'right', render:(row) => (row.missing_cells_total||0).toLocaleString() },
   { title:'最近计算', key:'latest_computed_date', width:90, render:(row) => row.latest_computed_date || '—' },
   { title:'依赖数', key:'depends_on', width:60, align:'center', render:(row) => (row.depends_on?.length || 0) },
   { title:'操作', key:'actions', width:110, render(row) {
