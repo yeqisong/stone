@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 from datetime import date, timedelta
 
+from app.config import settings
 from app.db.connection import get_sync_db
 from app.signal import _dag_wake_event, wake_dag_broadcast, set_main_loop
 from app.auth.auth import get_current_user
@@ -384,16 +385,21 @@ _last_dag_broadcast = {}
 
 @router.websocket("/ws/dag")
 async def ws_dag(websocket: WebSocket):
-    # WebSocket 认证：从 query string 获取 token
+    # WebSocket 认证：dev 模式放行，prod 模式强制校验 token
     token = websocket.query_params.get("token", "")
     if token:
         try:
             from app.auth.auth import verify_token
             verify_token(token)
         except Exception:
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    # 注：token 可选（dev 兼容），生产环境前端应传 token
+            if getattr(settings, 'APP_ENV', 'dev') == 'prod':
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+            # dev 模式：token 无效不阻塞，仅记录日志
+            logger.warning(f"[ws] token 校验失败，dev 模式放行")
+    elif getattr(settings, 'APP_ENV', 'dev') == 'prod':
+        await websocket.close(code=4001, reason="Token required")
+        return
     await websocket.accept()
     _ws_clients.add(websocket)
     # 立即发送当前状态（新连接不用等广播周期）

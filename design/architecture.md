@@ -1,7 +1,7 @@
 # 个股买卖点监测系统 (K道) — 架构设计文档
 
-> **版本**: v2.1  
-> **最后更新**: 2026-06-07  
+> **版本**: v2.2  
+> **最后更新**: 2026-07-07  
 > **生产地址**: https://s.pmlab.top
 
 ---
@@ -1080,7 +1080,59 @@ pytest tests/e2e/ -v --headed             # headed 模式观察浏览器
 
 ---
 
-## 18. 开发命令速查
+## 18. 安全架构 (v2.2 新增)
+
+### 18.1 认证覆盖
+
+所有变更端点 (POST/PUT/DELETE/PATCH) 统一使用 `Depends(get_current_user)` 进行 JWT 认证：
+
+| 模块 | 端点 | 认证 |
+|------|------|------|
+| `functions.py` | 创建/编辑/删除/试运行/回滚 | JWT 强制 |
+| `features.py` | 创建/编辑/删除/统计回写/状态切换 | JWT 强制 |
+| `models.py` | 创建/编辑/删除/审批/停训/重训/拒绝 | JWT 强制 |
+| `dag_flows.py` | 创建/编辑/删除 DAG 流程 | JWT 强制 |
+| `status.py` | dag_trigger/dag_terminate/sync_date | JWT 强制 |
+| `portfolio.py` | 持仓增删改 | JWT 强制 |
+| `settings.py` | 策略开关/偏好/参数/API Key | JWT 强制 |
+
+读端点 (GET) 保持开放。
+
+### 18.2 WebSocket 认证
+
+`/api/ws/dag` 通过 query param `?token=xxx` 传递 JWT：
+- **prod** 模式：无效/缺失 token → 403 拒绝连接
+- **dev** 模式：token 无效时放行 (仅 warning 日志)
+
+### 18.3 密钥管理
+
+- `APP_SECRET_KEY`：启动时校验长度，prod 强制 ≥16 字符，dev 仅警告
+- `LOGIN_PASSWORD`：通过环境变量设置，不写入代码
+- DeepSeek API Key：存储于 `strategy_config.params` JSONB，GET 返回时脱敏 (仅显示后4位)
+- `set_preference` 采用 merge 模式，不覆盖已有的 deepseek_key
+
+### 18.4 CORS
+
+`allow_origins` 从配置 `CORS_ORIGINS` 读取（默认 `localhost:3000` / `localhost:8000` / `s.pmlab.top`），不再使用 `*`。
+
+### 18.5 飞书 Webhook 签名
+
+- 使用 `HMAC-SHA256(secret, timestamp + nonce + body)` 校验（飞书官方标准）
+- `FEISHU_APP_SECRET` 已配置时，无论 `APP_ENV` 都执行校验
+
+### 18.6 函数试运行沙箱
+
+- `POST /api/functions/test-run-temp` 和 `/{id}/test-run` 需 JWT 认证
+- AST 扫描拦截：`import`/`eval`/`exec`/`open`/`compile`/`__import__` + `getattr`/`__builtins__` 绕过
+- 执行超时 5s，临时文件执行后清理
+
+### 18.7 登录频率限制
+
+`POST /api/login` 使用内存计数器，同一 IP 每分钟最多 5 次尝试。
+
+---
+
+## 19. 开发命令速查
 
 ```bash
 # 后端
