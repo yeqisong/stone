@@ -934,29 +934,6 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
     return df_merged
 
 
-def _resolve_legacy_features(db, groups: list) -> list:
-    """将旧版指标组名映射为 feature_values 中的特征英文名。"""
-    import json as _j
-    mapping = {
-        'boll': ['boll_pct_b', 'boll_width', 'boll_upper', 'boll_mid', 'boll_lower'],
-        'macd': ['macd_dif', 'macd_dea', 'macd_hist'],
-        'rsi': ['rsi_14'],
-        'atr': ['atr_14'],
-        'ma': ['ma_5', 'ma_20', 'ma_60'],
-        'volume': ['vol_ratio', 'vol_ma5'],
-    }
-    names = []
-    for g in groups:
-        names.extend(mapping.get(g, []))
-    # 只保留实际存在于 features 表的
-    if names:
-        rows = db.execute(text(
-            "SELECT feature_name FROM features WHERE feature_name = ANY(:names) AND status = 'enabled'"
-        ), {"names": names}).fetchall()
-        return [r[0] for r in rows]
-    return names
-
-
 def dag_task_model_train(trade_date=None, **kw):
     """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。"""
     from datetime import date as _date, timedelta as _td
@@ -1000,12 +977,10 @@ def dag_task_model_train(trade_date=None, **kw):
         # 特征列表：优先用 feature_names（v2.6），回退 features 指标组映射
         feature_names = cfg.get('feature_names', [])
         if not feature_names:
-            # 兼容旧配置：从 features 指标组名查找已注册特征
-            legacy_groups = cfg.get('features', ['boll','macd','rsi','atr','ma','volume'])
-            feature_names = _resolve_legacy_features(db, legacy_groups)
-            if not feature_names:
-                feature_names = ['boll_pct_b','boll_width','macd_dif','macd_dea','macd_hist',
-                               'rsi_14','atr_14','ma_5','ma_20','vol_ratio']
+            write_node_log(log_id=log_id, status='failed', detail='未配置 feature_names，请在模型配置中选择特征')
+            db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
+            db.commit()
+            db.close(); return 0
 
         df = build_feature_wide_table(db, feature_names, data_start, end_date, 'stock')
         if len(df) < 5000:
@@ -1617,11 +1592,8 @@ def dag_task_model_signal(trade_date=None, **kw):
         model_cfg_obj = _json.loads(model_cfg_json) if isinstance(model_cfg_json, str) else (model_cfg_json or {})
         feature_names = model_cfg_obj.get('feature_names', [])
         if not feature_names:
-            legacy_groups = model_cfg_obj.get('features', ['boll','macd','rsi','atr','ma','volume'])
-            feature_names = _resolve_legacy_features(db, legacy_groups)
-            if not feature_names:
-                feature_names = ['boll_pct_b','boll_width','macd_dif','macd_dea','macd_hist',
-                               'rsi_14','atr_14','ma_5','ma_20','vol_ratio']
+            write_node_log(log_id=log_id, status='failed', detail='未配置 feature_names')
+            db.close(); return 0
 
         df_today = build_feature_wide_table(db, feature_names, today_str, today_str, 'stock')
         if df_today.empty:
