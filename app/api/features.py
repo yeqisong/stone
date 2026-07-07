@@ -670,7 +670,10 @@ def get_feature_data(
                     items.append({"stock_code": r[0], "trade_date": str(r[1]), "value": float(r[2]) if r[2] is not None else None})
 
             db.close()
-            return {"items": items, "total": total, "page": page, "page_size": page_size, "entity": entity}
+            msg = None
+            if total == 0:
+                msg = "该特征数据尚未计算，请通过 DAG 触发特征计算流水线"
+            return {"items": items, "total": total, "page": page, "page_size": page_size, "entity": entity, "empty_reason": msg}
         except Exception:
             # 宽表尚未创建，返回空
             db.close()

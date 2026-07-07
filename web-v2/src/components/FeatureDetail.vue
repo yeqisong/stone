@@ -100,7 +100,7 @@
         </div>
         <n-spin v-if="previewLoading" style="padding:40px" />
         <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" :pagination="previewPagination" />
-        <n-empty v-else description="暂无数据" style="padding:20px" />
+        <n-empty v-else :description="previewEmptyReason || '暂无数据'" style="padding:20px" />
       </n-tab-pane>
     </n-tabs>
 
@@ -155,6 +155,7 @@ const previewItems = ref([])
 const previewTotal = ref(0)
 const previewPage = ref(1)
 const previewLoading = ref(false)
+const previewEmptyReason = ref('')
 
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
 const statusTypeMap = { draft:'warning', enabled:'success', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
@@ -269,6 +270,7 @@ async function loadPreview() {
     const r = await axios.get(API + `/api/features/${props.featureId}/data`, { params })
     previewItems.value = r.data.items || []
     previewTotal.value = r.data.total || 0
+    previewEmptyReason.value = r.data.empty_reason || ''
   } catch (e) {
     console.error(e)
     previewItems.value = []
