@@ -568,7 +568,7 @@ CREATE TABLE IF NOT EXISTS features (
     status          VARCHAR(16) DEFAULT 'draft',
     total_effective_cells   BIGINT DEFAULT 0,
     missing_cells_total     BIGINT DEFAULT 0,
-    pending_cells_total     BIGINT DEFAULT 0,
+    abnormal_missing_cells  BIGINT DEFAULT 0,
     data_completeness       DECIMAL(5,4) DEFAULT 0,
     latest_computed_date    DATE,
     data_anomaly_reason     VARCHAR(128),
@@ -988,6 +988,12 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE features ADD COLUMN IF NOT EXISTS {col} {col_type}"))
         except Exception:
             sync_session.rollback()
+
+    # 迁移：abnormal_missing_cells 列（v2.5）
+    try:
+        sync_session.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS abnormal_missing_cells BIGINT DEFAULT 0"))
+    except Exception:
+        sync_session.rollback()
 
     # 回填已有系统特征的 feature_group / tags
     import json as _j

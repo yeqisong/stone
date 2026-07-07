@@ -127,7 +127,7 @@ def list_features(
         rows = db.execute(text(f"""
             SELECT id, feature_name, display_name, target_entity, description, formula,
                    depends_on, feature_group, tags, status,
-                   total_effective_cells, missing_cells_total, pending_cells_total,
+                   total_effective_cells, missing_cells_total, abnormal_missing_cells,
                    data_completeness, latest_computed_date, data_anomaly_reason,
                    created_at, updated_at
             FROM features WHERE {' AND '.join(where)}
@@ -156,7 +156,7 @@ def list_features(
                 "status": r[9],
                 "total_effective_cells": r[10] or 0,
                 "missing_cells_total": r[11] or 0,
-                "pending_cells_total": r[12] or 0,
+                "abnormal_missing_cells": r[12] or 0,
                 "data_completeness": float(r[13]) if r[13] else 0,
                 "latest_computed_date": str(r[14]) if r[14] else None,
                 "data_anomaly_reason": r[15],
@@ -352,7 +352,7 @@ def get_feature(feature_id: int):
         r = db.execute(text("""
             SELECT id, feature_name, display_name, target_entity, description, formula,
                    depends_on, feature_group, tags, status,
-                   total_effective_cells, missing_cells_total, pending_cells_total,
+                   total_effective_cells, missing_cells_total, abnormal_missing_cells,
                    data_completeness, latest_computed_date, data_anomaly_reason,
                    created_at, updated_at
             FROM features WHERE id = :id
@@ -390,7 +390,7 @@ def get_feature(feature_id: int):
             "status": r[9],
             "total_effective_cells": r[10] or 0,
             "missing_cells_total": r[11] or 0,
-            "pending_cells_total": r[12] or 0,
+            "abnormal_missing_cells": r[12] or 0,
             "data_completeness": float(r[13]) if r[13] else 0,
             "latest_computed_date": str(r[14]) if r[14] else None,
             "data_anomaly_reason": r[15],
@@ -413,7 +413,7 @@ def get_feature_quality(feature_id: int):
         from sqlalchemy import text
         r = db.execute(text("""
             SELECT feature_name, status,
-                   total_effective_cells, missing_cells_total, pending_cells_total,
+                   total_effective_cells, missing_cells_total, abnormal_missing_cells,
                    data_completeness, latest_computed_date, data_anomaly_reason
             FROM features WHERE id = :id
         """), {"id": feature_id}).fetchone()
@@ -432,7 +432,7 @@ def get_feature_quality(feature_id: int):
             "status": r[1],
             "total_effective_cells": r[2] or 0,
             "missing_cells_total": r[3] or 0,
-            "pending_cells_total": r[4] or 0,
+            "abnormal_missing_cells": r[4] or 0,
             "data_completeness": float(r[5]) if r[5] else 0,
             "latest_computed_date": str(r[6]) if r[6] else None,
             "stale_days": fresh,  # 距上次计算的天数；None 表示从未计算
@@ -949,63 +949,111 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
 def _update_feature_stats_after_compute(feature_id: int):
     """计算完成后更新特征的数据统计。
 
-    总格子 = 2000-01-01 至今的交易日数 × 活跃股票数（理论全量）
-    完整度 = 实际入库行数 / 总格子
+    总格子     = Σ 每个股票(上市日→min(退市日,今天)) 之间的交易日数（已剔除未上市/已退市）
+    正常缺失   = 停牌天数 + 活跃股票数 × lookback（天然无解的窗口期）
+    异常缺失   = 总格子 - 正常缺失 - 已计算（需要排查的）
+    完整度     = 已计算 / 总格子
     """
     from app.db.connection import get_sync_db
     from sqlalchemy import text
-    from datetime import date as _dt
     db = get_sync_db()
     try:
-        feat_name = db.execute(text(
-            "SELECT feature_name, target_entity FROM features WHERE id = :id"
+        feat = db.execute(text(
+            "SELECT f.feature_name, f.target_entity, f.depends_on "
+            "FROM features f WHERE f.id = :id"
         ), {"id": feature_id}).fetchone()
-        if not feat_name:
+        if not feat:
             return
-        fn = feat_name[0]; entity = feat_name[1]
+        fn, entity, depends_on = feat[0], feat[1], feat[2] or []
 
-        # 理论总格子：交易日数 × 活跃股票数
-        total_dates = db.execute(text(
-            "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= CURRENT_DATE AND is_trade_day = true"
-        )).scalar() or 1
+        # lookback：取依赖函数的最大 lookback（features 表没有 lookback，从 functions 取）
+        if isinstance(depends_on, str):
+            depends_on = json.loads(depends_on)
+        max_lookback = 0
+        if depends_on:
+            lb_rows = db.execute(text(
+                "SELECT COALESCE(MAX(lookback), 0) FROM functions WHERE name = ANY(:names)"
+            ), {"names": depends_on}).scalar() or 0
+            max_lookback = max(max_lookback, lb_rows)
 
+        # 1. 理论总格子：每只股票从上市到退市之间的交易日数
         if entity == 'global':
-            total_stocks = 1
-        elif entity == 'index':
-            total_stocks = db.execute(text(
-                "SELECT COUNT(*) FROM stock_master WHERE stock_type='index' AND status='N'"
-            )).scalar() or 1
-        elif entity == 'etf':
-            total_stocks = db.execute(text(
-                "SELECT COUNT(*) FROM stock_master WHERE stock_type='etf' AND status='N'"
-            )).scalar() or 1
+            total_cells = db.execute(text(
+                "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= CURRENT_DATE AND is_trade_day = true"
+            )).scalar() or 0
+            stock_count = 1
         else:
-            total_stocks = db.execute(text(
-                "SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N' AND exchange IN ('SSE','SZSE')"
-            )).scalar() or 1
+            ent_filter = ""
+            if entity == 'index':
+                ent_filter = "AND sm.stock_type='index'"
+            elif entity == 'etf':
+                ent_filter = "AND sm.stock_type='etf'"
+            else:
+                ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
 
-        total_cells = total_dates * total_stocks
+            # 用 entity_meta 的 ipo_date/delist_date 精确计算
+            total_cells = db.execute(text(f"""
+                SELECT COALESCE(SUM(
+                    (SELECT COUNT(*) FROM trade_calendar tc
+                     WHERE tc.cal_date BETWEEN COALESCE(em.ipo_date, '2000-01-01')
+                         AND COALESCE(em.delist_date, CURRENT_DATE)
+                     AND tc.is_trade_day = true)
+                ), 0)
+                FROM entity_meta em
+                JOIN stock_master sm ON sm.stock_code = em.stock_code AND sm.stock_type = em.stock_type
+                WHERE sm.status = 'N' {ent_filter}
+            """)).scalar() or 0
 
-        # 实际入库行数
+            stock_count = db.execute(text(f"""
+                SELECT COUNT(*) FROM stock_master sm WHERE sm.status = 'N' {ent_filter}
+            """)).scalar() or 1
+
+        # 2. 实际已计算
         actual = db.execute(text(
             "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
         ), {"fn": fn}).scalar() or 0
 
+        # 3. 正常缺失 = 停牌格 + lookback 窗口
+        # 停牌格：用 is_suspended 列（如果有）或从 trade_calendar 反推
+        suspended_cells = 0
+        try:
+            suspended_cells = db.execute(text("""
+                SELECT COALESCE(COUNT(*), 0)
+                FROM trade_calendar tc
+                WHERE tc.cal_date >= '2000-01-01'
+                AND tc.cal_date <= CURRENT_DATE
+                AND tc.is_suspended = true
+            """)).scalar() or 0
+            if entity != 'global' and stock_count > 0:
+                # 停牌是 per-stock 的，简化：取停牌日数 × 股票数近似
+                # 精确实现需要逐股票关联，此处用 DAG stats 节点做
+                suspended_cells = suspended_cells * stock_count
+        except Exception:
+            pass
+
+        # lookback 窗口缺失 = 每只股票前 lookback 天无数据
+        lookback_missing = max_lookback * stock_count if entity != 'global' else max_lookback
+
+        normal_missing = suspended_cells + lookback_missing
+
+        # 4. 异常缺失
+        abnormal = max(0, total_cells - normal_missing - actual)
+
         completeness = round(actual / total_cells, 4) if total_cells > 0 else 0
-        missing = max(0, total_cells - actual)
 
         db.execute(text("""
             UPDATE features SET
                 total_effective_cells = :tot,
                 data_completeness = :comp,
-                missing_cells_total = :miss,
-                pending_cells_total = 0,
+                missing_cells_total = :norm,
+                abnormal_missing_cells = :abn,
                 latest_computed_date = CURRENT_DATE,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :id
         """), {
             "tot": total_cells, "comp": completeness,
-            "miss": missing, "id": feature_id,
+            "norm": normal_missing, "abn": abnormal,
+            "id": feature_id,
         })
         db.commit()
     except Exception as e:
@@ -1029,26 +1077,26 @@ def check_stats_integrity(user: str = Depends(get_current_user)):
     db = get_sync_db()
     try:
         rows = db.execute(text("""
-            SELECT id, feature_name, total_effective_cells, missing_cells_total, pending_cells_total, data_completeness, status
+            SELECT id, feature_name, total_effective_cells, missing_cells_total, abnormal_missing_cells, data_completeness, status
             FROM features
-            WHERE total_effective_cells > 0 OR missing_cells_total > 0 OR pending_cells_total > 0
+            WHERE total_effective_cells > 0 OR missing_cells_total > 0 OR abnormal_missing_cells > 0
         """)).fetchall()
 
         fixed = []
         for r in rows:
-            fid, name, stored_cells, missing, pending, stored_comp, status = r
+            fid, name, stored_cells, missing, abnormal, stored_comp, status = r
             # 用索引查询该特征在 feature_values 中的实际行数
             actual = db.execute(text(
                 "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
             ), {"fn": name}).scalar() or 0
 
-            if actual == 0 and (stored_cells > 0 or missing > 0 or pending > 0):
+            if actual == 0 and (stored_cells > 0 or missing > 0 or abnormal > 0):
                 # 严重不一致：元数据有值但实际表为空 → 全部归零
                 db.execute(text("""
                     UPDATE features SET status='data_anomaly',
                         data_anomaly_reason='feature_values 无数据，请执行特征计算',
                         total_effective_cells=0, data_completeness=0,
-                        missing_cells_total=0, pending_cells_total=0,
+                        missing_cells_total=0, abnormal_missing_cells=0,
                         updated_at=CURRENT_TIMESTAMP WHERE id=:id
                 """), {"id": fid})
                 fixed.append(name)

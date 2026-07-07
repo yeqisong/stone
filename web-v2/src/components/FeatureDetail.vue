@@ -42,11 +42,11 @@
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
             <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">✅ 已计算</div>
-            <div style="font-size:20px;font-weight:700;color:#10b981">{{ ((feat.total_effective_cells||0) - (feat.missing_cells_total||0)).toLocaleString() }}</div>
+            <div style="font-size:20px;font-weight:700;color:#10b981">{{ computedActual.toLocaleString() }}</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">❌ 缺失</div>
-            <div :style="{fontSize:'20px',fontWeight:700,color:feat.missing_cells_total>0?'#ef4444':'var(--c-text-dim)'}">{{ (feat.missing_cells_total||0).toLocaleString() }}</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">❌ 异常缺失</div>
+            <div :style="{fontSize:'20px',fontWeight:700,color:feat.abnormal_missing_cells>0?'#ef4444':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
           </div>
         </div>
 
@@ -132,6 +132,14 @@ const feat = ref(null)
 const staleDays = ref(0)
 const completenessPct = ref(0)
 const abnormalPct = ref(0)
+
+// 已计算 = 总格子 - 正常缺失 - 异常缺失 (或直接用实际行数估算)
+const computedActual = computed(() => {
+  const t = feat.value?.total_effective_cells || 0
+  const n = feat.value?.missing_cells_total || 0
+  const a = feat.value?.abnormal_missing_cells || 0
+  return Math.max(0, t - n - a)
+})
 
 const activeTab = ref('info')
 
