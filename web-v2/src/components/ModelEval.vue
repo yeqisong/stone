@@ -106,24 +106,29 @@
         <table style="width:100%;border-collapse:collapse;font-size:10px">
           <thead>
             <tr style="color:var(--c-text-dim);text-align:left;position:sticky;top:0;background:var(--c-card-bg)">
+              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">#</th>
               <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">股票</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">周期</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">买入日</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">卖出日</th>
+              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">操作</th>
+              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">日期</th>
+              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">价格</th>
               <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">股数</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">盈亏</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">原因</th>
+              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">金额</th>
+              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">累计盈亏</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(t, i) in pageTrades" :key="i" style="color:var(--c-text)">
+              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);color:var(--c-text-faint)">{{t.trade_id}}</td>
               <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);font-weight:600">{{t.code}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.horizon}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{(t.buy_date||'').slice(5)}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{(t.sell_date||'').slice(5)}}</td>
+              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)" :style="{color:t.action==='BUY'?'#ef4444':'#10b981'}">{{t.action==='BUY'?'买入':'卖出'}}</td>
+              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{(t.date||'').slice(5)}}</td>
+              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.price?.toFixed(2)}}</td>
               <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.shares}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);font-weight:600" :style="{color:t.pnl>=0?'#ef4444':'#10b981'}">{{t.pnl>=0?'+':''}}{{t.pnl.toFixed(0)}} ({{t.pnl_pct>=0?'+':''}}{{(t.pnl_pct*100).toFixed(1)}}%)</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);font-size:9px;color:var(--c-text-faint)">{{t.reason==='stop_loss'?'止损':'到期'}}</td>
+              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.amount?.toFixed(0)}}</td>
+              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);font-weight:600" :style="{color:(t.cumulative_pnl??0)>=0?'#ef4444':'#10b981'}">
+                {{(t.cumulative_pnl??0)>=0?'+':''}}{{(t.cumulative_pnl||0).toFixed(0)}}
+                <span v-if="t.action==='SELL' && t.pnl" style="font-size:9px;color:var(--c-text-faint)">({{t.pnl>=0?'+':''}}{{t.pnl.toFixed(0)}})</span>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -221,8 +226,13 @@ const tradeTotal = computed(() => trades.value.length)
 const pageTrades = computed(() => trades.value.slice((tradePage.value-1)*pageSize, tradePage.value*pageSize))
 
 function downloadTrades() {
-  const headers = ['股票','周期','买入日','买入价','卖出日','卖出价','股数','盈亏','盈亏%','原因']
-  const rows = trades.value.map(t => [t.code, t.horizon, t.buy_date, t.buy_price, t.sell_date, t.sell_price, t.shares, t.pnl.toFixed(2), (t.pnl_pct*100).toFixed(2)+'%', t.reason==='stop_loss'?'止损':'到期'])
+  const headers = ['ID','操作','日期','股票','价格','股数','金额','模型版本','信号标签','信号原因','盈亏','盈亏%','累计盈亏','原因','关联ID']
+  const rows = trades.value.map(t => [
+    t.trade_id, t.action, t.date, t.code, t.price, t.shares, t.amount,
+    t.model_version||'', t.signal_label||'', t.signal_reason||'',
+    t.pnl?.toFixed(2)||'', t.pnl_pct ? (t.pnl_pct*100).toFixed(2)+'%' : '',
+    t.cumulative_pnl?.toFixed(2)||'', t.reason||'', t.buy_trade_id||''
+  ])
   const csv = [headers.join(',')].concat(rows.map(r => r.join(','))).join('\n')
   const blob = new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8'})
   const url = URL.createObjectURL(blob)
