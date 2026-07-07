@@ -726,11 +726,11 @@ def update_feature_stats(feature_id: int, body: StatsBody, user: str = Depends(g
 
         # 自动质量监控规则
         if completeness is not None:
-            if completeness < 0.8:
+            if completeness < 0.6:
                 db.execute(text(
-                    "UPDATE features SET status='data_anomaly', data_anomaly_reason='数据完整度低于80%，请检查数据源' WHERE id=:id AND status='enabled'"
+                    "UPDATE features SET status='data_anomaly', data_anomaly_reason='数据完整度低于60%，请检查数据源' WHERE id=:id AND status='enabled'"
                 ), {"id": feature_id})
-            elif completeness >= 0.9:
+            elif completeness >= 0.7:
                 db.execute(text(
                     "UPDATE features SET status='enabled', data_anomaly_reason=NULL WHERE id=:id AND status='data_anomaly'"
                 ), {"id": feature_id})
@@ -1130,6 +1130,14 @@ def _update_feature_stats_after_compute(feature_id: int):
             "norm": normal_missing, "abn": abnormal,
             "id": feature_id,
         })
+
+        # 自动恢复状态：data_anomaly + 完整度≥60% → enabled（异常已修复）
+        db.execute(text("""
+            UPDATE features SET status = 'enabled', data_anomaly_reason = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND status = 'data_anomaly' AND data_completeness >= 0.6
+        """), {"id": feature_id})
+
         db.commit()
     except Exception as e:
         from loguru import logger as _log
