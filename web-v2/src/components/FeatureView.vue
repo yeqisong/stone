@@ -155,6 +155,28 @@
     </template>
   </n-modal>
 
+  <!-- Compute Range Modal -->
+  <n-modal v-model:show="showCompute" preset="card" title="📥 特征补数" style="width:420px;max-width:92vw" :mask-closable="false">
+    <n-space vertical>
+      <div style="font-size:12px;color:var(--c-text)">特征：<b>{{ computeTarget?.feature_name }}</b></div>
+      <div style="font-size:11px;color:var(--c-text-dim)">选择补数日期范围，系统将对该特征在指定日期内重新计算并入库。</div>
+      <n-date-picker v-model:value="computeDateRange" type="daterange" size="small" style="width:100%" clearable />
+      <n-checkbox v-model:checked="computeForce">强制更新（覆盖已有数据）</n-checkbox>
+      <div v-if="computeProgress" style="margin-top:8px">
+        <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:4px">
+          {{ computeProgress.current_date || '计算中...' }} ({{ computeProgress.progress_pct }}%)
+        </div>
+        <n-progress type="line" :percentage="computeProgress.progress_pct" :height="8" :border-radius="4" />
+      </div>
+    </n-space>
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button @click="showCompute=false">取消</n-button>
+        <n-button type="primary" @click="doCompute" :loading="computeSubmitting" :disabled="!!computeProgress">开始补数</n-button>
+      </n-space>
+    </template>
+  </n-modal>
+
   <!-- Full Dependency Graph Modal -->
   <n-modal v-model:show="showDepGraph" preset="card" title="🔗 特征依赖关系图" style="width:96vw;max-width:96vw;height:90vh" :mask-closable="true">
     <div ref="depGraphContainer" style="width:100%;height:calc(90vh - 120px)"></div>
@@ -163,12 +185,13 @@
 </template>
 
 <script setup>
-import { ref, computed, h, onMounted } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination } from 'naive-ui'
+import { ref, computed, h, onMounted, onUnmounted } from 'vue'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
 import * as echarts from 'echarts'
 import axios from 'axios'
+import { addWsListener } from '../utils/ws'
 
 const API = window.location.origin
 const loading = ref(false)
@@ -216,6 +239,71 @@ function openCreate() {
 }
 
 const nav = useNavStore()
+
+// ── 补数 ──
+const showCompute = ref(false)
+const computeTarget = ref(null)
+const computeDateRange = ref(null)
+const computeForce = ref(false)
+const computeSubmitting = ref(false)
+const computeProgress = ref(null)
+let computeWsUnwatch = null
+
+function openCompute(row) {
+  computeTarget.value = row
+  computeDateRange.value = null
+  computeForce.value = false
+  computeProgress.value = null
+  showCompute.value = true
+}
+
+async function doCompute() {
+  if (!computeTarget.value || !computeDateRange.value || computeDateRange.value.length !== 2) {
+    alert('请选择补数日期范围')
+    return
+  }
+  computeSubmitting.value = true
+  try {
+    const [s, e] = computeDateRange.value
+    const fd = (d) => {
+      const dt = new Date(d)
+      return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0')
+    }
+    const r = await axios.post(API + '/api/features/' + computeTarget.value.id + '/compute-range', {
+      start_date: fd(s), end_date: fd(e), force: computeForce.value
+    }, { headers: authHeaders() })
+    if (r.data.ok) {
+      computeProgress.value = { progress_pct: 0, current_date: '任务已提交...' }
+      listenComputeProgress(r.data.task_id, computeTarget.value.id)
+    }
+  } catch(e) {
+    alert(e.response?.data?.detail || '提交失败')
+  }
+  computeSubmitting.value = false
+}
+
+function listenComputeProgress(taskId, featureId) {
+  if (computeWsUnwatch) computeWsUnwatch()
+  computeWsUnwatch = addWsListener((data) => {
+    if (data.type === 'feature_compute_progress' && data.task_id === taskId) {
+      computeProgress.value = data
+      if (data.status === 'completed' || data.status === 'failed') {
+        setTimeout(() => {
+          computeProgress.value = null
+          showCompute.value = false
+          computeTarget.value = null
+          loadData()
+        }, 2000)
+        if (computeWsUnwatch) { computeWsUnwatch(); computeWsUnwatch = null }
+      }
+    }
+  })
+}
+
+function authHeaders() {
+  const t = localStorage.getItem('token')
+  return t ? { Authorization: 'Bearer ' + t } : {}
+}
 
 // ── 依赖图 ──
 const showDepGraph = ref(false)
@@ -347,9 +435,10 @@ const columns = [
   { title:'待计算', key:'pending_cells_total', width:70, align:'right', render:(row) => (row.pending_cells_total||0).toLocaleString() },
   { title:'最近计算', key:'latest_computed_date', width:90, render:(row) => row.latest_computed_date || '—' },
   { title:'依赖数', key:'depends_on', width:60, align:'center', render:(row) => (row.depends_on?.length || 0) },
-  { title:'操作', key:'actions', width:80, render(row) {
+  { title:'操作', key:'actions', width:110, render(row) {
     return h('div', { style:{display:'flex',gap:'2px'} }, [
       h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openEdit(row) }, () => '编辑'),
+      h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openCompute(row) }, () => '📥'),
     ])
   }},
 ]
@@ -403,6 +492,9 @@ function parseHashParams() {
 onMounted(() => {
   parseHashParams()
   loadData()
+})
+onUnmounted(() => {
+  if (computeWsUnwatch) computeWsUnwatch()
 })
 window.addEventListener('popstate', () => {
   parseHashParams()

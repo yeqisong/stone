@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import json
+import uuid
 
 from app.db.connection import get_sync_db
 from app.kepl.parser import parse_kepl
@@ -816,3 +817,168 @@ def _cascade_pending(db, upstream_name: str):
                 ), {"n": downstream_name})
                 queue.append(downstream_name)
     db.commit()
+
+
+# ── 特征补数（手动触发单特征计算）──
+
+import threading as _threading
+import time as _time
+from datetime import date as _date
+
+_compute_tasks: dict = {}  # task_id → {status, feature_id, progress_pct, current_date, ...}
+_compute_lock = _threading.Lock()
+
+
+class ComputeRangeBody(BaseModel):
+    start_date: str = ""
+    end_date: str = ""
+    force: bool = False  # True=覆盖已有数据, False=跳过已有
+
+
+@router.post("/{feature_id}/compute-range")
+def compute_range(feature_id: int, body: ComputeRangeBody, user: str = Depends(get_current_user)):
+    """手动触发单特征补数计算。"""
+    db = get_sync_db()
+    try:
+        feat = db.execute(text(
+            "SELECT feature_name, target_entity, formula FROM features WHERE id = :id"
+        ), {"id": feature_id}).fetchone()
+        db.close()
+        if not feat:
+            raise HTTPException(404, "特征不存在")
+
+        task_id = str(uuid.uuid4())[:8]
+        with _compute_lock:
+            _compute_tasks[task_id] = {
+                "status": "running", "feature_id": feature_id,
+                "feature_name": feat[0], "start_date": body.start_date,
+                "end_date": body.end_date, "force": body.force,
+                "progress_pct": 0, "current_date": "", "total_dates": 0,
+                "started_at": _time.time(),
+            }
+
+        thread = _threading.Thread(target=_run_compute, args=(
+            task_id, feature_id, feat[0], feat[1], feat[2],
+            body.start_date or None, body.end_date or None, body.force
+        ), daemon=True)
+        thread.start()
+
+        # 唤醒 WS 广播
+        from app.signal import wake_dag_broadcast
+        wake_dag_broadcast()
+
+        return {"ok": True, "task_id": task_id, "feature_name": feat[0], "status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close() if 'db' in dir() else None
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{feature_id}/compute-status")
+def compute_status(feature_id: int):
+    """查询当前特征的补数进度。"""
+    with _compute_lock:
+        for t in _compute_tasks.values():
+            if t["feature_id"] == feature_id and t["status"] == "running":
+                return {"has_task": True, **{k: v for k, v in t.items()}}
+    return {"has_task": False}
+
+
+def _run_compute(task_id, feature_id, feature_name, target_entity, formula, start_date, end_date, force):
+    """后台线程：执行特征计算。"""
+    from app.db.connection import get_sync_db
+    from scripts.feature_compute import compute_feature
+    from loguru import logger as _logger
+    import calendar as _cal
+
+    try:
+        # 获取日期范围中的所有交易日
+        db = get_sync_db()
+        if start_date and end_date:
+            dates = db.execute(text(
+                "SELECT cal_date FROM trade_calendar WHERE cal_date BETWEEN :s AND :e AND is_trade_day=true ORDER BY cal_date"
+            ), {"s": start_date, "e": end_date}).fetchall()
+            date_list = [str(r[0]) for r in dates]
+        else:
+            date_list = []
+
+        total = len(date_list) or 1
+        with _compute_lock:
+            _compute_tasks[task_id]["total_dates"] = total
+
+        if force:
+            # 强制模式：逐日计算
+            for i, td in enumerate(date_list):
+                with _compute_lock:
+                    _compute_tasks[task_id].update({"current_date": td, "progress_pct": round((i+1)/total*100)})
+                    from app.signal import wake_dag_broadcast
+                    wake_dag_broadcast()
+
+                r = compute_feature(db, feature_name, formula, target_entity, start_date=td, end_date=td)
+                _logger.info(f"[compute] {feature_name} {td}: {r.get('rows', 0)} rows")
+
+                if r.get("ok") is False:
+                    break
+        else:
+            # 非强制模式：全量计算但跳过已有
+            r = compute_feature(db, feature_name, formula, target_entity, start_date=start_date, end_date=end_date)
+            with _compute_lock:
+                _compute_tasks[task_id].update({"progress_pct": 100, "current_date": end_date or "完成"})
+                from app.signal import wake_dag_broadcast
+                wake_dag_broadcast()
+            _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {r.get('rows', 0)} rows")
+
+        db.close()
+
+        # 更新特征统计
+        _update_feature_stats_after_compute(feature_id)
+
+        with _compute_lock:
+            _compute_tasks[task_id]["status"] = "completed"
+            _compute_tasks[task_id]["progress_pct"] = 100
+            from app.signal import wake_dag_broadcast
+            wake_dag_broadcast()
+    except Exception as e:
+        _logger.error(f"[compute] {feature_name} 失败: {e}")
+        with _compute_lock:
+            _compute_tasks[task_id]["status"] = "failed"
+            _compute_tasks[task_id]["error"] = str(e)
+
+
+def _update_feature_stats_after_compute(feature_id: int):
+    """计算完成后更新特征的数据统计。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        # 统计 feature_values 中的有效数据
+        r = db.execute(text("""
+            SELECT COUNT(*) as total,
+                   COUNT(DISTINCT trade_date) as dates,
+                   COUNT(DISTINCT stock_code) as stocks
+            FROM feature_values
+            WHERE feature_name = (SELECT feature_name FROM features WHERE id = :id)
+        """), {"id": feature_id}).fetchone()
+        if r and r[0] > 0:
+            t = r[0]; d = r[1] or 1; s = r[2] or 1
+            completeness = round(min(1.0, t / (d * s)), 4)
+            db.execute(text("""
+                UPDATE features SET
+                    total_effective_cells = :tot,
+                    data_completeness = :comp,
+                    latest_computed_date = CURRENT_DATE,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+            """), {"tot": t, "comp": completeness, "id": feature_id})
+            db.commit()
+    except Exception as e:
+        pass
+    finally:
+        db.close()
+
+
+# 暴露补数任务列表给 WS 广播使用
+def get_active_compute_tasks():
+    with _compute_lock:
+        return [{"task_id": k, **v} for k, v in _compute_tasks.items() if v["status"] == "running"]

@@ -624,14 +624,25 @@ async def broadcast_dag_status():
                 mgr = BackfillManager.get_instance()
                 active = mgr.get_active_task()
                 if active:
-                    # 有活跃任务时每轮都推送（2s 间隔）
                     payload = _json.dumps({"type": "backfill_progress", **active})
                     dead = set()
                     for ws in _ws_clients:
-                        try:
-                            await ws.send_text(payload)
-                        except:
-                            dead.add(ws)
+                        try: await ws.send_text(payload)
+                        except: dead.add(ws)
+                    _ws_clients -= dead
+            except Exception:
+                pass
+
+            # ── 特征补数进度推送 ──
+            try:
+                from app.api.features import get_active_compute_tasks
+                tasks = get_active_compute_tasks()
+                for t in tasks:
+                    payload = _json.dumps({"type": "feature_compute_progress", **t})
+                    dead = set()
+                    for ws in _ws_clients:
+                        try: await ws.send_text(payload)
+                        except: dead.add(ws)
                     _ws_clients -= dead
             except Exception:
                 pass
