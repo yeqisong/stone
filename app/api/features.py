@@ -894,41 +894,23 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
     from loguru import logger as _logger
 
     try:
-        # 获取日期范围中的所有交易日
         db = get_sync_db()
-        if start_date and end_date:
-            dates = db.execute(text(
-                "SELECT cal_date FROM trade_calendar WHERE cal_date BETWEEN :s AND :e AND is_trade_day=true ORDER BY cal_date"
-            ), {"s": start_date, "e": end_date}).fetchall()
-            date_list = [str(r[0]) for r in dates]
-        else:
-            date_list = []
 
-        total = len(date_list) or 1
         with _compute_lock:
-            _compute_tasks[task_id]["total_dates"] = total
+            _compute_tasks[task_id].update({"progress_pct": 10, "current_date": "拉取行情数据..."})
+            from app.signal import wake_dag_broadcast
+            wake_dag_broadcast()
 
-        if force:
-            # 强制模式：逐日计算
-            for i, td in enumerate(date_list):
-                with _compute_lock:
-                    _compute_tasks[task_id].update({"current_date": td, "progress_pct": round((i+1)/total*100)})
-                    from app.signal import wake_dag_broadcast
-                    wake_dag_broadcast()
+        # 统一批量模式：拉取全量 daily_quote → DataFrame → 批量计算 → 批量写入
+        # ON CONFLICT DO UPDATE 已处理覆盖/跳过逻辑，无需逐日循环（逐日会破坏 ma_5 等滚动函数）
+        r = compute_feature(db, feature_name, formula, target_entity,
+                           start_date=start_date, end_date=end_date)
+        _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {r.get('rows', 0)} rows")
 
-                r = compute_feature(db, feature_name, formula, target_entity, start_date=td, end_date=td)
-                _logger.info(f"[compute] {feature_name} {td}: {r.get('rows', 0)} rows")
-
-                if r.get("ok") is False:
-                    break
-        else:
-            # 非强制模式：全量计算但跳过已有
-            r = compute_feature(db, feature_name, formula, target_entity, start_date=start_date, end_date=end_date)
-            with _compute_lock:
-                _compute_tasks[task_id].update({"progress_pct": 100, "current_date": end_date or "完成"})
-                from app.signal import wake_dag_broadcast
-                wake_dag_broadcast()
-            _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {r.get('rows', 0)} rows")
+        with _compute_lock:
+            _compute_tasks[task_id].update({"progress_pct": 80, "current_date": "更新统计..."})
+            from app.signal import wake_dag_broadcast
+            wake_dag_broadcast()
 
         db.close()
 
