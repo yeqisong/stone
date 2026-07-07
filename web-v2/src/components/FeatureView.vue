@@ -172,7 +172,7 @@ const loading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const filterEntity = ref(null)
 const filterStatus = ref(null)
 const searchText = ref('')
@@ -352,7 +352,7 @@ const columns = [
 ]
 
 const pagination = computed(() => ({
-  page: page.value, pageSize, itemCount: total.value,
+  page: page.value, pageSize: pageSize.value, itemCount: total.value,
   onChange(p) { page.value = p; loadData() },
 }))
 
@@ -364,7 +364,7 @@ function rowProps(row) {
 async function loadData() {
   loading.value = true
   try {
-    const params = { page: page.value, page_size: pageSize }
+    const params = { page: page.value, page_size: pageSize.value }
     if (filterEntity.value && filterEntity.value !== 'all') params.entity = filterEntity.value
     if (filterStatus.value && filterStatus.value !== 'all') params.status = filterStatus.value
     if (searchText.value) params.search = searchText.value
