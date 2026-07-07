@@ -207,14 +207,14 @@
       </div>
     </div>
     <template #footer>
-      <n-button size="small" @click="const d = detailItem; showDetail=false; openVersions(d)">📋 版本历史</n-button>
+      <n-button size="small" @click="openVersionsFromDetail">📋 版本历史</n-button>
     </template>
   </n-modal>
 </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, h, nextTick } from 'vue'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
@@ -549,6 +549,13 @@ const verCols = [
 
 function verRowProps(row) {
   return { style: 'cursor:default' }
+}
+
+async function openVersionsFromDetail() {
+  const d = detailItem
+  showDetail.value = false
+  await nextTick()
+  openVersions(d)
 }
 
 async function openVersions(row) {
