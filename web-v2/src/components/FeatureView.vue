@@ -31,7 +31,10 @@
 
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
-        <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size:11px">🔍 验证公式</n-button>
+        <div style="display:flex;gap:4px">
+          <n-button size="tiny" quaternary @click="showAiFormula = true" :loading="aiFormulaLoading" style="font-size:11px">🤖 AI</n-button>
+          <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size:11px">🔍 验证</n-button>
+        </div>
       </div>
       <MonacoEditor v-model="form.formula" />
 
@@ -155,6 +158,23 @@
     </template>
   </n-modal>
 
+  <!-- AI 生成公式弹窗 -->
+  <n-modal v-model:show="showAiFormula" preset="card" title="🤖 AI 生成 KEPL 公式" style="width:520px;max-width:92vw">
+    <n-space vertical>
+      <div style="font-size:12px;color:var(--c-text-dim)">描述计算逻辑，AI 根据 KEPL 语法和已注册函数生成公式。</div>
+      <n-input v-model:value="aiFormulaText" type="textarea" placeholder="例如：收盘价相对5日均线的偏离度" :rows="4" />
+      <div v-if="aiFormulaResult" style="margin-top:8px">
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:160px;overflow-y:auto">{{ aiFormulaResult }}</div>
+        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiFormula">✅ 填入公式框</n-button>
+      </div>
+    </n-space>
+    <template #footer>
+      <n-button @click="showAiFormula=false">取消</n-button>
+      <n-button type="primary" @click="callAiFormula" :loading="aiFormulaLoading">生成</n-button>
+    </template>
+  </n-modal>
+
   <!-- Compute Range Modal -->
   <n-modal v-model:show="showCompute" preset="card" title="📥 特征补数" style="width:420px;max-width:92vw" :mask-closable="false">
     <n-space vertical>
@@ -240,6 +260,49 @@ function openCreate() {
 }
 
 const nav = useNavStore()
+
+// ── AI 生成公式 ──
+const showAiFormula = ref(false)
+const aiFormulaText = ref('')
+const aiFormulaResult = ref('')
+const aiFormulaLoading = ref(false)
+
+const KEPL_SPEC = `KEPL 语法：
+- 裸字段：close, open, high, low, volume, amount
+- 时间序列函数（参数裸字段）：ma(close,5), ema(close,12), macd(close), rsi(close,14), boll(close), atr(high,low,close,14)
+- 横截面聚合（参数 stock.字段）：avg(stock.close), rank(stock.close, pct=True), std(stock.pe)
+- 运算：+ - * / ( ) > < == & |
+- 条件：if(cond, a, b)
+- 示例：close / ma(close, 5) - 1`
+
+async function callAiFormula() {
+  if (!aiFormulaText.value.trim()) return
+  aiFormulaLoading.value = true
+  aiFormulaResult.value = ''
+  try {
+    const fr = await axios.get(API + '/api/functions?page_size=200')
+    const funcList = (fr.data.items || []).map(f =>
+      `${f.name}(${(f.parameters||[]).map(p=>p.name+(p.default!==undefined?'='+p.default:'')).join(',')}): ${f.description||''}`
+    ).join('\n')
+
+    const prompt = `${KEPL_SPEC}\n\n【函数】\n${funcList}\n\n【需求】\n${aiFormulaText.value}\n\n只返回公式。`
+    const r = await axios.post(API + '/api/functions/ai-chat', {
+      messages: [{ role: 'user', content: prompt }],
+    }, { headers: authHeaders() })
+    const content = r.data?.content?.content || r.data?.content || ''
+    const m = content.match(/```[\s\S]*?\n([\s\S]*?)```/) || [null, content]
+    aiFormulaResult.value = (m[1] || content).trim()
+  } catch(e) {
+    aiFormulaResult.value = '# 失败: ' + (e.response?.data?.detail || e.message)
+  } finally { aiFormulaLoading.value = false }
+}
+
+function applyAiFormula() {
+  form.value.formula = aiFormulaResult.value
+  showAiFormula.value = false
+  aiFormulaText.value = ''
+  aiFormulaResult.value = ''
+}
 
 // ── 补数 ──
 const showCompute = ref(false)
