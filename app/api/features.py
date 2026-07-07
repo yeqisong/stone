@@ -917,12 +917,12 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
             db.close()
             return
 
-        _report(70, f"已计算 {rows_count} 行，更新统计...")
+        _report(70, f"已计算 {rows_count} 行")
 
         db.close()
 
-        # 更新特征统计
-        _report(85, "统计总格子/完整度...")
+        # 数据诊断：总格子、正常缺失(停牌+lookback)、异常缺失、完整度
+        _report(80, "诊断：计算总格子/缺失格子...")
         _update_feature_stats_after_compute(feature_id)
 
         _report(100, "完成")
