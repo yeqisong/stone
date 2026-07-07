@@ -6,7 +6,7 @@ from pathlib import Path
 class Settings(BaseSettings):
     # ── 应用 ──
     APP_ENV: str = "dev"  # dev | prod
-    APP_SECRET_KEY: str = ""  # 必须通过环境变量 APP_SECRET_KEY 设置
+    APP_SECRET_KEY: str = "kdao-dev-secret-key-change-in-production"  # prod 必须通过环境变量覆盖
     JWT_EXPIRE_HOURS: int = 24
 
     # ── 数据库 ──
