@@ -838,6 +838,7 @@ class ComputeRangeBody(BaseModel):
 @router.post("/{feature_id}/compute-range")
 def compute_range(feature_id: int, body: ComputeRangeBody, user: str = Depends(get_current_user)):
     """手动触发单特征补数计算。"""
+    from sqlalchemy import text
     db = get_sync_db()
     try:
         feat = db.execute(text(
@@ -889,8 +890,8 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
     """后台线程：执行特征计算。"""
     from app.db.connection import get_sync_db
     from scripts.feature_compute import compute_feature
+    from sqlalchemy import text
     from loguru import logger as _logger
-    import calendar as _cal
 
     try:
         # 获取日期范围中的所有交易日
