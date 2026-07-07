@@ -304,22 +304,28 @@ def execute_flow(flow_id: int, body: dict = {}, user: str = Depends(get_current_
         td = body.get("trade_date", "") or str(_date.today())
         run_id = f"run-{uuid.uuid4().hex[:8]}"
 
-        # 构建临时 DagExecutor
+        # 构建临时 DagExecutor，设置 on_node_enter 以写入 dag_run_log
         executor = DagExecutor()
         for n in nodes_raw:
             name = n.get("node_name", "")
             deps = n.get("deps", [])
             fn = NODE_FN_MAP.get(name)
             if not fn:
-                fn = lambda **kw: True  # 无函数的节点当标记节点
+                fn = lambda **kw: True
             executor.add(DagNode(name, deps, fn))
 
-        # 后台线程执行
+        # 复用 pipeline 的节点日志回调
+        from scripts.pipeline import _node_enter
+        executor.on_node_enter = _node_enter
+
+        # 后台线程执行（使用共享的 context 初始化）
         def _bg():
             from loguru import logger
             try:
-                executor.run_all(trade_date=td, run_id=run_id)
-                logger.info(f"[flow] {flow_name} 执行完成 {run_id}")
+                rid, sorted_names, ctx = executor.prepare_context(trade_date=td)
+                logger.info(f"[flow] {flow_name} 开始执行 {rid}, 节点: {sorted_names}")
+                executor._execute(sorted_names, **ctx)
+                logger.info(f"[flow] {flow_name} 执行完成 {rid}")
             except Exception as e:
                 logger.error(f"[flow] {flow_name} 执行失败: {e}")
 

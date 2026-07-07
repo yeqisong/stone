@@ -129,12 +129,28 @@ class DagExecutor:
 
     def start(self, start_node: str = None, trade_date: str = '', force=False,
               include_downstream: bool = True):
-        """统一入口：根据 start_node 创建计划并执行。
+        """统一入口：根据 start_node 创建计划并执行。"""
+        run_id, sorted_names, context = self.prepare_context(
+            trade_date, force, start_node, include_downstream)
+        logger.info(f"[dag] start (start_node={start_node or 'None'}, force={force}) → "
+                    f"{len(sorted_names)} 节点: {sorted_names}")
+        self._execute(sorted_names, **context)
 
-        start_node=None → 全量执行
-        start_node="kline" → 从 kline 开始，跳上游
-        include_downstream=False → 仅执行指定节点，不传播下游（默认 true 保持向后兼容）
-        force: bool 或 {"kline": true, "fund": false}
+    def run(self, trigger: str, **context):
+        """手工触发一个节点，自动传播到所有下游（兼容旧接口，内部转调 start）。"""
+        if 'run_id' not in context:
+            context['run_id'] = self._gen_run_id()
+        td = context.get('trade_date', '')
+        force = context.get('force', False)
+        include_downstream = context.get('include_downstream', True)
+        self.start(start_node=trigger, trade_date=td, force=force,
+                   include_downstream=include_downstream)
+
+    def prepare_context(self, trade_date: str = '', force=False, start_node: str = None,
+                         include_downstream: bool = True):
+        """抽象 context 初始化（供 start() 和动态流程 execute 共用）。
+
+        Returns: (run_id, sorted_names, context_dict)
         """
         run_id = self._gen_run_id()
         self._completed.clear()
@@ -148,27 +164,21 @@ class DagExecutor:
             names = {start_node}
             if include_downstream:
                 names |= self._get_downstream(start_node)
-            # 标记 unaffected 节点为已完成
             for name in self._nodes:
                 if name not in names:
                     self._completed[name] = True
 
         sorted_names = self._topo_sort(names)
 
-        # 解析 force → 注入 context
         context = {
             'run_id': run_id,
             'trade_date': trade_date,
             'force': force,
         }
-        # 为每个节点预解析 force 值
         node_force = {name: self._resolve_force(force, name) for name in sorted_names}
         context['_node_force'] = node_force
 
-        logger.info(f"[dag] start (start_node={start_node or 'None'}, force={force}) → "
-                    f"{len(sorted_names)} 节点: {sorted_names}")
-
-        # 阶段1: 创建计划 (pending 日志) + 收集 log_id
+        # 创建节点日志条目
         log_ids = {}
         if self.on_node_enter:
             for name in sorted_names:
@@ -178,18 +188,7 @@ class DagExecutor:
         context['_node_log_ids'] = log_ids
         self._wake_broadcast()
 
-        # 阶段2: 按计划执行
-        self._execute(sorted_names, **context)
-
-    def run(self, trigger: str, **context):
-        """手工触发一个节点，自动传播到所有下游（兼容旧接口，内部转调 start）。"""
-        if 'run_id' not in context:
-            context['run_id'] = self._gen_run_id()
-        td = context.get('trade_date', '')
-        force = context.get('force', False)
-        include_downstream = context.get('include_downstream', True)
-        self.start(start_node=trigger, trade_date=td, force=force,
-                   include_downstream=include_downstream)
+        return run_id, sorted_names, context
 
     def _wake_broadcast(self):
         """线程安全地通知 WS 广播立即推送。"""
