@@ -134,17 +134,15 @@ const activeTab = ref('info')
 const pieChart = ref(null)
 const heatmapChart = ref(null)
 let pieInstance = null, heatmapInstance = null
-let diagnosisRendered = false
 
 function onTabChange(name) {
   if (name === 'diagnosis') {
     nextTick(() => {
-      if (!diagnosisRendered) {
-        renderDiagnosis()
-        diagnosisRendered = true
+      // 每次切换都检查：实例是否被销毁（切换 Tab 时 DOM 可能重建）
+      if (pieInstance && !pieInstance.isDisposed()) {
+        pieInstance.resize()
       } else {
-        if (pieInstance) pieInstance.resize()
-        if (heatmapInstance) heatmapInstance.resize()
+        renderDiagnosis()
       }
     })
   }
@@ -206,6 +204,9 @@ async function loadDetail() {
 }
 
 function renderDiagnosis() {
+  // 清理旧实例
+  if (pieInstance) { try { pieInstance.dispose() } catch(e) {} }
+  if (heatmapInstance) { try { heatmapInstance.dispose() } catch(e) {} }
   // 饼图
   if (pieChart.value) {
     pieInstance = echarts.init(pieChart.value); const pie = pieInstance
