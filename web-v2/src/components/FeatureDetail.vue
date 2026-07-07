@@ -7,6 +7,8 @@
       <n-button size="small" quaternary @click="$emit('back')">← 返回列表</n-button>
       <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ feat.feature_name }}</span>
       <n-tag :type="statusTypeMap[feat.status]||'default'" size="small" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
+      <div style="flex:1" />
+      <n-button size="small" @click="$emit('edit', feat.id)">✎ 编辑</n-button>
     </div>
 
     <!-- 3 Tab 切换 -->
@@ -116,10 +118,6 @@
       </n-tab-pane>
     </n-tabs>
 
-    <!-- 底部操作 -->
-    <div style="display:flex;gap:8px;margin-top:16px">
-      <n-button size="small" @click="$emit('edit', feat.id)">✎ 编辑</n-button>
-    </div>
   </template>
 </div>
 </template>

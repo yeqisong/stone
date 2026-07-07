@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { ref, computed, h, onMounted, onUnmounted } from 'vue'
+import { ref, computed, h, onMounted, onUnmounted, watch } from 'vue'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
@@ -494,6 +494,15 @@ onMounted(() => {
   parseHashParams()
   loadData()
 })
+// 从详情页点编辑时，自动打开编辑弹窗
+watch(() => nav.pendingEditFeatureId, (id) => {
+  if (id) {
+    const row = items.value.find(i => i.id === id)
+    if (row) openEdit(row)
+    nav.pendingEditFeatureId = null
+  }
+})
+
 onUnmounted(() => {
   if (computeWsUnwatch) computeWsUnwatch()
 })

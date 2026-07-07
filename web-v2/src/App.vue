@@ -51,7 +51,7 @@
           <div v-if="nav.tab==='a'"><ModelView /></div>
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
-          <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => nav.backFromFeatureDetail()" /></div>
+          <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => { nav.backFromFeatureDetail(); nav.pendingEditFeatureId = id }" /></div>
           <div v-if="nav.tab==='g'"><DagFlowEdit /></div>
           <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>

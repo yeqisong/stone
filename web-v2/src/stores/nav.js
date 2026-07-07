@@ -7,6 +7,7 @@ export const useNavStore = defineStore('nav', () => {
   const dcode = ref('')
   const fid = ref(null)   // feature detail id
   const prevTab = ref('')
+  const pendingEditFeatureId = ref(null)  // 从详情页点编辑时传回列表
 
   // URL hash 路由
   function parseHash() {
@@ -73,5 +74,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, prevTab, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, parseHash }
+  return { tab, dcode, fid, prevTab, pendingEditFeatureId, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, parseHash }
 })
