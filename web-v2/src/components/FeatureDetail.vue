@@ -134,12 +134,18 @@ const activeTab = ref('info')
 const pieChart = ref(null)
 const heatmapChart = ref(null)
 let pieInstance = null, heatmapInstance = null
+let diagnosisRendered = false
 
 function onTabChange(name) {
   if (name === 'diagnosis') {
     nextTick(() => {
-      if (pieInstance) pieInstance.resize()
-      if (heatmapInstance) heatmapInstance.resize()
+      if (!diagnosisRendered) {
+        renderDiagnosis()
+        diagnosisRendered = true
+      } else {
+        if (pieInstance) pieInstance.resize()
+        if (heatmapInstance) heatmapInstance.resize()
+      }
     })
   }
 }
@@ -193,10 +199,6 @@ async function loadDetail() {
     if (r.data.latest_computed_date) {
       staleDays.value = Math.round((new Date() - new Date(r.data.latest_computed_date))/86400000)
     }
-    await nextTick()
-    renderDiagnosis()
-    // 延迟渲染诊断图表（等待 Tab 容器就绪）
-    setTimeout(() => { if (pieInstance) pieInstance.resize(); if (heatmapInstance) heatmapInstance.resize() }, 100)
   } catch (e) {
     console.error(e)
   }
