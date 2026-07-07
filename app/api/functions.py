@@ -289,6 +289,25 @@ def _do_test_run(source_code, parameters, category):
                     numeric_args[p["name"]] = int(fv) if fv == int(fv) else fv
                 except: pass
 
+    # 如果参数列表为空，从函数签名自动解析：第一个参数非 df → 标量，df → 序列
+    if not params and not series_args and not numeric_args and not matrix_args:
+        sig_match = _re.search(r'def\s+\w+\s*\((.*?)\)', code)
+        if sig_match:
+            sig_args = [a.strip() for a in sig_match.group(1).split(',') if a.strip()]
+            for i, arg in enumerate(sig_args):
+                name = arg.split('=')[0].strip()
+                if i == 0 or name == 'df':
+                    col = f"col_{len(series_args)}"
+                    series_args.append((name, col))
+                else:
+                    default_val = arg.split('=')[1].strip() if '=' in arg else None
+                    if default_val:
+                        try:
+                            fv = float(default_val)
+                            numeric_args[name] = int(fv) if fv == int(fv) else fv
+                        except:
+                            pass
+
     n_rows = 200
     col_defs = []
     all_args = ""
@@ -333,7 +352,7 @@ print(json.dumps({{"elapsed_ms": round(elapsed, 1), "preview": preview, "rows": 
         f.write(test_script)
         tmp_path = f.name
     try:
-        proc = _sp.run(["python3", tmp_path], capture_output=True, text=True, timeout=5)
+        proc = _sp.run(["python3", tmp_path], capture_output=True, text=True, timeout=15)
         if proc.returncode != 0:
             return {"ok": False, "error": proc.stderr[:500] or proc.stdout[:500], "status": "failed"}
         result = json.loads(proc.stdout.strip())
@@ -341,7 +360,7 @@ print(json.dumps({{"elapsed_ms": round(elapsed, 1), "preview": preview, "rows": 
         status = "passed" if elapsed < 500 else ("warning" if elapsed < 2000 else "failed")
         return {"ok": True, "status": status, "elapsed_ms": elapsed, "preview": result["preview"], "rows": result["rows"]}
     except _sp.TimeoutExpired:
-        return {"ok": False, "error": "执行超时（>5s）", "status": "failed"}
+        return {"ok": False, "error": "执行超时（>15s）", "status": "failed"}
     finally:
         try: _os.unlink(tmp_path)
         except: pass
