@@ -589,7 +589,9 @@ class BaostockCrawler:
                                  "l":float(d[4]) if d[4] else 0,"cl":float(d[5]) if d[5] else 0,
                                  "v":int(float(d[6])) if d[6] else 0,"a":float(d[7]) if d[7] else 0})
                             total += 1
-                    except: pass
+                    except:
+                        db.rollback()
+                        logger.warning(f"指数插入失败 {label}, 回滚本批次")
         db.commit()
         logger.info(f"指数下载完成 {label}: {total} 条")
         return {"rows": total, "errors": 0}

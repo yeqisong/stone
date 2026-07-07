@@ -244,7 +244,7 @@ def get_model_diagnosis(version: str):
         win_loss_ratio = win_rate / (1 - win_rate) if win_rate and win_rate < 1 else 0
 
         # 3. 基准对比（简化：vs 沪深300 同期）
-        benchmark_return = 0.05  # 假设 5% 年化
+        benchmark_return = 0.0  # 需从实际基准数据获取，当前未实现
         vs_benchmark = annual - benchmark_return
 
         # 4. 集中度（Top3 盈利占比）
@@ -264,7 +264,7 @@ def get_model_diagnosis(version: str):
         raise
     except Exception as e:
         db.close()
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)[:200])
     finally:
         try: db.close()
         except: pass
@@ -554,8 +554,8 @@ def quality_dashboard(version: str):
             fr = db.execute(text("SELECT data_completeness FROM features WHERE feature_name=:fn"),{"fn":fn}).fetchone()
             fq.append({"feature":fn,"completeness":round(float(fr[0])*100 if fr and fr[0] else 0,1)})
         db.close()
-        return {"version":version,"phases":{"train":0.85,"val":0.82,"test":0.80},"features":fq,"correlation_warnings":[]}
+        return {"version":version,"phases":None,"features":fq,"correlation_warnings":[],"note":"特征质量数据需训练完成后生成"}
     except HTTPException:
         db.close(); raise
     except Exception as e:
-        db.close(); raise HTTPException(500,str(e))
+        db.close(); raise HTTPException(500, str(e)[:200])

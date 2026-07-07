@@ -93,7 +93,7 @@ def create_flow(body: CreateFlow, user: str = Depends(get_current_user)):
         raise
     except Exception as e:
         db.close()
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)[:200])
 
 
 @router.get("/flows/{flow_id}")
@@ -127,7 +127,7 @@ def get_flow(flow_id: int):
         raise
     except Exception as e:
         db.close()
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)[:200])
 
 
 @router.put("/flows/{flow_id}")
@@ -184,7 +184,7 @@ def update_flow(flow_id: int, body: UpdateFlow, user: str = Depends(get_current_
         raise
     except Exception as e:
         db.close()
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)[:200])
 
 
 @router.delete("/flows/{flow_id}")
@@ -204,7 +204,7 @@ def delete_flow(flow_id: int, user: str = Depends(get_current_user)):
         return {"ok": True}
     except Exception as e:
         db.close()
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)[:200])
 
 
 @router.post("/flows/validate")

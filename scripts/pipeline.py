@@ -74,6 +74,7 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
                     val = float(r[3]) if len(r) > 3 and r[3] else 0
                     industry = str(r[4]) if len(r) > 4 and r[4] else ''
             except:
+                db.rollback()
                 val = 0; industry = ''
 
             chg = 0
