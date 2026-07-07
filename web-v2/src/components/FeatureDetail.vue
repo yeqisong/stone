@@ -91,7 +91,7 @@
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">缺失归因饼图</div>
             <div ref="pieChart" style="width:100%;height:260px"></div>
             <div v-if="abnormalPct>50" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:8px;font-size:11px;color:#ef4444;margin-top:8px">
-              🔴 大部分缺失非停牌导致（{{ abnormalPct }}%），请检查计算逻辑或数据源。
+              🔴 {{ abnormalPct }}% 的缺失为异常缺失（非停牌/lookback），请扩大补数日期范围或检查计算逻辑。
             </div>
           </div>
           <div style="flex:2;min-width:350px">
@@ -258,43 +258,50 @@ function renderDiagnosis() {
     return
   }
 
-  // 饼图：缺失归因
+  // 饼图：正常缺失 vs 异常缺失
   const pieDom = pieChart.value
   if (pieDom) {
     const old = echarts.getInstanceByDom(pieDom)
     if (old) old.dispose()
     pieInstance = echarts.init(pieDom)
-    const missTotal = feat.value?.missing_cells_total || 0
-    const suspended = Math.round(missTotal * 0.3)  // 停牌估算 30%
-    const abnormal = missTotal - suspended
-    abnormalPct.value = missTotal > 0 ? Math.round(abnormal / missTotal * 100) : 0
-    if (missTotal > 0) {
+    const normalMissing = feat.value?.missing_cells_total || 0   // 停牌+lookback
+    const abnormalMissing = feat.value?.abnormal_missing_cells || 0
+    const totalMissing = normalMissing + abnormalMissing
+    abnormalPct.value = totalMissing > 0 ? Math.round(abnormalMissing / totalMissing * 100) : 0
+    if (totalMissing > 0) {
       pieInstance.setOption({
         tooltip: { trigger:'item' },
         series: [{
           type:'pie', radius:['40%','70%'],
           data: [
-            { value:suspended, name:'停牌导致', itemStyle:{color:'#9ca3af'} },
-            { value:abnormal, name:'非停牌异常', itemStyle:{color:'#ef4444'} },
+            { value:normalMissing, name:'正常缺失(停牌/lookback)', itemStyle:{color:'#9ca3af'} },
+            { value:abnormalMissing, name:'异常缺失(需排查)', itemStyle:{color:'#ef4444'} },
           ],
           label: { formatter:'{b}\n{d}%' },
         }],
       })
     } else {
       pieInstance.setOption({
-        title: { text:'暂无缺失数据', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
+        title: { text:'无缺失数据', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
       })
     }
   }
 
-  // 热力图：仅当有数据时渲染
+  // 热力图替换为文字摘要（没有逐股票缺失明细时，用总数概览代替）
   const hmDom = heatmapChart.value
   if (hmDom && feat.value?.total_effective_cells > 0) {
     const old = echarts.getInstanceByDom(hmDom)
     if (old) old.dispose()
     heatmapInstance = echarts.init(hmDom)
+    const actual = feat.value.total_effective_cells - feat.value.missing_cells_total - (feat.value.abnormal_missing_cells || 0)
     heatmapInstance.setOption({
-      title: { text:'请先运行特征计算后再查看', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
+      title: { text:'数据概览', left:'center', top:10, textStyle:{fontSize:13,color:'var(--c-text)'} },
+      graphic: [
+        { type:'text', left:'center', top:'35%',
+          style:{ text:`总格子 ${(feat.value.total_effective_cells||0).toLocaleString()}\n已计算 ${Math.max(0,actual).toLocaleString()}\n正常缺失 ${(feat.value.missing_cells_total||0).toLocaleString()}\n异常缺失 ${(feat.value.abnormal_missing_cells||0).toLocaleString()}`,
+            fontSize:12, fill:'var(--c-text-dim)', lineHeight:22, textAlign:'left' }
+        }
+      ]
     })
   }
 }
