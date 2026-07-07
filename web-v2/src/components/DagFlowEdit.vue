@@ -5,7 +5,19 @@
       <span style="font-size:17px;font-weight:700;color:var(--c-text)">DAG 流程编排</span>
       <n-select v-if="!editMode" v-model:value="selectedFlow" :options="flowOptions" size="small" style="width:180px" placeholder="选择流程" @update:value="openEdit" />
       <n-input v-if="editMode" v-model:value="flowName" size="small" style="width:180px" placeholder="流程名称" />
-      <n-input v-if="editMode" v-model:value="flowCron" size="small" style="width:140px" placeholder="Cron 表达式" />
+      <n-popover v-if="editMode" trigger="click" style="width:300px">
+        <template #trigger>
+          <n-input :value="flowCron || '点击设置Cron'" size="small" style="width:130px;cursor:pointer" readonly />
+        </template>
+        <div style="padding:8px;font-size:12px">
+          <div style="font-weight:600;margin-bottom:8px;color:var(--c-text)">⏰ Cron 表达式</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+            <n-button v-for="p in cronPresets" :key="p.value" size="tiny" :type="flowCron===p.value?'primary':'default'" @click="flowCron=p.value">{{ p.label }}</n-button>
+          </div>
+          <n-input v-model:value="flowCron" size="tiny" placeholder="或手动输入，如 0 8 * * 1-5" />
+          <div style="font-size:10px;color:var(--c-text-faint);margin-top:4px">格式: 分 时 日 月 周 (0=周日)</div>
+        </div>
+      </n-popover>
     </div>
     <div style="display:flex;gap:6px">
       <n-button v-if="editMode && flowStatus==='draft'" size="small" type="success" @click="doPublish" :loading="saving">🚀 发布</n-button>
@@ -88,7 +100,7 @@
 
 <script setup>
 import { ref, onMounted, nextTick, h } from 'vue'
-import { NButton, NSelect, NInput, NDataTable, NTag, NModal, NSpace, NDatePicker } from 'naive-ui'
+import { NButton, NSelect, NInput, NDataTable, NTag, NModal, NSpace, NDatePicker, NPopover } from 'naive-ui'
 import { Graph } from '@antv/x6'
 import axios from 'axios'
 
@@ -99,6 +111,14 @@ const selectedFlow = ref(null)
 const editMode = ref(false)
 const flowName = ref('')
 const flowCron = ref('')
+const cronPresets = [
+  { label:'每天 8:00', value:'0 8 * * *' },
+  { label:'每天 18:00', value:'0 18 * * *' },
+  { label:'工作日 8:00', value:'0 8 * * 1-5' },
+  { label:'每周一 8:00', value:'0 8 * * 1' },
+  { label:'每小时', value:'0 * * * *' },
+  { label:'每30分钟', value:'*/30 * * * *' },
+]
 const validation = ref(null)
 const saving = ref(false)
 const flowStatus = ref('draft')
