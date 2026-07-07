@@ -10,8 +10,8 @@
     <div style="display:flex;gap:6px">
       <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">🔍 校验</n-button>
       <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">💾 保存</n-button>
-      <n-button v-if="editMode" size="small" quaternary @click="editMode=false">← 返回</n-button>
-      <n-button v-if="!editMode" size="small" type="primary" @click="editMode=true;flowName='';flowCron='';initGraph()">+ 新建</n-button>
+      <n-button v-if="editMode" size="small" quaternary @click="editMode=false;validation=null">← 返回</n-button>
+      <n-button v-if="!editMode" size="small" type="primary" @click="editMode=true;flowName='';flowCron='';validation=null;initGraph()">+ 新建</n-button>
     </div>
   </div>
 
@@ -27,8 +27,8 @@
     <div style="width:160px;flex-shrink:0;background:var(--c-card-bg);border-right:1px solid var(--c-border);padding:10px;overflow-y:auto">
       <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">节点类型</div>
       <div v-for="nt in nodeTypes" :key="nt.name"
-        :style="{padding:'8px 10px',marginBottom:'4px',borderRadius:'6px',border:'1px solid var(--c-border)',cursor:'grab',fontSize:'11px',background:'var(--c-bg)',color:'var(--c-text)'}"
-        @mousedown="startDrag(nt)">
+        :style="{padding:'8px 10px',marginBottom:'4px',borderRadius:'6px',border:'1px solid var(--c-border)',cursor:'pointer',fontSize:'11px',background:'var(--c-bg)',color:'var(--c-text)'}"
+        @click="addNode(nt)">
         {{ nt.label || nt.name }}
       </div>
     </div>
@@ -62,7 +62,6 @@ const canvasRef = ref(null)
 
 let graph = null
 const nodeTypes = ref([])
-let dragNodeType = null
 
 const flowOptions = ref([])
 const flowCols = [
@@ -99,7 +98,12 @@ function initGraph() {
     grid: { visible: true, size: 20, args: { color: 'var(--c-border)' } },
     panning: { enabled: true, modifiers: 'shift' },
     mousewheel: { enabled: true, modifiers: ['ctrl','meta'] },
-    connecting: { snap: true, allowBlank: false, connector: { name: 'smooth' } },
+    connecting: { 
+      snap: { radius: 20 },
+      allowBlank: false,
+      connector: { name: 'smooth' },
+      createEdge() { return { attrs: { line: { stroke: '#6b7280', strokeWidth: 2, targetMarker: { name:'block',width:8,height:6 } } } } },
+    },
     selecting: { enabled: true, multiple: false },
     keyboard: { enabled: true },
     history: { enabled: true },
@@ -112,39 +116,48 @@ function initGraph() {
   })
 
   // Drop handler
-  graph.on('node:mouseup', ({ node }) => {
-    node.setData({ selected: true })
+  // Double-click node → show detail
+  graph.on('node:dblclick', ({ node }) => {
+    const name = node.getData()?.node_name
+    if (!name) return
+    axios.get(API + `/api/dag/node-types/${name}`).then(r => {
+      const d = r.data
+      const steps = (d.sub_steps || []).map(s => `${s.name}: ${s.desc}`).join('\n')
+      alert(`${d.label || d.node_name}\n\n上游: ${d.deps.join(', ') || '无'}\n\n内部子图:\n${steps || '无子步骤'}`)
+    }).catch(() => {})
   })
 }
 
-function startDrag(nt) {
-  dragNodeType = nt
-  // Add node at center of visible area on next click
-  if (!graph) return
-  const center = graph.getGraphArea().getCenter()
-  graph.addNode({
-    x: center.x - 60 + Math.random() * 100,
-    y: center.y - 20 + Math.random() * 60,
+function makeNode(name, label, x, y) {
+  return {
+    x: x || 100, y: y || 100,
     width: 120, height: 40,
     shape: 'rect',
-    label: nt.label || nt.name,
-    data: { node_name: nt.name },
+    label: label || name,
+    data: { node_name: name },
     attrs: {
       body: { rx: 8, ry: 8, fill: '#1e293b', stroke: '#475569', strokeWidth: 2 },
       label: { fill: '#e2e8f0', fontSize: 11, fontWeight: 600 },
     },
     ports: {
       groups: {
-        top: { position: 'top', attrs: { circle: { r: 4, fill: '#60a5fa' } } },
-        bottom: { position: 'bottom', attrs: { circle: { r: 4, fill: '#f59e0b' } } },
+        top: { position: 'top', attrs: { circle: { r: 5, magnet: true, fill: '#60a5fa', stroke: '#1e293b', strokeWidth: 2 } } },
+        bottom: { position: 'bottom', attrs: { circle: { r: 5, magnet: true, fill: '#f59e0b', stroke: '#1e293b', strokeWidth: 2 } } },
       },
       items: [{ group: 'top' }, { group: 'bottom' }],
     },
-  })
+  }
+}
+
+function addNode(nt) {
+  if (!graph) return
+  const c = graph.getGraphArea().getCenter()
+  graph.addNode(makeNode(nt.node_name || nt.name, nt.label, c.x - 60 + Math.random() * 100, c.y - 20 + Math.random() * 60))
 }
 
 async function openEdit(id) {
   editMode.value = true
+  validation.value = null
   try {
     const r = await axios.get(API + `/api/dag/flows/${id}`)
     const d = r.data
@@ -156,24 +169,7 @@ async function openEdit(id) {
     // Load existing nodes
     const nodeMap = {}
     for (const n of d.nodes || []) {
-      const node = graph.addNode({
-        x: 100 + Math.random() * 400, y: 50 + Math.random() * 300,
-        width: 120, height: 40,
-        shape: 'rect',
-        label: n.node_name,
-        data: { node_name: n.node_name },
-        attrs: {
-          body: { rx: 8, ry: 8, fill: '#1e293b', stroke: '#475569', strokeWidth: 2 },
-          label: { fill: '#e2e8f0', fontSize: 11, fontWeight: 600 },
-        },
-        ports: {
-          groups: {
-            top: { position: 'top', attrs: { circle: { r: 4, fill: '#60a5fa' } } },
-            bottom: { position: 'bottom', attrs: { circle: { r: 4, fill: '#f59e0b' } } },
-          },
-          items: [{ group: 'top' }, { group: 'bottom' }],
-        },
-      })
+      const node = graph.addNode(makeNode(n.node_name, n.node_name, 100 + Math.random() * 400, 50 + Math.random() * 300))
       nodeMap[n.node_name] = node
     }
     // Draw edges
