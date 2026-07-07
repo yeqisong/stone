@@ -1179,30 +1179,46 @@ def dag_task_model_train(trade_date=None, **kw):
                         gross = h['shares'] * sell_price
                         sell_cost = gross * (commission + stamp_tax) + max(gross * slippage, 0)
                         net_sell = max(gross - sell_cost, 0)
+                        cash_before = cash
                         cash += net_sell
-                        # 计算买入成本（含滑点+佣金）
                         buy_gross = h['shares'] * h['buy_price']
                         buy_cost = buy_gross * commission + max(buy_gross * (slippage / 2), 0)
                         pnl = net_sell - (buy_gross + buy_cost)
                         pnl_pct = pnl / (buy_gross + buy_cost) if (buy_gross + buy_cost) > 0 else 0
-                        equity_at_buy = equity_curve[h['eq_idx']] if 'eq_idx' in h else equity
+
+                        # 分录：卖出记录
+                        trade_id = h.get('trade_id', '')
+                        cumulative_pnl = sum(t.get('pnl', 0) for t in trade_log) + pnl
+                        cumulative_return = cumulative_pnl / initial_cash if initial_cash > 0 else 0
+
+                        pos_value = 0
+                        for hh in holdings:
+                            if hh['code'] != h['code']:
+                                hday = val_df[(val_df['date'] == d) & (val_df['code'] == hh['code'])]
+                                if not hday.empty:
+                                    pos_value += hh['shares'] * float(hday['price'].iloc[0])
+                        market_value = cash + pos_value
+
                         trade_log.append({
+                            'trade_id': trade_id,
+                            'action': 'SELL',
+                            'date': str(d)[:10],
                             'code': h['code'],
-                            'buy_date': str(h['buy_date'])[:10],
-                            'buy_price': round(h['buy_price'], 2),
-                            'sell_date': str(d)[:10],
-                            'sell_price': round(sell_price, 2),
+                            'price': round(sell_price, 2),
                             'shares': h['shares'],
-                            'buy_amount': round(h.get('buy_amount', buy_gross + buy_cost), 2),
-                            'sell_amount': round(net_sell, 2),
-                            'position_pct': round(h.get('position_pct', 0), 4),
-                            'equity_at_buy': round(h.get('equity_at_buy', 0), 2),
-                            'equity_at_sell': round(equity, 2),
+                            'amount': round(net_sell, 2),
+                            'commission_tax': round(sell_cost, 2),
+                            'cash_before': round(cash_before, 2),
+                            'cash_after': round(cash, 2),
+                            'market_value': round(market_value, 2),
                             'pnl': round(pnl, 2),
                             'pnl_pct': round(pnl_pct, 4),
+                            'cumulative_pnl': round(cumulative_pnl, 2),
+                            'cumulative_return': round(cumulative_return, 6),
                             'reason': 'stop_loss' if cur_price <= h['buy_price'] * (1 - stop_loss) else 'hold_expire',
                             'signal_source': h.get('signal_source', ''),
                             'hold_days': (d - h['buy_date']).days,
+                            'buy_trade_id': trade_id,
                         })
                         trade_count += 1
                         if sell_price > h['buy_price']:
@@ -1259,16 +1275,42 @@ def dag_task_model_train(trade_date=None, **kw):
                     total_cost = gross + buy_cost
                     if total_cost > cash:
                         continue
+                    cash_before = cash
                     cash -= total_cost
+
+                    trade_id = f"T{len(trade_log)+1:04d}"
+                    pos_value = total_cost
+                    for hh in holdings:
+                        hday = val_df[(val_df['date'] == d) & (val_df['code'] == hh['code'])]
+                        if not hday.empty:
+                            pos_value += hh['shares'] * float(hday['price'].iloc[0])
+                    market_value = cash + pos_value
+                    cumulative_pnl = sum(t.get('pnl', 0) for t in trade_log)
+                    cumulative_return = cumulative_pnl / initial_cash if initial_cash > 0 else 0
+
+                    # 分录：买入记录
+                    trade_log.append({
+                        'trade_id': trade_id,
+                        'action': 'BUY',
+                        'date': str(d)[:10],
+                        'code': r['code'],
+                        'price': round(buy_price, 2),
+                        'shares': shares,
+                        'amount': round(total_cost, 2),
+                        'commission': round(buy_cost, 4),
+                        'cash_before': round(cash_before, 2),
+                        'cash_after': round(cash, 2),
+                        'market_value': round(market_value, 2),
+                        'position_pct': round(total_cost / max(equity, 1), 4),
+                        'signal_source': str(hdays) + 'd',
+                    })
+
                     holdings.append({
                         'code': r['code'],
                         'buy_price': price,
                         'buy_date': d,
                         'shares': shares,
-                        'buy_amount': total_cost,
-                        'position_pct': round(total_cost / max(equity, 1), 4),
-                        'equity_at_buy': round(equity, 2),
-                        'eq_idx': len(equity_curve),
+                        'trade_id': trade_id,
                         'signal_source': str(hdays) + 'd',
                     })
 
