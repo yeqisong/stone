@@ -101,7 +101,7 @@
 
   <!-- Data Status DAG Flow -->
   <div style="margin-top:14px">
-    <DagView />
+    <DagFlowView />
   </div>
 
   <!-- DAG 节点类型 -->
@@ -252,7 +252,7 @@
 import { ref, computed, onMounted, h } from 'vue'
 import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag } from 'naive-ui'
 import axios from 'axios'
-import DagView from './DagView.vue'
+import DagFlowView from './DagFlowView.vue'
 import BackfillModal from './BackfillModal.vue'
 import { addWsListener } from '../utils/ws'
 
