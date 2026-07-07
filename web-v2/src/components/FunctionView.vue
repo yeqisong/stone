@@ -411,7 +411,7 @@ async function doCreate() {
     await axios.post(API + '/api/functions', {
       ...form.value,
       parameters: formParams.value,
-    })
+    }, { headers: authHeaders() })
     showCreate.value = false
     await loadData()
   } catch(e) {
@@ -426,7 +426,7 @@ async function doUpdate() {
     await axios.put(API + '/api/functions/' + editId.value, {
       ...form.value,
       parameters: formParams.value,
-    })
+    }, { headers: authHeaders() })
     showCreate.value = false
     await loadData()
   } catch(e) {
@@ -470,7 +470,7 @@ ${aiRequirement.value}
 
     const r = await axios.post(API + '/api/functions/ai-chat', {
       messages: [{ role: 'user', content: prompt }],
-    })
+    }, { headers: authHeaders() })
     const content = r.data?.content?.content || r.data?.content || r.data?.message || ''
     // 提取代码块
     const codeMatch = content.match(/```(?:python)?\s*\n?([\s\S]*?)\n?```/)
@@ -491,6 +491,11 @@ function applyAiResult() {
   aiResult.value = ''
 }
 
+function authHeaders() {
+  const t = localStorage.getItem('token')
+  return t ? { Authorization: 'Bearer ' + t } : {}
+}
+
 async function doTestRun() {
   if (!form.value.source_code.trim()) return
   testRunning.value = true
@@ -502,7 +507,7 @@ async function doTestRun() {
     const body = editId.value
       ? { test_data: {} }
       : { source_code: form.value.source_code, parameters: formParams.value, category: form.value.category }
-    const r = await axios.post(endpoint, body)
+    const r = await axios.post(endpoint, body, { headers: authHeaders() })
     testResult.value = r.data
   } catch(e) {
     testResult.value = { error: e.response?.data?.detail || '执行失败' }
@@ -514,13 +519,13 @@ async function publishFunc() {
   publishing.value = true
   try {
     // 先试运行
-    const tr = await axios.post(API + '/api/functions/' + editId.value + '/test-run', { test_data: {} })
+    const tr = await axios.post(API + '/api/functions/' + editId.value + '/test-run', { test_data: {} }, { headers: authHeaders() })
     if (tr.data.status === 'failed' && tr.data.elapsed_ms > 2000) {
       alert('函数性能不达标（>2000ms），无法发布')
       return
     }
     // 发布
-    await axios.put(API + '/api/functions/' + editId.value, { status: 'published' })
+    await axios.put(API + '/api/functions/' + editId.value, { status: 'published' }, { headers: authHeaders() })
     alert('发布成功！')
     showTestRun.value = false
     await loadData()
@@ -532,7 +537,7 @@ async function publishFunc() {
 async function confirmDel(row) {
   if (!confirm(`确定删除函数「${row.name}」？`)) return
   try {
-    await axios.delete(API + '/api/functions/' + row.id)
+    await axios.delete(API + '/api/functions/' + row.id, { headers: authHeaders() })
     await loadData()
   } catch(e) {
     alert(e.response?.data?.detail || '删除失败')
@@ -570,7 +575,7 @@ async function openVersions(row) {
 async function doRollback(v) {
   if (!confirm(`确定回滚到版本 v${v}？当前代码将被覆盖。`)) return
   try {
-    await axios.post(API + '/api/functions/' + detailItem.value.id + '/rollback/' + v)
+    await axios.post(API + '/api/functions/' + detailItem.value.id + '/rollback/' + v, {}, { headers: authHeaders() })
     alert('回滚成功，请刷新查看')
     showVersions.value = false
     await loadData()
