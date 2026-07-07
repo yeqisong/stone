@@ -79,6 +79,9 @@
       </n-tab-pane>
 
       <n-tab-pane name="diagnosis" tab="数据缺失诊断">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+          <n-button size="tiny" quaternary @click="recomputeStats" :loading="statsLoading">🔄 重新诊断</n-button>
+        </div>
         <div v-if="!feat.total_effective_cells" style="text-align:center;padding:60px 20px;color:var(--c-text-dim)">
           <div style="font-size:14px;margin-bottom:8px">📭 暂无特征计算数据</div>
           <div style="font-size:12px">该特征尚未执行计算，请通过列表页 📥 补数功能或 DAG 流水线触发特征计算。</div>
@@ -169,6 +172,24 @@ const previewTotal = ref(0)
 const previewPage = ref(1)
 const previewLoading = ref(false)
 const previewEmptyReason = ref('')
+const statsLoading = ref(false)
+
+function authHeaders() {
+  const t = localStorage.getItem('token')
+  return t ? { Authorization: 'Bearer ' + t } : {}
+}
+
+async function recomputeStats() {
+  statsLoading.value = true
+  try {
+    await axios.post(API + `/api/features/${props.featureId}/recompute-stats`, {}, { headers: authHeaders() })
+    await loadDetail()
+  } catch(e) {
+    console.error(e)
+  } finally {
+    statsLoading.value = false
+  }
+}
 
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
 const statusTypeMap = { draft:'warning', enabled:'success', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }

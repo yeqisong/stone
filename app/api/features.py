@@ -876,6 +876,13 @@ def compute_range(feature_id: int, body: ComputeRangeBody, user: str = Depends(g
         raise HTTPException(500, str(e))
 
 
+@router.post("/{feature_id}/recompute-stats")
+def recompute_stats(feature_id: int, user: str = Depends(get_current_user)):
+    """原子级重算特征统计（不触发计算，仅基于 feature_values 现有数据更新诊断）。"""
+    _update_feature_stats_after_compute(feature_id)
+    return {"ok": True, "message": "诊断已更新"}
+
+
 @router.get("/{feature_id}/compute-status")
 def compute_status(feature_id: int):
     """查询当前特征的补数进度。"""
