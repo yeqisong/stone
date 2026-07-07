@@ -1014,44 +1014,35 @@ def dag_task_model_train(trade_date=None, **kw):
             if tcnt > 0 and df_tcnt > 0 and abs(tcnt/6 - df_tcnt) > df_tcnt * 0.01:
                 logger.warning(f"[train] {tlabel}行数({tcnt})与JOIN后行数({df_tcnt})偏差>1%，可能存在对齐缺口")
 
-        update_node_progress(log_id=log_id, rows=1, detail='步骤1:加载指标')
+        update_node_progress(log_id=log_id, rows=1, detail='步骤1:加载特征')
 
-        # ── 2. 特征工程 ──
+        # ── 2. 特征工程（v2.6: 使用 feature_names，不再依赖旧指标列名）──
         update_node_progress(log_id=log_id, rows=2, detail='步骤2:特征工程')
-        df['bias_5_20'] = df['ma5'] / df['ma20'] - 1
-        df['vol_ratio_3d'] = df.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())
-        df['obv_slope_7d'] = df.groupby('stock_code')['obv'].transform(lambda x: (x - x.shift(7)) / (x.shift(7).abs() + 1))
+        FEATURES = list(feature_names)
 
-        # ── 市场过滤器：沪深300 20日动量 + 全市场涨跌比 ──
+        # 派生特征（仅当宽表包含所需列时才计算）
+        if 'ma_5' in df.columns and 'ma_20' in df.columns:
+            df['bias_5_20'] = df['ma_5'] / df['ma_20'] - 1
+            FEATURES.append('bias_5_20')
+        if 'vol_ratio' in df.columns:
+            df['vol_ratio_3d'] = df.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())
+            FEATURES.append('vol_ratio_3d')
+
+        # 市场过滤器：沪深300 20日动量
         idx_rows = db.execute(text(
             "SELECT trade_date, close FROM index_daily_quote WHERE index_code='000300' AND trade_date BETWEEN :ds AND :ed ORDER BY trade_date"
         ), {"ds": data_start, "ed": end_date}).fetchall()
-        idx_df = pd.DataFrame(idx_rows, columns=['trade_date','idx_close'])
-        idx_df['trade_date'] = idx_df['trade_date'].astype(str)
-        idx_df['idx_ret_20d'] = idx_df['idx_close'].pct_change(20)
-        df = df.merge(idx_df[['trade_date','idx_ret_20d']], on='trade_date', how='left')
-        df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0)
+        if idx_rows:
+            idx_df = pd.DataFrame(idx_rows, columns=['trade_date','idx_close'])
+            idx_df['trade_date'] = idx_df['trade_date'].astype(str)
+            idx_df['idx_ret_20d'] = idx_df['idx_close'].pct_change(20)
+            df = df.merge(idx_df[['trade_date','idx_ret_20d']], on='trade_date', how='left')
+            df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0)
+            FEATURES.append('idx_ret_20d')
 
-        # 全市场涨跌比（当日上涨股票数/总数，用 close > open 近似）
-        breadth = df.groupby('trade_date').apply(
-            lambda g: (g['close'] > g['close'].shift(1)).sum() / len(g) if len(g) > 0 else 0.5
-        ).reset_index(name='market_breadth')
-        df = df.merge(breadth, on='trade_date', how='left')
-        df['market_breadth'] = df['market_breadth'].fillna(0.5)
-
-        # 根据用户选择的指标过滤特征
-        ALL_FEATURES = {
-            'boll':   ['pct_b','width'],
-            'macd':   ['dif','dea','hist'],
-            'rsi':    ['rsi'],
-            'atr':    ['atr'],
-            'ma':     ['ma5','ma20'],
-            'volume': ['vol_ratio','obv'],
-        }
-        derived = ['bias_5_20','vol_ratio_3d','obv_slope_7d','idx_ret_20d','market_breadth']
-        selected = cfg.get('features', ['boll','macd','rsi','atr','ma','volume'])
-        FEATURES = derived + [f for feat in selected if feat in ALL_FEATURES for f in ALL_FEATURES[feat]]
-        df = df.dropna(subset=FEATURES + ['ma20'])
+        # 只保留有效特征列 + close/volume
+        valid_features = [f for f in FEATURES if f in df.columns]
+        df = df.dropna(subset=valid_features)
 
         # ── 3. 标签：forward N 日收益 ──
         # 从 daily_quote 批量查每只股票 N 日后的 close_hfq
@@ -1340,20 +1331,19 @@ def dag_task_model_train(trade_date=None, **kw):
                 Y_tr = {tname: df[train_mask][tname].values[:train_n] for _, tname, _ in TARGETS}
                 Y_es = {tname: df[train_mask][tname].values[train_n:] for _, tname, _ in TARGETS}
 
-                total_sharpe = 0
+                total_r2 = 0
                 for label, tname, hdays in TARGETS:
                     model = XGBRegressor(**params, early_stopping_rounds=20)
                     model.fit(X_tr, Y_tr[tname], eval_set=[(X_es, Y_es[tname])], verbose=False)
-                    y_pred = model.predict(X_val)
-                    bt = _backtest(df[val_mask][tname].values, y_pred, val_dates, val_codes, val_close, val_volume, hdays)
-                    models[label] = {'model': model, 'r2': round(float(model.score(X_val, df[val_mask][tname])), 4), 'backtest': bt}
-                    total_sharpe += bt['sharpe']
-                avg_sharpe = total_sharpe / 3
-                trial_records.append({'trial': len(trial_records)+1, 'params': params, 'sharpe': round(avg_sharpe, 4)})
-                update_node_progress(log_id=log_id, rows=len(trial_records), detail=f'Optuna实验:{len(trial_records)}/{n_trials} sharpe={avg_sharpe:.3f}')
-                if avg_sharpe > best_score:
-                    best_score = avg_sharpe
-                    best_params_store = {k: {'params': params, 'r2': m['r2'], 'backtest': m['backtest']} for k, m in models.items()}
+                    r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
+                    models[label] = {'model': model, 'r2': r2}
+                    total_r2 += r2
+                avg_r2 = total_r2 / 3
+                trial_records.append({'trial': len(trial_records)+1, 'params': params, 'r2': round(avg_r2, 4)})
+                update_node_progress(log_id=log_id, rows=len(trial_records), detail=f'Optuna实验:{len(trial_records)}/{n_trials} r²={avg_r2:.4f}')
+                if avg_r2 > best_score:
+                    best_score = avg_r2
+                    best_params_store = {k: {'params': params, 'r2': m['r2']} for k, m in models.items()}
                     best_models = {k: m['model'] for k, m in models.items()}
                 db.execute(text("INSERT INTO training_trials (version, trial_number, params, score) VALUES (:v,:n,:p,:s) ON CONFLICT (version, trial_number) DO UPDATE SET params=EXCLUDED.params, score=EXCLUDED.score"),
                            {"v": ver, "n": trial.number + 1, "p": _json.dumps(params), "s": round(float(avg_sharpe), 4)})
@@ -1369,10 +1359,9 @@ def dag_task_model_train(trade_date=None, **kw):
             for label, tname, hdays in TARGETS:
                 model = XGBRegressor(**params)
                 model.fit(X_train, df[train_mask][tname])
-                y_pred = model.predict(X_val)
-                bt = _backtest(df[val_mask][tname].values, y_pred, val_dates, val_codes, val_close, val_volume, hdays)
+                r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
                 best_models[label] = model
-                best_params_store[label] = {'params': params, 'r2': round(float(model.score(X_val, df[val_mask][tname])), 4), 'backtest': bt}
+                best_params_store[label] = {'params': params, 'r2': r2}
             update_node_progress(log_id=log_id, rows=1, detail='训练完成(无Optuna)')
 
         # ── 最终评估：测试集（Optuna从未见过的数据）──
@@ -1418,12 +1407,12 @@ def dag_task_model_train(trade_date=None, **kw):
         all_trades = deduped
         all_trades.sort(key=lambda t: t['sell_date'], reverse=True)
 
-        # 过拟合检测：对比 val 和 test 的夏普
-        val_sharpes = [best_params_store.get(l,{}).get('backtest',{}).get('sharpe',0) for l in ['10d','20d']]
+        # 过拟合检测：对比 val R² 和 test sharpe（val上高R² + test上低sharpe = 过拟合）
+        val_r2s = [best_params_store.get(l,{}).get('r2',0) for l in ['10d','20d']]
         test_sharpes = [test_results.get(l,{}).get('sharpe',0) for l in ['10d','20d']]
-        val_avg = float(np.mean(val_sharpes)) if val_sharpes else 0
-        test_avg = float(np.mean(test_sharpes)) if test_sharpes else 0
-        overfit_gap = val_avg - test_avg  # 正值=过拟合, 负值=欠拟合
+        val_r2_avg = float(np.mean(val_r2s)) if val_r2s else 0
+        test_sharpe_avg = float(np.mean(test_sharpes)) if test_sharpes else 0
+        overfit_warning = val_r2_avg > 0.3 and test_sharpe_avg < 0.5  # 高R²低实盘 = 过拟合信号
 
         # 基准对比：沪深300 同期收益（用 000300 指数数据）
         benchmark_return = 0
