@@ -618,10 +618,8 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('treemap', 'fund', '树图', 6),
     ('stats', 'treemap,model_health,index,etf', '统计', 8),
     ('daily_completeness', 'stats', '日历统计', 9),
-    ('indicator_incr', 'kline', '指标增量', 10),
-    ('indicator_full', '', '指标全量', 11),
     ('model_train', '', '模型训练', 12),
-    ('model_signal', 'indicator_incr', '模型信号', 13),
+    ('model_signal', 'feature_compute', '模型信号', 13),
     ('model_health', 'model_signal', '模型健康', 14),
     ('feature_compute', 'indicator_incr', '特征计算', 15),
     ('feature_backfill', '', '特征补数', 16)
@@ -992,6 +990,13 @@ def init_db(sync_session) -> None:
     # 迁移：abnormal_missing_cells 列（v2.5）
     try:
         sync_session.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS abnormal_missing_cells BIGINT DEFAULT 0"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：移除 indicator 节点（v2.6 — KEPL feature_compute 替代）
+    try:
+        sync_session.execute(text("DELETE FROM dag_config WHERE node_name IN ('indicator_incr','indicator_full')"))
+        sync_session.commit()
     except Exception:
         sync_session.rollback()
 

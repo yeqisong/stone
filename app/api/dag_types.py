@@ -28,12 +28,6 @@ NODE_SUB_STEPS = {
         {'name': '生成 data_stats_cache', 'desc': 'JSON 写入缓存表'},
         {'name': '更新 system_metrics', 'desc': '系统指标快照'},
     ],
-    'indicator_incr': [
-        {'name': '获取增量日期', 'desc': '最近 N 个未计算的交易日'},
-        {'name': '拉取行情', 'desc': 'daily_quote → DataFrame'},
-        {'name': '计算指标', 'desc': 'BOLL/MACD/RSI/ATR/MA/Volume'},
-        {'name': '写入 stock_indicators_*', 'desc': '批量 INSERT'},
-    ],
     'model_train': [
         {'name': '拉取特征宽表', 'desc': 'feature_values + indicators JOIN'},
         {'name': '标签计算', 'desc': 'Triple Barrier 标签'},

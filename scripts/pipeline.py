@@ -1853,8 +1853,6 @@ NODE_FN_MAP = {
     'treemap':            dag_task_treemap,
     'stats':              dag_task_stats,
     'daily_completeness': dag_task_completeness,
-    'indicator_full':     dag_task_indicator_full,
-    'indicator_incr':     dag_task_indicator_incr,
     'model_train':        dag_task_model_train,
     'model_signal':       dag_task_model_signal,
     'model_health':       dag_task_model_health,
