@@ -542,7 +542,6 @@ const backfillBtns = [
   { type: 'index', label: '指数日K线', icon: '📊' },
   { type: 'etf', label: 'ETF日K线', icon: '💹' },
   { type: 'fund', label: '基本面', icon: '📋' },
-  { type: 'indicator', label: '基础指标加工', icon: '⚙️' },
   { type: 'calendar', label: '日历统计', icon: '📅' },
 ]
 

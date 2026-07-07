@@ -59,7 +59,7 @@ const API = window.location.origin
 
 const LABELS = {
   kline: '个股日K线', index: '指数日K线', etf: 'ETF日K线',
-  fund: '基本面', indicator: '基础指标加工', calendar: '日历统计',
+  fund: '基本面', calendar: '日历统计',
 }
 
 const title = computed(() => `📥 ${LABELS[props.type] || props.type} 补数`)
