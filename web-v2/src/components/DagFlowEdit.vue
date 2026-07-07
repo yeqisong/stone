@@ -10,6 +10,7 @@
     <div style="display:flex;gap:6px">
       <n-button v-if="editMode && flowStatus==='draft'" size="small" type="success" @click="doPublish" :loading="saving">🚀 发布</n-button>
       <n-button v-if="editMode && flowStatus==='published'" size="small" type="warning" @click="doUnpublish" :loading="saving">⬇ 下线</n-button>
+      <n-button v-if="editMode && flowStatus==='published'" size="small" type="primary" @click="showExecModal=true">▶ 执行</n-button>
       <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">🔍 校验</n-button>
       <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">💾 保存</n-button>
       <n-button v-if="editMode" size="small" quaternary @click="editMode=false;validation=null">← 返回</n-button>
@@ -66,12 +67,28 @@
   <div v-else style="flex:1;overflow-y:auto">
     <n-data-table :columns="flowCols" :data="flows" size="small" :loading="loading" />
   </div>
+
+  <!-- 执行弹窗 -->
+  <n-modal v-model:show="showExecModal" preset="card" title="▶ 执行流程" style="width:360px;max-width:92vw">
+    <n-space vertical>
+      <div style="font-size:12px;color:var(--c-text-dim)">选择执行日期（默认今天）</div>
+      <n-date-picker v-model:value="execDate" type="date" size="small" style="width:100%" />
+      <div v-if="execResult" style="margin-top:8px;padding:8px;background:var(--c-card-bg);border-radius:6px;font-size:11px">
+        <div v-if="execResult.ok" style="color:#10b981">✅ 已触发 — {{ execResult.run_id }}</div>
+        <div v-else style="color:#ef4444">❌ {{ execResult.error }}</div>
+      </div>
+    </n-space>
+    <template #footer>
+      <n-button @click="showExecModal=false">取消</n-button>
+      <n-button type="primary" @click="doExecute" :loading="execLoading">执行</n-button>
+    </template>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
 import { ref, onMounted, nextTick, h } from 'vue'
-import { NButton, NSelect, NInput, NDataTable, NTag } from 'naive-ui'
+import { NButton, NSelect, NInput, NDataTable, NTag, NModal, NSpace, NDatePicker } from 'naive-ui'
 import { Graph } from '@antv/x6'
 import axios from 'axios'
 
@@ -91,6 +108,10 @@ let graph = null
 const nodeTypes = ref([])
 const showNodeDetail = ref(false)
 const nodeDetail = ref(null)
+const showExecModal = ref(false)
+const execDate = ref(null)
+const execLoading = ref(false)
+const execResult = ref(null)
 
 const flowOptions = ref([])
 const flowCols = [
@@ -271,6 +292,24 @@ async function doUnpublish() {
     loadFlows()
   } catch(e) { alert(e.response?.data?.detail || '下线失败') }
   saving.value = false
+}
+
+async function doExecute() {
+  if (!selectedFlow.value) return
+  execLoading.value = true; execResult.value = null
+  try {
+    const fd = (d) => {
+      if (!d) return ''
+      const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0')
+    }
+    const r = await axios.post(API + `/api/dag/flows/${selectedFlow.value}/execute`, {
+      trade_date: fd(execDate.value)
+    })
+    execResult.value = r.data
+  } catch(e) {
+    execResult.value = { ok: false, error: e.response?.data?.detail || e.message }
+  }
+  execLoading.value = false
 }
 
 async function doSave() {

@@ -279,6 +279,60 @@ def validate_flow_nodes(body: dict):
         return {"ok": False, "errors": [str(e)]}
 
 
+@router.post("/flows/{flow_id}/execute")
+def execute_flow(flow_id: int, body: dict = {}, user: str = Depends(get_current_user)):
+    """触发流程执行。body: {"trade_date": "2026-07-08"}（默认今天）。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    from scripts.pipeline import NODE_FN_MAP
+    from scripts.dag import DagExecutor, DagNode
+    from datetime import date as _date
+    import uuid, threading, json as _json
+
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT flow_name, nodes, edges, cron_expr FROM dag_flows WHERE id=:id"),
+                       {"id": flow_id}).fetchone()
+        db.close()
+        if not r:
+            raise HTTPException(404, "流程不存在")
+
+        flow_name = r[0]
+        nodes_raw = _json.loads(r[1]) if isinstance(r[1], str) else (r[1] or [])
+        td = body.get("trade_date", "") or str(_date.today())
+        run_id = f"run-{uuid.uuid4().hex[:8]}"
+
+        # 构建临时 DagExecutor
+        executor = DagExecutor()
+        for n in nodes_raw:
+            name = n.get("node_name", "")
+            deps = n.get("deps", [])
+            fn = NODE_FN_MAP.get(name)
+            if not fn:
+                fn = lambda **kw: True  # 无函数的节点当标记节点
+            executor.add(DagNode(name, deps, fn))
+
+        # 后台线程执行
+        def _bg():
+            from loguru import logger
+            try:
+                executor.run_all(trade_date=td, run_id=run_id)
+                logger.info(f"[flow] {flow_name} 执行完成 {run_id}")
+            except Exception as e:
+                logger.error(f"[flow] {flow_name} 执行失败: {e}")
+
+        thread = threading.Thread(target=_bg, daemon=True)
+        thread.start()
+
+        return {"ok": True, "run_id": run_id, "flow_name": flow_name, "trade_date": td, "status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try: db.close()
+        except: pass
+        raise HTTPException(500, str(e)[:200])
+
+
 def _validate_flow(nodes: List[FlowNode], db) -> List[str]:
     """7 项流程校验规则。返回错误列表。"""
     from sqlalchemy import text
