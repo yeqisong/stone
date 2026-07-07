@@ -7,6 +7,11 @@ export const useAuthStore = defineStore('auth', () => {
   const username = ref(localStorage.getItem('username') || '')
   const isLoggedIn = computed(() => !!token.value)
 
+  // 初始化时从 localStorage 恢复 axios Authorization header（刷新页面后必须）
+  if (token.value) {
+    axios.defaults.headers.common['Authorization'] = 'Bearer ' + token.value
+  }
+
   function setToken(t) {
     token.value = t
     localStorage.setItem('token', t)
