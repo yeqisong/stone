@@ -164,9 +164,10 @@
       <n-checkbox v-model:checked="computeForce">强制更新（覆盖已有数据）</n-checkbox>
       <div v-if="computeProgress" style="margin-top:8px">
         <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:4px">
-          {{ computeProgress.current_date || '计算中...' }} ({{ computeProgress.progress_pct }}%)
+          {{ computeProgress.current_date || '计算中...' }}
         </div>
-        <n-progress type="line" :percentage="computeProgress.progress_pct" :height="8" :border-radius="4" />
+        <n-progress type="line" :percentage="computeProgress.progress_pct || 0" :height="8" :border-radius="4"
+          :status="computeProgress.status === 'failed' ? 'error' : computeProgress.status === 'completed' ? 'success' : 'default'" />
       </div>
     </n-space>
     <template #footer>

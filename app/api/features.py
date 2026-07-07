@@ -896,32 +896,38 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
     try:
         db = get_sync_db()
 
-        with _compute_lock:
-            _compute_tasks[task_id].update({"progress_pct": 10, "current_date": "拉取行情数据..."})
-            from app.signal import wake_dag_broadcast
-            wake_dag_broadcast()
+        def _report(pct, msg):
+            with _compute_lock:
+                _compute_tasks[task_id].update({"progress_pct": pct, "current_date": msg})
+                from app.signal import wake_dag_broadcast
+                wake_dag_broadcast()
+
+        _report(5, "拉取行情数据...")
 
         # 统一批量模式：拉取全量 daily_quote → DataFrame → 批量计算 → 批量写入
-        # ON CONFLICT DO UPDATE 已处理覆盖/跳过逻辑，无需逐日循环（逐日会破坏 ma_5 等滚动函数）
+        # ON CONFLICT DO UPDATE 已处理覆盖/跳过逻辑
+        _report(20, "计算特征值...")
         r = compute_feature(db, feature_name, formula, target_entity,
                            start_date=start_date, end_date=end_date)
-        _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {r.get('rows', 0)} rows")
+        rows_count = r.get('rows', 0)
+        _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {rows_count} rows")
 
-        with _compute_lock:
-            _compute_tasks[task_id].update({"progress_pct": 80, "current_date": "更新统计..."})
-            from app.signal import wake_dag_broadcast
-            wake_dag_broadcast()
+        if not r.get('ok'):
+            _report(0, f"计算失败: {r.get('error', '未知错误')}")
+            db.close()
+            return
+
+        _report(70, f"已计算 {rows_count} 行，更新统计...")
 
         db.close()
 
         # 更新特征统计
+        _report(85, "统计总格子/完整度...")
         _update_feature_stats_after_compute(feature_id)
 
+        _report(100, "完成")
         with _compute_lock:
             _compute_tasks[task_id]["status"] = "completed"
-            _compute_tasks[task_id]["progress_pct"] = 100
-            from app.signal import wake_dag_broadcast
-            wake_dag_broadcast()
     except Exception as e:
         _logger.error(f"[compute] {feature_name} 失败: {e}")
         with _compute_lock:
