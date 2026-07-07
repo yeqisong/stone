@@ -13,7 +13,7 @@
   </div>
 
   <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :pagination="pagination"
-    :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" @update:page="onPage" @update:page-size="onPageSize" />
+    :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" />
 
   <!-- Create/Edit Modal -->
   <n-modal v-model:show="showCreate" preset="card" :title="editId ? '编辑函数' : '新增函数'" style="width:850px;max-width:95vw" :mask-closable="false">
@@ -324,10 +324,9 @@ function onExpand(keys) { expandedKeys.value = keys }
 const pagination = computed(() => ({
   page: page.value, pageSize: pageSize.value, itemCount: total.value,
   prefix({itemCount}) { return `共 ${itemCount} 条` },
+  onChange: (p) => { page.value = p; loadData(); },
+  onUpdatePageSize: (ps) => { page.value = 1; pageSize.value = ps; loadData(); },
 }))
-
-function onPage(p) { page.value = p; loadData() }
-function onPageSize(ps) { page.value = 1; pageSize.value = ps; loadData() }
 
 async function loadData() {
   loading.value = true
