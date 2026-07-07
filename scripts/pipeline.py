@@ -1251,7 +1251,10 @@ def dag_task_model_train(trade_date=None, **kw):
                     equity_curve.append(equity)
                     continue
 
-                top = day.nlargest(slots, 'pred')
+                # 只买入预测收益 > min_threshold 的股票（默认 0 = 正收益预期）
+                min_threshold = 0.0
+                candidates = day[day['pred'] > min_threshold]
+                top = candidates.nlargest(slots, 'pred')
                 # 资金约束：总资产 × 单票仓位上限 / 买入价
                 position_pct = 1.0 / max_pos  # 每只股票占总资产比例
                 for _, r in top.iterrows():
