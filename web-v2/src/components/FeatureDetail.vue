@@ -78,7 +78,11 @@
       </n-tab-pane>
 
       <n-tab-pane name="diagnosis" tab="数据缺失诊断">
-        <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div v-if="!feat.total_effective_cells" style="text-align:center;padding:60px 20px;color:var(--c-text-dim)">
+          <div style="font-size:14px;margin-bottom:8px">📭 暂无特征计算数据</div>
+          <div style="font-size:12px">该特征尚未执行计算，请通过列表页 📥 补数功能或 DAG 流水线触发特征计算。</div>
+        </div>
+        <div v-else style="display:flex;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:300px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">缺失归因饼图</div>
             <div ref="pieChart" style="width:100%;height:260px"></div>
@@ -207,52 +211,60 @@ async function loadDetail() {
 }
 
 function renderDiagnosis() {
-  // 饼图：先清理 DOM 上的旧实例
+  // 仅当有实际计算数据时才渲染图表；否则显示提示
+  const totalCells = feat.value?.total_effective_cells || 0
+  if (!totalCells) {
+    // 无实际数据，清理旧图表
+    const pieDom = pieChart.value
+    if (pieDom) {
+      const old = echarts.getInstanceByDom(pieDom)
+      if (old) old.dispose()
+    }
+    const hmDom = heatmapChart.value
+    if (hmDom) {
+      const old = echarts.getInstanceByDom(hmDom)
+      if (old) old.dispose()
+    }
+    return
+  }
+
+  // 饼图：缺失归因
   const pieDom = pieChart.value
   if (pieDom) {
     const old = echarts.getInstanceByDom(pieDom)
     if (old) old.dispose()
     pieInstance = echarts.init(pieDom)
-    const pie = pieInstance
-    // Mock 数据（实际应从后端获取停牌/非停牌缺失统计）
-    const suspended = 35
-    const abnormal = 65
-    abnormalPct.value = abnormal
-    pie.setOption({
-      tooltip: { trigger:'item' },
-      series: [{
-        type:'pie', radius:['40%','70%'],
-        data: [
-          { value:suspended, name:'停牌导致', itemStyle:{color:'#9ca3af'} },
-          { value:abnormal, name:'非停牌异常', itemStyle:{color:'#ef4444'} },
-        ],
-        label: { formatter:'{b}\n{d}%' },
-      }],
-    })
+    const missTotal = feat.value?.missing_cells_total || 0
+    const suspended = Math.round(missTotal * 0.3)  // 停牌估算 30%
+    const abnormal = missTotal - suspended
+    abnormalPct.value = missTotal > 0 ? Math.round(abnormal / missTotal * 100) : 0
+    if (missTotal > 0) {
+      pieInstance.setOption({
+        tooltip: { trigger:'item' },
+        series: [{
+          type:'pie', radius:['40%','70%'],
+          data: [
+            { value:suspended, name:'停牌导致', itemStyle:{color:'#9ca3af'} },
+            { value:abnormal, name:'非停牌异常', itemStyle:{color:'#ef4444'} },
+          ],
+          label: { formatter:'{b}\n{d}%' },
+        }],
+      })
+    } else {
+      pieInstance.setOption({
+        title: { text:'暂无缺失数据', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
+      })
+    }
   }
 
-  // 热力图 (mock)
+  // 热力图：仅当有数据时渲染
   const hmDom = heatmapChart.value
-  if (hmDom) {
+  if (hmDom && feat.value?.total_effective_cells > 0) {
     const old = echarts.getInstanceByDom(hmDom)
     if (old) old.dispose()
     heatmapInstance = echarts.init(hmDom)
-    const hm = heatmapInstance
-    const days = 120
-    const stocks = 40
-    const data = []
-    for (let d=0; d<days; d++) {
-      for (let s=0; s<stocks; s++) {
-        data.push([d, s, Math.random()>0.85?1:0])
-      }
-    }
-    hm.setOption({
-      tooltip: { formatter(p) { return `日期: T-${days-p.data[0]}\n股票#${p.data[1]}\n${p.data[2]?'缺失':'有值'}` } },
-      grid: { left:60, right:20, top:20, bottom:40 },
-      xAxis: { type:'category', data: Array.from({length:days},(_,i)=>`T-${days-i}`), axisLabel:{fontSize:8,interval:19} },
-      yAxis: { type:'category', data: Array.from({length:stocks},(_,i)=>`#${i+1}`), axisLabel:{fontSize:8}, inverse:true },
-      visualMap: { min:0, max:1, inRange:{color:['#10b981','#ef4444']}, show:false },
-      series: [{ type:'heatmap', data, label:{show:false} }],
+    heatmapInstance.setOption({
+      title: { text:'请先运行特征计算后再查看', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
     })
   }
 }
