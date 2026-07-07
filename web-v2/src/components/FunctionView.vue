@@ -37,7 +37,7 @@
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">参数配置（从函数签名自动解析）</div>
             <div v-for="(p, i) in formParams" :key="i" style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
               <span style="font-size:11px;color:var(--c-text);min-width:60px">{{ p.name }}</span>
-              <n-select v-model:value="p.type" :options="paramTypeOpts" size="tiny" style="width:90px" />
+              <n-select v-model:value="p.type" :options="paramTypeOpts" size="tiny" style="width:130px" :consistent-menu-width="false" />
               <n-input v-model:value="p.default" size="tiny" placeholder="默认值" style="width:60px" />
               <n-input v-model:value="p.desc" size="tiny" placeholder="说明" style="flex:1" />
             </div>
@@ -261,12 +261,12 @@ const isBuiltin = ref(false)
 const form = ref({ name:'', display_name:'', description:'', category:'other', source_code:'' })
 const formParams = ref([])
 const paramTypeOpts = [
-  { label:'标量(整数)', value:'scalar' },
-  { label:'标量(小数)', value:'scalar' },
-  { label:'标量(百分比)', value:'scalar' },
-  { label:'序列(一维数组)', value:'series' },
-  { label:'矩阵(二维表)', value:'matrix' },
-  { label:'字符串', value:'string' },
+  { label:'标量 int', value:'scalar', sub:'整数默认值 → 解析为 int' },
+  { label:'标量 float', value:'scalar', sub:'小数默认值 → 解析为 float' },
+  { label:'标量 pct', value:'scalar', sub:'百分比默认值 → 解析为 0~1' },
+  { label:'序列 Series', value:'series', sub:'一维随机数组（如收盘价）' },
+  { label:'矩阵 DataFrame', value:'matrix', sub:'二维表（如多股票数据）' },
+  { label:'字符串', value:'string', sub:'文本参数' },
 ]
 
 const catOptions = [
