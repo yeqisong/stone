@@ -993,24 +993,26 @@ def check_stats_integrity(user: str = Depends(get_current_user)):
     db = get_sync_db()
     try:
         rows = db.execute(text("""
-            SELECT id, feature_name, total_effective_cells, data_completeness, status
-            FROM features WHERE total_effective_cells > 0
+            SELECT id, feature_name, total_effective_cells, missing_cells_total, pending_cells_total, data_completeness, status
+            FROM features
+            WHERE total_effective_cells > 0 OR missing_cells_total > 0 OR pending_cells_total > 0
         """)).fetchall()
 
         fixed = []
         for r in rows:
-            fid, name, stored_cells, stored_comp, status = r
+            fid, name, stored_cells, missing, pending, stored_comp, status = r
             # 用索引查询该特征在 feature_values 中的实际行数
             actual = db.execute(text(
                 "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
             ), {"fn": name}).scalar() or 0
 
-            if actual == 0 and stored_cells > 0:
-                # 严重不一致：元数据有值但实际表为空
+            if actual == 0 and (stored_cells > 0 or missing > 0 or pending > 0):
+                # 严重不一致：元数据有值但实际表为空 → 全部归零
                 db.execute(text("""
                     UPDATE features SET status='data_anomaly',
                         data_anomaly_reason='feature_values 无数据，请执行特征计算',
                         total_effective_cells=0, data_completeness=0,
+                        missing_cells_total=0, pending_cells_total=0,
                         updated_at=CURRENT_TIMESTAMP WHERE id=:id
                 """), {"id": fid})
                 fixed.append(name)
