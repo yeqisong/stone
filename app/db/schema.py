@@ -994,6 +994,38 @@ def init_db(sync_session) -> None:
     except Exception:
         sync_session.rollback()
 
+    # 迁移：model_versions 新增策略优化字段（v2.7）
+    for col, col_type in [
+        ('train_params', 'JSONB'),
+        ('trading_rules', 'JSONB'),
+        ('strategy_scan_results', 'JSONB'),
+        ('test_performance', 'JSONB'),
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE model_versions ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+
+    # 迁移：strategy_scan_tasks 表（v2.7）
+    try:
+        sync_session.execute(text("""
+            CREATE TABLE IF NOT EXISTS strategy_scan_tasks (
+                task_id       VARCHAR(16) PRIMARY KEY,
+                version       VARCHAR(16),
+                status        VARCHAR(16) DEFAULT 'pending',
+                total_combos  INTEGER DEFAULT 0,
+                completed     INTEGER DEFAULT 0,
+                best_params   JSONB,
+                best_sharpe   DECIMAL(8,4),
+                results       JSONB,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at   TIMESTAMP
+            )
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
     # 迁移：移除 indicator 节点（v2.6 — KEPL feature_compute 替代）
     try:
         sync_session.execute(text("DELETE FROM dag_config WHERE node_name IN ('indicator_incr','indicator_full')"))

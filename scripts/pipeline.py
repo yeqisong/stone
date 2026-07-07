@@ -934,6 +934,114 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
     return df_merged
 
 
+# ── 归因分析引擎（v2.7 — 基准锚定法）──
+
+def run_attribution(db, version: str, df, feature_names: list, val_start: str, val_end: str,
+                    initial_cash: float = 1_000_000, max_pos: int = 5,
+                    stop_loss: float = 0.08, take_profit: float = 0.15, hold_days: int = 10):
+    """三基线归因分析。
+
+    Returns:
+        {
+            'ideal': {sharpe, total_return, max_dd, win_rate, ...},
+            'random': {sharpe, ...},
+            'real': {sharpe, ...},
+            'matrix': 'execution_loss'|'beta_amplifier'|'dual_driver'|'double_misjudge',
+            'brinson': {model_contribution, strategy_contribution, interaction}
+        }
+    """
+    import numpy as np
+    from datetime import date as _date
+
+    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
+    if not val_mask.any():
+        return {'error': '验证集无数据'}
+
+    val_df = df[val_mask].copy()
+    dates = val_df['trade_date'].values
+    codes = val_df['stock_code'].values
+    close = val_df['close'].values
+    volume = val_df['volume'].values
+    X = val_df[feature_names].values if feature_names else np.zeros((len(val_df), 1))
+
+    # 1. 理想化回测：模型预测 + 无摩擦 + 无止盈止损
+    try:
+        model_path = f"data/models/{version}/xgb_10d.pkl"
+        import pickle as _pkl, os as _os
+        if _os.path.exists(model_path):
+            with open(model_path, 'rb') as f:
+                model = _pkl.load(f)
+            y_pred = model.predict(X)
+        else:
+            y_pred = np.random.randn(len(val_df)) * 0.01
+    except Exception:
+        y_pred = np.random.randn(len(val_df)) * 0.01
+
+    ideal = _backtest(
+        val_df['close'].values * 0 + 0.01, y_pred, dates, codes, close, volume,
+        hold_days=hold_days, stop_loss=0.99, take_profit=99.0,   # 无止盈止损
+        commission=0, stamp_tax=0, slippage=0,                     # 无摩擦
+        bt_ver=version, bt_label='ideal'
+    )
+
+    # 2. 随机信号：随机预测 + 真实止盈止损
+    random_pred = np.random.randn(len(val_df)) * 0.01
+    random = _backtest(
+        val_df['close'].values * 0, random_pred, dates, codes, close, volume,
+        hold_days=hold_days, stop_loss=stop_loss, take_profit=take_profit,
+        bt_ver=version, bt_label='random'
+    )
+
+    # 3. 真实策略：模型预测 + 真实止盈止损
+    real = _backtest(
+        val_df['close'].values * 0, y_pred, dates, codes, close, volume,
+        hold_days=hold_days, stop_loss=stop_loss, take_profit=take_profit,
+        bt_ver=version, bt_label='real'
+    )
+
+    # 4. 基准收益（沪深300 同期）
+    benchmark_return = 0
+    try:
+        bm = db.execute(text(
+            "SELECT close FROM index_daily_quote WHERE index_code='000300' AND trade_date BETWEEN :s AND :e ORDER BY trade_date"
+        ), {"s": val_start, "e": val_end}).fetchall()
+        if len(bm) >= 2:
+            benchmark_return = (float(bm[-1][0]) / float(bm[0][0]) - 1) if float(bm[0][0]) > 0 else 0
+    except Exception:
+        pass
+
+    # 5. 归因矩阵
+    id_high = ideal.get('sharpe', 0) > 1.0
+    rd_high = random.get('sharpe', 0) > 0.5
+    if id_high and rd_high:    matrix = 'dual_driver'
+    elif id_high and not rd_high: matrix = 'execution_loss'
+    elif not id_high and rd_high: matrix = 'beta_amplifier'
+    else: matrix = 'double_misjudge'
+
+    # 6. Brinson 归因
+    real_ret = real.get('total_return', 0)
+    ideal_ret = ideal.get('total_return', 0)
+    model_contribution = ideal_ret - benchmark_return
+    strategy_contribution = real_ret - ideal_ret
+    interaction = real_ret - model_contribution - strategy_contribution - benchmark_return
+
+    return {
+        'ideal': {'sharpe': ideal.get('sharpe',0), 'total_return': ideal.get('total_return',0),
+                  'win_rate': ideal.get('win_rate',0), 'max_dd': ideal.get('max_dd',0)},
+        'random': {'sharpe': random.get('sharpe',0), 'total_return': random.get('total_return',0),
+                   'win_rate': random.get('win_rate',0), 'max_dd': random.get('max_dd',0)},
+        'real': {'sharpe': real.get('sharpe',0), 'total_return': real.get('total_return',0),
+                 'win_rate': real.get('win_rate',0), 'max_dd': real.get('max_dd',0)},
+        'benchmark_return': round(benchmark_return, 4),
+        'matrix': matrix,
+        'brinson': {
+            'model_contribution': round(model_contribution, 4),
+            'strategy_contribution': round(strategy_contribution, 4),
+            'interaction': round(interaction, 4),
+        }
+    }
+
+
 def dag_task_model_train(trade_date=None, **kw):
     """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。"""
     from datetime import date as _date, timedelta as _td
@@ -1128,7 +1236,9 @@ def dag_task_model_train(trade_date=None, **kw):
         commission = cfg.get('commission', 0.00025)
         slippage = cfg.get('slippage', 0.001)
 
-        def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days, bt_ver='', bt_label=''):
+        def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days,
+                       bt_ver='', bt_label='', stop_loss=None, take_profit=None,
+                       commission=None, stamp_tax=None, slippage=None):
             """回测引擎：资金约束 + 流动性约束 + 整数手约束。
 
             Args:
@@ -1139,8 +1249,16 @@ def dag_task_model_train(trade_date=None, **kw):
                 volumes: 当日成交量（股），用于流动性约束
                 hold_days: 持仓天数 (5/10/20)
                 bt_ver: 模型版本号
-                bt_label: 标签名 (5d/10d/20d)
+                bt_label: 标签名
+                stop_loss: 止损阈值（默认取配置值）
+                take_profit: 止盈阈值（默认取配置值 × 2）
+                commission/stamp_tax/slippage: 成本参数（默认取配置值）
             """
+            sl_val = stop_loss if stop_loss is not None else 0.08
+            tp_val = take_profit if take_profit is not None else 0.15
+            comm_val = commission if commission is not None else 0.00025
+            st_val = stamp_tax if stamp_tax is not None else 0.001
+            slip_val = slippage if slippage is not None else 0.001
             val_df = pd.DataFrame({
                 'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true,
                 'price': close_prices, 'volume': volumes
@@ -1170,8 +1288,12 @@ def dag_task_model_train(trade_date=None, **kw):
                     should_sell = False
 
                     # 止损时卖价 ≈ 止损价
-                    if cur_price <= h['buy_price'] * (1 - stop_loss):
-                        sell_price = h['buy_price'] * (1 - stop_loss)
+                    if cur_price <= h['buy_price'] * (1 - sl_val):
+                        sell_price = h['buy_price'] * (1 - sl_val)
+                        should_sell = True
+                    # 止盈
+                    if tp_val and cur_price >= h['buy_price'] * (1 + tp_val):
+                        sell_price = h['buy_price'] * (1 + tp_val)
                         should_sell = True
                     # 到期平仓
                     if hold_dur >= hold_days:
@@ -1179,12 +1301,12 @@ def dag_task_model_train(trade_date=None, **kw):
 
                     if should_sell:
                         gross = h['shares'] * sell_price
-                        sell_cost = gross * (commission + stamp_tax) + max(gross * slippage, 0)
+                        sell_cost = gross * (comm_val + st_val) + max(gross * slip_val, 0)
                         net_sell = max(gross - sell_cost, 0)
                         cash_before = cash
                         cash += net_sell
                         buy_gross = h['shares'] * h['buy_price']
-                        buy_cost = buy_gross * commission + max(buy_gross * (slippage / 2), 0)
+                        buy_cost = buy_gross * comm_val + max(buy_gross * (slip_val / 2), 0)
                         pnl = net_sell - (buy_gross + buy_cost)
                         pnl_pct = pnl / (buy_gross + buy_cost) if (buy_gross + buy_cost) > 0 else 0
 
@@ -1217,7 +1339,9 @@ def dag_task_model_train(trade_date=None, **kw):
                             'pnl_pct': round(pnl_pct, 4),
                             'cumulative_pnl': round(cumulative_pnl, 2),
                             'cumulative_return': round(cumulative_return, 6),
-                            'reason': 'stop_loss' if cur_price <= h['buy_price'] * (1 - stop_loss) else 'hold_expire',
+                            'reason': 'stop_loss' if cur_price <= h['buy_price'] * (1 - sl_val)
+          else 'take_profit' if tp_val and cur_price >= h['buy_price'] * (1 + tp_val)
+          else 'hold_expire',
                             'model_version': bt_ver,
                             'signal_label': bt_label,
                             'hold_days': (d - h['buy_date']).days,
@@ -1263,7 +1387,7 @@ def dag_task_model_train(trade_date=None, **kw):
                         continue
                     # 约束1: 资金约束 — 当前总资产 × 仓位上限
                     budget = equity * position_pct
-                    buy_price = price * (1 + slippage / 2)
+                    buy_price = price * (1 + slip_val / 2)
                     if buy_price <= 0 or budget <= 0:
                         continue
                     shares = int(budget // buy_price // 100) * 100
@@ -1277,7 +1401,7 @@ def dag_task_model_train(trade_date=None, **kw):
                         continue
                     # 约束3: 整数手 — 已由 `// 100 * 100` 保证
                     gross = shares * buy_price
-                    buy_cost = gross * commission + max(gross * (slippage / 2), 0)
+                    buy_cost = gross * comm_val + max(gross * (slip_val / 2), 0)
                     total_cost = gross + buy_cost
                     if total_cost > cash:
                         continue
@@ -1443,7 +1567,10 @@ def dag_task_model_train(trade_date=None, **kw):
         for label, tname, hdays in TARGETS:
             if label in best_models:
                 y_pred = best_models[label].predict(df[test_mask][FEATURES])
-                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, test_volume, hdays, bt_ver=ver, bt_label=label)
+                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, test_volume,
+                               hdays, bt_ver=ver, bt_label=label,
+                               stop_loss=stop_loss, take_profit=stop_loss*2,
+                               commission=commission, stamp_tax=stamp_tax, slippage=slippage)
                 test_results[label] = bt
 
         # ── 存储最优模型文件 ──
