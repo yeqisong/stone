@@ -12,8 +12,11 @@
     <n-button size="small" @click="loadData">查询</n-button>
   </div>
 
-  <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :pagination="pagination"
+  <n-data-table :columns="columns" :data="items" :loading="loading" size="small"
     :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" />
+  <div style="display:flex;justify-content:center;margin-top:10px">
+    <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
+  </div>
 
   <!-- Create/Edit Modal -->
   <n-modal v-model:show="showCreate" preset="card" :title="editId ? '编辑函数' : '新增函数'" style="width:850px;max-width:95vw" :mask-closable="false">
@@ -212,7 +215,7 @@
 
 <script setup>
 import { ref, computed, onMounted, h } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty } from 'naive-ui'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 
@@ -221,7 +224,7 @@ const loading = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const PAGE_SIZE = 20
 const filterCategory = ref(null)
 const filterStatus = ref(null)
 const searchText = ref('')
@@ -321,17 +324,12 @@ function rowProps(row) {
 
 function onExpand(keys) { expandedKeys.value = keys }
 
-const pagination = computed(() => ({
-  page: page.value, pageSize: pageSize.value, itemCount: total.value,
-  prefix({itemCount}) { return `共 ${itemCount} 条` },
-  onChange: (p) => { page.value = p; loadData(); },
-  onUpdatePageSize: (ps) => { page.value = 1; pageSize.value = ps; loadData(); },
-}))
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 async function loadData() {
   loading.value = true
   try {
-    const params = { page: page.value, page_size: pageSize.value }
+    const params = { page: page.value, page_size: PAGE_SIZE }
     if (filterCategory.value && filterCategory.value !== 'all') params.category = filterCategory.value
     if (filterStatus.value && filterStatus.value !== 'all') params.status = filterStatus.value
     if (searchText.value) params.search = searchText.value
