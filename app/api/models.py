@@ -1,11 +1,12 @@
 """模型版本管理 API。"""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
 import json
 
 from app.db.connection import get_sync_db
+from app.auth.auth import get_current_user
 
 router = APIRouter(tags=["models"])
 
@@ -138,7 +139,7 @@ def get_model(version: str):
 
 
 @router.post("/v1/models")
-def create_model(body: CreateModel):
+def create_model(body: CreateModel, user: str = Depends(get_current_user)):
     """创建新模型版本（状态 DRAFT，自动生成版本号）。"""
     if not body.model_name or not body.model_name.strip():
         raise HTTPException(400, "模型名称不能为空")
@@ -345,7 +346,7 @@ def check_model_delete(version: str):
 
 
 @router.delete("/v1/models/{version}")
-def delete_model(version: str, mode: str = Query("soft")):
+def delete_model(version: str, mode: str = Query("soft"), user: str = Depends(get_current_user)):
     """删除模型版本。mode=soft 逻辑删除，mode=hard 物理删除。"""
     if mode not in ("soft", "hard"):
         raise HTTPException(400, "mode 参数只能是 soft 或 hard")
@@ -425,7 +426,7 @@ def get_indicator_status(name: str):
         db.close()
 
 @router.post("/v1/models/{version}/approve")
-def approve_model(version: str):
+def approve_model(version: str, user: str = Depends(get_current_user)):
     """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。"""
     db = get_sync_db()
     try:
@@ -447,7 +448,7 @@ def approve_model(version: str):
         db.close()
 
 @router.put("/v1/models/{version}/config")
-def update_model_config(version: str, body: dict):
+def update_model_config(version: str, body: dict, user: str = Depends(get_current_user)):
     """更新 DRAFT 状态模型的四层配置。"""
     db = get_sync_db()
     try:
@@ -475,7 +476,7 @@ def update_model_config(version: str, body: dict):
 
 
 @router.post("/v1/models/{version}/stop")
-def stop_training(version: str):
+def stop_training(version: str, user: str = Depends(get_current_user)):
     """强制停止训练，模型回到 DRAFT。"""
     db = get_sync_db()
     try:
@@ -497,7 +498,7 @@ def stop_training(version: str):
 
 
 @router.post("/v1/models/{version}/retrain")
-def retrain_model(version: str):
+def retrain_model(version: str, user: str = Depends(get_current_user)):
     """REJECTED 模型重新训练：清空旧数据，回到 DRAFT。"""
     db = get_sync_db()
     try:
@@ -519,7 +520,7 @@ def retrain_model(version: str):
 
 
 @router.post("/v1/models/{version}/reject")
-def reject_model(version: str):
+def reject_model(version: str, user: str = Depends(get_current_user)):
     """拒绝模型。"""
     db = get_sync_db()
     try:

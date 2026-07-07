@@ -1,7 +1,7 @@
 """FastAPI 应用入口。"""
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -30,6 +30,11 @@ from app.auth.auth import verify_password, create_token
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化数据库，关闭时释放连接。"""
     logger.info(f"Starting Stock Monitor in {settings.APP_ENV} mode...")
+
+    # JWT secret 强度校验
+    if len(settings.APP_SECRET_KEY) < 16:
+        logger.error("APP_SECRET_KEY 长度不足（需要至少16字符），拒绝启动")
+        raise RuntimeError("APP_SECRET_KEY must be at least 16 characters")
 
     # 初始化数据库（同步执行，因为是启动时一次性操作）
     from app.db.connection import SyncSessionLocal
@@ -79,7 +84,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,15 +106,36 @@ app.include_router(dag_types_router)  # /api/dag 已含前缀
 app.include_router(dag_flows_router)  # /api/dag 已含前缀
 app.include_router(feishu_router)  # /webhook/feishu 不带 /api 前缀
 
+from pydantic import BaseModel
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+# 简易内存频率限制
+_login_attempts: dict = {}  # ip → [(timestamp, ...)]
+
 @app.post("/api/login")
-async def login(request: dict):
-    """登录接口，返回 JWT Token。"""
-    username = request.get("username", "")
-    password = request.get("password", "")
+async def login(request: LoginRequest, req: Request = None):
+    """登录接口，返回 JWT Token。频率限制：5次/分钟/IP。"""
+    # 频率限制
+    import time as _time
+    client_ip = req.client.host if req else "unknown"
+    now_ts = _time.time()
+    attempts = _login_attempts.get(client_ip, [])
+    attempts = [t for t in attempts if now_ts - t < 60]
+    if len(attempts) >= 5:
+        raise HTTPException(status_code=429, detail="登录尝试过于频繁，请1分钟后再试")
+    attempts.append(now_ts)
+    _login_attempts[client_ip] = attempts
+
+    username = request.username
+    password = request.password
     if not verify_password(username, password):
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = create_token(username)
+    # 登录成功后清除该 IP 的尝试记录
+    _login_attempts.pop(client_ip, None)
     return {"ok": True, "token": token, "username": username}
 
 

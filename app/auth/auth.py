@@ -46,9 +46,7 @@ async def get_current_user(
 async def optional_auth(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str | None:
-    """可选认证：dev 环境无 Token 放行，prod 环境强制。"""
-    if settings.APP_ENV == "dev" and credentials is None:
-        return "dev_user"
+    """可选认证：所有环境均需 Token；未配置 secret 时打印警告。"""
     if credentials is None:
         raise HTTPException(status_code=401, detail="请提供认证 Token")
     return await get_current_user(credentials)

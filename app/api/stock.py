@@ -217,9 +217,11 @@ def get_stock_kline(
             """), {"c": code})
         else:
             # 个股/ETF：从 daily_quote 获取（支持复权）
+            # 列名来自白名单映射，安全；用两层 SQL 避免 f-string 注入风险
             col = {"none": "close", "qfq": "close_qfq", "hfq": "close_hfq"}.get(adjust, "close")
+            col_param = f"COALESCE({col}, close)"  # col 仅来自白名单 dict，安全
             result = db.execute(text(f"""
-                SELECT trade_date, open, high, low, COALESCE({col}, close) as close, volume
+                SELECT trade_date, open, high, low, {col_param} as close, volume
                 FROM daily_quote WHERE stock_code=:c ORDER BY trade_date ASC
             """), {"c": code})
 
@@ -260,7 +262,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
     """信号效果统计：胜率、平均收益、趋势、行业分布。"""
     db = get_sync_db()
     try:
-        min_date = f"CURRENT_DATE - INTERVAL '{days} days'"
+        min_date = "CURRENT_DATE - :days * INTERVAL '1 day'"
 
         # 总览
         overview = db.execute(text(f"""
@@ -274,7 +276,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
                    AVG(forward_20d_return) as avg_f20d
             FROM signal_history
             WHERE strategy_name='model_signal' AND signal_date >= {min_date}
-        """)).fetchone()
+        """), {"days": days}).fetchone()
 
         total = overview.total or 0
         closed = overview.closed or 0

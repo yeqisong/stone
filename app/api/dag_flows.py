@@ -2,10 +2,12 @@
 
 提供 DAG 流程的 CRUD、校验、版本管理。
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import json
+
+from app.auth.auth import get_current_user
 
 router = APIRouter(prefix="/api/dag", tags=["dag-flows"])
 
@@ -53,7 +55,7 @@ def list_flows():
 
 
 @router.post("/flows")
-def create_flow(body: CreateFlow):
+def create_flow(body: CreateFlow, user: str = Depends(get_current_user)):
     """创建新 DAG 流程（含 7 项校验）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -129,7 +131,7 @@ def get_flow(flow_id: int):
 
 
 @router.put("/flows/{flow_id}")
-def update_flow(flow_id: int, body: UpdateFlow):
+def update_flow(flow_id: int, body: UpdateFlow, user: str = Depends(get_current_user)):
     """更新流程（自动创建新版本）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -186,7 +188,7 @@ def update_flow(flow_id: int, body: UpdateFlow):
 
 
 @router.delete("/flows/{flow_id}")
-def delete_flow(flow_id: int):
+def delete_flow(flow_id: int, user: str = Depends(get_current_user)):
     """删除流程（级联删除版本历史）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text

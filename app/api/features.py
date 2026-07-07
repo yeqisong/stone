@@ -2,13 +2,14 @@
 
 提供特征的 CRUD、KEPL 公式校验、依赖提取、循环检测。
 """
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import json
 
 from app.db.connection import get_sync_db
 from app.kepl.parser import parse_kepl
+from app.auth.auth import get_current_user
 
 router = APIRouter(prefix="/features", tags=["features"])
 
@@ -184,7 +185,7 @@ def validate_formula(body: ValidateFormulaRequest):
 
 
 @router.post("")
-def create_feature(body: CreateFeature):
+def create_feature(body: CreateFeature, user: str = Depends(get_current_user)):
     """新增特征。"""
     db = get_sync_db()
     try:
@@ -447,7 +448,7 @@ def get_feature_quality(feature_id: int):
 
 
 @router.put("/{feature_id}")
-def update_feature(feature_id: int, body: UpdateFeature):
+def update_feature(feature_id: int, body: UpdateFeature, user: str = Depends(get_current_user)):
     """更新特征（部分更新）。
     - 不可修改 target_entity 和 feature_name
     - 修改 formula 时重新解析依赖，并标记本特征和下游为 pending_recalc
@@ -558,7 +559,7 @@ def update_feature(feature_id: int, body: UpdateFeature):
 
 
 @router.delete("/{feature_id}")
-def delete_feature(feature_id: int):
+def delete_feature(feature_id: int, user: str = Depends(get_current_user)):
     """软删除特征（状态改为 deprecated）。"""
     db = get_sync_db()
     try:
@@ -683,7 +684,7 @@ def get_feature_data(
 
 
 @router.post("/{feature_id}/stats")
-def update_feature_stats(feature_id: int, body: StatsBody):
+def update_feature_stats(feature_id: int, body: StatsBody, user: str = Depends(get_current_user)):
     """DAG 回写特征数据质量统计。"""
     db = get_sync_db()
     try:
@@ -742,7 +743,7 @@ def update_feature_stats(feature_id: int, body: StatsBody):
 
 
 @router.patch("/{feature_id}/status")
-def update_feature_status(feature_id: int, body: StatusBody):
+def update_feature_status(feature_id: int, body: StatusBody, user: str = Depends(get_current_user)):
     """手动切换特征状态（含下游检查）。"""
     db = get_sync_db()
     try:

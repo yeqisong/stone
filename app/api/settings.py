@@ -30,7 +30,7 @@ class StrategyParams(BaseModel):
 
 @router.get("/settings")
 def get_settings():
-    """获取所有配置。"""
+    """获取所有配置。API Key 脱敏返回（仅显示后4位）。"""
     db = get_sync_db()
     try:
         result = db.execute(text(
@@ -57,7 +57,11 @@ def get_settings():
             else:
                 strategies.append(entry)  # 旧策略，保留兼容
 
-        deepseek_configured = bool(preference.get("deepseek_key", ""))
+        # API Key 脱敏：仅保留后4位
+        raw_key = preference.get("deepseek_key", "")
+        deepseek_configured = bool(raw_key)
+        if raw_key and len(raw_key) > 4:
+            preference["deepseek_key"] = "****" + raw_key[-4:]
 
         return {"indicators": indicators, "strategies": strategies, "preference": preference, "deepseek_configured": deepseek_configured}
     finally:
@@ -82,14 +86,26 @@ def toggle_strategy(body: StrategyToggle, user: str = Depends(optional_auth)):
 
 @router.post("/settings/preference")
 def set_preference(body: PreferenceSet, user: str = Depends(optional_auth)):
-    """切换全局交易偏好。"""
+    """切换全局交易偏好（保留已有 deepseek_key，不覆盖）。"""
     if body.mode not in ("left", "right", "balanced"):
         raise HTTPException(400, "无效偏好: left/right/balanced")
     db = get_sync_db()
     try:
+        # 读取现有配置，保留 deepseek_key
+        row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='global_preference'"
+        )).fetchone()
+        existing = {}
+        if row and row[0]:
+            try:
+                existing = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+            except:
+                pass
+        # merge: 保留已有 deepseek_key
+        merged = {**existing, "mode": body.mode}
         db.execute(text(
             "UPDATE strategy_config SET params=:p, updated_at=CURRENT_TIMESTAMP, updated_by='web' WHERE strategy_name='global_preference'"
-        ), {"p": json.dumps({"mode": body.mode, "deepseek_key": ""})})
+        ), {"p": json.dumps(merged)})
         db.commit()
         return {"ok": True, "mode": body.mode}
     finally:

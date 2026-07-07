@@ -62,6 +62,8 @@ def list_stocks(
         result = db.execute(text(cnt_sql), params)
         total = result.scalar() or 0
 
+        # order_sql 来自白名单 ORDER_SQL_MAP（硬编码 SQL 片段），dir_sql 来自白名单 "ASC"/"DESC"
+        # 两者均不可由用户任意控制，安全。如需扩展，保持此白名单模式。
         dir_sql = "DESC NULLS LAST" if order_dir == "desc" else "ASC NULLS LAST"
         order_sql = ORDER_SQL_MAP[order_by]
 

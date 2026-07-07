@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     LOGIN_USERNAME: str = "admin"
     LOGIN_PASSWORD: str = ""  # 必须通过环境变量 LOGIN_PASSWORD 设置
 
+    # ── CORS ──
+    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "https://s.pmlab.top"]
+
     # ── 服务器 ──
     DOMAIN: str = "localhost"
 

@@ -141,6 +141,8 @@ export const useDagStore = defineStore('dag', () => {
         edges.value[dep + '→' + n.name] = 'default'
       }
     }
+    _prevRunId.value = null
+    if (_expireTimer) { clearTimeout(_expireTimer); _expireTimer = null }
   }
 
   return {

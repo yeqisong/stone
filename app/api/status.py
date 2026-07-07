@@ -1,10 +1,11 @@
 """数据状态 API — 交易日历 + 每日下载进度 + 数据完整性。"""
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 from datetime import date, timedelta
 
 from app.db.connection import get_sync_db
 from app.signal import _dag_wake_event, wake_dag_broadcast, set_main_loop
+from app.auth.auth import get_current_user
 
 # 预加载 pipeline 模块，避免首次 DAG 触发时 cold import 延迟 5-10 秒
 from scripts.pipeline import dag
@@ -176,14 +177,14 @@ def get_data_status(
 
 
 def _has_running_task() -> bool:
-    """检查是否有活跃 DAG 任务（心跳 5 分钟内更新过的 running 节点）。"""
+    """检查是否有活跃 DAG 任务（心跳 10 分钟内更新过的 running 节点）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     try:
         db = get_sync_db()
         r = db.execute(text(
             "SELECT 1 FROM dag_run_log WHERE status='running' "
-            "AND heartbeat_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes' LIMIT 1"
+            "AND heartbeat_at > CURRENT_TIMESTAMP - INTERVAL '10 minutes' LIMIT 1"
         )).scalar()
         db.close()
         return bool(r)
@@ -192,7 +193,7 @@ def _has_running_task() -> bool:
 
 
 @router.post("/dag_trigger")
-def dag_trigger(body: dict):
+def dag_trigger(body: dict, user: str = Depends(get_current_user)):
     """手工触发 DAG 节点（后台执行）。body: {"node": "kline", "date": "2026-06-05"}"""
     if _has_running_task():
         return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
@@ -208,7 +209,7 @@ def dag_trigger(body: dict):
 
 
 @router.post("/refresh_stats")
-def refresh_stats():
+def refresh_stats(user: str = Depends(get_current_user)):
     """手工触发全库数据统计（DAG stats 节点，后台执行）。"""
     if _has_running_task():
         return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
@@ -230,15 +231,15 @@ def get_dag_status():
     from scripts.pipeline import _load_dag_structure
     structure = _load_dag_structure()
 
-    # 看门狗：检测心跳超过 5 分钟未更新的 running 节点 → 卡死
+    # 看门狗：检测心跳超过 10 分钟未更新的 running 节点 → 卡死
     db = get_sync_db()
     stuck = db.execute(text("""
         SELECT id, node_name, run_id FROM dag_run_log
-        WHERE status='running' AND heartbeat_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+        WHERE status='running' AND heartbeat_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
     """)).fetchall()
     for row in stuck:
         db.execute(text("UPDATE dag_run_log SET status='failed', detail=:dt, finished_at=CURRENT_TIMESTAMP WHERE id=:id"),
-                   {"id": row[0], "dt": f"心跳超时(>5min无更新), node={row[1]}"})
+                   {"id": row[0], "dt": f"心跳超时(>10min无更新), node={row[1]}"})
     if stuck:
         run_ids = list(set(r[2] for r in stuck))
         for rid in run_ids:
@@ -332,7 +333,7 @@ def _run_dag_background(node: str, trade_date: str, task_id: str, force: bool = 
 
 
 @router.post("/data_status/sync_date")
-def sync_date(body: SyncDateRequest):
+def sync_date(body: SyncDateRequest, user: str = Depends(get_current_user)):
     if _has_running_task():
         return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
     import uuid
@@ -350,7 +351,7 @@ def sync_date(body: SyncDateRequest):
 # ══════════════════════════════════════════
 
 @router.post("/dag_terminate")
-def dag_terminate(body: dict):
+def dag_terminate(body: dict, user: str = Depends(get_current_user)):
     """终止正在运行的任务。body: {"run_id": "xxx"}"""
     run_id = body.get("run_id", "")
     if not run_id:
@@ -383,6 +384,16 @@ _last_dag_broadcast = {}
 
 @router.websocket("/ws/dag")
 async def ws_dag(websocket: WebSocket):
+    # WebSocket 认证：从 query string 获取 token
+    token = websocket.query_params.get("token", "")
+    if token:
+        try:
+            from app.auth.auth import verify_token
+            verify_token(token)
+        except Exception:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+    # 注：token 可选（dev 兼容），生产环境前端应传 token
     await websocket.accept()
     _ws_clients.add(websocket)
     # 立即发送当前状态（新连接不用等广播周期）

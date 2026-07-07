@@ -29,18 +29,22 @@ async def feishu_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             raise HTTPException(status_code=403, detail="Invalid verify token")
         return {"challenge": challenge}
 
-    # 2. 校验签名（生产环境）
-    if settings.APP_ENV == "prod":
+    # 2. 校验签名（FEISHU_APP_SECRET 配置时始终校验）
+    if settings.FEISHU_APP_SECRET:
         timestamp = request.headers.get("X-Lark-Request-Timestamp", "")
         nonce = request.headers.get("X-Lark-Request-Nonce", "")
         signature = request.headers.get("X-Lark-Signature", "")
-        # 飞书签名校验：sha256(timestamp + nonce + encrypt_key + body)
-        if settings.FEISHU_APP_SECRET:
-            sign_str = f"{timestamp}{nonce}{settings.FEISHU_APP_SECRET}"
-            expected = hashlib.sha256(sign_str.encode()).hexdigest()
-            if signature != expected:
-                logger.warning(f"飞书签名校验失败: received={signature}")
-                raise HTTPException(status_code=403, detail="签名校验失败")
+        # 飞书签名校验：HMAC-SHA256(secret, timestamp + nonce + body)
+        body_str = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+        sign_str = f"{timestamp}{nonce}{body_str}"
+        expected = hmac.new(
+            settings.FEISHU_APP_SECRET.encode("utf-8"),
+            sign_str.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        if signature != expected:
+            logger.warning(f"飞书签名校验失败: expected={expected[:16]}... received={signature[:16]}...")
+            raise HTTPException(status_code=403, detail="签名校验失败")
 
     # 3. 处理消息
     event = body_json.get("event", {})

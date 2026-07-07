@@ -1,17 +1,13 @@
 """函数管理 API（v2.0 重构 — 迭代 1.1）。"""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy import text
-from pydantic import BaseModel
-from typing import Optional, List
-import json
-import re
-
-from app.db.connection import get_sync_db
-from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import json
 import re
+
+from app.db.connection import get_sync_db
+from app.auth.auth import get_current_user
 
 router = APIRouter(prefix="/functions", tags=["functions"])
 
@@ -76,7 +72,7 @@ def list_functions(
 
 
 @router.post("")
-def create_function(body: CreateFunction):
+def create_function(body: CreateFunction, user: str = Depends(get_current_user)):
     """新增函数（存为草稿）。"""
     if not re.match(r'^[a-z][a-z0-9_]{1,63}$', body.name):
         raise HTTPException(400, "函数名格式非法，需小写字母开头、仅含字母数字下划线")
@@ -141,6 +137,49 @@ def get_function(func_id: int):
 
 
 @router.put("/{func_id}")
+def update_function(func_id: int, body: dict, user: str = Depends(get_current_user)):
+    """编辑函数。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT is_builtin,status FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
+        if not r:
+            raise HTTPException(404, "函数不存在")
+        if r[0]:
+            raise HTTPException(400, "系统内置函数不可编辑")
+
+        sets = []
+        params = {"id": func_id}
+        for f in ['display_name','description','category','parameters','source_code','lookback','dependencies','status']:
+            if f in body:
+                sets.append(f"{f}=:{f}")
+                params[f] = json.dumps(body[f]) if f in ('parameters','dependencies') else body[f]
+
+        if not sets:
+            raise HTTPException(400, "无修改内容")
+
+        is_publishing = body.get("status") == "published"
+        if is_publishing:
+            cur = db.execute(text("SELECT version,source_code,parameters FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
+            new_ver = (cur[0] or 0) + 1
+            sets.append(f"version={new_ver}")
+            params["ver"] = new_ver
+            db.execute(text(
+                "INSERT INTO function_versions (function_id, version, source_code, parameters) VALUES (:id, :ver, :code, :prm)"
+            ), {"id": func_id, "ver": new_ver, "code": cur[1], "prm": cur[2]})
+
+        sets.append("updated_at=CURRENT_TIMESTAMP")
+        db.execute(text(f"UPDATE functions SET {','.join(sets)} WHERE id=:id"), params)
+        db.commit()
+        db.close()
+        return {"ok": True, "id": func_id, "version": new_ver if is_publishing else None}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        db.close()
+        raise HTTPException(500, str(e))
+
+
 @router.post("/ai-chat")
 def ai_chat(body: Dict = Body(...)):
     """AI 辅助生成：将编码规则 + 已有函数 + 用户需求发给 DeepSeek。"""
@@ -160,12 +199,29 @@ def ai_chat(body: Dict = Body(...)):
 
 
 @router.post("/test-run-temp")
-def test_run_temp(body: dict):
+def test_run_temp(body: dict, user: str = Depends(get_current_user)):
     """临时试运行（无需先保存）：直接传 source_code + parameters 即可测试。"""
     return _do_test_run(body.get("source_code",""), body.get("parameters",[]), body.get("category","other"))
 
 
 @router.post("/{func_id}/test-run")
+def test_run_function(func_id: int, body: dict, user: str = Depends(get_current_user)):
+    """沙箱试运行（需先保存）。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT source_code,parameters,category FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
+        if not r:
+            raise HTTPException(404, "函数不存在")
+        code, params_raw, cat = r[0], r[1], r[2]
+        params = json.loads(params_raw) if isinstance(params_raw, str) else (params_raw or [])
+        db.close()
+        return _do_test_run(code, params, cat or "other")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"试运行失败: {str(e)[:200]}")
+
+
 def _do_test_run(source_code, parameters, category):
     """共享试运行逻辑。"""
     import ast as _ast
@@ -192,8 +248,20 @@ def _do_test_run(source_code, parameters, category):
             if isinstance(node, (_ast.Import, _ast.ImportFrom)):
                 raise HTTPException(400, "函数体禁止使用 import 语句")
             if isinstance(node, _ast.Call):
-                if isinstance(node.func, _ast.Name) and node.func.id in ('eval','exec','open','__import__'):
+                if isinstance(node.func, _ast.Name) and node.func.id in ('eval','exec','open','__import__','compile','globals','locals','vars'):
                     raise HTTPException(400, f"检测到危险调用: {node.func.id}")
+                if isinstance(node.func, _ast.Attribute):
+                    # 拦截 getattr(__builtins__, ...) / __builtins__.exec 等绕过
+                    attr_chain = []
+                    cur = node.func
+                    while isinstance(cur, _ast.Attribute):
+                        attr_chain.append(cur.attr)
+                        cur = cur.value
+                    if isinstance(cur, _ast.Name):
+                        attr_chain.append(cur.id)
+                    full = '.'.join(reversed(attr_chain))
+                    if any(d in full for d in ('__builtins__','__class__','__bases__','__subclasses__','__globals__','__code__','__import__','getattr','eval','exec')):
+                        raise HTTPException(400, f"检测到危险调用: {full}")
     except SyntaxError as e:
         return {"ok": False, "error": f"语法错误: {e.msg}", "status": "failed"}
 
@@ -312,7 +380,7 @@ def list_versions(func_id: int):
 
 
 @router.post("/{func_id}/rollback/{version}")
-def rollback_function(func_id: int, version: int):
+def rollback_function(func_id: int, version: int, user: str = Depends(get_current_user)):
     """回滚到指定版本。"""
     db = get_sync_db()
     try:
@@ -340,31 +408,8 @@ def rollback_function(func_id: int, version: int):
         raise HTTPException(500, str(e))
 
 
-@router.get("/{func_id}/diff/{v1}/{v2}")
-def diff_versions(func_id: int, v1: int, v2: int):
-    """版本 diff 视图（1.3）。返回两个版本源码的逐行对比。"""
-    db = get_sync_db()
-    try:
-        s1 = db.execute(text("SELECT source_code FROM function_versions WHERE function_id=:id AND version=:v"),
-                        {"id": func_id, "v": v1}).fetchone()
-        s2 = db.execute(text("SELECT source_code FROM function_versions WHERE function_id=:id AND version=:v"),
-                        {"id": func_id, "v": v2}).fetchone()
-        db.close()
-        if not s1 or not s2:
-            raise HTTPException(404, "版本不存在")
-        import difflib
-        diff = list(difflib.unified_diff(
-            (s1[0] or "").splitlines(), (s2[0] or "").splitlines(),
-            fromfile=f"v{v1}", tofile=f"v{v2}", lineterm=""
-        ))
-        return {"ok": True, "v1": v1, "v2": v2, "diff": diff}
-    except HTTPException:
-        db.close(); raise
-    except Exception as e:
-        db.close(); raise HTTPException(500, str(e))
-
-
-def delete_function(func_id: int):
+@router.delete("/{func_id}")
+def delete_function(func_id: int, user: str = Depends(get_current_user)):
     """删除自定义函数（仅草稿状态可删）。"""
     db = get_sync_db()
     try:
@@ -385,47 +430,4 @@ def delete_function(func_id: int):
         raise HTTPException(500, str(e))
 
 
-def update_function(func_id: int, body: dict):
-    """编辑函数。"""
-    db = get_sync_db()
-    try:
-        r = db.execute(text("SELECT is_builtin,status FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
-        if not r:
-            raise HTTPException(404, "函数不存在")
-        if r[0]:
-            raise HTTPException(400, "系统内置函数不可编辑")
 
-        sets = []
-        params = {"id": func_id}
-        for f in ['display_name','description','category','parameters','source_code','lookback','dependencies','status']:
-            if f in body:
-                sets.append(f"{f}=:{f}")
-                params[f] = json.dumps(body[f]) if f in ('parameters','dependencies') else body[f]
-
-        if not sets:
-            raise HTTPException(400, "无修改内容")
-
-        # 发布时保存快照
-        is_publishing = body.get("status") == "published"
-        if is_publishing:
-            # 获取当前版本号 +1
-            cur = db.execute(text("SELECT version,source_code,parameters FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
-            new_ver = (cur[0] or 0) + 1
-            sets.append(f"version={new_ver}")
-            params["ver"] = new_ver
-            # 插入版本快照
-            db.execute(text(
-                "INSERT INTO function_versions (function_id, version, source_code, parameters) VALUES (:id, :ver, :code, :prm)"
-            ), {"id": func_id, "ver": new_ver, "code": cur[1], "prm": cur[2]})
-
-        sets.append("updated_at=CURRENT_TIMESTAMP")
-        db.execute(text(f"UPDATE functions SET {','.join(sets)} WHERE id=:id"), params)
-        db.commit()
-        db.close()
-        return {"ok": True, "id": func_id, "version": new_ver if is_publishing else None}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        db.close()
-        raise HTTPException(500, str(e))

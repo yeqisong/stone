@@ -108,18 +108,18 @@ class DagExecutor:
         """生成简短的任务ID。"""
         return uuid.uuid4().hex[:8]
 
-    # 受 force 影响的数据节点
-    _FORCE_NODES = {'kline', 'index', 'etf', 'fund'}
-
-    @staticmethod
-    def _resolve_force(force, node_name: str) -> bool:
+    def _resolve_force(self, force, node_name: str) -> bool:
         """解析 force 参数为 per-node bool。
-
-        force 为 bool → 所有数据节点统一生效。
+        自动从 DAG 拓扑推导可 force 的节点（无依赖的入口节点）。
+        force 为 bool → 所有入口节点统一生效。
         force 为 dict → 取对应 key，缺失默认 false。
-        非数据节点永远返回 false。
+        非入口节点永远返回 false。
         """
-        if node_name not in DagExecutor._FORCE_NODES:
+        # 动态推导入口节点（无上游依赖）
+        entries = {n for n, node in self._nodes.items() if not node.deps}
+        if not entries:
+            entries = {'kline', 'index', 'etf', 'fund'}  # fallback
+        if node_name not in entries:
             return False
         if isinstance(force, bool):
             return force
@@ -276,3 +276,9 @@ class DagExecutor:
             # 从剩余列表中移除已执行的节点
             for name in ready:
                 remaining.remove(name)
+
+        # 执行完成后清理 stop 事件，防止内存泄漏
+        run_id = context.get('run_id', '')
+        if run_id:
+            from app.signal import clear_stop_events
+            clear_stop_events(run_id)

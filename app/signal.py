@@ -49,6 +49,12 @@ def clear_stop_request(run_id: str):
     _stop_requests.discard(run_id)
 
 
+def clear_stop_events(run_id: str):
+    """清除 run_id 对应的所有终止相关资源（DAG 执行完成后调用，防止内存泄漏）。"""
+    _stop_requests.discard(run_id)
+    _stop_events.pop(run_id, None)
+
+
 def set_main_loop(loop):
     """由 main.py 在 lifespan 中调用，保存主事件循环引用。"""
     global _main_loop

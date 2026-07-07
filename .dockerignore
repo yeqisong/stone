@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 环境
+.env
+.env.prod
+.env.local
+
+# 数据库
+data/*.db
+data/*.db-*
+data/pgdata/
+data/redis/
+data/exports/
+data/backups/
+data/download_progress.json
+data/stock_monitor_dump.sql.gz
+
+# 日志
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 项目配置
+reasonix.toml
+.claude/
+.reasonix/
+
+# Docker
+docker-compose.override.yml
+.git/
+
+# Node
+node_modules/
+web-v2/node_modules/
+
+# Tests
+tests/
+.pytest_cache/
+
+# docs (not needed in production image)
+docs/
+design/
+初始规划/
