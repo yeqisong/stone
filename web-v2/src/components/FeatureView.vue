@@ -425,7 +425,7 @@ const columns = [
   { title:'实体', key:'target_entity', width:60, render:(row) => entityLabel[row.target_entity] || row.target_entity },
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
   { title:'完整度', key:'data_completeness', width:80, render:(row) => {
-    const pct = Math.round((row.data_completeness||0)*100)
+    const pct = Math.round((row.data_completeness||0)*1000)/10
     const color = pct >= 60 ? '#10b981' : pct >= 30 ? '#f59e0b' : '#ef4444'
     return h('div', {}, [
       h('div', { style:{fontSize:'10px',color:'var(--c-text-dim)',marginBottom:'2px'} }, pct+'%'),

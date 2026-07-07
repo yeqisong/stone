@@ -230,7 +230,7 @@ async function loadDetail() {
   try {
     const r = await axios.get(API + `/api/features/${props.featureId}`)
     feat.value = r.data
-    completenessPct.value = Math.round((r.data.data_completeness||0)*100)
+    completenessPct.value = Math.round((r.data.data_completeness||0)*1000)/10
     if (r.data.latest_computed_date) {
       staleDays.value = Math.round((new Date() - new Date(r.data.latest_computed_date))/86400000)
     }
