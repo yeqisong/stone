@@ -207,6 +207,62 @@ def delete_flow(flow_id: int, user: str = Depends(get_current_user)):
         raise HTTPException(500, str(e)[:200])
 
 
+@router.post("/flows/{flow_id}/publish")
+def publish_flow(flow_id: int, user: str = Depends(get_current_user)):
+    """发布流程：draft → published。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status FROM dag_flows WHERE id=:id"), {"id": flow_id}).fetchone()
+        if not r:
+            raise HTTPException(404, "流程不存在")
+        db.execute(text("UPDATE dag_flows SET status='published', updated_at=CURRENT_TIMESTAMP WHERE id=:id"), {"id": flow_id})
+        db.commit()
+        db.close()
+        return {"ok": True, "status": "published"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e)[:200])
+
+
+@router.post("/flows/{flow_id}/unpublish")
+def unpublish_flow(flow_id: int, user: str = Depends(get_current_user)):
+    """下线流程：published → draft。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status FROM dag_flows WHERE id=:id"), {"id": flow_id}).fetchone()
+        if not r:
+            raise HTTPException(404, "流程不存在")
+        db.execute(text("UPDATE dag_flows SET status='draft', updated_at=CURRENT_TIMESTAMP WHERE id=:id"), {"id": flow_id})
+        db.commit()
+        db.close()
+        return {"ok": True, "status": "draft"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e)[:200])
+
+
+@router.get("/flows/{flow_id}/versions")
+def list_flow_versions(flow_id: int):
+    """流程版本历史。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        rows = db.execute(text(
+            "SELECT version, change_log, created_at FROM dag_flow_versions WHERE flow_id=:id ORDER BY version DESC"
+        ), {"id": flow_id}).fetchall()
+        db.close()
+        return {"versions": [{"version": r[0], "change_log": r[1], "created_at": str(r[2])[:19] if r[2] else None} for r in rows]}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e)[:200])
+
+
 @router.post("/flows/validate")
 def validate_flow_nodes(body: dict):
     """仅校验节点配置（不保存）。"""

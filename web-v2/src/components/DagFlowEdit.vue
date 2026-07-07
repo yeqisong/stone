@@ -8,6 +8,8 @@
       <n-input v-if="editMode" v-model:value="flowCron" size="small" style="width:140px" placeholder="Cron 表达式" />
     </div>
     <div style="display:flex;gap:6px">
+      <n-button v-if="editMode && flowStatus==='draft'" size="small" type="success" @click="doPublish" :loading="saving">🚀 发布</n-button>
+      <n-button v-if="editMode && flowStatus==='published'" size="small" type="warning" @click="doUnpublish" :loading="saving">⬇ 下线</n-button>
       <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">🔍 校验</n-button>
       <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">💾 保存</n-button>
       <n-button v-if="editMode" size="small" quaternary @click="editMode=false;validation=null">← 返回</n-button>
@@ -82,6 +84,7 @@ const flowName = ref('')
 const flowCron = ref('')
 const validation = ref(null)
 const saving = ref(false)
+const flowStatus = ref('draft')
 const canvasRef = ref(null)
 
 let graph = null
@@ -94,7 +97,13 @@ const flowCols = [
   { title:'流程名', key:'flow_name', width:160 },
   { title:'状态', key:'status', width:80, render(r){ return r.status==='published'?'✅ 已发布':'📝 '+r.status } },
   { title:'Cron', key:'cron_expr', width:130 },
-  { title:'操作', key:'actions', width:100, render(r){ return h(NButton,{size:'tiny',quaternary:true,onClick:()=>openEdit(r.id)},()=>'编辑') } },
+  { title:'操作', key:'actions', width:160, render(r){
+    return h('div',{style:{display:'flex',gap:'4px'}},[
+      h(NButton,{size:'tiny',quaternary:true,onClick:()=>openEdit(r.id)},()=>'✎'),
+      r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'success',onClick:()=>doPublishList(r.id)},()=>'▶') : null,
+      r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'⏸') : null,
+    ])
+  }},
 ]
 
 async function loadFlows() {
@@ -190,6 +199,7 @@ async function openEdit(id) {
     const d = r.data
     flowName.value = d.flow_name
     flowCron.value = d.cron_expr || ''
+    flowStatus.value = d.status || 'draft'
     selectedFlow.value = id
     await nextTick()
     initGraph()
@@ -232,6 +242,35 @@ async function doValidate() {
   } catch(e) {
     validation.value = { ok: false, errors: [e.response?.data?.detail || e.message] }
   }
+}
+
+async function doPublish() {
+  if (!selectedFlow.value) return
+  saving.value = true
+  try {
+    await axios.post(API + `/api/dag/flows/${selectedFlow.value}/publish`)
+    flowStatus.value = 'published'
+    loadFlows()
+  } catch(e) { alert(e.response?.data?.detail || '发布失败') }
+  saving.value = false
+}
+
+async function doPublishList(id) {
+  try { await axios.post(API + `/api/dag/flows/${id}/publish`); loadFlows() } catch(e) {}
+}
+async function doUnpublishList(id) {
+  try { await axios.post(API + `/api/dag/flows/${id}/unpublish`); loadFlows() } catch(e) {}
+}
+
+async function doUnpublish() {
+  if (!selectedFlow.value) return
+  saving.value = true
+  try {
+    await axios.post(API + `/api/dag/flows/${selectedFlow.value}/unpublish`)
+    flowStatus.value = 'draft'
+    loadFlows()
+  } catch(e) { alert(e.response?.data?.detail || '下线失败') }
+  saving.value = false
 }
 
 async function doSave() {
