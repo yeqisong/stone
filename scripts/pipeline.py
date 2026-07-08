@@ -978,8 +978,13 @@ def _simple_backtest(df, feature_names, val_start, val_end, hold_days, stop_loss
         if candidates.empty: continue
         slots = max_pos - len(holdings)
         if slots <= 0: continue
-        # 预测 > 0 才买，用排序选 top
-        top_idx = np.argsort(y_pred)[-min(slots, len(candidates)):][::-1] if len(y_pred) > 0 else []
+        # 预测 > min_pred_return(默认0) 才买，用排序选 top
+        min_ret = 0.0
+        filtered = candidates.copy()
+        if len(y_pred) > 0:
+            pred_vals = y_pred[:len(candidates)]
+            filtered = candidates[pred_vals > min_ret]
+        top_idx = np.argsort(y_pred[:len(filtered)])[-min(slots, len(filtered)):][::-1] if len(filtered) > 0 and len(y_pred) > 0 else []
         bought = 0
         for idx in top_idx:
             if bought >= slots: break

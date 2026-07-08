@@ -130,8 +130,8 @@
               </n-collapse-item>
               <n-collapse-item title="② 信号过滤" name="sig">
                 <div style="display:flex;gap:12px;font-size:11px">
-                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">最低分</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.min_score_threshold" :min="0" :max="1" :step="0.05" style="width:80px" size="small" /></div>
-                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">最高分</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.max_score_threshold" :min="0" :max="1" :step="0.05" style="width:80px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">最低预测收益</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.min_pred_return" :min="-0.2" :max="0.2" :step="0.01" style="width:90px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">最高预测收益</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.max_pred_return" :min="0.1" :max="0.5" :step="0.05" style="width:90px" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="③ 头寸管理" name="pos">
@@ -240,7 +240,7 @@ const createForm = reactive({
   // 六层策略配置默认值（策略扫描时搜索最优）
   trading_rules: {
     execution: { price_type: 'next_day_open', delay_days: 1, volume_limit: 0.10 },
-    signal_filter: { min_score_threshold: 0.5, max_score_threshold: 0.95, allow_limit_up: false },
+    signal_filter: { min_pred_return: 0.0, max_pred_return: 0.30, allow_limit_up: false },
     position_sizing: { sizing_method: 'equal_weight', max_single_position: 0.20, max_turnover_per_day: 0.30 },
     risk_management: { stop_loss_type: 'percentage', stop_loss: 0.05, take_profit: 0.10,
                        trailing_retracement: 0.05, max_holding_days: 20 },
