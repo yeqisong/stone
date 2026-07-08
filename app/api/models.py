@@ -554,7 +554,7 @@ def quality_dashboard(version: str):
             fr = db.execute(text("SELECT data_completeness FROM features WHERE feature_name=:fn"),{"fn":fn}).fetchone()
             fq.append({"feature":fn,"completeness":round(float(fr[0])*100 if fr and fr[0] else 0,1)})
         db.close()
-        return {"version":version,"phases":None,"features":fq,"correlation_warnings":[],"note":"特征质量数据需训练完成后生成"}
+        return {"version":version,"phases":None,"features":fq,"correlation_warnings":[],"note":"特征质量数据需训练完成后生成，当前为占位数据"}
     except HTTPException:
         db.close(); raise
     except Exception as e:
@@ -706,74 +706,9 @@ def _run_scan(task_id, version, combos, val_start, val_end, hold_days):
 
 
 def _backtest_scan(df, feature_names, val_start, val_end, hold_days, sl, tp, tr):
-    """简化版回测，供策略扫描使用（与 pipeline._backtest 逻辑一致）。"""
-    import numpy as np
-    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
-    if not val_mask.any(): return {'sharpe': 0, 'max_dd': 0, 'win_rate': 0, 'total_return': 0}
-    vdf = df[val_mask].copy()
-
-    if feature_names:
-        X = vdf[feature_names].fillna(0).values
-        y_pred = np.mean(X, axis=1) if X.shape[1] > 0 else np.zeros(len(vdf))
-    else:
-        y_pred = np.zeros(len(vdf))
-
-    dates_unique = sorted(vdf['trade_date'].unique())
-    equity = 1_000_000; cash = 1_000_000
-    holdings = []; equity_curve = [equity]
-    trade_count = win_count = 0
-    max_pos = 5; comm = 0.00025; st_tax = 0.001; slip = 0.001
-
-    for d in dates_unique:
-        day = vdf[vdf['trade_date'] == d]
-        if day.empty: continue
-        # 平仓
-        surviving = []
-        for h in holdings:
-            hday = day[day['stock_code'] == h['code']]
-            if hday.empty: surviving.append(h); continue
-            cur_p = float(hday['close'].iloc[0])
-            sell_p = cur_p; should_sell = False
-            if cur_p <= h['buy_price'] * (1 - sl): sell_p = h['buy_price'] * (1 - sl); should_sell = True
-            elif cur_p >= h['buy_price'] * (1 + tp): sell_p = h['buy_price'] * (1 + tp); should_sell = True
-            elif (d - h['buy_date']).days >= hold_days: should_sell = True
-            if should_sell:
-                gross = h['shares'] * sell_p; cost = gross * (comm + st_tax) + max(gross * slip, 0)
-                cash += max(gross - cost, 0); trade_count += 1
-                if sell_p > h['buy_price']: win_count += 1
-            else: surviving.append(h)
-        holdings = surviving
-        # 买入
-        held = {h['code'] for h in holdings}
-        candidates = day[~day['stock_code'].isin(held) & (day['close'] > 0)]
-        if candidates.empty: continue
-        slots = max_pos - len(holdings)
-        if slots <= 0: continue
-        # 预测 > 0 才买
-        idx_arr = np.argsort(y_pred)[-len(candidates):][::-1] if len(y_pred) > 0 else []
-        bought = 0
-        for idx in idx_arr:
-            if bought >= slots: break
-            r = candidates.iloc[min(idx, len(candidates)-1)]
-            price = float(r['close']) * (1 + slip/2)
-            shares = int((equity/max_pos)//price//100)*100
-            if shares < 100: continue
-            gross2 = shares * price
-            if gross2 + gross2*comm > cash: continue
-            cash -= gross2 + gross2*comm
-            holdings.append({'code': r['stock_code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
-            bought += 1
-        pos_val = sum(h['shares'] * float(day[day['stock_code']==h['code']]['close'].iloc[0]) if not day[day['stock_code']==h['code']].empty else 0 for h in holdings)
-        equity = cash + pos_val; equity_curve.append(equity)
-
-    eq = np.array(equity_curve)
-    rets = eq[1:]/eq[:-1] - 1 if len(eq) > 1 else np.array([0])
-    sharpe = float(np.mean(rets)/np.std(rets)*np.sqrt(252)) if np.std(rets) > 0 else 0
-    total_ret = equity/1_000_000 - 1
-    peak = np.maximum.accumulate(eq); dd = np.min((eq-peak)/peak) if len(eq) > 1 else 0
-    return {'sharpe': round(sharpe,4), 'max_dd': round(float(dd),4),
-            'win_rate': round(win_count/max(trade_count,1),4),
-            'total_return': round(float(total_ret),4)}
+    """策略扫描回测 — 调用 pipeline._simple_backtest。"""
+    from scripts.pipeline import _simple_backtest
+    return _simple_backtest(df, feature_names, val_start, val_end, hold_days, sl, tp)
 
 
 @router.post("/v1/models/{version}/attribution")

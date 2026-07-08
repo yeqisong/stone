@@ -936,6 +936,74 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
 
 # ── 归因分析引擎（v2.7 — 基准锚定法）──
 
+def _simple_backtest(df, feature_names, val_start, val_end, hold_days, stop_loss, take_profit):
+    """模块级简化回测（供 run_attribution 和 strategy-scan 共用）。"""
+    import numpy as np
+    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
+    if not val_mask.any(): return {'sharpe': 0, 'max_dd': 0, 'win_rate': 0, 'total_return': 0}
+    vdf = df[val_mask].copy()
+
+    if feature_names:
+        X = vdf[feature_names].fillna(0).values
+        y_pred = np.mean(X, axis=1) if X.shape[1] > 0 else np.zeros(len(vdf))
+    else:
+        y_pred = np.zeros(len(vdf))
+
+    dates_unique = sorted(vdf['trade_date'].unique())
+    equity = 1_000_000; cash = 1_000_000
+    holdings = []; equity_curve = [equity]
+    trade_count = win_count = 0
+    max_pos = 5; comm = 0.00025; st_tax = 0.001; slip = 0.001
+
+    for d in dates_unique:
+        day = vdf[vdf['trade_date'] == d]
+        if day.empty: continue
+        surviving = []
+        for h in holdings:
+            hday = day[day['stock_code'] == h['code']]
+            if hday.empty: surviving.append(h); continue
+            cur_p = float(hday['close'].iloc[0])
+            sell_p = cur_p; should_sell = False
+            if cur_p <= h['buy_price'] * (1 - stop_loss): sell_p = h['buy_price'] * (1 - stop_loss); should_sell = True
+            elif cur_p >= h['buy_price'] * (1 + take_profit): sell_p = h['buy_price'] * (1 + take_profit); should_sell = True
+            elif (d - h['buy_date']).days >= hold_days: should_sell = True
+            if should_sell:
+                gross = h['shares'] * sell_p; cost = gross * (comm + st_tax) + max(gross * slip, 0)
+                cash += max(gross - cost, 0); trade_count += 1
+                if sell_p > h['buy_price']: win_count += 1
+            else: surviving.append(h)
+        holdings = surviving
+        held = {h['code'] for h in holdings}
+        candidates = day[~day['stock_code'].isin(held) & (day['close'] > 0)]
+        if candidates.empty: continue
+        slots = max_pos - len(holdings)
+        if slots <= 0: continue
+        # 预测 > 0 才买，用排序选 top
+        top_idx = np.argsort(y_pred)[-min(slots, len(candidates)):][::-1] if len(y_pred) > 0 else []
+        bought = 0
+        for idx in top_idx:
+            if bought >= slots: break
+            r = candidates.iloc[min(idx, len(candidates)-1)]
+            price = float(r['close']) * (1 + slip/2)
+            shares = int((equity/max_pos)//price//100)*100
+            if shares < 100: continue
+            gross2 = shares * price
+            if gross2 + gross2*comm > cash: continue
+            cash -= gross2 + gross2*comm
+            holdings.append({'code': r['stock_code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
+            bought += 1
+        pos_val = sum(h['shares'] * float(day[day['stock_code']==h['code']]['close'].iloc[0]) if not day[day['stock_code']==h['code']].empty else 0 for h in holdings)
+        equity = cash + pos_val; equity_curve.append(equity)
+
+    eq = np.array(equity_curve); rets = eq[1:]/eq[:-1] - 1 if len(eq) > 1 else np.array([0])
+    sharpe = float(np.mean(rets)/np.std(rets)*np.sqrt(252)) if np.std(rets) > 0 else 0
+    total_ret = equity/1_000_000 - 1
+    peak = np.maximum.accumulate(eq); dd = np.min((eq-peak)/peak) if len(eq) > 1 else 0
+    return {'sharpe': round(sharpe,4), 'max_dd': round(float(dd),4),
+            'win_rate': round(win_count/max(trade_count,1),4),
+            'total_return': round(float(total_ret),4), 'total_trades': trade_count}
+
+
 def run_attribution(db, version: str, df, feature_names: list, val_start: str, val_end: str,
                     initial_cash: float = 1_000_000, max_pos: int = 5,
                     stop_loss: float = 0.08, take_profit: float = 0.15, hold_days: int = 10):
@@ -964,40 +1032,33 @@ def run_attribution(db, version: str, df, feature_names: list, val_start: str, v
     volume = val_df['volume'].values
     X = val_df[feature_names].values if feature_names else np.zeros((len(val_df), 1))
 
-    # 1. 理想化回测：模型预测 + 无摩擦 + 无止盈止损
-    try:
-        model_path = f"data/models/{version}/xgb_10d.pkl"
-        import pickle as _pkl, os as _os
-        if _os.path.exists(model_path):
+    # 1. 检查模型是否存在
+    import pickle as _pkl, os as _os
+    model_path = f"data/models/{version}/xgb_10d.pkl"
+    model = None
+    y_pred = None
+    if _os.path.exists(model_path):
+        try:
             with open(model_path, 'rb') as f:
                 model = _pkl.load(f)
-            y_pred = model.predict(X)
-        else:
-            y_pred = np.random.randn(len(val_df)) * 0.01
-    except Exception:
-        y_pred = np.random.randn(len(val_df)) * 0.01
+            y_pred = model.predict(X) if len(X) > 0 else None
+        except Exception:
+            pass
 
-    ideal = _backtest(
-        val_df['close'].values * 0 + 0.01, y_pred, dates, codes, close, volume,
-        hold_days=hold_days, stop_loss=0.99, take_profit=99.0,   # 无止盈止损
-        commission=0, stamp_tax=0, slippage=0,                     # 无摩擦
-        bt_ver=version, bt_label='ideal'
-    )
+    if y_pred is None or model is None:
+        return {
+            'ideal': {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0},
+            'random': {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0},
+            'real': {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0},
+            'benchmark_return': 0, 'matrix': 'double_misjudge',
+            'brinson': {'model_contribution': 0, 'strategy_contribution': 0, 'interaction': 0},
+            'error': f'模型文件不存在或损坏: {model_path}，请先完成模型训练'
+        }
 
-    # 2. 随机信号：随机预测 + 真实止盈止损
-    random_pred = np.random.randn(len(val_df)) * 0.01
-    random = _backtest(
-        val_df['close'].values * 0, random_pred, dates, codes, close, volume,
-        hold_days=hold_days, stop_loss=stop_loss, take_profit=take_profit,
-        bt_ver=version, bt_label='random'
-    )
-
-    # 3. 真实策略：模型预测 + 真实止盈止损
-    real = _backtest(
-        val_df['close'].values * 0, y_pred, dates, codes, close, volume,
-        hold_days=hold_days, stop_loss=stop_loss, take_profit=take_profit,
-        bt_ver=version, bt_label='real'
-    )
+    # 2. 使用简化回测（避免嵌套函数作用域问题）
+    ideal = _simple_backtest(df, feature_names, val_start, val_end, hold_days, 0.99, 99.0)
+    random = _simple_backtest(df, [], val_start, val_end, hold_days, stop_loss, take_profit)
+    real = _simple_backtest(df, feature_names, val_start, val_end, hold_days, stop_loss, take_profit)
 
     # 4. 基准收益（沪深300 同期）
     benchmark_return = 0

@@ -285,7 +285,7 @@ async function startScan() {
   try {
     const r = await axios.post(API + `/v1/models/${props.version.version}/strategy-scan`, {
       param_grid: { stop_loss: scanStopLoss.value, take_profit: scanTakeProfit.value, trailing_retracement: [0.05] },
-      val_start: '2022-01-01', val_end: '2023-12-31'
+      val_start: cfgValStart, val_end: cfgValEnd
     })
     scanTask.value = r.data
     if (r.data.task_id) pollScan(r.data.task_id)
@@ -323,7 +323,7 @@ async function loadAttribution() {
   attrLoading.value = true
   try {
     const r = await axios.post(API + `/v1/models/${props.version.version}/attribution`, {
-      val_start: '2022-01-01', val_end: '2023-12-31'
+      val_start: cfgValStart, val_end: cfgValEnd
     })
     attribution.value = r.data
   } catch(e) {} finally { attrLoading.value = false }
@@ -346,6 +346,9 @@ const attrMatrixColor = computed(() => {
   const m = attribution.value?.matrix
   return {dual_driver:'#10b981',execution_loss:'#f59e0b',beta_amplifier:'#f59e0b',double_misjudge:'#ef4444'}[m] || 'var(--c-text)'
 })
+
+const cfgValStart = computed(() => props.version?.config?.val_strategy_range?.start || '2022-01-01')
+const cfgValEnd = computed(() => props.version?.config?.val_strategy_range?.end || '2023-12-31')
 
 const trades = computed(() => rep.value.trades || [])
 const tradePage = ref(1)
