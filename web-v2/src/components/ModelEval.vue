@@ -136,6 +136,58 @@
       <n-pagination v-if="tradeTotal > pageSize" :page="tradePage" :page-size="pageSize" :item-count="tradeTotal" :on-update:page="p=>tradePage=p" size="small" style="margin-top:8px;justify-content:center" />
     </div>
 
+    <!-- 策略扫描 -->
+    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🔍 策略参数扫描</div>
+        <n-button size="tiny" @click="showScanModal=true" :disabled="scanRunning">开始扫描</n-button>
+      </div>
+      <div v-if="scanTask" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
+        {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `✅ 完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
+      </div>
+    </div>
+
+    <!-- 归因分析 -->
+    <div v-if="attribution" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">📊 归因分析（基准锚定法）</div>
+        <n-button size="tiny" @click="loadAttribution" :loading="attrLoading">🔄 重新分析</n-button>
+      </div>
+      <div v-if="attribution.matrix" style="display:flex;gap:8px;flex-wrap:wrap">
+        <div v-for="m in attrCards" :key="m.label" style="flex:1;min-width:90px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+          <div style="font-size:9px;color:var(--c-text-faint)">{{ m.label }}</div>
+          <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{ m.value }}</div>
+          <div style="font-size:9px;color:var(--c-text-faint)">夏普 {{ m.sharpe }}</div>
+        </div>
+      </div>
+      <div v-if="attribution.brinson" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
+        选股贡献 {{ (attribution.brinson.model_contribution*100).toFixed(1) }}% | 策略贡献 {{ (attribution.brinson.strategy_contribution*100).toFixed(1) }}%
+        <span style="margin-left:8px;font-weight:600" :style="{color:attrMatrixColor}">{{ attrMatrixLabel }}</span>
+      </div>
+    </div>
+
+    <!-- 策略扫描弹窗 -->
+    <n-modal v-model:show="showScanModal" preset="card" title="策略参数扫描" style="width:500px;max-width:92vw">
+      <n-space vertical>
+        <div style="font-size:11px;color:var(--c-text-dim)">选择参数候选值，系统将遍历所有组合在验证集上回测。</div>
+        <div style="font-size:11px;font-weight:600">止盈阈值</div>
+        <n-checkbox-group v-model:value="scanStopLoss"><n-space><n-checkbox v-for="v in [0.03,0.05,0.08,0.10]" :key="v" :value="v" :label="(v*100)+'%'" /></n-space></n-checkbox-group>
+        <div style="font-size:11px;font-weight:600">止损阈值</div>
+        <n-checkbox-group v-model:value="scanTakeProfit"><n-space><n-checkbox v-for="v in [0.05,0.08,0.10,0.15,0.20]" :key="v" :value="v" :label="(v*100)+'%'" /></n-space></n-checkbox-group>
+        <div v-if="scanTask?.status==='running'" style="margin-top:8px">
+          <n-progress type="line" :percentage="Math.round(scanTask.completed/scanTask.total_combos*100)" />
+        </div>
+        <div v-if="scanTask?.status==='completed' && scanTask.best_so_far" style="margin-top:8px;font-size:11px;color:#10b981">
+          ✅ 最优：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}% 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
+          <n-button size="tiny" type="primary" style="margin-left:8px" @click="applyScan">应用</n-button>
+        </div>
+      </n-space>
+      <template #footer>
+        <n-button @click="showScanModal=false">取消</n-button>
+        <n-button type="primary" @click="startScan" :loading="scanRunning">开始扫描</n-button>
+      </template>
+    </n-modal>
+
     <n-empty v-if="!trials.length" description="无回测记录" style="padding:20px" />
   </template>
 </div>
@@ -143,7 +195,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { NEmpty, NButton, NPagination } from 'naive-ui'
+import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress } from 'naive-ui'
 
 const props = defineProps({ version: Object })
 
@@ -217,6 +269,82 @@ const modelParams = computed(() => {
     { label:'子采样', value: first.subsample?.toFixed?.(2) || first.subsample, key:'subsample' },
     { label:'列采样', value: first.colsample_bytree?.toFixed?.(2) || first.max_features?.toFixed?.(2) || '—', key:'colsample_bytree' },
   ]
+})
+
+// ── 策略扫描 ──
+const showScanModal = ref(false)
+const scanStopLoss = ref([0.05, 0.08])
+const scanTakeProfit = ref([0.10, 0.15])
+const scanRunning = ref(false)
+const scanTask = ref(null)
+let scanPollTimer = null
+
+async function startScan() {
+  if (!props.version?.version) return
+  scanRunning.value = true; scanTask.value = null
+  try {
+    const r = await axios.post(API + `/v1/models/${props.version.version}/strategy-scan`, {
+      param_grid: { stop_loss: scanStopLoss.value, take_profit: scanTakeProfit.value, trailing_retracement: [0.05] },
+      val_start: '2022-01-01', val_end: '2023-12-31'
+    })
+    scanTask.value = r.data
+    if (r.data.task_id) pollScan(r.data.task_id)
+  } catch(e) { alert(e.response?.data?.detail || '启动失败') }
+  scanRunning.value = false
+}
+
+function pollScan(taskId) {
+  scanPollTimer = setInterval(async () => {
+    try {
+      const r = await axios.get(API + `/v1/models/${props.version.version}/strategy-scan/${taskId}`)
+      scanTask.value = r.data
+      if (r.data.status === 'completed' || r.data.status === 'failed') {
+        clearInterval(scanPollTimer); scanPollTimer = null
+      }
+    } catch(e) { clearInterval(scanPollTimer) }
+  }, 1000)
+}
+
+async function applyScan() {
+  if (!scanTask.value?.task_id) return
+  try {
+    await axios.post(API + `/v1/models/${props.version.version}/strategy-scan/${scanTask.value.task_id}/apply`)
+    alert('最优参数已应用')
+    showScanModal.value = false
+  } catch(e) { alert('应用失败') }
+}
+
+// ── 归因分析 ──
+const attribution = ref(null)
+const attrLoading = ref(false)
+
+async function loadAttribution() {
+  if (!props.version?.version) return
+  attrLoading.value = true
+  try {
+    const r = await axios.post(API + `/v1/models/${props.version.version}/attribution`, {
+      val_start: '2022-01-01', val_end: '2023-12-31'
+    })
+    attribution.value = r.data
+  } catch(e) {} finally { attrLoading.value = false }
+}
+
+const attrCards = computed(() => {
+  const a = attribution.value; if (!a) return []
+  return [
+    { label:'理想化', value: (a.ideal?.total_return*100).toFixed(1)+'%', sharpe: a.ideal?.sharpe?.toFixed(2) || '—' },
+    { label:'随机信号', value: (a.random?.total_return*100).toFixed(1)+'%', sharpe: a.random?.sharpe?.toFixed(2) || '—' },
+    { label:'真实策略', value: (a.real?.total_return*100).toFixed(1)+'%', sharpe: a.real?.sharpe?.toFixed(2) || '—' },
+  ]
+})
+
+const attrMatrixLabel = computed(() => {
+  const m = attribution.value?.matrix
+  return {dual_driver:'双轮驱动',execution_loss:'执行损耗',beta_amplifier:'Beta放大',double_misjudge:'双重误判'}[m] || ''
+})
+const attrMatrixColor = computed(() => {
+  const m = attribution.value?.matrix
+  return {dual_driver:'#10b981',execution_loss:'#f59e0b',beta_amplifier:'#f59e0b',double_misjudge:'#ef4444'}[m] || 'var(--c-text)'
 })
 
 const trades = computed(() => rep.value.trades || [])
