@@ -43,6 +43,12 @@ async function login() {
     })
     auth.setToken(r.data.token)
     auth.setUser(r.data.username)
+    // 登录后跳回原页面
+    const params = new URLSearchParams(location.hash.includes('?') ? location.hash.split('?')[1] : '')
+    const returnUrl = params.get('return')
+    if (returnUrl) {
+      location.hash = decodeURIComponent(returnUrl)
+    }
   } catch(e) {
     error.value = e.response?.data?.detail || '登录失败（请检查网络或后端服务）'
   }
