@@ -76,6 +76,7 @@
                 <div><span style="color:var(--c-text-faint)">移动止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.trailing_retracement ? (tr.risk_management.trailing_retracement*100).toFixed(0)+'%' : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">仓位上限: </span><span style="color:var(--c-text)">{{tr.position_sizing?.max_single_position ? (tr.position_sizing.max_single_position*100).toFixed(0)+'%' : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">大盘择时: </span><span style="color:var(--c-text)">{{tr.market_filter?.require_market_above_ma ? 'MA'+tr.market_filter.market_ma_period+'以上开仓' : '不限'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">成本: </span><span style="color:var(--c-text)">佣{{((tr.cost_model?.commission_rate ?? 0.0015)*100).toFixed(2)}}% 滑{{((tr.cost_model?.slippage_rate ?? 0.001)*100).toFixed(1)}}% 印{{((tr.cost_model?.stamp_duty ?? 0.0005)*100).toFixed(2)}}%</span></div>
                 <div><span style="color:var(--c-text-faint)">执行模型: </span><span style="color:var(--c-text)">{{tr.execution?.price_type || 'next_day_open'}} T+{{tr.execution?.delay_days || 1}}</span></div>
               </div>
             </div>
@@ -164,8 +165,8 @@
               </n-collapse-item>
               <n-collapse-item title="⑥ 成本模型" name="cost">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
-                  <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">佣金</span><n-input-number v-model:value="createForm.trading_rules.cost_model.commission_rate" :min="0.0005" :max="0.003" :step="0.0001" style="width:90px" size="small" /></div>
-                  <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">滑点</span><n-input-number v-model:value="createForm.trading_rules.cost_model.slippage_rate" :min="0.0005" :max="0.002" :step="0.0001" style="width:90px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">佣金</span><n-input-number v-model:value="createForm.trading_rules.cost_model.commission_rate" :min="0.0005" :max="0.003" :step="0.0001" style="width:110px" size="small" :format="v => (v*100).toFixed(2)+'%'" :parse="v => parseFloat(v)/100" /></div>
+                  <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">滑点</span><n-input-number v-model:value="createForm.trading_rules.cost_model.slippage_rate" :min="0.0005" :max="0.002" :step="0.0001" style="width:110px" size="small" :format="v => (v*100).toFixed(2)+'%'" :parse="v => parseFloat(v)/100" /></div>
                 </div>
               </n-collapse-item>
             </n-collapse>
