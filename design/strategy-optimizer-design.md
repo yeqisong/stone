@@ -1,249 +1,165 @@
-# 策略参数优化引擎 — 开发设计文档
+# 模型训练与回测模块 — 开发设计文档 v2.0
 
-> 版本：v1.0 | 日期：2026-07-08 | 状态：设计中
-
----
-
-## 1. 核心认知
-
-模型参数（XGBoost）和策略参数（止盈止损）是**双塔**，两者并列，都需要被优化。
-
-| 维度 | 模型超参数 | 策略交易规则 |
-|------|-----------|-------------|
-| 优化目标 | Val R² | 回测 Sharpe / 收益回撤比 |
-| 参数类型 | learning_rate, max_depth... | stop_loss, take_profit, trailing_stop... |
-| 计算成本 | 极高（需重训练 XGBoost） | 极低（模型固定，只重放逐日模拟） |
-| 运行时间 | 分钟~小时 | 秒~几十秒 |
-
-**结论**：可枚举成千上万种策略参数组合，几乎零算力成本。
+> 版本：v2.0 | 日期：2026-07-08 | 状态：设计中
 
 ---
 
-## 2. 数据模型变更
+## 1. 模块定位
 
-### 2.1 model_versions 新增字段
+模型训练与回测模块是K道量化平台的**"策略研发中心"**，独立于DAG流程编排，提供从特征选择、模型训练、策略优化、综合评估到上线部署的完整模型生命周期管理。
 
-```sql
-ALTER TABLE model_versions ADD COLUMN train_params JSONB;         -- 模型训练参数快照
-ALTER TABLE model_versions ADD COLUMN trading_rules JSONB;        -- 最优交易规则（验证集搜索得出）
-ALTER TABLE model_versions ADD COLUMN strategy_scan_results JSONB; -- 策略扫描全部结果 [{params,sharpe,max_dd,...}]
-ALTER TABLE model_versions ADD COLUMN test_performance JSONB;     -- 测试集性能（仅展示，不回传优化）
-```
-
-### 2.2 新表：strategy_scan_tasks
-
-```sql
-CREATE TABLE strategy_scan_tasks (
-    task_id       VARCHAR(16) PRIMARY KEY,
-    version       VARCHAR(16) REFERENCES model_versions(version),
-    status        VARCHAR(16) DEFAULT 'pending',  -- pending/running/completed/failed
-    total_combos  INTEGER DEFAULT 0,
-    completed     INTEGER DEFAULT 0,
-    best_params   JSONB,
-    best_sharpe   DECIMAL(8,4),
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    finished_at   TIMESTAMP
-);
-```
+**核心设计理念**：**版本 = 模型文件 + 策略配置快照**。模型（预测能力）和策略（执行规则）是并列的两个独立组件，版本管理同时锁定两者。
 
 ---
 
-## 3. 嵌套验证架构（防止 Look-ahead Bias）
+## 2. 设计原则
 
-```
-全量数据时间线:
-|────── train ──────|── val_strategy ──|──── test ────|
-  2016-01 ~ 2021-12    2022-01 ~ 2023-12   2024-01 ~ 今
-
-阶段1: train 集 → 训练 XGBoost → 模型 .pkl
-阶段2: val_strategy 集 → 搜索最优 trading_rules (仅在这段数据上)
-阶段3: test 集 → 最终回测 (确定参数后只跑一次，结果写入 test_performance)
-```
-
-### model_versions.config 结构变更
-
-```json
-{
-  "train_params": {
-    "train_start": "2016-01-01", "train_end": "2021-12-31",
-    "features": [...], "model_type": "xgboost"
-  },
-  "val_strategy_range": {
-    "start": "2022-01-01", "end": "2023-12-31",
-    "purpose": "策略参数搜索专用，严禁用于模型训练"
-  },
-  "test_range": {
-    "start": "2024-01-01", "end": null
-  },
-  "trading_rules": {
-    "stop_loss": 0.08, "take_profit": 0.15, "trailing_stop": 0.05,
-    "max_positions": 5, "position_size": 0.2,
-    "optimized_on": "val_strategy",
-    "optimized_sharpe": 1.85
-  },
-  "test_performance": {
-    "sharpe": 1.42, "max_dd": 0.18, "win_rate": 0.55,
-    "evaluated_at": "2026-07-08"
-  }
-}
-```
-
----
-
-## 4. 策略参数扫描引擎
-
-### 4.1 API
-
-**`POST /api/models/versions/{version}/strategy-scan`**
-
-```json
-// Request
-{
-  "param_grid": {
-    "stop_loss": [0.03, 0.05, 0.08, 0.10],
-    "take_profit": [0.05, 0.08, 0.10, 0.15, 0.20],
-    "trailing_stop": [0.03, 0.05, 0.08]
-  },
-  "val_range": {"start": "2022-01-01", "end": "2023-12-31"}
-}
-// Response
-{ "task_id": "scan-a1b2", "total_combos": 60, "status": "started" }
-```
-
-**`GET /api/models/versions/{version}/strategy-scan/{task_id}`**
-
-```json
-{
-  "task_id": "scan-a1b2", "status": "running",
-  "completed": 45, "total_combos": 60,
-  "best_so_far": {
-    "stop_loss": 0.08, "take_profit": 0.15, "trailing_stop": 0.05,
-    "sharpe": 1.85, "max_dd": 0.12, "win_rate": 0.58
-  },
-  "heatmap_data": [[0.03,0.05,0.8],[0.03,0.08,1.1],...]
-}
-```
-
-### 4.2 后端扫描逻辑
-
-```python
-def run_strategy_scan(version, param_grid, val_start, val_end):
-    # 1. 加载模型 .pkl（只加载一次）
-    model = load_model(version)
-    
-    # 2. 加载验证集特征 + 标签（只加载一次，缓存到内存）
-    df_val = load_features(val_start, val_end)
-    daily_data = load_daily_quote(val_start, val_end)
-    
-    # 3. 模型预测（只跑一次，缓存预测值）
-    predictions = model.predict(df_val[FEATURES])
-    df_val['pred'] = predictions
-    
-    # 4. 笛卡尔积遍历策略参数
-    combos = list(product(
-        param_grid['stop_loss'],
-        param_grid['take_profit'],
-        param_grid.get('trailing_stop', [0])
-    ))
-    
-    results = []
-    for i, (sl, tp, ts) in enumerate(combos):
-        bt = _backtest(
-            df_val['target'].values, df_val['pred'].values,
-            df_val['trade_date'], df_val['stock_code'],
-            df_val['close'], df_val['volume'],
-            hold_days=10, stop_loss=sl, take_profit=tp, trailing_stop=ts
-        )
-        results.append({
-            'stop_loss': sl, 'take_profit': tp, 'trailing_stop': ts,
-            'sharpe': bt['sharpe'], 'max_dd': bt['max_dd'],
-            'win_rate': bt['win_rate'], 'total_return': bt['total_return']
-        })
-        # 每完成一个组合推送进度
-        push_ws_progress(task_id, i+1, len(combos))
-    
-    # 5. 选最优
-    best = max(results, key=lambda r: r['sharpe'])
-    return best, results
-```
-
-### 4.3 性能优化
-
-- 模型 .pkl 只加载 1 次
-- 特征数据 + 预测值缓存在内存中
-- 逐日模拟纯逻辑计算，每秒可跑数百种组合
-
----
-
-## 7. 前端设计
-
-### 5.1 策略参数扫描弹窗
-
-- 在 ModelEval 回测页增加 **[策略参数扫描]** 按钮
-- 弹窗内容：
-  - 止盈阈值：多选 `[5%, 8%, 10%, 15%, 20%]` + 自定义
-  - 止损阈值：多选 `[3%, 5%, 8%, 10%]` + 自定义
-  - 移动止盈回撤：多选 `[3%, 5%, 8%]`
-  - 验证集日期范围（自动从 config 读取）
-  - 预计组合数显示
-
-### 5.2 扫描结果页
-
-- **热力图**：X轴=止盈, Y轴=止损, 颜色=夏普比率
-- **帕累托散点图**：X轴=夏普, Y轴=最大回撤，点击选中
-- **表格**：列出所有组合的详细指标，可按列排序
-- **一键应用**：选中某组参数 → 写入 `model_versions.trading_rules`
-
----
-
-## 6. 文件变更清单
-
-| 文件 | 变更 |
+| 原则 | 说明 |
 |------|------|
-| `app/db/schema.py` | model_versions 加 4 列 + strategy_scan_tasks 表 |
-| `app/api/models.py` | strategy-scan API (POST + GET) |
-| `scripts/pipeline.py` | `run_strategy_scan()` + `_backtest()` 支持 take_profit/trailing_stop |
-| `web-v2/src/components/ModelEval.vue` | 策略扫描按钮 + 弹窗 |
-| `web-v2/src/components/ModelScan.vue` | 新建：扫描结果热力图 + 表格 |
-| `design/model-create-design.md` | 更新模型版本数据模型 |
+| **版本即快照** | 每个版本完整记录特征配置、模型超参数、训练数据范围、五层策略配置 |
+| **预测与执行分离** | 模型只负责预测；策略负责信号过滤、头寸管理、止盈止损、执行模型 |
+| **四层评估体系** | 纯模型基线 → 纯策略基线 → 执行损耗归因 → 实际组合评估 |
+| **策略参数可搜索** | 支持网格扫描，在验证集上自动搜索最优交易规则 |
+| **回测可诊断** | 每笔交易记录完整上下文（仓位、资金、信号、执行价格） |
 
 ---
 
-## 5. 基准锚定法（归因分析）
-
-### 5.1 三个基线
-
-| 基线 | 模型信号 | 交易规则 | 回答的问题 |
-|------|---------|---------|-----------|
-| **理想化回测**（Ideal） | 真实模型预测 | 无摩擦/无止盈止损/每日调仓 | 模型本身的 Alpha 纯度有多高？ |
-| **随机信号**（Random） | 随机信号 | 真实止盈止损规则 | 策略规则本身的韧性如何？ |
-| **真实策略**（Real） | 真实模型预测 | 真实止盈止损规则 | 实际落地能赚多少？ |
-
-### 5.2 归因四象限
+## 3. 版本状态机
 
 ```
-              纯模型(Ideal) 高         纯模型(Ideal) 低
-              ┌──────────────────┬──────────────────┐
-纯策略(Random) │ 双轮驱动型        │ Beta放大器型      │
-高             │ 选股+操作都强     │ 模型不准但规则好   │
-              ├──────────────────┼──────────────────┤
-纯策略(Random) │ 执行损耗型        │ 双重误判型         │
-低             │ 模型强但止盈太紧  │ 都需要重构         │
-              └──────────────────┴──────────────────┘
-```
-
-### 5.3 Brinson 归因
-
-```
-选股收益（模型贡献）= Ideal收益 - 基准收益(沪深300)
-策略收益（规则贡献）= Real收益 - Ideal收益
-交互收益 = Real收益 - 选股收益 - 策略收益
+config_ready → training → trained → strategy_optimized → evaluated → approved → online → offline
+(配置就绪)     (训练中)    (已训练)   (策略已优化)        (已评估)    (已审批)   (已上线)  (已下线)
 ```
 
 ---
 
-## 6. 文件变更清单
+## 4. 五层策略配置体系 (`trading_rules`)
 
-1. **Look-ahead Bias**：策略参数搜索**严格限定在验证集**，绝不触碰测试集
-2. **过拟合风险**：验证集搜索出的参数可能在测试集表现平庸 → 热力图展示完整分布
-3. **参数爆炸**：用户可能选太多值 → 限制最大组合数（如 500），超限提示减少候选值
+### 第一层：执行模型（Execution）— 物理底座
+
+| 参数 | 默认 | 搜索 | 说明 |
+|------|------|------|------|
+| `price_type` | next_day_open | ❌ | T+1开盘价执行 |
+| `order_type` | market_order | ❌ | 市价单 |
+| `delay_days` | 1 | ❌ | T+1制度 |
+| `volume_limit` | 0.10 | ❌ | 单笔不超成交量10% |
+
+### 第二层：信号过滤（Signal Filter）— 安检门
+
+| 参数 | 默认 | 搜索 | 说明 |
+|------|------|------|------|
+| `min_score_threshold` | 0.5 | ✅ | 最低预测分阈值 |
+| `max_score_threshold` | 0.95 | ✅ | 最高预测分阈值 |
+| `exclude_new_stocks_days` | 60 | ❌ | 新股过滤 |
+| `allow_limit_up` | false | ❌ | 涨停板过滤 |
+
+### 第三层：头寸管理（Position Sizing）— 买多少
+
+| 参数 | 默认 | 搜索 | 说明 |
+|------|------|------|------|
+| `sizing_method` | equal_weight | ✅ | 仓位分配方式 |
+| `max_single_position` | 0.20 | ✅ | 单票最大仓位 |
+| `max_industry_exposure` | 0.40 | ✅ | 单行业最大暴露 |
+| `max_turnover_per_day` | 0.30 | ✅ | 日最大换手率 |
+
+### 第四层：止盈止损（Risk Management）— 怎么卖
+
+| 参数 | 默认 | 搜索 | 说明 |
+|------|------|------|------|
+| `stop_loss_type` | percentage | ✅ | 百分比/ATR |
+| `stop_loss` | -0.05 | ✅核心 | 止损阈值 |
+| `take_profit` | 0.10 | ✅核心 | 止盈阈值 |
+| `trailing_retracement` | 0.05 | ✅核心 | 移动止盈回撤 |
+| `max_holding_days` | 20 | ✅ | 最大持仓天数 |
+
+### 第五层：市场择时（Market Filter）— 做不做
+
+| 参数 | 默认 | 搜索 | 说明 |
+|------|------|------|------|
+| `require_market_above_ma` | true | ✅ | 大盘站上均线才开仓 |
+| `market_ma_period` | 20 | ✅ | 大盘均线周期 |
+| `max_volatility_threshold` | 0.30 | ✅ | 波动率过高暂停 |
+
+### 第六层：成本模型（Cost）— 锁定
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `commission_rate` | 0.0015 | 手续费 |
+| `slippage_rate` | 0.001 | 滑点 |
+| `stamp_duty` | 0.0005 | 印花税 |
+
+---
+
+## 5. 四层评估体系
+
+### 基线一：纯模型基线（Alpha纯度）
+- 当日收盘价成交，无止盈止损，每日调仓，无交易限制
+- 若夏普<1.0 → 模型质量堪忧，回退特征工程
+
+### 基线二：纯策略基线（规则韧性）
+- 随机信号替代模型预测，保留真实止盈止损规则
+- 若收益为正 → 策略有适应性；大幅亏损 → 策略依赖模型准确率
+
+### 归因：执行损耗
+- 理想化(当日收盘) vs 实盘模拟(次日开盘) → 量化真实损耗
+
+### 实际组合评估
+- 模型 + 完整策略，次日开盘价 → 最终上线依据
+
+### Brinson归因
+- 选股贡献 = 理想化收益 - 基准收益(沪深300)
+- 策略贡献 = 实际收益 - 理想化收益
+- 交互收益 = 实际 - 选股 - 策略 - 基准
+
+---
+
+## 6. 策略参数网格搜索
+
+1. 用户定义搜索空间 → 笛卡尔积计算组合数
+2. 模型.pkl只加载1次，预测值缓存，纯逻辑重放
+3. 热力图展示（X=止盈, Y=止损, 颜色=夏普）
+4. 一键应用最优参数到 `trading_rules`
+
+**防过拟合**：搜索严格限定验证集，平台区域检测（尖峰=过拟合风险）
+
+---
+
+## 7. 数据库表结构
+
+### model_versions 新增字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `train_params` | JSONB | 训练参数快照 |
+| `trading_rules` | JSONB | 五层策略配置 |
+| `strategy_scan_results` | JSONB | 全部扫描结果 |
+| `test_performance` | JSONB | 测试集性能 |
+| `stage` | VARCHAR(16) | 状态机阶段 |
+| `baseline_metrics` | JSONB | 纯模型基线指标 |
+| `attribution_analysis` | JSONB | Brinson归因 |
+
+### strategy_scans 表（新）
+
+策略参数扫描记录，含每种组合的 sharpe/max_dd/annual_return。
+
+### backtest_records 表（新）
+
+回测记录，含 mode(baseline_model/baseline_strategy/full_strategy) + metrics + trade_summary。
+
+---
+
+## 8. 核心 API
+
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| POST | `/api/models/versions/{id}/train` | 启动训练 |
+| POST | `/api/models/versions/{id}/strategy-scan` | 策略参数扫描 |
+| GET | `/api/models/versions/{id}/strategy-scan/{task_id}` | 扫描进度+热力图 |
+| POST | `/api/models/versions/{id}/strategy-scan/apply` | 应用最优参数 |
+| POST | `/api/models/versions/{id}/backtest` | 执行回测(mode: baseline/full) |
+| POST | `/api/models/versions/{id}/evaluate` | 四层评估 |
+| POST | `/api/models/versions/{id}/attribution` | 归因分析 |
+| POST | `/api/models/versions/{id}/approve` | 审批通过 |
+| POST | `/api/models/versions/{id}/online` | 上线 |
+
+---
