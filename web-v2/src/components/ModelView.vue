@@ -72,8 +72,11 @@
                 <div><span style="color:var(--c-text-faint)">初始资金: </span><span style="color:var(--c-text)">{{(cfg.initial_cash || 1000000).toLocaleString()}}元</span></div>
                 <div><span style="color:var(--c-text-faint)">最大持仓: </span><span style="color:var(--c-text)">{{cfg.max_positions || 5}}只</span></div>
                 <div><span style="color:var(--c-text-faint)">交易成本: </span><span style="color:var(--c-text)">印花{{((cfg.stamp_tax??0.001)*100).toFixed(1)}}% 佣金{{((cfg.commission??0.00025)*100).toFixed(3)}}% 滑点{{((cfg.slippage??0.001)*100).toFixed(1)}}%</span></div>
-                <div><span style="color:var(--c-text-faint)">止损: </span><span style="color:var(--c-text)">{{cfg.risk?.stop_loss_pct ?? 8}}%</span></div>
-                <div><span style="color:var(--c-text-faint)">信号超时: </span><span style="color:var(--c-text)">{{cfg.risk?.signal_timeout_days ?? 20}}天</span></div>
+                <div><span style="color:var(--c-text-faint)">止损/止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.stop_loss ? (tr.risk_management.stop_loss*100).toFixed(0)+'%' : '—'}} / {{tr.risk_management?.take_profit ? (tr.risk_management.take_profit*100).toFixed(0)+'%' : '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">移动止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.trailing_retracement ? (tr.risk_management.trailing_retracement*100).toFixed(0)+'%' : '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">仓位上限: </span><span style="color:var(--c-text)">{{tr.position_sizing?.max_single_position ? (tr.position_sizing.max_single_position*100).toFixed(0)+'%' : '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">大盘择时: </span><span style="color:var(--c-text)">{{tr.market_filter?.require_market_above_ma ? 'MA'+tr.market_filter.market_ma_period+'以上开仓' : '不限'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">成本: </span><span style="color:var(--c-text)">佣{{((tr.cost_model?.commission_rate ?? 0.0015)*100).toFixed(2)}}% 滑{{((tr.cost_model?.slippage_rate ?? 0.001)*100).toFixed(1)}}% 印{{((tr.cost_model?.stamp_duty ?? 0.0005)*100).toFixed(2)}}%</span></div>
               </div>
             </div>
 
@@ -210,8 +213,17 @@ const createForm = reactive({
   test_start: '2026-01-01', test_end: null,
   feature_names: [],
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
-  stamp_tax: 0.001, commission: 0.00025, slippage: 0.001,
-  stop_loss_pct: 8, signal_timeout_days: 20,
+  // 六层策略配置默认值（策略扫描时搜索最优）
+  trading_rules: {
+    execution: { price_type: 'next_day_open', delay_days: 1, volume_limit: 0.10 },
+    signal_filter: { min_score_threshold: 0.5, max_score_threshold: 0.95, allow_limit_up: false },
+    position_sizing: { sizing_method: 'equal_weight', max_single_position: 0.20, max_turnover_per_day: 0.30 },
+    risk_management: { stop_loss_type: 'percentage', stop_loss: 0.05, take_profit: 0.10,
+                       trailing_retracement: 0.05, max_holding_days: 20 },
+    market_filter: { require_market_above_ma: true, market_ma_period: 20, max_volatility_threshold: 0.30 },
+    cost_model: { commission_rate: 0.0015, slippage_rate: 0.001, stamp_duty: 0.0005 },
+  },
+  stop_loss_pct: 8, signal_timeout_days: 20,  // 保留兼容旧字段
 })
 const featureOptions = ref([])
 async function loadFeatureOptions() {
@@ -282,6 +294,7 @@ async function doCreate() {
       test_end: createForm.test_end || '',
       features: createForm.feature_names,
       feature_names: createForm.feature_names,
+      trading_rules: createForm.trading_rules,
       optuna_trials: createForm.optuna_trials,
       initial_cash: createForm.initial_cash,
       max_positions: createForm.max_positions,
@@ -309,6 +322,7 @@ const tabs = [
 ]
 
 const cfg = computed(() => store.selected?.config || {})
+const tr = computed(() => cfg.value.trading_rules || createForm.trading_rules || {})
 const basicMetrics = computed(() => {
   const s = store.selected
   if (!s) return []
