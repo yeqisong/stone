@@ -66,7 +66,7 @@
             <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px">
               <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">配置详情</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
-                <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{(cfg.features||[]).length ? (cfg.features||[]).join(', ') : '—'}}</span></div>
+                <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{((cfg.feature_names || cfg.features)||[]).length ? ((cfg.feature_names || cfg.features)||[]).slice(0,8).join(', ') + (((cfg.feature_names || cfg.features)||[]).length>8?'...':'') : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">数据范围: </span><span style="color:var(--c-text)">{{cfg.train_start || '—'}} ~ 前天（自动60/20/20切分）</span></div>
                 <div><span style="color:var(--c-text-faint)">Optuna轮数: </span><span style="color:var(--c-text)">{{cfg.optuna_trials || 50}}</span></div>
                 <div><span style="color:var(--c-text-faint)">初始资金: </span><span style="color:var(--c-text)">{{(cfg.initial_cash || 1000000).toLocaleString()}}元</span></div>
@@ -109,7 +109,7 @@
           <n-divider style="margin:4px 0">特征配置</n-divider>
           <n-space>
             <n-tag v-for="f in featureOptions" :key="f.key"
-              :type="createForm.features.includes(f.key)?'info':'default'"
+              :type="createForm.feature_names.includes(f.key)?'info':'default'"
               style="cursor:pointer" @click="toggleFeature(f.key)" :bordered="false" size="small">
               {{f.label}}
             </n-tag>
@@ -207,21 +207,26 @@ const showSidebar = computed({
 const hoveredVersion = ref(null)
 const createForm = reactive({
   train_start: '2021-01-01', train_end: '2025-12-31',
-  test_start: '2026-01-01', test_end: null,  // null 避免 DatePicker 报 Invalid time value
-  features: ['boll','macd','rsi','atr','ma','volume'],
+  test_start: '2026-01-01', test_end: null,
+  feature_names: [],
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
   stamp_tax: 0.001, commission: 0.00025, slippage: 0.001,
   stop_loss_pct: 8, signal_timeout_days: 20,
 })
-const featureOptions = [
-  { key:'boll', label:'BOLL(20,2)' }, { key:'macd', label:'MACD(12,26,9)' },
-  { key:'rsi', label:'RSI(14)' }, { key:'atr', label:'ATR(14)' },
-  { key:'ma', label:'MA(5,20,60,250)' }, { key:'volume', label:'量能' },
-]
+const featureOptions = ref([])
+async function loadFeatureOptions() {
+  try {
+    const r = await axios.get(window.location.origin + '/api/features?entity=stock&status=enabled&page_size=200')
+    featureOptions.value = (r.data.items || []).map(f => ({
+      key: f.feature_name, label: f.feature_name, display: f.display_name, completeness: f.data_completeness
+    }))
+  } catch(e) { console.error(e) }
+}
+loadFeatureOptions()
 function toggleFeature(key) {
-  const idx = createForm.features.indexOf(key)
-  if (idx >= 0) createForm.features.splice(idx, 1)
-  else createForm.features.push(key)
+  const idx = createForm.feature_names.indexOf(key)
+  if (idx >= 0) createForm.feature_names.splice(idx, 1)
+  else createForm.feature_names.push(key)
 }
 function startEditConfig() {
   editMode.value = true
@@ -231,7 +236,7 @@ function startEditConfig() {
   createForm.train_end = cfg.train_end || '2025-12-31'
   createForm.test_start = cfg.test_start || '2026-01-01'
   createForm.test_end = cfg.test_end || null
-  createForm.features = cfg.features || ['boll','macd','rsi','atr','ma','volume']
+  createForm.feature_names = cfg.feature_names || cfg.features || []
   createForm.optuna_trials = cfg.optuna_trials || 50
   createForm.initial_cash = cfg.initial_cash || 1000000
   createForm.max_positions = cfg.max_positions || 5
@@ -246,15 +251,15 @@ function startEditConfig() {
 async function doSaveConfig() {
   creating.value = true
   try {
-    const cfg = store.selected?.config || {}
     await axios.put(window.location.origin + `/api/v1/models/${store.selectedId}/config`, {
-      ...cfg,  // 保留所有未修改字段
       model_name: createName.value.trim(),
       train_start: createForm.train_start,
       train_end: createForm.train_end,
       test_start: createForm.test_start,
       test_end: createForm.test_end || null,
-      features: createForm.features,
+      feature_names: createForm.feature_names,
+      features: createForm.feature_names,
+      optuna_trials: createForm.optuna_trials,
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
     })
     showCreate.value = false
@@ -275,7 +280,8 @@ async function doCreate() {
       train_end: createForm.train_end,
       test_start: createForm.test_start,
       test_end: createForm.test_end || '',
-      features: createForm.features,
+      features: createForm.feature_names,
+      feature_names: createForm.feature_names,
       optuna_trials: createForm.optuna_trials,
       initial_cash: createForm.initial_cash,
       max_positions: createForm.max_positions,
