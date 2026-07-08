@@ -954,7 +954,7 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
 @router.post("/{feature_id}/recompute-stats")
 def recompute_stats(feature_id: int, user: str = Depends(get_current_user)):
     """原子级重算特征统计（不触发计算，仅基于 feature_values 现有数据更新诊断）。"""
-    _update_feature_stats_after_compute(feature_id)
+    _update_feature_stats_after_compute(feature_id, force_recompute=True)
     return {"ok": True, "message": "诊断已更新"}
 
 
@@ -1017,13 +1017,16 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
             _compute_tasks[task_id]["error"] = str(e)
 
 
-def _update_feature_stats_after_compute(feature_id: int):
+def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool = False):
     """计算完成后更新特征的数据统计。
 
     总格子     = Σ 每个股票(上市日→min(退市日,今天)) 之间的交易日数（已剔除未上市/已退市）
     正常缺失   = 停牌天数 + 活跃股票数 × lookback（天然无解的窗口期）
     异常缺失   = 总格子 - 正常缺失 - 已计算（需要排查的）
     完整度     = 已计算 / 总格子
+
+    Args:
+        force_recompute: True=强制重算总格子（recompute-stats），False=复用缓存值（增量补数）
     """
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -1037,12 +1040,12 @@ def _update_feature_stats_after_compute(feature_id: int):
             db.rollback()
 
         feat = db.execute(text(
-            "SELECT f.feature_name, f.target_entity, f.depends_on "
+            "SELECT f.feature_name, f.target_entity, f.depends_on, f.total_effective_cells "
             "FROM features f WHERE f.id = :id"
         ), {"id": feature_id}).fetchone()
         if not feat:
             return
-        fn, entity, depends_on = feat[0], feat[1], feat[2] or []
+        fn, entity, depends_on, cached_total = feat[0], feat[1], feat[2] or [], feat[3] or 0
 
         # lookback：取依赖函数的最大 lookback（features 表没有 lookback，从 functions 取）
         if isinstance(depends_on, str):
@@ -1054,22 +1057,34 @@ def _update_feature_stats_after_compute(feature_id: int):
             ), {"names": depends_on}).scalar() or 0
             max_lookback = max(max_lookback, lb_rows)
 
-        # 1. 理论总格子：每只股票从上市到退市之间的交易日数
-        if entity == 'global':
+        # 1. 理论总格子：首次计算或 force_recompute 时全量统计（~24s JOIN）
+        #    后续补数复用缓存值，跳过 2200 万行 JOIN
+        if cached_total > 0 and not force_recompute:
+            total_cells = cached_total
+            # 快速取 stock_count（用于 lookback 计算）
+            if entity == 'global':
+                stock_count = 1
+            else:
+                ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
+                if entity == 'index':
+                    ent_filter = "AND sm.stock_type='index'"
+                elif entity == 'etf':
+                    ent_filter = "AND sm.stock_type='etf'"
+                stock_count = db.execute(text(f"""
+                    SELECT COUNT(*) FROM stock_master sm WHERE sm.status = 'N' {ent_filter}
+                """)).scalar() or 1
+        elif entity == 'global':
             total_cells = db.execute(text(
                 "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= CURRENT_DATE AND is_trade_day = true"
             )).scalar() or 0
             stock_count = 1
         else:
-            ent_filter = ""
+            ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
             if entity == 'index':
                 ent_filter = "AND sm.stock_type='index'"
             elif entity == 'etf':
                 ent_filter = "AND sm.stock_type='etf'"
-            else:
-                ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
 
-            # v2.2 优化: JOIN 替代关联子查询（原 5000 次子查询 → 1 次 JOIN）
             total_cells = db.execute(text(f"""
                 SELECT COUNT(*)
                 FROM stock_master sm
