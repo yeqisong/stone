@@ -5,11 +5,61 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 import json
 import re
+import ast
 
 from app.db.connection import get_sync_db
 from app.auth.auth import get_current_user
 
 router = APIRouter(prefix="/functions", tags=["functions"])
+
+
+# ── 安全校验：自定义函数必须是纯向量化代码 ──
+
+_FORBIDDEN_NODES = {ast.For, ast.While, ast.AsyncFor, ast.AsyncWith}
+_FORBIDDEN_IMPORTS = {'os', 'subprocess', 'sys', 'shutil', 'socket', 'requests', 'http'}
+
+
+def _validate_function_safety(source_code: str) -> Optional[str]:
+    """校验自定义函数安全性。返回错误信息字符串，合法返回 None。
+
+    规则：
+    1. 禁止 for / while 循环（必须用 pandas/numpy 向量化操作）
+    2. 禁止危险模块导入（os/subprocess/sys/socket 等）
+    3. 必须定义至少一个函数
+    """
+    if not source_code or not source_code.strip():
+        return "函数源码不能为空"
+
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError as e:
+        return f"Python 语法错误: {e.msg} (行 {e.lineno})"
+
+    has_function = False
+
+    for node in ast.walk(tree):
+        # 检查 for / while
+        if type(node) in _FORBIDDEN_NODES:
+            return f"禁止使用 {type(node).__name__} 循环。请使用 pandas/numpy 向量化操作（如 .rolling(), np.where() 等）。"
+
+        # 检查函数定义
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            has_function = True
+
+        # 检查危险 import
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split('.')[0] in _FORBIDDEN_IMPORTS:
+                    return f"禁止导入模块 '{alias.name}'。自定义函数仅允许使用 pandas/numpy 及安全内置模块。"
+
+        if isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split('.')[0] in _FORBIDDEN_IMPORTS:
+                return f"禁止导入模块 '{node.module}'。"
+
+    if not has_function:
+        return "源码中未检测到函数定义。请至少定义一个函数（函数名需与注册名一致）。"
+
+    return None
 
 
 class CreateFunction(BaseModel):
@@ -76,6 +126,12 @@ def create_function(body: CreateFunction, user: str = Depends(get_current_user))
     """新增函数（存为草稿）。"""
     if not re.match(r'^[a-z][a-z0-9_]{1,63}$', body.name):
         raise HTTPException(400, "函数名格式非法，需小写字母开头、仅含字母数字下划线")
+
+    # 安全校验：禁止 for/while 循环 + 危险 import
+    err = _validate_function_safety(body.source_code)
+    if err:
+        raise HTTPException(400, err)
+
     db = get_sync_db()
     try:
         # 检查名称冲突
@@ -157,7 +213,19 @@ def update_function(func_id: int, body: dict, user: str = Depends(get_current_us
         if not sets:
             raise HTTPException(400, "无修改内容")
 
+        # 安全校验：如果修改了源码或正在发布，重新校验
+        src = body.get("source_code")
         is_publishing = body.get("status") == "published"
+        if src is not None or is_publishing:
+            current_src = src
+            if current_src is None:
+                r2 = db.execute(text("SELECT source_code FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
+                current_src = r2[0] if r2 else ""
+            err = _validate_function_safety(current_src)
+            if err:
+                db.close()
+                raise HTTPException(400, err)
+
         if is_publishing:
             cur = db.execute(text("SELECT version,source_code,parameters FROM functions WHERE id=:id"), {"id": func_id}).fetchone()
             new_ver = (cur[0] or 0) + 1

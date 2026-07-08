@@ -1,41 +1,86 @@
-"""KEPL 公式解析器 — v2.0 重构 迭代 2.1。
+"""KEPL 公式解析器 — v2.2 lark 重构。
 
-实现：
-- 词法分析（Tokenizer）
-- 语法校验（6 类错误拦截）
-- AST 提取（函数名、参数类型、实体引用）
+变更：
+- v2.2: 用 lark PEG 解析器替换手写递归下降 → 产生可求值的表达式树 AST
+- v2.1: 手写递归下降 + 扁平 AST（functions/fields 数组）
+- v2.0: 初版
+
+架构：
+  KEPL 公式 → Lark LALR(1) 解析 → ParseTree → _tree_to_ast() → KepLAST 节点树
 """
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Union
 import re
-from typing import List, Dict, Optional, Tuple
-from enum import Enum
+
+import lark
+
+# ── AST 节点数据类 ──
+
+@dataclass
+class FieldRef:
+    """裸字段引用：close, volume, open 等。"""
+    name: str
+
+@dataclass
+class NumLit:
+    """数值字面量。"""
+    value: float
+
+@dataclass
+class BoolLit:
+    """布尔字面量：true / false。"""
+    value: bool
+
+@dataclass
+class FuncCall:
+    """函数调用：ma(close, 5), ema(rsi(close,14), 5) 等。"""
+    name: str
+    args: List[Expr] = field(default_factory=list)
+
+@dataclass
+class BinOp:
+    """二元运算：+ - * /"""
+    op: str
+    left: Expr
+    right: Expr
 
 
-class TokenType(Enum):
-    IDENT = "ident"          # close, ma, stock
-    NUMBER = "number"        # 5, 20.5
-    OP = "op"                # + - * / ( ) [ ] , .
-    STRING = "string"        # '000300.SH'
-    DOT = "dot"              # .
-    EOF = "eof"
+Expr = Union[FieldRef, NumLit, BoolLit, FuncCall, BinOp]
 
 
-class Token:
-    def __init__(self, typ: TokenType, value: str, pos: int):
-        self.typ = typ
-        self.value = value
-        self.pos = pos
+# ── KEPL 语法（EBNF，LALR(1)）──
 
-    def __repr__(self):
-        return f"{self.typ}:{self.value}"
+KEPL_GRAMMAR = r"""
+?start: expr
 
+expr: term ((PLUS | MINUS) term)*
+term: factor ((MUL | DIV) factor)*
+?factor: NUMBER   -> num
+       | BOOL     -> bool
+       | CNAME    -> field
+       | func_call
+       | LPAR expr RPAR
 
-class KepLError(Exception):
-    def __init__(self, code: str, message: str, pos: int = 0):
-        self.code = code   # FEAT_002, FEAT_005, etc.
-        self.message = message
-        self.pos = pos
-        super().__init__(message)
+func_call: CNAME LPAR arg_list? RPAR
+arg_list: expr (COMMA expr)*
 
+PLUS: "+"
+MINUS: "-"
+MUL: "*"
+DIV: "/"
+LPAR: "("
+RPAR: ")"
+COMMA: ","
+
+%import common.CNAME
+%import common.NUMBER
+%import common.WS
+
+BOOL.2: "true" | "false"
+
+%ignore WS
+"""
 
 # ── 系统内置函数注册表 ──
 TIME_SERIES_FUNCTIONS = {
@@ -50,260 +95,211 @@ CROSS_SECTIONAL_FUNCTIONS = {
 
 ALL_FUNCTIONS = TIME_SERIES_FUNCTIONS | CROSS_SECTIONAL_FUNCTIONS
 
-# 预置数据源
-DATA_SOURCES = {'stock', 'etf', 'index', 'financial', 'macro', 'north'}
 
+# ── ParseTree → KepLAST (manual walker, avoids Transformer complexity) ──
 
-# ── 词法分析器 ──
-class KepLTokenizer:
-    """KEPL 公式 → Token 序列。"""
+def _binop_from_children(node) -> Expr:
+    """从 expr/term 节点的子节点构建左结合 BinOp 链。
 
-    _TOKEN_PATTERNS = [
-        (r'\d+\.?\d*', TokenType.NUMBER),
-        (r'[a-zA-Z_][a-zA-Z0-9_]*', TokenType.IDENT),
-        (r"'(?:[^'\\]|\\.)*'", TokenType.STRING),  # '000300.SH'
-        (r'"(?:[^"\\]|\\.)*"', TokenType.STRING),  # "000300.SH"
-        (r'\.', TokenType.DOT),
-        (r'[+\-*/()\[\],]', TokenType.OP),
-        (r'\s+', None),  # skip whitespace
-    ]
-
-    def __init__(self, source: str):
-        self.source = source
-        self.pos = 0
-
-    def tokenize(self) -> List[Token]:
-        tokens = []
-        pos = 0
-        while pos < len(self.source):
-            matched = False
-            for pattern, typ in self._TOKEN_PATTERNS:
-                m = re.match(pattern, self.source[pos:])
-                if m:
-                    if typ is not None:
-                        tokens.append(Token(typ, m.group(), pos))
-                    pos += len(m.group())
-                    matched = True
-                    break
-            if not matched:
-                raise KepLError("FEAT_002", f"无法识别的字符 '{self.source[pos]}'", pos)
-        tokens.append(Token(TokenType.EOF, '', pos))
-        return tokens
-
-
-# ── 校验器 ──
-class KepLValidator:
-    """KEPL 公式校验，返回 AST 或错误。"""
-
-    def __init__(self, tokens: List[Token], entity: str = 'stock'):
-        self.tokens = tokens
-        self.entity = entity  # stock/etf/index/global
-        self.pos = 0
-        self.errors: List[Dict] = []
-        self.ast: Dict = {
-            "type": "expression",
-            "functions": [],      # 引用的函数列表
-            "fields": [],          # 引用的字段列表
-            "sources": [],         # 引用的数据源列表
-            "external_refs": [],   # 外部引用列表
-            "dependencies": [],    # 依赖的特征名列表
-        }
-
-    def current(self) -> Token:
-        return self.tokens[min(self.pos, len(self.tokens)-1)]
-
-    def eat(self, expected: TokenType = None) -> Token:
-        t = self.current()
-        if expected and t.typ != expected:
-            raise KepLError("FEAT_002", f"期望 {expected.value}，实际 '{t.value}'", t.pos)
-        self.pos += 1
-        return t
-
-    def validate(self) -> Dict:
-        """执行完整校验，返回 AST + errors。"""
-        try:
-            self._parse_expression()
-        except KepLError as e:
-            self.errors.append({"code": e.code, "message": e.message, "pos": e.pos})
-        return {"ok": len(self.errors) == 0, "ast": self.ast, "errors": self.errors}
-
-    def _parse_expression(self):
-        """递归下降解析表达式：term (op term)*。"""
-        self._parse_term()
-        while self.current().typ == TokenType.OP and self.current().value in '+-*/':
-            self.eat(TokenType.OP)
-            self._parse_term()
-
-    def _parse_term(self):
-        """term → function_call | field_ref | number | '(' expression ')'。"""
-        t = self.current()
-
-        if t.typ == TokenType.NUMBER:
-            # 普通数字
-            self.eat()
-            return
-
-        if t.typ == TokenType.OP and t.value == '(':
-            self.eat()
-            self._parse_expression()
-            self.eat(TokenType.OP)  # expect ')'
-            return
-
-        if t.typ == TokenType.IDENT:
-            ident = t.value
-
-            # 检查下一个 token 是否为 '('（函数调用）
-            if self._peek_is('('):
-                self._parse_function_call(ident)
-                return
-
-            # 检查下一个 token 是否为 '.'
-            if self._peek_is('.'):
-                self._parse_dot_ref(ident)
-                return
-
-            # 否则为裸字段引用（如 close）
-            self._parse_bare_field(ident)
-            return
-
-        raise KepLError("FEAT_002", f"意外的 '{t.value}'", t.pos)
-
-    def _peek_is(self, *values) -> bool:
-        """前瞻检查下一个非 EOF token 的值。"""
-        for i in range(1, 5):  # 跳过最多5个 token
-            tok = self.tokens[self.pos + i] if self.pos + i < len(self.tokens) else None
-            if tok and tok.typ == TokenType.EOF:
-                return False
-            if tok:
-                return tok.value in values
-        return False
-
-    def _peek_type(self, typ: TokenType) -> bool:
-        """前瞻检查下一个 token 的类型。"""
-        if self.pos + 1 >= len(self.tokens):
-            return False
-        return self.tokens[self.pos + 1].typ == typ
-
-    def _parse_bare_field(self, ident: str):
-        """解析裸字段引用（如 close, volume）。"""
-        if self.entity == 'global':
-            raise KepLError("FEAT_005",
-                            "全局（Global）实体不存在当前行，公式中禁止使用裸字段，请显式指定数据源。",
-                            self.current().pos)
-        self.eat()
-        self.ast["fields"].append({"name": ident, "type": "bare"})
-
-    def _parse_dot_ref(self, prefix: str):
-        """解析 . 引用链: prefix.field 或 prefix['key'].field。"""
-        self.eat()  # prefix ident
-        self.eat(TokenType.DOT)  # .
-
-        # 可能是 prefix['key'].field
-        key = None
-        is_dynamic = False
-        if self.current().typ == TokenType.OP and self.current().value == '[':
-            self.eat()  # [
-            kt = self.current()
-            if kt.typ == TokenType.STRING:
-                key = kt.value.strip("'\"").strip()
-                self.eat()
-            elif kt.typ == TokenType.IDENT:
-                if kt.value == 'current':
-                    is_dynamic = True
-                    self.eat()
-                    self.eat(TokenType.DOT)  # .
-                    key = self.eat().value  # field after current.
-                else:
-                    raise KepLError("FEAT_002",
-                                    f"动态映射中括号内请使用 current.属性名 格式，如 index[current.industry_code].close",
-                                    kt.pos)
-            else:
-                raise KepLError("FEAT_002", "中括号内需要字符串或 current.属性", kt.pos)
-            self.eat(TokenType.OP)  # ]
-
-        if self.current().typ == TokenType.DOT:
-            self.eat()  # .
-            field = self.eat().value  # field name after .
+    子节点模式: [operand, op_token, operand, op_token, operand, ...]
+    op_token 类型为 PLUS/MINUS/MUL/DIV。
+    """
+    # 过滤括号和逗号（它们可能因 ?factor inline 出现在子节点中）
+    meaningful = []
+    for child in node.children:
+        if isinstance(child, lark.Token):
+            t = child.type
+            if t in ('PLUS', 'MINUS', 'MUL', 'DIV'):
+                meaningful.append(child)
+            # 跳过 LPAR, RPAR, COMMA
         else:
-            field = None
+            meaningful.append(child)
 
-        if prefix in DATA_SOURCES:
-            # 数据源引用: stock.close, index['000300'].close
-            if field is None:
-                # 没有具体字段，只有数据源. 或 数据源['xxx'] →
-                if key:
-                    self.ast["external_refs"].append({"source": prefix, "key": key, "dynamic": is_dynamic, "field": None})
-                else:
-                    raise KepLError("FEAT_002",
-                                    f"数据源'{prefix}'是集合类型，请使用 ['代码'] 指定个体，或使用 avg({prefix}.close) 进行聚合。",
-                                    self.current().pos)
-            else:
-                self.ast["external_refs"].append({"source": prefix, "key": key, "field": field, "dynamic": is_dynamic})
-            self.ast["sources"].append(prefix)
-        elif prefix == 'current':
-            # current.field 引用
-            self.ast["fields"].append({"name": field or "?", "type": "current"})
+    operands = []
+    operators = []
+    for item in meaningful:
+        if isinstance(item, lark.Token):
+            operators.append(item.value)
         else:
-            # unknown prefix
-            raise KepLError("FEAT_003", f"未注册的数据源或函数 '{prefix}'", self.current().pos)
+            operands.append(_tree_to_ast(item))
 
-    def _parse_function_call(self, name: str):
-        """解析函数调用：name(arg1, arg2, ...)。"""
-        self.eat()  # function name
-        self.eat(TokenType.OP)  # (
+    if not operators:
+        return operands[0] if operands else None
+    result = operands[0]
+    for i, op in enumerate(operators):
+        result = BinOp(op=op, left=result, right=operands[i + 1])
+    return result
 
+
+def _tree_to_ast(node) -> Expr:
+    """将 lark ParseTree 递归转换为 KepLAST 表达式树。
+
+    处理：
+    - expr/term: 收集子节点，检测运算符构建 BinOp
+    - func_call: 提取函数名和参数列表
+    - num/field: 叶子节点
+    """
+    if isinstance(node, lark.Token):
+        if node.type == 'NUMBER':
+            return NumLit(float(node.value))
+        elif node.type == 'CNAME':
+            return FieldRef(str(node.value))
+        # literal operators like '+', '-', '*', '/', ',', '(', ')'
+        return str(node.value)
+
+    # Tree node
+    data = node.data
+
+    if data == 'num':
+        return _tree_to_ast(node.children[0])
+    elif data == 'bool':
+        child = node.children[0]
+        if isinstance(child, lark.Token):
+            return BoolLit(child.value == 'true')
+        return BoolLit(False)
+    elif data == 'field':
+        # CNAME → FieldRef
+        child = node.children[0]
+        if isinstance(child, lark.Token):
+            return FieldRef(str(child.value))
+        return _tree_to_ast(child)
+    elif data == 'func_call':
+        # Children: [CNAME, (LPAR), arg_list?, (RPAR)]
+        # LPAR/RPAR may appear due to ?factor inline
+        name = None
         args = []
-        depth = 1
-        while depth > 0 and self.current().typ != TokenType.EOF:
-            t = self.current()
-            if t.typ == TokenType.OP:
-                if t.value == '(':
-                    depth += 1
-                    self.eat()
+        for child in node.children:
+            if isinstance(child, lark.Token):
+                if child.type == 'CNAME' and name is None:
+                    name = str(child.value)
+                # skip LPAR, RPAR, COMMA
+            else:
+                if child.data == 'arg_list':
+                    args = _tree_to_ast(child)  # returns list
+                elif name is None:
+                    # might be nested expression as function name (unusual)
+                    pass
+        return FuncCall(name=name or '?', args=args if isinstance(args, list) else [])
+    elif data == 'arg_list':
+        args = []
+        for child in node.children:
+            if isinstance(child, lark.Token):
+                continue  # skip COMMA
+            args.append(_tree_to_ast(child))
+        return args
+    elif data == 'factor':
+        # factor may appear as explicit node when using named terminals (even with ? prefix).
+        # Skip LPAR/RPAR wrapper and return the expression inside.
+        for child in node.children:
+            if isinstance(child, lark.Token):
+                if child.type in ('LPAR', 'RPAR'):
                     continue
-                elif t.value == ')':
-                    depth -= 1
-                    if depth == 0:
-                        self.eat()
-                        break
-                    self.eat()
-                    continue
-                elif t.value == ',':
-                    self.eat()
-                    continue
-            # 递归解析参数中的表达式
-            self._parse_expression()
+                # field or num
+                return _tree_to_ast(child)
+            else:
+                return _tree_to_ast(child)
+        return None
+    elif data == 'expr':
+        return _binop_from_children(node)
+    elif data == 'term':
+        return _binop_from_children(node)
+    elif data == 'start':
+        return _tree_to_ast(node.children[0]) if node.children else None
 
-        # 校验函数调用规则
-        self._validate_function_call(name, args)
+    return None
 
-        # 校验未注册函数
-        if name not in ALL_FUNCTIONS:
-            # 允许自定义函数（从 functions 表查）
-            self.ast["functions"].append({"name": name, "type": "custom"})
-        elif name in TIME_SERIES_FUNCTIONS:
-            self.ast["functions"].append({"name": name, "type": "time_series"})
-        elif name in CROSS_SECTIONAL_FUNCTIONS:
-            self.ast["functions"].append({"name": name, "type": "cross_sectional"})
 
-    def _validate_function_call(self, name: str, args: list):
-        """校验函数参数是否符合 KEPL 规则。"""
-        if name not in ALL_FUNCTIONS:
-            return  # 自定义函数不做参数校验
+# ── 辅助：表达式树 → 旧版扁平 AST（向后兼容）──
 
-        # 获取第一个参数的 token
-        # （简化：仅检查函数名是否在白名单中，详细参数校验放到特征注册时做）
+def _tree_to_flat_ast(tree: Expr) -> dict:
+    functions = []
+    fields = []
+    seen_fn = set()
+    seen_field = set()
+
+    def walk(node):
+        if isinstance(node, FieldRef):
+            if node.name not in seen_field:
+                fields.append({"name": node.name, "type": "bare"})
+                seen_field.add(node.name)
+        elif isinstance(node, NumLit):
+            pass
+        elif isinstance(node, BoolLit):
+            pass
+        elif isinstance(node, FuncCall):
+            fn_type = "time_series" if node.name in TIME_SERIES_FUNCTIONS else (
+                "cross_sectional" if node.name in CROSS_SECTIONAL_FUNCTIONS else "custom"
+            )
+            if node.name not in seen_fn:
+                functions.append({"name": node.name, "type": fn_type})
+                seen_fn.add(node.name)
+            for arg in node.args:
+                walk(arg)
+        elif isinstance(node, BinOp):
+            walk(node.left)
+            walk(node.right)
+
+    walk(tree)
+    return {
+        "type": "expression",
+        "functions": functions,
+        "fields": fields,
+        "sources": [],
+        "external_refs": [],
+        "dependencies": [],
+    }
+
+
+# ── Lark 实例（模块级单例，首次 ~50ms）──
+
+_lark_parser: Optional[lark.Lark] = None
+
+
+def _get_parser() -> lark.Lark:
+    global _lark_parser
+    if _lark_parser is None:
+        _lark_parser = lark.Lark(KEPL_GRAMMAR, parser="lalr")
+    return _lark_parser
 
 
 # ── API 入口 ──
+
 def parse_kepl(formula: str, entity: str = 'stock') -> Dict:
-    """解析 KEPL 公式，返回结构化结果。"""
+    """解析 KEPL 公式，返回结构化结果。
+
+    Returns:
+        {"ok": True/False, "ast": {...flat...}, "tree": KepLAST, "errors": [...]}
+    """
+    if not formula or not formula.strip():
+        return {"ok": False, "errors": [{"code": "FEAT_001", "message": "公式为空", "pos": 0}]}
+
     try:
-        tokenizer = KepLTokenizer(formula)
-        tokens = tokenizer.tokenize()
-        validator = KepLValidator(tokens, entity)
-        return validator.validate()
-    except KepLError as e:
-        return {"ok": False, "errors": [{"code": e.code, "message": e.message, "pos": e.pos}]}
+        parser = _get_parser()
+        parse_tree = parser.parse(formula.strip())
+        tree = _tree_to_ast(parse_tree)
+
+        if tree is None:
+            return {"ok": False, "errors": [{"code": "FEAT_002", "message": "无法解析公式", "pos": 0}]}
+
+        flat_ast = _tree_to_flat_ast(tree)
+
+        return {
+            "ok": True,
+            "ast": flat_ast,
+            "tree": tree,
+            "errors": [],
+        }
+    except lark.UnexpectedInput as e:
+        return {"ok": False, "errors": [{"code": "FEAT_002", "message": f"语法错误: {str(e)[:120]}", "pos": getattr(e, 'pos_in_stream', 0)}]}
+    except lark.UnexpectedToken as e:
+        return {"ok": False, "errors": [{"code": "FEAT_002", "message": f"语法错误: 意外的符号 '{e.token}'", "pos": getattr(e, 'pos_in_stream', 0)}]}
     except Exception as e:
-        return {"ok": False, "errors": [{"code": "FEAT_002", "message": str(e), "pos": 0}]}
+        return {"ok": False, "errors": [{"code": "FEAT_002", "message": str(e)[:200], "pos": 0}]}
+
+
+def parse_to_tree(formula: str) -> Optional[Expr]:
+    """解析 KEPL 公式，仅返回可求值表达式树。"""
+    r = parse_kepl(formula)
+    if r.get("ok") and r.get("tree"):
+        return r["tree"]
+    return None

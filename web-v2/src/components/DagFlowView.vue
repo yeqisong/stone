@@ -64,7 +64,7 @@ function stateTag(s) {
 }
 
 function nodeLabel(n) {
-  const labels = {daily_update:'📋 更新',kline:'📈 K线',index:'📊 指数',etf:'💹 ETF',fund:'💰 基本面',treemap:'🌳 树图',stats:'📐 统计',cron:'⏰ 定时',indicator_incr:'🔢 指标',model_train:'🧠 训练',model_signal:'📡 信号',model_health:'💚 健康',feature_compute:'⚙️ 特征',feature_backfill:'🔄 补数',daily_completeness:'📅 日历'}
+  const labels = {daily_update:'📋 更新',kline:'📈 K线',index:'📊 指数',etf:'💹 ETF',fund:'💰 基本面',treemap:'🌳 树图',stats:'📐 统计',cron:'⏰ 定时',model_train:'🧠 训练',model_signal:'📡 信号',model_health:'💚 健康',feature_compute:'⚙️ 特征',feature_backfill:'🔄 补数',daily_completeness:'📅 日历'}
   return labels[n.name] || n.name
 }
 

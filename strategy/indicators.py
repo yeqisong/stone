@@ -115,15 +115,15 @@ def obv(df: pd.DataFrame) -> pd.Series:
     若当日收盘 > 前日收盘，OBV = 前日OBV + 当日成交量
     若当日收盘 < 前日收盘，OBV = 前日OBV - 当日成交量
     若相等，OBV 不变。
+
+    v2.1: 向量化实现（np.where + np.cumsum 替代 Python for 循环）。
     """
     close = df['close'].values
     volume = df['volume'].values
-    obv_vals = np.zeros(len(close))
-    for i in range(1, len(close)):
-        if close[i] > close[i - 1]:
-            obv_vals[i] = obv_vals[i - 1] + volume[i]
-        elif close[i] < close[i - 1]:
-            obv_vals[i] = obv_vals[i - 1] - volume[i]
-        else:
-            obv_vals[i] = obv_vals[i - 1]
+    # 方向：+1 (涨), -1 (跌), 0 (平)
+    direction = np.where(close[1:] > close[:-1], 1,
+                np.where(close[1:] < close[:-1], -1, 0))
+    # 每日 OBV 增量：方向 × 成交量
+    daily_obv = np.concatenate([[0], direction * volume[1:]])
+    obv_vals = np.cumsum(daily_obv)
     return pd.Series(obv_vals, index=df.index)

@@ -397,7 +397,7 @@ DAG 流程结构（纯拓扑，无运行状态）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `type` | string | ✅ | `kline`(个股) / `index`(指数) / `etf` / `fund`(基本面) / `indicator`(指标) |
+| `type` | string | ✅ | `kline`(个股) / `index`(指数) / `etf` / `fund`(基本面) |
 | `start_date` | string | | 起始日期 YYYY-MM-DD，默认 5 年前。fund 类型按季度对齐 |
 | `end_date` | string | | 截止日期 YYYY-MM-DD，默认今天 |
 | `force` | bool | | 强制更新（跳过断点续传），默认 false |
