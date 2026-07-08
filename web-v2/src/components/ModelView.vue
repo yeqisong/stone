@@ -123,40 +123,43 @@
           <div style="max-height:350px;overflow-y:auto;padding-right:4px">
             <n-collapse>
               <n-collapse-item title="① 执行模型" name="exec">
-                <n-input-number v-model:value="createForm.trading_rules.execution.volume_limit" :min="0.01" :max="0.30" :step="0.01" style="width:150px"><template #suffix>量比上限</template></n-input-number>
+                <div style="display:flex;align-items:center;gap:6px;font-size:11px">
+                  <span style="color:var(--c-text-dim);min-width:50px">量比上限</span>
+                  <n-input-number v-model:value="createForm.trading_rules.execution.volume_limit" :min="0.01" :max="0.30" :step="0.01" style="width:100px" size="small" />
+                </div>
               </n-collapse-item>
               <n-collapse-item title="② 信号过滤" name="sig">
-                <div style="display:flex;gap:8px">
-                  <n-input-number v-model:value="createForm.trading_rules.signal_filter.min_score_threshold" :min="0" :max="1" :step="0.05" style="width:130px"><template #suffix>最低分</template></n-input-number>
-                  <n-input-number v-model:value="createForm.trading_rules.signal_filter.max_score_threshold" :min="0" :max="1" :step="0.05" style="width:130px"><template #suffix>最高分</template></n-input-number>
+                <div style="display:flex;gap:12px;font-size:11px">
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">最低分</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.min_score_threshold" :min="0" :max="1" :step="0.05" style="width:80px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">最高分</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.max_score_threshold" :min="0" :max="1" :step="0.05" style="width:80px" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="③ 头寸管理" name="pos">
-                <div style="display:flex;gap:8px">
-                  <n-input-number v-model:value="createForm.trading_rules.position_sizing.max_single_position" :min="0.05" :max="0.50" :step="0.05" style="width:130px"><template #suffix>单票上限</template></n-input-number>
-                  <n-input-number v-model:value="createForm.trading_rules.position_sizing.max_turnover_per_day" :min="0.10" :max="1.00" :step="0.05" style="width:130px"><template #suffix>日换手率</template></n-input-number>
+                <div style="display:flex;gap:12px;font-size:11px">
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">单票上限</span><n-input-number v-model:value="createForm.trading_rules.position_sizing.max_single_position" :min="0.05" :max="0.50" :step="0.05" style="width:80px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">日换手率</span><n-input-number v-model:value="createForm.trading_rules.position_sizing.max_turnover_per_day" :min="0.10" :max="1.00" :step="0.05" style="width:80px" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="④ 止盈止损" name="risk">
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                  <n-input-number v-model:value="createForm.trading_rules.risk_management.stop_loss" :min="0.02" :max="0.15" :step="0.01" style="width:110px"><template #suffix>止损</template></n-input-number>
-                  <n-input-number v-model:value="createForm.trading_rules.risk_management.take_profit" :min="0.05" :max="0.50" :step="0.01" style="width:110px"><template #suffix>止盈</template></n-input-number>
-                  <n-input-number v-model:value="createForm.trading_rules.risk_management.trailing_retracement" :min="0.02" :max="0.10" :step="0.01" style="width:110px"><template #suffix>移动止盈</template></n-input-number>
-                  <n-input-number v-model:value="createForm.trading_rules.risk_management.max_holding_days" :min="5" :max="60" style="width:110px"><template #suffix>最大持仓天</template></n-input-number>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:11px">
+                  <div style="display:flex;align-items:center;gap:3px"><span style="color:var(--c-text-dim);min-width:50px">止损</span><n-input-number v-model:value="createForm.trading_rules.risk_management.stop_loss" :min="0.02" :max="0.15" :step="0.01" style="width:75px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:3px"><span style="color:var(--c-text-dim);min-width:50px">止盈</span><n-input-number v-model:value="createForm.trading_rules.risk_management.take_profit" :min="0.05" :max="0.50" :step="0.01" style="width:75px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:3px"><span style="color:var(--c-text-dim);min-width:70px">移动止盈</span><n-input-number v-model:value="createForm.trading_rules.risk_management.trailing_retracement" :min="0.02" :max="0.10" :step="0.01" style="width:75px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:3px"><span style="color:var(--c-text-dim);min-width:70px">持仓天数</span><n-input-number v-model:value="createForm.trading_rules.risk_management.max_holding_days" :min="5" :max="60" style="width:75px" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="⑤ 市场择时" name="mkt">
-                <div style="display:flex;gap:8px;align-items:center">
+                <div style="display:flex;gap:8px;align-items:center;font-size:11px">
                   <n-switch v-model:value="createForm.trading_rules.market_filter.require_market_above_ma" size="small" />
-                  <span style="font-size:11px;color:var(--c-text-dim)">大盘MA</span>
-                  <n-input-number v-model:value="createForm.trading_rules.market_filter.market_ma_period" :min="10" :max="60" style="width:80px" size="small" />
-                  <span style="font-size:11px;color:var(--c-text-dim)">以上开仓</span>
+                  <span style="color:var(--c-text-dim)">大盘MA</span>
+                  <n-input-number v-model:value="createForm.trading_rules.market_filter.market_ma_period" :min="10" :max="60" style="width:70px" size="small" />
+                  <span style="color:var(--c-text-dim)">以上开仓</span>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="⑥ 成本模型" name="cost">
-                <div style="display:flex;gap:8px">
-                  <n-input-number v-model:value="createForm.trading_rules.cost_model.commission_rate" :min="0.0005" :max="0.003" :step="0.0001" style="width:120px"><template #suffix>佣金</template></n-input-number>
-                  <n-input-number v-model:value="createForm.trading_rules.cost_model.slippage_rate" :min="0.0005" :max="0.002" :step="0.0001" style="width:120px"><template #suffix>滑点</template></n-input-number>
+                <div style="display:flex;gap:12px;font-size:11px">
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">佣金</span><n-input-number v-model:value="createForm.trading_rules.cost_model.commission_rate" :min="0.0005" :max="0.003" :step="0.0001" style="width:90px" size="small" /></div>
+                  <div style="display:flex;align-items:center;gap:4px"><span style="color:var(--c-text-dim)">滑点</span><n-input-number v-model:value="createForm.trading_rules.cost_model.slippage_rate" :min="0.0005" :max="0.002" :step="0.0001" style="width:90px" size="small" /></div>
                 </div>
               </n-collapse-item>
             </n-collapse>
