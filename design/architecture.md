@@ -1,7 +1,7 @@
 # 个股买卖点监测系统 (K道) — 架构设计文档
 
 > **版本**: v2.7  
-> **最后更新**: 2026-07-08  
+> **最后更新**: 2026-07-09  
 > **生产地址**: https://s.pmlab.top
 
 ---
@@ -1169,7 +1169,58 @@ POST /api/features/{id}/compute-range
 
 `POST /api/features/check-stats-integrity` → 遍历所有特征 → COUNT feature_values 对比 metadata → 不一致自动标记 data_anomaly + 归零。
 
-## 20. 开发命令速查
+## 20. KEPL 解析与执行引擎（v2.2）
+
+### 20.1 架构
+
+```
+公式字符串 "avg(ma(close, 5), true)"
+         │
+         ▼
+    lark LALR(1) 解析器 (app/kepl/parser.py)
+    ~30 行 EBNF 语法，支持嵌套函数 + 算术 + 布尔字面量
+         │
+         ▼
+    KepLAST 表达式树
+    FieldRef | NumLit | BoolLit | FuncCall | BinOp
+         │
+         ▼
+    _execute_ast(df, node, db)  (scripts/feature_compute.py)
+         │
+    ┌────┴──────────────────────┐
+    ▼                           ▼
+时序函数 (ma/ema/rsi/...)    跨股票函数 (avg/sum/max/min/rank/zscore)
+groupby().transform()       框架迭代股票 + exclude_self 过滤
+逐股隔离                     函数只接收"别人"的数据
+    │                           │
+    └────────┬──────────────────┘
+             ▼
+    pd.Series (与 df 等长) → _batch_insert → feature_values
+```
+
+### 20.2 内置函数
+
+| 类别 | 函数 | 实现 |
+|------|------|------|
+| 时序 | ma, ema, rsi, pct_change | groupby().transform() + strategy/indicators.py |
+| 时序 | boll_upper/mid/lower, dif/dea/macd_hist, atr | 同上 |
+| 截面 | avg, sum, max, min | _execute_cross_sectional: 逐股迭代 + 可选 exclude_self |
+
+### 20.3 自定义函数
+
+1. 用户创建函数 (`POST /api/functions`) → `_validate_function_safety` 扫描 for/while + 危险 import
+2. 特征引用自定义函数 → lark 解析 AST → `_execute_ast` 查缓存
+3. 缓存 miss → `_load_custom_function` 从 functions 表加载 → RestrictedPython 编译 → exec → 入缓存
+4. 调用时框架包 `groupby().transform(lambda x: custom_fn(x, *params))`
+
+### 20.4 依赖
+
+```
+lark>=1.3              # PEG 解析器 (110KB)
+RestrictedPython>=8.0   # 沙箱执行 (27KB)
+```
+
+## 21. 开发命令速查
 
 ```bash
 # 后端
