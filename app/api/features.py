@@ -1069,16 +1069,13 @@ def _update_feature_stats_after_compute(feature_id: int):
             else:
                 ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
 
-            # 优先用 entity_meta 的 ipo_date/delist_date，为空则回退到 stock_master
+            # v2.2 优化: JOIN 替代关联子查询（原 5000 次子查询 → 1 次 JOIN）
             total_cells = db.execute(text(f"""
-                SELECT COALESCE(SUM(
-                    (SELECT COUNT(*) FROM trade_calendar tc
-                     WHERE tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01')
-                         AND CURRENT_DATE
-                     AND tc.is_trade_day = true)
-                ), 0)
+                SELECT COUNT(*)
                 FROM stock_master sm
+                JOIN trade_calendar tc ON tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01') AND CURRENT_DATE
                 WHERE sm.status = 'N' {ent_filter}
+                  AND tc.is_trade_day = true
             """)).scalar() or 0
 
             stock_count = db.execute(text(f"""
