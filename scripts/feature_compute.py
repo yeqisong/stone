@@ -78,26 +78,47 @@ def compute_feature(
         if result is None:
             return {"ok": False, "error": "公式执行失败"}
 
-        # 3. 构造写入数据
-        to_insert = []
-        for stock, grp in df.groupby("stock_code"):
-            vals = result.get(stock) if isinstance(result, dict) else result
-            if vals is None:
-                continue
-            for idx, row in grp.iterrows():
-                val = vals[idx] if isinstance(vals, (pd.Series, list, np.ndarray)) else vals
-                v = float(val) if val is not None and pd.notna(val) else None
-                if v is not None:
-                    to_insert.append({
-                        "feature_name": feature_name,
-                        "stock_code": stock,
-                        "trade_date": row["trade_date"].strftime("%Y-%m-%d"),
-                        "value": v,
-                    })
+        # 3. 向量化构造写入数据 + 分片提交（100只股票/批）
+        total_rows = 0
+        stocks = sorted(df["stock_code"].unique())
+        batch_size = 100
 
-        # 4. 批量写入 feature_values
-        if to_insert:
-            for chunk in _chunk(to_insert, 500):
+        for batch_start in range(0, len(stocks), batch_size):
+            batch_stocks = stocks[batch_start:batch_start + batch_size]
+            batch_df = df[df["stock_code"].isin(batch_stocks)].copy()
+
+            # 向量化：用 pd.concat 替代 iterrows
+            rows_list = []
+            for stock in batch_stocks:
+                grp = batch_df[batch_df["stock_code"] == stock]
+                vals = result.get(stock) if isinstance(result, dict) else result
+                if vals is None or len(grp) == 0:
+                    continue
+                # 对齐：确保 vals 和 grp 长度一致
+                if isinstance(vals, (pd.Series, list, np.ndarray)):
+                    vals = np.array(vals).flatten()
+                else:
+                    vals = np.full(len(grp), vals)
+                if len(vals) < len(grp):
+                    vals = np.pad(vals, (0, len(grp) - len(vals)), constant_values=np.nan)
+
+                mask = pd.notna(vals[:len(grp)])
+                stock_rows = pd.DataFrame({
+                    "feature_name": feature_name,
+                    "stock_code": stock,
+                    "trade_date": grp["trade_date"].dt.strftime("%Y-%m-%d").values,
+                    "value": vals[:len(grp)],
+                })
+                rows_list.append(stock_rows[mask])
+
+            if not rows_list:
+                continue
+
+            batch_insert = pd.concat(rows_list, ignore_index=True)
+            total_rows += len(batch_insert)
+
+            # 批量写入
+            for chunk in _chunk(batch_insert.to_dict("records"), 500):
                 values_clause = ", ".join(
                     f"('{d['feature_name']}', '{d['stock_code']}', '{d['trade_date']}', {d['value']})"
                     for d in chunk
@@ -107,9 +128,9 @@ def compute_feature(
                     VALUES {values_clause}
                     ON CONFLICT (feature_name, stock_code, trade_date) DO UPDATE SET value = EXCLUDED.value
                 """))
-            db.commit()
+            db.commit()  # 每批提交，避免长事务
 
-        return {"ok": True, "rows": len(to_insert)}
+        return {"ok": True, "rows": total_rows}
     except Exception as e:
         logger.error(f"compute_feature({feature_name}): {e}")
         return {"ok": False, "error": str(e)}
