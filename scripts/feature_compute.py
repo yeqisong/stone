@@ -36,6 +36,7 @@ def compute_feature(
         {"ok": True/False, "rows": N, "error": "..."}
     """
     try:
+        import numpy as np
         # 1. 拉取 daily_quote 数据 → pandas DataFrame
         table = "daily_quote"
         if target_entity == "index":
@@ -84,7 +85,7 @@ def compute_feature(
             if vals is None:
                 continue
             for idx, row in grp.iterrows():
-                val = vals[idx] if isinstance(vals, (pd.Series, list)) else vals
+                val = vals[idx] if isinstance(vals, (pd.Series, list, np.ndarray)) else vals
                 v = float(val) if val is not None and pd.notna(val) else None
                 if v is not None:
                     to_insert.append({
