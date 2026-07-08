@@ -115,9 +115,9 @@
           </n-space>
           <n-divider style="margin:4px 0">训练参数</n-divider>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="width:110px"><template #suffix>Optuna轮数</template></n-input-number>
-            <n-input-number v-model:value="createForm.initial_cash" :min="100000" :step="100000" style="width:130px"><template #suffix>初始资金</template></n-input-number>
-            <n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" style="width:110px"><template #suffix>最大持仓</template></n-input-number>
+            <div style="display:flex;align-items:center;gap:4px;font-size:11px"><span style="color:var(--c-text-dim)">Optuna</span><n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="width:80px" size="small" /></div>
+            <div style="display:flex;align-items:center;gap:4px;font-size:11px"><span style="color:var(--c-text-dim)">初始资金</span><n-input-number v-model:value="createForm.initial_cash" :min="100000" :step="100000" style="width:110px" size="small" /></div>
+            <div style="display:flex;align-items:center;gap:4px;font-size:11px"><span style="color:var(--c-text-dim)">最大持仓</span><n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" style="width:80px" size="small" /></div>
           </div>
           <n-divider style="margin:4px 0">六层交易策略</n-divider>
           <div style="max-height:350px;overflow-y:auto;padding-right:4px">
