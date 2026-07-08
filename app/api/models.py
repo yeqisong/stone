@@ -36,6 +36,7 @@ class CreateModel(BaseModel):
     test_end: str = ""
     # 特征配置
     features: List[str] = ["boll", "macd", "rsi", "atr", "ma", "volume"]
+    feature_names: Optional[List[str]] = None
     # 模型配置
     ml_enabled: bool = False
     model_type: str = "xgboost"
@@ -162,6 +163,7 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
             "test_start": body.test_start,
             "test_end": body.test_end or None,
             "features": body.features,
+            "feature_names": body.feature_names or body.features,
             "ml_enabled": body.ml_enabled,
             "model_type": body.model_type,
             "optuna_trials": body.optuna_trials,

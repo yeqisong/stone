@@ -871,6 +871,7 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
         DataFrame with columns [trade_date, stock_code, {feature_names}..., close, volume]
         缺失特征值填 NaN
     """
+    from sqlalchemy import text
     import pandas as pd
 
     if not feature_names:
@@ -924,6 +925,9 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
 
     df_q = pd.DataFrame(quotes, columns=['stock_code', 'trade_date', 'close', 'volume'])
     df_q['trade_date'] = pd.to_datetime(df_q['trade_date'])
+
+    # Ensure both have same dtype for merge
+    df_wide['trade_date'] = pd.to_datetime(df_wide['trade_date'])
 
     # 4. LEFT JOIN 行情
     df_merged = df_wide.merge(df_q, on=['stock_code', 'trade_date'], how='left')
@@ -1178,15 +1182,6 @@ def dag_task_model_train(trade_date=None, **kw):
             db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE version=:v"), {"v": ver})
             db.commit()
             db.close(); return 0
-
-        # M1-1 扩展: 指标对齐质量检查
-        for tname, tlabel in [('boll','BOLL'),('macd','MACD'),('rsi','RSI'),('atr','ATR'),('ma','MA'),('volume','成交量')]:
-            tbl = f"stock_indicators_{tname}"
-            tcnt = db.execute(text(f"SELECT COUNT(*) FROM {tbl} WHERE trade_date BETWEEN :ds AND :ed"),
-                              {"ds": data_start, "ed": end_date}).scalar() or 0
-            df_tcnt = len(df)
-            if tcnt > 0 and df_tcnt > 0 and abs(tcnt/6 - df_tcnt) > df_tcnt * 0.01:
-                logger.warning(f"[train] {tlabel}行数({tcnt})与JOIN后行数({df_tcnt})偏差>1%，可能存在对齐缺口")
 
         update_node_progress(log_id=log_id, rows=1, detail='步骤1:加载特征')
 
