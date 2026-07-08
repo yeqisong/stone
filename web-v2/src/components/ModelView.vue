@@ -102,44 +102,65 @@
     </div>
 
     <!-- Create Modal -->
-    <n-modal v-model:show="showCreate" preset="card" :title="editMode?'✎ 编辑配置':'✚ 创建模型版本'" style="width:520px;max-width:92vw" :mask-closable="false">
+    <n-modal v-model:show="showCreate" preset="card" :title="editMode?'✎ 编辑配置':'✚ 创建模型版本'" style="width:640px;max-width:92vw" :mask-closable="false">
         <n-space vertical>
-          <n-input v-model:value="createName" placeholder="模型名称，例如：BOLL+MACD+RSI 多策略融合" />
+          <n-input v-model:value="createName" placeholder="模型名称" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:2px">数据范围起点（系统自动 60/20/20 切分为训练/验证/测试集）</div>
           <n-date-picker v-model:formatted-value="createForm.train_start" type="date" value-format="yyyy-MM-dd" placeholder="数据起点" />
-          <div style="font-size:10px;color:var(--c-text-faint);margin-top:4px">数据截止日期（自动取前天，确保数据已收盘）</div>
           <n-divider style="margin:4px 0">特征配置</n-divider>
           <n-space>
             <n-tag v-for="f in featureOptions" :key="f.key"
               :type="createForm.feature_names.includes(f.key)?'info':'default'"
-              style="cursor:pointer" @click="toggleFeature(f.key)" :bordered="false" size="small">
-              {{f.label}}
-            </n-tag>
+              style="cursor:pointer" @click="toggleFeature(f.key)" :bordered="false" size="small">{{f.label}}</n-tag>
           </n-space>
           <n-divider style="margin:4px 0">训练参数</n-divider>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" placeholder="Optuna轮数" style="width:120px" />
-            <n-input-number v-model:value="createForm.initial_cash" :min="100000" :max="10000000" :step="100000" placeholder="初始资金" style="width:140px" />
-            <n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" placeholder="最大持仓数" style="width:120px" />
+            <n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="width:110px"><template #suffix>Optuna轮数</template></n-input-number>
+            <n-input-number v-model:value="createForm.initial_cash" :min="100000" :step="100000" style="width:130px"><template #suffix>初始资金</template></n-input-number>
+            <n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" style="width:110px"><template #suffix>最大持仓</template></n-input-number>
           </div>
-          <n-divider style="margin:4px 0">交易成本</n-divider>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <n-input-number v-model:value="createForm.stamp_tax" :min="0" :max="0.01" :step="0.0001" placeholder="印花税" style="width:110px">
-              <template #suffix>印花税</template>
-            </n-input-number>
-            <n-input-number v-model:value="createForm.commission" :min="0" :max="0.01" :step="0.0001" placeholder="佣金" style="width:110px">
-              <template #suffix>佣金</template>
-            </n-input-number>
-            <n-input-number v-model:value="createForm.slippage" :min="0" :max="0.01" :step="0.0001" placeholder="滑点" style="width:110px">
-              <template #suffix>滑点</template>
-            </n-input-number>
+          <n-divider style="margin:4px 0">六层交易策略</n-divider>
+          <div style="max-height:350px;overflow-y:auto;padding-right:4px">
+            <n-collapse>
+              <n-collapse-item title="① 执行模型" name="exec">
+                <n-input-number v-model:value="createForm.trading_rules.execution.volume_limit" :min="0.01" :max="0.30" :step="0.01" style="width:150px"><template #suffix>量比上限</template></n-input-number>
+              </n-collapse-item>
+              <n-collapse-item title="② 信号过滤" name="sig">
+                <div style="display:flex;gap:8px">
+                  <n-input-number v-model:value="createForm.trading_rules.signal_filter.min_score_threshold" :min="0" :max="1" :step="0.05" style="width:130px"><template #suffix>最低分</template></n-input-number>
+                  <n-input-number v-model:value="createForm.trading_rules.signal_filter.max_score_threshold" :min="0" :max="1" :step="0.05" style="width:130px"><template #suffix>最高分</template></n-input-number>
+                </div>
+              </n-collapse-item>
+              <n-collapse-item title="③ 头寸管理" name="pos">
+                <div style="display:flex;gap:8px">
+                  <n-input-number v-model:value="createForm.trading_rules.position_sizing.max_single_position" :min="0.05" :max="0.50" :step="0.05" style="width:130px"><template #suffix>单票上限</template></n-input-number>
+                  <n-input-number v-model:value="createForm.trading_rules.position_sizing.max_turnover_per_day" :min="0.10" :max="1.00" :step="0.05" style="width:130px"><template #suffix>日换手率</template></n-input-number>
+                </div>
+              </n-collapse-item>
+              <n-collapse-item title="④ 止盈止损" name="risk">
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <n-input-number v-model:value="createForm.trading_rules.risk_management.stop_loss" :min="0.02" :max="0.15" :step="0.01" style="width:110px"><template #suffix>止损</template></n-input-number>
+                  <n-input-number v-model:value="createForm.trading_rules.risk_management.take_profit" :min="0.05" :max="0.50" :step="0.01" style="width:110px"><template #suffix>止盈</template></n-input-number>
+                  <n-input-number v-model:value="createForm.trading_rules.risk_management.trailing_retracement" :min="0.02" :max="0.10" :step="0.01" style="width:110px"><template #suffix>移动止盈</template></n-input-number>
+                  <n-input-number v-model:value="createForm.trading_rules.risk_management.max_holding_days" :min="5" :max="60" style="width:110px"><template #suffix>最大持仓天</template></n-input-number>
+                </div>
+              </n-collapse-item>
+              <n-collapse-item title="⑤ 市场择时" name="mkt">
+                <div style="display:flex;gap:8px;align-items:center">
+                  <n-switch v-model:value="createForm.trading_rules.market_filter.require_market_above_ma" size="small" />
+                  <span style="font-size:11px;color:var(--c-text-dim)">大盘MA</span>
+                  <n-input-number v-model:value="createForm.trading_rules.market_filter.market_ma_period" :min="10" :max="60" style="width:80px" size="small" />
+                  <span style="font-size:11px;color:var(--c-text-dim)">以上开仓</span>
+                </div>
+              </n-collapse-item>
+              <n-collapse-item title="⑥ 成本模型" name="cost">
+                <div style="display:flex;gap:8px">
+                  <n-input-number v-model:value="createForm.trading_rules.cost_model.commission_rate" :min="0.0005" :max="0.003" :step="0.0001" style="width:120px"><template #suffix>佣金</template></n-input-number>
+                  <n-input-number v-model:value="createForm.trading_rules.cost_model.slippage_rate" :min="0.0005" :max="0.002" :step="0.0001" style="width:120px"><template #suffix>滑点</template></n-input-number>
+                </div>
+              </n-collapse-item>
+            </n-collapse>
           </div>
-          <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">默认: 印花0.001 佣金0.00025 滑点0.001</div>
-          <n-divider style="margin:4px 0">风险控制</n-divider>
-          <n-input-number v-model:value="createForm.stop_loss_pct" :min="1" :max="30" placeholder="止损比例(%)" />
-          <n-input-number v-model:value="createForm.signal_timeout_days" :min="5" :max="60" placeholder="信号超时(交易日)" />
-          <n-checkbox v-model:checked="createForm.ml_enabled" disabled title="规则引擎已移除，当前仅 XGBoost，后续补充非ML预测路径">ML增强（预留）</n-checkbox>
         </n-space>
         <template #footer>
           <n-space justify="flex-end">
@@ -184,7 +205,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider } from 'naive-ui'
+import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import ModelTraining from './ModelTraining.vue'
