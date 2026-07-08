@@ -71,12 +71,12 @@
                 <div><span style="color:var(--c-text-faint)">Optuna轮数: </span><span style="color:var(--c-text)">{{cfg.optuna_trials || 50}}</span></div>
                 <div><span style="color:var(--c-text-faint)">初始资金: </span><span style="color:var(--c-text)">{{(cfg.initial_cash || 1000000).toLocaleString()}}元</span></div>
                 <div><span style="color:var(--c-text-faint)">最大持仓: </span><span style="color:var(--c-text)">{{cfg.max_positions || 5}}只</span></div>
-                <div><span style="color:var(--c-text-faint)">交易成本: </span><span style="color:var(--c-text)">印花{{((cfg.stamp_tax??0.001)*100).toFixed(1)}}% 佣金{{((cfg.commission??0.00025)*100).toFixed(3)}}% 滑点{{((cfg.slippage??0.001)*100).toFixed(1)}}%</span></div>
+                <div><span style="color:var(--c-text-faint)">成本: </span><span style="color:var(--c-text)">佣{{((tr.cost_model?.commission_rate ?? 0.0015)*100).toFixed(2)}}% 滑{{((tr.cost_model?.slippage_rate ?? 0.001)*100).toFixed(1)}}% 印{{((tr.cost_model?.stamp_duty ?? 0.0005)*100).toFixed(2)}}%</span></div>
                 <div><span style="color:var(--c-text-faint)">止损/止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.stop_loss ? (tr.risk_management.stop_loss*100).toFixed(0)+'%' : '—'}} / {{tr.risk_management?.take_profit ? (tr.risk_management.take_profit*100).toFixed(0)+'%' : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">移动止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.trailing_retracement ? (tr.risk_management.trailing_retracement*100).toFixed(0)+'%' : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">仓位上限: </span><span style="color:var(--c-text)">{{tr.position_sizing?.max_single_position ? (tr.position_sizing.max_single_position*100).toFixed(0)+'%' : '—'}}</span></div>
                 <div><span style="color:var(--c-text-faint)">大盘择时: </span><span style="color:var(--c-text)">{{tr.market_filter?.require_market_above_ma ? 'MA'+tr.market_filter.market_ma_period+'以上开仓' : '不限'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">成本: </span><span style="color:var(--c-text)">佣{{((tr.cost_model?.commission_rate ?? 0.0015)*100).toFixed(2)}}% 滑{{((tr.cost_model?.slippage_rate ?? 0.001)*100).toFixed(1)}}% 印{{((tr.cost_model?.stamp_duty ?? 0.0005)*100).toFixed(2)}}%</span></div>
+                <div><span style="color:var(--c-text-faint)">执行模型: </span><span style="color:var(--c-text)">{{tr.execution?.price_type || 'next_day_open'}} T+{{tr.execution?.delay_days || 1}}</span></div>
               </div>
             </div>
 
@@ -95,7 +95,13 @@
             <ModelEval :version="store.selected" />
           </div>
           <ModelLive v-else-if="store.detailTab==='live'" :version="store.selected" />
-          <ModelIndicators v-else-if="store.detailTab==='indicators'" />
+          <div v-else-if="store.detailTab==='indicators'" style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:12px;color:var(--c-text-dim)">模型使用的特征（来自特征注册中心）</div>
+            <div v-if="featuresForModel.length" style="display:flex;flex-wrap:wrap;gap:4px">
+              <n-tag v-for="f in featuresForModel" :key="f" size="small" type="info" :bordered="false">{{ f }}</n-tag>
+            </div>
+            <n-empty v-else description="未配置特征" style="padding:20px" />
+          </div>
         </template>
         <n-empty v-else description="选择一个模型版本" style="padding:60px 0" />
       </div>
@@ -214,9 +220,11 @@ import { useModelStore } from '../stores/model'
 import ModelTraining from './ModelTraining.vue'
 import ModelEval from './ModelEval.vue'
 import ModelLive from './ModelLive.vue'
-import ModelIndicators from './ModelIndicators.vue'
-
 const store = useModelStore()
+const featuresForModel = computed(() => {
+  const c = store.selected?.config || {}
+  return c.feature_names || c.features || []
+})
 const loading = ref(true)
 const showCreate = ref(false)
 const editMode = ref(false)
@@ -276,11 +284,12 @@ function startEditConfig() {
   createForm.optuna_trials = cfg.optuna_trials || 50
   createForm.initial_cash = cfg.initial_cash || 1000000
   createForm.max_positions = cfg.max_positions || 5
-  createForm.stamp_tax = cfg.stamp_tax ?? 0.001
-  createForm.commission = cfg.commission ?? 0.00025
-  createForm.slippage = cfg.slippage ?? 0.001
-  createForm.stop_loss_pct = cfg.risk?.stop_loss_pct || 8
-  createForm.signal_timeout_days = cfg.risk?.signal_timeout_days || 20
+  createForm.trading_rules = cfg.trading_rules || createForm.trading_rules
+  createForm.stamp_tax = cfg.trading_rules?.cost_model?.stamp_duty ?? 0.0005
+  createForm.commission = cfg.trading_rules?.cost_model?.commission_rate ?? 0.0015
+  createForm.slippage = cfg.trading_rules?.cost_model?.slippage_rate ?? 0.001
+  createForm.stop_loss_pct = Math.round((cfg.trading_rules?.risk_management?.stop_loss ?? 0.05) * 100)
+  createForm.signal_timeout_days = cfg.trading_rules?.risk_management?.max_holding_days ?? 20
   showCreate.value = true
 }
 
@@ -339,7 +348,7 @@ async function doCreate() {
 
 const tabs = [
   { key:'basic', label:'基本信息' },
-  { key:'indicators', label:'指标' },
+  { key:'indicators', label:'特征' },
   { key:'train', label:'训练' },
   { key:'eval', label:'评估' },
   { key:'live', label:'实盘' },
