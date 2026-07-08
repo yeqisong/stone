@@ -182,7 +182,8 @@ function renderGraph() {
 // WS 驱动节点状态更新
 function updateNodeStates() {
   if (!graph) return
-  for (const [name, state] of Object.entries(store.nodes)) {
+  const nodes = store.nodes || {}
+  for (const [name, state] of Object.entries(nodes)) {
     const cell = graph.getCellById(name)
     if (!cell || !cell.isNode()) continue
     cell.setAttrs({
@@ -193,7 +194,7 @@ function updateNodeStates() {
       },
     })
     // Update edges
-    const incoming = graph.getIncomingEdges(name)
+    const incoming = graph.getIncomingEdges(name) || []
     for (const e of incoming) {
       const srcName = e.getSourceCellId()
       const fromState = store.nodes[srcName] || 'default'
