@@ -559,3 +559,248 @@ def quality_dashboard(version: str):
         db.close(); raise
     except Exception as e:
         db.close(); raise HTTPException(500, str(e)[:200])
+
+
+# ── v2.7 策略优化 + 归因分析 ──
+
+import threading as _threading
+import time as _time
+import uuid as _uuid
+
+_scan_tasks: dict = {}
+_scan_lock = _threading.Lock()
+
+
+class StrategyScanRequest(BaseModel):
+    param_grid: dict  # {stop_loss:[0.03,...], take_profit:[0.05,...], trailing_retracement:[0.03,...]}
+    val_start: str = "2022-01-01"
+    val_end: str = "2023-12-31"
+    hold_days: int = 10
+
+
+@router.post("/v1/models/{version}/strategy-scan")
+def start_strategy_scan(version: str, body: StrategyScanRequest, user: str = Depends(get_current_user)):
+    """启动策略参数网格扫描。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            db.close(); raise HTTPException(404, "版本不存在")
+        db.close()
+
+        param_grid = body.param_grid
+        stop_losses = param_grid.get('stop_loss', [0.05, 0.08])
+        take_profits = param_grid.get('take_profit', [0.10, 0.15])
+        trailings = param_grid.get('trailing_retracement', [0.05])
+
+        combos = [[sl, tp, tr] for sl in stop_losses for tp in take_profits for tr in trailings]
+        task_id = f"scan-{_uuid.uuid4().hex[:6]}"
+
+        with _scan_lock:
+            _scan_tasks[task_id] = {
+                'task_id': task_id, 'version': version, 'status': 'running',
+                'total_combos': len(combos), 'completed': 0,
+                'best_sharpe': -999, 'best_params': None,
+                'results': [], 'started_at': _time.time(),
+            }
+
+        thread = _threading.Thread(target=_run_scan, args=(
+            task_id, version, combos, body.val_start, body.val_end, body.hold_days
+        ), daemon=True)
+        thread.start()
+
+        return {"ok": True, "task_id": task_id, "total_combos": len(combos), "status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close(); raise HTTPException(500, str(e)[:200])
+
+
+@router.get("/v1/models/{version}/strategy-scan/{task_id}")
+def get_scan_progress(version: str, task_id: str):
+    """查询策略扫描进度 + 热力图数据。"""
+    with _scan_lock:
+        t = _scan_tasks.get(task_id)
+        if not t:
+            return {"status": "not_found"}
+        return {
+            'task_id': t['task_id'], 'status': t['status'],
+            'completed': t['completed'], 'total_combos': t['total_combos'],
+            'best_so_far': t['best_params'],
+            'heatmap_data': t['results'][-100:],  # 最近100条
+        }
+
+
+@router.post("/v1/models/{version}/strategy-scan/{task_id}/apply")
+def apply_scan_result(version: str, task_id: str, user: str = Depends(get_current_user)):
+    """应用策略扫描的最优参数到 trading_rules。"""
+    with _scan_lock:
+        t = _scan_tasks.get(task_id)
+        if not t or t['status'] != 'completed':
+            raise HTTPException(400, "扫描未完成")
+        best = t['best_params']
+
+    db = get_sync_db()
+    try:
+        db.execute(text("""
+            UPDATE model_versions SET trading_rules = :tr, strategy_scan_results = :sr,
+                stage = 'strategy_optimized', updated_at = CURRENT_TIMESTAMP
+            WHERE version = :v
+        """), {"v": version, "tr": json.dumps(best), "sr": json.dumps(t['results'])})
+        db.commit()
+        db.close()
+        return {"ok": True, "applied": best}
+    except Exception as e:
+        db.close(); raise HTTPException(500, str(e)[:200])
+
+
+def _run_scan(task_id, version, combos, val_start, val_end, hold_days):
+    """后台执行策略扫描。"""
+    from scripts.pipeline import run_attribution, build_feature_wide_table
+    from app.db.connection import get_sync_db
+    from loguru import logger as _log
+    import pandas as pd, numpy as np
+
+    try:
+        db = get_sync_db()
+        # 加载特征
+        r = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
+                       {"v": version}).fetchone()
+        if not r:
+            db.close(); return
+        feature_names = r[0] if isinstance(r[0], list) else (json.loads(r[0]) if r[0] else [])
+        cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
+        if not feature_names:
+            feature_names = cfg.get('feature_names', [])
+
+        df = build_feature_wide_table(db, feature_names, val_start, val_end, 'stock')
+        db.close()
+        if df.empty:
+            with _scan_lock: _scan_tasks[task_id]['status'] = 'failed'
+            return
+
+        results = []
+        best_sharpe = -999
+        best_params = None
+        total = len(combos)
+
+        for i, (sl, tp, tr) in enumerate(combos):
+            bt = _backtest_scan(df, feature_names, val_start, val_end, hold_days, sl, tp, tr)
+            r = {'stop_loss': sl, 'take_profit': tp, 'trailing_retracement': tr,
+                 'sharpe': bt.get('sharpe', 0), 'max_dd': bt.get('max_dd', 0),
+                 'win_rate': bt.get('win_rate', 0), 'total_return': bt.get('total_return', 0)}
+            results.append(r)
+            if r['sharpe'] > best_sharpe:
+                best_sharpe = r['sharpe']; best_params = r
+
+            with _scan_lock:
+                _scan_tasks[task_id].update({'completed': i+1, 'results': results,
+                    'best_sharpe': best_sharpe, 'best_params': best_params})
+
+        with _scan_lock:
+            _scan_tasks[task_id].update({'status': 'completed', 'results': results,
+                'best_sharpe': best_sharpe, 'best_params': best_params})
+    except Exception as e:
+        _log.error(f"[scan] 失败: {e}")
+        with _scan_lock: _scan_tasks[task_id]['status'] = 'failed'
+
+
+def _backtest_scan(df, feature_names, val_start, val_end, hold_days, sl, tp, tr):
+    """简化版回测，供策略扫描使用（与 pipeline._backtest 逻辑一致）。"""
+    import numpy as np
+    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
+    if not val_mask.any(): return {'sharpe': 0, 'max_dd': 0, 'win_rate': 0, 'total_return': 0}
+    vdf = df[val_mask].copy()
+
+    if feature_names:
+        X = vdf[feature_names].fillna(0).values
+        y_pred = np.mean(X, axis=1) if X.shape[1] > 0 else np.zeros(len(vdf))
+    else:
+        y_pred = np.zeros(len(vdf))
+
+    dates_unique = sorted(vdf['trade_date'].unique())
+    equity = 1_000_000; cash = 1_000_000
+    holdings = []; equity_curve = [equity]
+    trade_count = win_count = 0
+    max_pos = 5; comm = 0.00025; st_tax = 0.001; slip = 0.001
+
+    for d in dates_unique:
+        day = vdf[vdf['trade_date'] == d]
+        if day.empty: continue
+        # 平仓
+        surviving = []
+        for h in holdings:
+            hday = day[day['stock_code'] == h['code']]
+            if hday.empty: surviving.append(h); continue
+            cur_p = float(hday['close'].iloc[0])
+            sell_p = cur_p; should_sell = False
+            if cur_p <= h['buy_price'] * (1 - sl): sell_p = h['buy_price'] * (1 - sl); should_sell = True
+            elif cur_p >= h['buy_price'] * (1 + tp): sell_p = h['buy_price'] * (1 + tp); should_sell = True
+            elif (d - h['buy_date']).days >= hold_days: should_sell = True
+            if should_sell:
+                gross = h['shares'] * sell_p; cost = gross * (comm + st_tax) + max(gross * slip, 0)
+                cash += max(gross - cost, 0); trade_count += 1
+                if sell_p > h['buy_price']: win_count += 1
+            else: surviving.append(h)
+        holdings = surviving
+        # 买入
+        held = {h['code'] for h in holdings}
+        candidates = day[~day['stock_code'].isin(held) & (day['close'] > 0)]
+        if candidates.empty: continue
+        slots = max_pos - len(holdings)
+        if slots <= 0: continue
+        # 预测 > 0 才买
+        idx_arr = np.argsort(y_pred)[-len(candidates):][::-1] if len(y_pred) > 0 else []
+        bought = 0
+        for idx in idx_arr:
+            if bought >= slots: break
+            r = candidates.iloc[min(idx, len(candidates)-1)]
+            price = float(r['close']) * (1 + slip/2)
+            shares = int((equity/max_pos)//price//100)*100
+            if shares < 100: continue
+            gross2 = shares * price
+            if gross2 + gross2*comm > cash: continue
+            cash -= gross2 + gross2*comm
+            holdings.append({'code': r['stock_code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
+            bought += 1
+        pos_val = sum(h['shares'] * float(day[day['stock_code']==h['code']]['close'].iloc[0]) if not day[day['stock_code']==h['code']].empty else 0 for h in holdings)
+        equity = cash + pos_val; equity_curve.append(equity)
+
+    eq = np.array(equity_curve)
+    rets = eq[1:]/eq[:-1] - 1 if len(eq) > 1 else np.array([0])
+    sharpe = float(np.mean(rets)/np.std(rets)*np.sqrt(252)) if np.std(rets) > 0 else 0
+    total_ret = equity/1_000_000 - 1
+    peak = np.maximum.accumulate(eq); dd = np.min((eq-peak)/peak) if len(eq) > 1 else 0
+    return {'sharpe': round(sharpe,4), 'max_dd': round(float(dd),4),
+            'win_rate': round(win_count/max(trade_count,1),4),
+            'total_return': round(float(total_ret),4)}
+
+
+@router.post("/v1/models/{version}/attribution")
+def get_attribution(version: str, body: dict = {}, user: str = Depends(get_current_user)):
+    """执行归因分析（三基线 + Brinson分解）。"""
+    from scripts.pipeline import run_attribution, build_feature_wide_table
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
+                       {"v": version}).fetchone()
+        if not r: raise HTTPException(404, "版本不存在")
+        feature_names = r[0] if isinstance(r[0], list) else (json.loads(r[0]) if r[0] else [])
+        cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
+        if not feature_names:
+            feature_names = cfg.get('feature_names', [])
+
+        val_start = body.get('val_start', '2022-01-01')
+        val_end = body.get('val_end', '2023-12-31')
+
+        df = build_feature_wide_table(db, feature_names, val_start, val_end, 'stock')
+        db.close()
+        if df.empty:
+            return {"error": "验证集无数据，请先执行特征计算"}
+
+        result = run_attribution(db, version, df, feature_names, val_start, val_end)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close(); raise HTTPException(500, str(e)[:200])
