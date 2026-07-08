@@ -277,6 +277,13 @@ function startEditConfig() {
   editMode.value = true
   const cfg = store.selected?.config || {}
   createName.value = store.selected?.model_name || ''
+  // 确保模型已选的特征出现在选项列表中（即使它们不是 enabled 状态）
+  const configured = cfg.feature_names || cfg.features || []
+  for (const fn of configured) {
+    if (!featureOptions.value.find(f => f.key === fn)) {
+      featureOptions.value.push({ key: fn, label: fn, display: fn, completeness: 0 })
+    }
+  }
   createForm.train_start = cfg.train_start || '2021-01-01'
   createForm.train_end = cfg.train_end || '2025-12-31'
   createForm.test_start = cfg.test_start || '2026-01-01'
