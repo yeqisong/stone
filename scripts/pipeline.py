@@ -924,10 +924,10 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
     """), {"sd": start_date, "ed": end_date}).fetchall()
 
     df_q = pd.DataFrame(quotes, columns=['stock_code', 'trade_date', 'close', 'volume'])
-    df_q['trade_date'] = pd.to_datetime(df_q['trade_date'])
+    df_q['trade_date'] = pd.to_datetime(df_q['trade_date']).dt.strftime('%Y-%m-%d')
 
-    # Ensure both have same dtype for merge
-    df_wide['trade_date'] = pd.to_datetime(df_wide['trade_date'])
+    # Convert both to string for safe merge
+    df_wide['trade_date'] = pd.to_datetime(df_wide['trade_date']).dt.strftime('%Y-%m-%d')
 
     # 4. LEFT JOIN 行情
     df_merged = df_wide.merge(df_q, on=['stock_code', 'trade_date'], how='left')
