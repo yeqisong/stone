@@ -343,7 +343,6 @@ function renderDiagnosis() {
     const old = echarts.getInstanceByDom(pieDom)
     if (old) old.dispose()
     pieInstance = echarts.init(pieDom)
-    const totalCells = feat.value?.total_effective_cells || 0
     const windowMissing = feat.value?.missing_cells_total || 0     // 窗口期天然缺失
     const totalMissing = feat.value?.abnormal_missing_cells || 0   // 总缺失（窗口期+未补）
     const uncomputed = Math.max(0, totalMissing - windowMissing)   // 未补历史数据
@@ -406,7 +405,6 @@ function loadHeatmap() {
         title: { text:'热力图数据加载失败', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
       })
     })
-  }
 }
 
 function doLoadPreview() {
