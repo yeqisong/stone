@@ -929,7 +929,15 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
 
         stock_labels = [r[0] for r in stocks]
 
-        # 构建矩阵：1=缺失 0=有值（不放入 matrix）
+        # 拉取 top_n 只股的 ipo_date（用于区分"未上市"的灰格子）
+        ipo_map = {}
+        if stock_labels:
+            ipo_rows = db.execute(text(
+                "SELECT stock_code, ipo_date FROM stock_master WHERE stock_code = ANY(:codes)"
+            ), {"codes": stock_labels}).fetchall()
+            ipo_map = {r[0]: str(r[1]) if r[1] else None for r in ipo_rows}
+
+        # 构建矩阵：2=红(有数据但缺) 1=灰(未上市/不适用) 0=绿(有数据，不放入)
         matrix = []
         fv_rows = db.execute(text("""
             SELECT stock_code, trade_date::text FROM feature_values
@@ -938,9 +946,14 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
         has_data = set((r[0], str(r[1])) for r in fv_rows)
 
         for si, stock in enumerate(stock_labels):
+            ipo = ipo_map.get(stock)
             for di, day in enumerate(days_labels):
-                if (stock, day) not in has_data:
-                    matrix.append([di, si, 1])
+                if (stock, day) in has_data:
+                    continue  # 绿：不放入 matrix
+                if ipo and day < ipo:
+                    matrix.append([di, si, 1])  # 灰：未上市
+                else:
+                    matrix.append([di, si, 2])  # 红：该有但缺
 
         db.close()
         return {"days_labels": days_labels, "stock_labels": stock_labels, "matrix": matrix}

@@ -370,13 +370,15 @@ function renderDiagnosis() {
         heatmapInstance.setOption({
           tooltip: {
             formatter(p) {
-              return `${stock_labels[p.data[1]] || '#N'}<br/>${days_labels[p.data[0]] || ''}<br/>${p.data[2] ? '🟥 缺失' : '🟩 有值'}`
+              const v = p.data[2]
+              const status = v === 2 ? '🟥 缺失' : v === 1 ? '⬜ 未上市/不适用' : '🟩 有值'
+              return `${stock_labels[p.data[1]] || '#N'}<br/>${days_labels[p.data[0]] || ''}<br/>${status}`
             }
           },
           grid: { left:70, right:20, top:20, bottom:40 },
           xAxis: { type:'category', data: days_labels, axisLabel:{fontSize:8,interval:Math.max(1,Math.floor(days_labels.length/6))} },
           yAxis: { type:'category', data: stock_labels, axisLabel:{fontSize:8}, inverse:true },
-          visualMap: { min:0, max:1, inRange:{color:['#10b981','#ef4444']}, show:false },
+          visualMap: { min:0, max:2, inRange:{color:['#10b981','#9ca3af','#ef4444']}, show:false },
           series: [{ type:'heatmap', data: matrix, label:{show:false} }],
         })
       } else {
