@@ -192,6 +192,9 @@
         </div>
         <n-progress type="line" :percentage="computeProgress.progress_pct || 0" :height="8" :border-radius="4"
           :status="computeProgress.status === 'failed' ? 'error' : computeProgress.status === 'completed' ? 'success' : 'default'" />
+        <div v-if="computeProgress.status === 'failed'" style="margin-top:8px;padding:10px;background:var(--c-error-bg, #fff0f0);border-radius:4px;font-size:12px;color:var(--c-error, #d03050)">
+          ❌ 计算失败：{{ computeProgress.error || '未知错误' }}
+        </div>
       </div>
     </n-space>
     <template #footer>
@@ -378,13 +381,17 @@ function listenComputeProgress(taskId, featureId) {
     if (data.type === 'feature_compute_progress' && data.task_id === taskId) {
       computeProgress.value = data
       if (data.status === 'completed' || data.status === 'failed') {
+        if (computeWsUnwatch) { computeWsUnwatch(); computeWsUnwatch = null }
+        if (data.status === 'failed') {
+          // 失败时不自动关闭，让用户看到错误信息
+          return
+        }
         setTimeout(() => {
           computeProgress.value = null
           showCompute.value = false
           computeTarget.value = null
           loadData()
         }, 2000)
-        if (computeWsUnwatch) { computeWsUnwatch(); computeWsUnwatch = null }
       }
     }
   })

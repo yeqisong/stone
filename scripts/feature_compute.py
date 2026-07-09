@@ -88,48 +88,51 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
 def _batch_insert(db, feature_name: str, df: pd.DataFrame):
     """将 df[["trade_date","stock_code","_value"]] 批量写入 feature_values。
 
-    策略：先 DELETE 日期范围内该特征的旧数据，再 COPY + INSERT（无冲突检查）。
-    比逐行 ON CONFLICT DO UPDATE 快 10-30x，因为无需逐行索引查重。
+    使用独立的 raw connection + COPY FROM STDIN，自管理 DELETE + COPY + COMMIT。
+    COPY 流式写入不构建 SQL，任意行数不 OOM。
+    db 参数仅用于获取 engine（不参与事务）。
     """
-    import math
-    from psycopg2.extras import execute_values
     from io import StringIO
 
-    insert_df = df[["trade_date", "stock_code", "_value"]].dropna(subset=["_value"]).copy()
+    insert_df = df[["trade_date", "stock_code", "_value"]].copy()
+    insert_df["_value"] = insert_df["_value"].apply(lambda v: None if pd.isna(v) else v)
+    insert_df = insert_df.dropna(subset=["_value"])
     if insert_df.empty:
         return 0
 
     insert_df["trade_date"] = insert_df["trade_date"].dt.strftime("%Y-%m-%d")
-
-    # 1. 删除该特征在日期范围内的旧数据（避免 ON CONFLICT 逐行检查）
     min_date = insert_df["trade_date"].min()
     max_date = insert_df["trade_date"].max()
-    db.execute(text(
-        "DELETE FROM feature_values WHERE feature_name = :fn AND trade_date >= :sd AND trade_date <= :ed"
-    ), {"fn": feature_name, "sd": min_date, "ed": max_date})
 
-    # 2. 构建元组列表
-    codes = insert_df["stock_code"].tolist()
-    dates = insert_df["trade_date"].tolist()
-    vals = insert_df["_value"].tolist()
-    tuples = [
-        (feature_name, codes[i], dates[i],
-         None if (isinstance(vals[i], float) and math.isnan(vals[i])) else float(vals[i]))
-        for i in range(len(codes))
-    ]
+    # 构建 CSV 缓冲区
+    buf = StringIO()
+    insert_df["feature_name"] = feature_name
+    insert_df[["feature_name", "stock_code", "trade_date", "_value"]].to_csv(
+        buf, header=False, index=False, na_rep="\\N"
+    )
+    buf.seek(0)
 
-    # 3. 单次 execute_values 写入（无 ON CONFLICT，绕过逐行索引查重）
-    raw_conn = db.connection().connection
+    # 独立连接：DELETE + COPY + COMMIT，不污染调用方 session 事务
+    raw_conn = db.get_bind().raw_connection()
     cursor = raw_conn.cursor()
     try:
-        execute_values(cursor, """
-            INSERT INTO feature_values (feature_name, stock_code, trade_date, value)
-            VALUES %s
-        """, tuples, page_size=len(tuples))
+        cursor.execute(
+            "DELETE FROM feature_values WHERE feature_name = %s AND trade_date >= %s AND trade_date <= %s",
+            (feature_name, min_date, max_date)
+        )
+        cursor.copy_expert(
+            "COPY feature_values (feature_name, stock_code, trade_date, value) FROM STDIN WITH CSV",
+            buf
+        )
+        raw_conn.commit()
+    except Exception:
+        raw_conn.rollback()
+        raise
     finally:
         cursor.close()
+        raw_conn.close()
 
-    return len(tuples)
+    return len(insert_df)
 
 
 # ── 公式 lookback 提取 ──
@@ -197,69 +200,124 @@ def compute_feature(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     stock_codes: Optional[List[str]] = None,
-    df: Optional[pd.DataFrame] = None,  # v2.1: 可选复用已有 DataFrame
+    df: Optional[pd.DataFrame] = None,
+    chunk_days: int = 30,
+    progress_cb = None,
 ) -> Dict:
     """计算单个特征值并写入 feature_values 表。
 
+    大范围自动分片：按 chunk_days 天/片拆分，每片独立 fetch→compute→COPY→commit。
+    单片失败不影响已完成片。
+
     Args:
-        db: SQLAlchemy 同步 session
+        db: SQLAlchemy 同步 session（仅用于读取，不参与写入事务）
         feature_name: 特征英文名
         formula: KEPL 公式表达式
         target_entity: stock/etf/index/global
         start_date/end_date: 用户请求的日期范围（None = 全部历史）
         stock_codes: 限定股票代码列表（None = 全部）
-        df: 可选，已有 OHLCV DataFrame（由 compute_all_features 传入复用）
+        df: 可选复用 DataFrame（分片模式不适用）
+        chunk_days: 每片自然日数（默认 30）
+        progress_cb: fn(chunk_num, total_chunks, chunk_start, chunk_end, rows) 进度回调
 
     Returns:
-        {"ok": True/False, "rows": N, "error": "..."}
+        {"ok": True/False, "rows": N, "chunks": M, "error": "..."}
     """
-    try:
-        import re as _re
+    from datetime import datetime, timedelta
+    import re as _re
 
-        # 0. 从公式提取需要的 OHLCV 列（减少 DB 传输量）
+    try:
+        # 0. 从公式提取需要的 OHLCV 列
         _ohlcv_fields = {"close", "open", "high", "low", "volume", "amount"}
         needed_cols = sorted(_ohlcv_fields & set(_re.findall(r'\b(close|open|high|low|volume|amount)\b', formula)))
         if not needed_cols:
-            needed_cols = ["close"]  # 默认至少拉 close
+            needed_cols = ["close"]
 
-        # 计算 lookback 窗口，扩展拉取范围
         lookback = _extract_lookback(formula)
+
+        # ── 分片逻辑 ──
+        if start_date and end_date and chunk_days and chunk_days > 0:
+            sd = datetime.strptime(start_date, "%Y-%m-%d")
+            ed = datetime.strptime(end_date, "%Y-%m-%d")
+            total_days = (ed - sd).days + 1
+
+            if total_days > chunk_days:
+                # 大范围：拆分为多个 chunk
+                chunks = []
+                cs = sd
+                while cs <= ed:
+                    ce = min(cs + timedelta(days=chunk_days - 1), ed)
+                    chunks.append((cs.strftime("%Y-%m-%d"), ce.strftime("%Y-%m-%d")))
+                    cs = ce + timedelta(days=1)
+
+                total_rows = 0
+                for i, (cs, ce) in enumerate(chunks):
+                    # 扩展拉取范围（含 lookback）
+                    fetch_sd = cs
+                    if lookback > 0:
+                        cs_dt = datetime.strptime(cs, "%Y-%m-%d")
+                        fetch_sd = max(
+                            (cs_dt - timedelta(days=max(1, int(lookback * 1.5)))).strftime("%Y-%m-%d"),
+                            "2020-01-01"
+                        )
+
+                    # fetch → compute → filter → write
+                    df_chunk = _fetch_ohlcv(db, target_entity, fetch_sd, ce, stock_codes, columns=needed_cols)
+                    if df_chunk.empty:
+                        if progress_cb:
+                            progress_cb(i + 1, len(chunks), cs, ce, 0)
+                        continue
+
+                    result = _evaluate_kepl_dataframe(df_chunk, formula, db)
+                    if result is None:
+                        return {"ok": False, "error": f"公式 '{formula}' 不支持或执行失败"}
+
+                    df_chunk["_value"] = result
+                    df_chunk = df_chunk[
+                        (df_chunk["trade_date"] >= pd.Timestamp(cs)) &
+                        (df_chunk["trade_date"] <= pd.Timestamp(ce))
+                    ]
+
+                    rows = _batch_insert(db, feature_name, df_chunk)
+                    total_rows += rows
+
+                    if progress_cb:
+                        progress_cb(i + 1, len(chunks), cs, ce, rows)
+
+                db.rollback()
+                return {"ok": True, "rows": total_rows, "chunks": len(chunks)}
+
+        # ── 小范围 / 不分片：单次 fetch → compute → write ──
         fetch_start = start_date
         if lookback > 0 and start_date:
-            # 交易日 ≈ 自然日 × 0.7，往前推 lookback / 0.7 ≈ lookback × 1.5
-            # 但需确保不早于 2020-01-01（数据起始日）
-            from datetime import datetime, timedelta
             sd_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            expanded = sd_dt - timedelta(days=max(1, int(lookback * 1.5)))
-            fetch_start = max(expanded.strftime("%Y-%m-%d"), "2020-01-01")
+            fetch_start = max(
+                (sd_dt - timedelta(days=max(1, int(lookback * 1.5)))).strftime("%Y-%m-%d"),
+                "2020-01-01"
+            )
 
-        # 1. 拉取数据（如果调用方未传入）
         if df is None or df.empty:
             df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, stock_codes, columns=needed_cols)
 
         if df.empty:
             return {"ok": True, "rows": 0, "message": "无数据"}
 
-        # 确保索引唯一
         df = df.reset_index(drop=True)
-
-        # 2. KEPL 公式 → pandas 向量化执行（传入 db 供自定义函数查询）
         result = _evaluate_kepl_dataframe(df, formula, db)
-
         if result is None:
             return {"ok": False, "error": f"公式 '{formula}' 不支持或执行失败"}
 
-        # 3. 附加结果列 → 过滤回用户请求的日期范围 → 批量写入
         df["_value"] = result
-
-        # 仅写入用户请求的日期范围（多余拉取的数据仅用于滚动计算）
         if start_date:
             df = df[df["trade_date"] >= pd.Timestamp(start_date)]
         if end_date:
             df = df[df["trade_date"] <= pd.Timestamp(end_date)]
 
         total_rows = _batch_insert(db, feature_name, df)
-        db.commit()
+        db.rollback()
+
+        if progress_cb:
+            progress_cb(1, 1, start_date or "", end_date or "", total_rows)
 
         return {"ok": True, "rows": total_rows}
     except Exception as e:

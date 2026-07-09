@@ -11,6 +11,7 @@ async_engine = create_async_engine(
     echo=False,
     pool_size=5 if settings.APP_ENV == "prod" else 1,
     max_overflow=10,
+    pool_pre_ping=True,  # DB 重启后自动检测并刷新死连接
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -26,6 +27,7 @@ sync_engine = create_engine(
     pool_size=5,
     max_overflow=10,
     pool_timeout=30,  # 30s 超时，避免永久阻塞
+    pool_pre_ping=True,  # DB 重启后自动检测并刷新死连接
 )
 
 SyncSessionLocal = sessionmaker(

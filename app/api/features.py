@@ -986,11 +986,16 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
 
         _report(5, "拉取行情数据...")
 
-        # 统一批量模式：拉取全量 daily_quote → DataFrame → 批量计算 → 批量写入
-        # ON CONFLICT DO UPDATE 已处理覆盖/跳过逻辑
+        # 分片进度回调：将分片号映射到 20%~70% 的进度区间
+        def _chunk_progress(chunk_num, total_chunks, chunk_start, chunk_end, rows):
+            pct = 20 + int((chunk_num / total_chunks) * 50)  # 20% → 70%
+            msg = f"计算中 ({chunk_num}/{total_chunks} 片: {chunk_start}~{chunk_end}, {rows}行)"
+            _report(min(pct, 70), msg)
+
         _report(20, "计算特征值...")
         r = compute_feature(db, feature_name, formula, target_entity,
-                           start_date=start_date, end_date=end_date)
+                           start_date=start_date, end_date=end_date,
+                           progress_cb=_chunk_progress)
         rows_count = r.get('rows', 0)
         _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {rows_count} rows")
 
@@ -1010,11 +1015,18 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
         _report(100, "完成")
         with _compute_lock:
             _compute_tasks[task_id]["status"] = "completed"
+            _compute_tasks[task_id]["progress_pct"] = 100
+        # 唤醒 WS 广播最后一次（completed 状态也会被推送一次）
+        from app.signal import wake_dag_broadcast
+        wake_dag_broadcast()
     except Exception as e:
         _logger.error(f"[compute] {feature_name} 失败: {e}")
         with _compute_lock:
             _compute_tasks[task_id]["status"] = "failed"
             _compute_tasks[task_id]["error"] = str(e)
+            _compute_tasks[task_id]["progress_pct"] = 0
+        from app.signal import wake_dag_broadcast
+        wake_dag_broadcast()
 
 
 def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool = False):
@@ -1127,8 +1139,29 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
 
 # 暴露补数任务列表给 WS 广播使用
 def get_active_compute_tasks():
+    """返回 running + 刚完成的 completed/failed 任务。
+
+    completed/failed 任务首次广播后标记 _broadcasted，下次不再返回。
+    """
+    import time as _time
+    now = _time.time()
     with _compute_lock:
-        return [{"task_id": k, **v} for k, v in _compute_tasks.items() if v["status"] == "running"]
+        result = []
+        stale = []
+        for k, v in list(_compute_tasks.items()):
+            if v["status"] == "running":
+                result.append({"task_id": k, **v})
+            elif v["status"] in ("completed", "failed") and not v.get("_broadcasted"):
+                v["_broadcasted"] = True
+                result.append({"task_id": k, **v})
+            # 清理 60 秒前完成的旧任务
+            if v["status"] in ("completed", "failed") and v.get("_broadcasted"):
+                started = v.get("started_at", 0)
+                if now - started > 60:
+                    stale.append(k)
+        for k in stale:
+            del _compute_tasks[k]
+        return result
 
 
 @router.post("/check-stats-integrity")
