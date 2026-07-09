@@ -929,27 +929,33 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
 
         stock_labels = [r[0] for r in stocks]
 
-        # 拉取 top_n 只股的 ipo_date + 最后交易日（区分灰格子：未上市 / 已退市）
+        # 拉取 top_n 只股的 ipo_date（区分灰格子）
         ipo_map = {}
-        last_trade_map = {}
         if stock_labels:
             ipo_rows = db.execute(text(
                 "SELECT stock_code, ipo_date FROM stock_master WHERE stock_code = ANY(:codes)"
             ), {"codes": stock_labels}).fetchall()
             ipo_map = {r[0]: str(r[1]) if r[1] else None for r in ipo_rows}
 
-            # 每只股在 daily_quote 的最后交易日（退市检测，只查 top_n 只 → 快）
+        # 构建矩阵：2=红 1=灰 0=绿
+        # 用 daily_quote 实际交易集判定"该股该日是否交易"（只查 top_n 只 × N 天，走 stock_code 索引）
+        matrix = []
+        traded = set()
+        if stock_labels:
             dq_table = "daily_quote"
+            dq_ex_filter = "AND exchange IN ('SSE','SZSE')"
             if entity == 'index':
                 dq_table = "index_daily_quote"
-            lt_rows = db.execute(text(f"""
-                SELECT stock_code, MAX(trade_date)::text FROM {dq_table}
-                WHERE stock_code = ANY(:codes) GROUP BY stock_code
-            """), {"codes": stock_labels}).fetchall()
-            last_trade_map = {r[0]: r[1] for r in lt_rows}
+                dq_ex_filter = ""
+            elif entity == 'etf':
+                dq_ex_filter = "AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"
 
-        # 构建矩阵：2=红(该有但缺) 1=灰(未上市/已退市) 0=绿(有数据，不放入)
-        matrix = []
+            dq_rows = db.execute(text(f"""
+                SELECT stock_code, trade_date::text FROM {dq_table}
+                WHERE stock_code = ANY(:codes) AND trade_date::text = ANY(:dates) {dq_ex_filter}
+            """), {"codes": stock_labels, "dates": days_labels}).fetchall()
+            traded = set((r[0], str(r[1])) for r in dq_rows)
+
         fv_rows = db.execute(text("""
             SELECT stock_code, trade_date::text FROM feature_values
             WHERE feature_name = :fn AND stock_code = ANY(:codes) AND trade_date::text = ANY(:dates)
@@ -958,16 +964,13 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
 
         for si, stock in enumerate(stock_labels):
             ipo = ipo_map.get(stock)
-            last_dq = last_trade_map.get(stock)
             for di, day in enumerate(days_labels):
                 if (stock, day) in has_data:
                     continue  # 绿
-                if ipo and day < ipo:
-                    matrix.append([di, si, 1])  # 灰：未上市
-                elif last_dq and day > last_dq:
-                    matrix.append([di, si, 1])  # 灰：已退市/无交易
+                if (stock, day) not in traded:
+                    matrix.append([di, si, 1])  # 灰：未交易(未上市/停牌/退市)
                 else:
-                    matrix.append([di, si, 2])  # 红：该有但缺
+                    matrix.append([di, si, 2])  # 红：交易了但缺数据
 
         db.close()
         return {"days_labels": days_labels, "stock_labels": stock_labels, "matrix": matrix}
