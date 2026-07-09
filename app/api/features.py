@@ -904,7 +904,7 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
         if not days_labels:
             return {"days_labels": [], "stock_labels": [], "matrix": []}
 
-        # 缺失率最高的 top_n 只股票（简单聚合，避免 CROSS JOIN + LATERAL）
+        # 缺失率最高的 top_n 只股票（排除完全无数据的退市股）
         ent_filter = "AND sm.stock_type='stock' AND sm.exchange IN ('SSE','SZSE')"
         if entity == 'index':
             ent_filter = "AND sm.stock_type='index'"
@@ -922,14 +922,14 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
                 GROUP BY stock_code
             ) fv ON sm.stock_code = fv.stock_code
             WHERE sm.status = 'N' {ent_filter}
-              AND COALESCE(fv.cnt, 0) > 0  -- 排除完全无数据的退市股
+              AND COALESCE(fv.cnt, 0) > 0
             ORDER BY missing DESC
             LIMIT :top
         """), {"fn": fn, "dates": days_labels, "total": total_days, "top": top_n}).fetchall()
 
         stock_labels = [r[0] for r in stocks]
 
-        # 构建矩阵：批量查 feature_values，按 (stock, day) 标记缺失
+        # 构建矩阵：1=缺失 0=有值（不放入 matrix）
         matrix = []
         fv_rows = db.execute(text("""
             SELECT stock_code, trade_date::text FROM feature_values
