@@ -252,12 +252,14 @@ def compute_feature(
 
                 total_rows = 0
                 for i, (cs, ce) in enumerate(chunks):
-                    # 扩展拉取范围（含 lookback）
+                    # 扩展拉取范围（含 lookback × 2.0 自然日 + 保底 10 天）
+                    # 确保分片边界有足够历史数据用于滚动窗口计算
                     fetch_sd = cs
                     if lookback > 0:
                         cs_dt = datetime.strptime(cs, "%Y-%m-%d")
+                        margin = max(int(lookback * 2.0), 10)
                         fetch_sd = max(
-                            (cs_dt - timedelta(days=max(1, int(lookback * 1.5)))).strftime("%Y-%m-%d"),
+                            (cs_dt - timedelta(days=margin)).strftime("%Y-%m-%d"),
                             "2020-01-01"
                         )
 
@@ -291,8 +293,9 @@ def compute_feature(
         fetch_start = start_date
         if lookback > 0 and start_date:
             sd_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            margin = max(int(lookback * 2.0), 10)
             fetch_start = max(
-                (sd_dt - timedelta(days=max(1, int(lookback * 1.5)))).strftime("%Y-%m-%d"),
+                (sd_dt - timedelta(days=margin)).strftime("%Y-%m-%d"),
                 "2020-01-01"
             )
 
