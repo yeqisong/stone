@@ -11,14 +11,16 @@ axios.interceptors.request.use(config => {
   return config
 })
 
-// 响应拦截：401 → 跳转登录页（带 returnUrl）
+// 响应拦截：401 → 清 token + reload → 显示 LoginView
+let _401Reloading = false
 axios.interceptors.response.use(
   r => r,
   error => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !_401Reloading) {
+      _401Reloading = true
       localStorage.removeItem('token')
-      const returnUrl = encodeURIComponent(location.hash || '/')
-      location.hash = '#/login?return=' + returnUrl
+      localStorage.removeItem('username')
+      window.location.reload()
     }
     return Promise.reject(error)
   }
