@@ -291,7 +291,11 @@ const infoCards = computed(() => {
 
 const previewCols = computed(() => {
   const cols = []
-  if (feat.value?.target_entity !== 'global') cols.push({ title:'代码', key:'stock_code', width:70 })
+  if (feat.value?.target_entity !== 'global') {
+    cols.push({ title:'代码', key:'stock_code', width:70 })
+    cols.push({ title:'名称', key:'stock_name', width:80, ellipsis:{tooltip:true} })
+    cols.push({ title:'交易所', key:'exchange', width:55 })
+  }
   cols.push({ title:'日期', key:'trade_date', width:90 })
   cols.push({ title:'值', key:'value', width:120, render(row) {
     if (row.value == null) return h('span', { style:{color:'#9ca3af',cursor:'help'}, title:'该日无数据（停牌/上市前/计算失败）' }, '—')

@@ -664,11 +664,26 @@ def get_feature_data(
             rows = db.execute(text(sql), base_params).fetchall()
 
             items = []
+            # 批量查 stock_name + exchange（只查本页出现的 stock_code）
+            code_set = {r[0] for r in rows if entity != "global" and r[0]}
+            name_map = {}
+            if code_set:
+                sm_rows = db.execute(text(
+                    "SELECT stock_code, stock_name, exchange FROM stock_master WHERE stock_code = ANY(:codes)"
+                ), {"codes": list(code_set)}).fetchall()
+                name_map = {r[0]: (r[1], r[2]) for r in sm_rows}
+
             for r in rows:
                 if entity == "global":
                     items.append({"trade_date": str(r[0]), "value": float(r[1]) if r[1] is not None else None})
                 else:
-                    items.append({"stock_code": r[0], "trade_date": str(r[1]), "value": float(r[2]) if r[2] is not None else None})
+                    sc = r[0]
+                    nm, ex = name_map.get(sc, ("", ""))
+                    items.append({
+                        "stock_code": sc, "stock_name": nm, "exchange": ex,
+                        "trade_date": str(r[1]),
+                        "value": float(r[2]) if r[2] is not None else None
+                    })
 
             db.close()
             msg = None
