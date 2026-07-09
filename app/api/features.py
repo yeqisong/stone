@@ -963,14 +963,14 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
         has_data = set((r[0], str(r[1])) for r in fv_rows)
 
         for si, stock in enumerate(stock_labels):
-            ipo = ipo_map.get(stock)
             for di, day in enumerate(days_labels):
-                if (stock, day) in has_data:
-                    continue  # 绿
-                if (stock, day) not in traded:
-                    matrix.append([di, si, 1])  # 灰：未交易(未上市/停牌/退市)
+                key = (stock, day)
+                if key in has_data:
+                    matrix.append([di, si, 0])  # 绿：有数据
+                elif key not in traded:
+                    matrix.append([di, si, 1])  # 灰：未交易
                 else:
-                    matrix.append([di, si, 2])  # 红：交易了但缺数据
+                    matrix.append([di, si, 2])  # 红：交易但缺
 
         db.close()
         return {"days_labels": days_labels, "stock_labels": stock_labels, "matrix": matrix}
