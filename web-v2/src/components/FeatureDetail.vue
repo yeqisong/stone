@@ -297,6 +297,12 @@ const previewCols = computed(() => {
     cols.push({ title:'交易所', key:'exchange', width:55 })
   }
   cols.push({ title:'日期', key:'trade_date', width:90 })
+  if (feat.value?.target_entity !== 'global') {
+    cols.push({ title:'收盘价', key:'close', width:80, render(row) {
+      if (row.close == null) return h('span', { style:{color:'#9ca3af'} }, '—')
+      return row.close.toFixed(2)
+    }})
+  }
   cols.push({ title:'值', key:'value', width:120, render(row) {
     if (row.value == null) return h('span', { style:{color:'#9ca3af',cursor:'help'}, title:'该日无数据（停牌/上市前/计算失败）' }, '—')
     return row.value

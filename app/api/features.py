@@ -664,25 +664,36 @@ def get_feature_data(
             rows = db.execute(text(sql), base_params).fetchall()
 
             items = []
-            # 批量查 stock_name + exchange（只查本页出现的 stock_code）
+            # 批量查 stock_name + exchange + close_price（只查本页数据）
             code_set = {r[0] for r in rows if entity != "global" and r[0]}
             name_map = {}
+            close_map = {}
             if code_set:
                 sm_rows = db.execute(text(
                     "SELECT stock_code, stock_name, exchange FROM stock_master WHERE stock_code = ANY(:codes)"
                 ), {"codes": list(code_set)}).fetchall()
                 name_map = {r[0]: (r[1], r[2]) for r in sm_rows}
+                # 批量查收盘价
+                dq_table = "daily_quote" if entity != "index" else "index_daily_quote"
+                code_col = "stock_code" if entity != "index" else "index_code"
+                dq_rows = db.execute(text(f"""
+                    SELECT {code_col}, trade_date::text, close FROM {dq_table}
+                    WHERE {code_col} = ANY(:codes) AND trade_date::text = ANY(:dates)
+                """), {"codes": list(code_set), "dates": [str(r[1]) for r in rows if entity != "global"]}).fetchall()
+                close_map = {(r[0], r[1]): float(r[2]) if r[2] else None for r in dq_rows}
 
             for r in rows:
                 if entity == "global":
                     items.append({"trade_date": str(r[0]), "value": float(r[1]) if r[1] is not None else None})
                 else:
                     sc = r[0]
+                    td = str(r[1])
                     nm, ex = name_map.get(sc, ("", ""))
                     items.append({
                         "stock_code": sc, "stock_name": nm, "exchange": ex,
-                        "trade_date": str(r[1]),
-                        "value": float(r[2]) if r[2] is not None else None
+                        "trade_date": td,
+                        "value": float(r[2]) if r[2] is not None else None,
+                        "close": close_map.get((sc, td)),
                     })
 
             db.close()
