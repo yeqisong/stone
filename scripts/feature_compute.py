@@ -58,11 +58,17 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
 
     where = " AND ".join(conditions) if conditions else "1=1"
 
+    # JOIN stock_master 按 stock_type 过滤（避免指数/ETF 混入 stock 特征）
+    join_clause = ""
+    if target_entity in ("stock", "etf"):
+        st_filter = "stock" if target_entity == "stock" else "etf"
+        join_clause = f"JOIN stock_master sm ON {table}.stock_code = sm.stock_code AND sm.stock_type = '{st_filter}'"
+
     col_str = ", ".join(sel_cols)
     if target_entity == "index":
-        sql = f"SELECT {code_col} as stock_code, trade_date, {col_str} FROM {table} WHERE {where} ORDER BY {code_col}, trade_date"
+        sql = f"SELECT {code_col} as stock_code, trade_date, {col_str} FROM {table} {join_clause} WHERE {where} ORDER BY {code_col}, trade_date"
     else:
-        sql = f"SELECT stock_code, trade_date, {col_str} FROM {table} WHERE {where} ORDER BY stock_code, trade_date"
+        sql = f"SELECT {table}.stock_code, {table}.trade_date, {col_str} FROM {table} {join_clause} WHERE {where} ORDER BY {table}.stock_code, {table}.trade_date"
 
     rows = db.execute(text(sql), params).fetchall()
     if not rows:
