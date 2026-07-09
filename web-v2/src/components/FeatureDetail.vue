@@ -97,7 +97,10 @@
             </div>
           </div>
           <div style="flex:2;min-width:350px">
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">缺失热力图（最近120日 × 前50股）</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <span style="font-size:11px;font-weight:600;color:var(--c-text-dim)">缺失热力图（最近120日 × 前{{ heatmapTopN }}股）</span>
+              <n-select v-model:value="heatmapMode" :options="heatmapModeOptions" size="tiny" style="width:110px" @update:value="loadHeatmap" />
+            </div>
             <div ref="heatmapChart" style="width:100%;height:360px"></div>
           </div>
         </div>
@@ -190,6 +193,13 @@ const activeTab = ref('info')
 const pieChart = ref(null)
 const heatmapChart = ref(null)
 let pieInstance = null, heatmapInstance = null
+
+const heatmapMode = ref('top_missing')
+const heatmapTopN = ref(50)
+const heatmapModeOptions = [
+  { label: '缺失最多', value: 'top_missing' },
+  { label: '随机抽样', value: 'random' },
+]
 
 // 监听 Tab 切换
 watch(activeTab, (tab) => {
@@ -359,15 +369,18 @@ function renderDiagnosis() {
     }
   }
 
-  // 热力图：缺失分布（最近120日 × 缺失率最高的前50只股票）
+  loadHeatmap()
+}
+
+function loadHeatmap() {
   const hmDom = heatmapChart.value
-  if (hmDom && feat.value?.total_effective_cells > 0) {
-    const old = echarts.getInstanceByDom(hmDom)
-    if (old) old.dispose()
-    heatmapInstance = echarts.init(hmDom)
-    // 从后端获取热力图数据
-    axios.get(API + `/api/features/${props.featureId}/missing-heatmap`).then(r => {
-      const { days_labels, stock_labels, matrix } = r.data
+  if (!hmDom || !feat.value?.total_effective_cells) return
+  const old = echarts.getInstanceByDom(hmDom)
+  if (old) old.dispose()
+  heatmapInstance = echarts.init(hmDom)
+  const params = new URLSearchParams({ days: 120, top_n: heatmapTopN.value, mode: heatmapMode.value })
+  axios.get(API + `/api/features/${props.featureId}/missing-heatmap?${params}`).then(r => {
+    const { days_labels, stock_labels, matrix } = r.data
       if (matrix && matrix.length) {
         heatmapInstance.setOption({
           tooltip: {

@@ -877,11 +877,13 @@ def compute_range(feature_id: int, body: ComputeRangeBody, user: str = Depends(g
 
 
 @router.get("/{feature_id}/missing-heatmap")
-def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_n: int = Query(50, ge=10, le=100)):
-    """返回缺失热力图数据：最近 N 个交易日 × 缺失率最高的 top_n 只股票。
+def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365),
+                    top_n: int = Query(50, ge=10, le=100),
+                    mode: str = Query("top_missing", pattern="^(top_missing|random)$")):
+    """返回缺失热力图数据：最近 N 个交易日 × top_n 只股票。
 
-    Returns:
-        { days_labels: [str], stock_labels: [str], matrix: [[day_idx, stock_idx, 0|1]] }
+    mode=top_missing: 选缺失最多的 top_n 只（排查问题）
+    mode=random: 随机选 top_n 只（整体覆盖率快照）
     """
     from sqlalchemy import text
     db = get_sync_db()
@@ -912,22 +914,32 @@ def missing_heatmap(feature_id: int, days: int = Query(120, ge=30, le=365), top_
             ent_filter = "AND sm.stock_type='etf'"
 
         total_days = len(days_labels)
-        stocks = db.execute(text(f"""
-            SELECT sm.stock_code,
-                   :total - COALESCE(fv.cnt, 0) as missing
-            FROM stock_master sm
-            LEFT JOIN (
-                SELECT stock_code, COUNT(*) as cnt FROM feature_values
-                WHERE feature_name = :fn AND trade_date::text = ANY(:dates)
-                GROUP BY stock_code
-            ) fv ON sm.stock_code = fv.stock_code
-            WHERE sm.status = 'N' {ent_filter}
-              AND COALESCE(fv.cnt, 0) > 0
-            ORDER BY missing DESC
-            LIMIT :top
-        """), {"fn": fn, "dates": days_labels, "total": total_days, "top": top_n}).fetchall()
-
-        stock_labels = [r[0] for r in stocks]
+        if mode == 'random':
+            # 随机抽样：从所有活跃股中随机选 top_n 只
+            stocks = db.execute(text(f"""
+                SELECT sm.stock_code FROM stock_master sm
+                WHERE sm.status = 'N' {ent_filter}
+                ORDER BY RANDOM()
+                LIMIT :top
+            """), {"top": top_n}).fetchall()
+            stock_labels = [r[0] for r in stocks]
+        else:
+            # top_missing：选缺失最多的 top_n 只（需有至少 1 个数据点）
+            stocks = db.execute(text(f"""
+                SELECT sm.stock_code,
+                       :total - COALESCE(fv.cnt, 0) as missing
+                FROM stock_master sm
+                LEFT JOIN (
+                    SELECT stock_code, COUNT(*) as cnt FROM feature_values
+                    WHERE feature_name = :fn AND trade_date::text = ANY(:dates)
+                    GROUP BY stock_code
+                ) fv ON sm.stock_code = fv.stock_code
+                WHERE sm.status = 'N' {ent_filter}
+                  AND COALESCE(fv.cnt, 0) > 0
+                ORDER BY missing DESC
+                LIMIT :top
+            """), {"fn": fn, "dates": days_labels, "total": total_days, "top": top_n}).fetchall()
+            stock_labels = [r[0] for r in stocks]
 
         # 拉取 top_n 只股的 ipo_date（区分灰格子）
         ipo_map = {}
