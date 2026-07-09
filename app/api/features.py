@@ -669,9 +669,16 @@ def get_feature_data(
             name_map = {}
             close_map = {}
             if code_set:
-                sm_rows = db.execute(text(
-                    "SELECT stock_code, stock_name, exchange FROM stock_master WHERE stock_code = ANY(:codes)"
-                ), {"codes": list(code_set)}).fetchall()
+                # 按特征实体类型过滤 stock_type，避免 code 重复(如000025同时是stock和index)
+                st_filter = entity if entity in ("stock", "etf") else None
+                if st_filter:
+                    sm_rows = db.execute(text(
+                        "SELECT stock_code, stock_name, exchange FROM stock_master WHERE stock_code = ANY(:codes) AND stock_type = :st"
+                    ), {"codes": list(code_set), "st": st_filter}).fetchall()
+                else:
+                    sm_rows = db.execute(text(
+                        "SELECT stock_code, stock_name, exchange FROM stock_master WHERE stock_code = ANY(:codes)"
+                    ), {"codes": list(code_set)}).fetchall()
                 name_map = {r[0]: (r[1], r[2]) for r in sm_rows}
                 # 批量查收盘价
                 dq_table = "daily_quote" if entity != "index" else "index_daily_quote"
