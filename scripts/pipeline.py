@@ -388,7 +388,7 @@ def dag_task_kline(trade_date=None, **kw):
             from sqlalchemy import text as _text
             db = get_sync_db()
             codes = [r[0] for r in db.execute(_text(
-                "SELECT stock_code FROM stock_master WHERE status='N'"
+                "SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'"
             )).fetchall()]
             rows = source.fetch_stock_kline(codes, td, td)
             saved = batch_upsert_kline(db, rows)
