@@ -1109,29 +1109,12 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
             "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
         ), {"fn": fn}).scalar() or 0
 
-        # 3. 正常缺失 = 停牌格 + lookback 窗口
-        suspended_cells = 0
-        try:
-            suspended_cells = db.execute(text("""
-                SELECT COALESCE(COUNT(*), 0)
-                FROM trade_calendar tc
-                WHERE tc.cal_date >= '2000-01-01'
-                AND tc.cal_date <= CURRENT_DATE
-                AND tc.is_suspended = true
-            """)).scalar() or 0
-            if entity != 'global' and stock_count > 0:
-                suspended_cells = suspended_cells * stock_count
-        except Exception:
-            db.rollback()
-            suspended_cells = 0
-
-        # lookback 窗口缺失 = 每只股票前 lookback 天无数据
+        # 3. 窗口期天然缺失 = 每只股票前 lookback 天无法计算
+        #    停牌格子无法精确统计（需 per-stock daily_quote），归入"未补"
         lookback_missing = max_lookback * stock_count if entity != 'global' else max_lookback
 
-        normal_missing = suspended_cells + lookback_missing
-
-        # 4. 异常缺失
-        abnormal = max(0, total_cells - normal_missing - actual)
+        # 4. 总缺失（窗口期 + 未补历史数据）
+        total_missing = max(0, total_cells - actual)
 
         completeness = round(actual / total_cells, 4) if total_cells > 0 else 0
 
@@ -1139,14 +1122,14 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
             UPDATE features SET
                 total_effective_cells = :tot,
                 data_completeness = :comp,
-                missing_cells_total = :norm,
-                abnormal_missing_cells = :abn,
+                missing_cells_total = :win,       -- 窗口期天然缺失
+                abnormal_missing_cells = :totmiss, -- 总缺失（窗口期 + 未补）
                 latest_computed_date = CURRENT_DATE,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :id
         """), {
             "tot": total_cells, "comp": completeness,
-            "norm": normal_missing, "abn": abnormal,
+            "win": lookback_missing, "totmiss": total_missing,
             "id": feature_id,
         })
 

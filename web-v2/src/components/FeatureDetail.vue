@@ -47,8 +47,8 @@
             <div style="font-size:20px;font-weight:700;color:#10b981">{{ computedActual.toLocaleString() }}</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">❌ 异常缺失</div>
-            <div :style="{fontSize:'20px',fontWeight:700,color:feat.abnormal_missing_cells>0?'#ef4444':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 总缺失格</div>
+            <div :style="{fontSize:'20px',fontWeight:700,color:feat.abnormal_missing_cells>0?'#f59e0b':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
           </div>
         </div>
 
@@ -92,8 +92,8 @@
           <div style="flex:1;min-width:300px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">缺失归因饼图</div>
             <div ref="pieChart" style="width:100%;height:260px"></div>
-            <div v-if="abnormalPct>50" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:8px;font-size:11px;color:#ef4444;margin-top:8px">
-              🔴 {{ abnormalPct }}% 的缺失为异常缺失（非停牌/lookback），请扩大补数日期范围或检查计算逻辑。
+            <div v-if="uncomputedPct>50" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:8px;font-size:11px;color:#f59e0b;margin-top:8px">
+              🟠 {{ uncomputedPct }}% 的总格子尚未补数，请扩大补数日期范围覆盖更多历史数据。
             </div>
           </div>
           <div style="flex:2;min-width:350px">
@@ -175,14 +175,13 @@ const loading = ref(true)
 const feat = ref(null)
 const staleDays = ref(0)
 const completenessPct = ref(0)
-const abnormalPct = ref(0)
+const uncomputedPct = ref(0)
 
-// 已计算 = 总格子 - 正常缺失 - 异常缺失 (或直接用实际行数估算)
+// 已计算 = 总格子 - 总缺失（abnormal_missing_cells 现在存的是总缺失）
 const computedActual = computed(() => {
   const t = feat.value?.total_effective_cells || 0
-  const n = feat.value?.missing_cells_total || 0
-  const a = feat.value?.abnormal_missing_cells || 0
-  return Math.max(0, t - n - a)
+  const a = feat.value?.abnormal_missing_cells || 0   // 总缺失 = 窗口期 + 未补
+  return Math.max(0, t - a)
 })
 
 const activeTab = ref('info')
@@ -328,31 +327,34 @@ function renderDiagnosis() {
     return
   }
 
-  // 饼图：正常缺失 vs 异常缺失
+  // 饼图：已计算 / 窗口期(天然缺) / 未补(历史缺口)
   const pieDom = pieChart.value
   if (pieDom) {
     const old = echarts.getInstanceByDom(pieDom)
     if (old) old.dispose()
     pieInstance = echarts.init(pieDom)
-    const normalMissing = feat.value?.missing_cells_total || 0   // 停牌+lookback
-    const abnormalMissing = feat.value?.abnormal_missing_cells || 0
-    const totalMissing = normalMissing + abnormalMissing
-    abnormalPct.value = totalMissing > 0 ? Math.round(abnormalMissing / totalMissing * 100) : 0
-    if (totalMissing > 0) {
+    const totalCells = feat.value?.total_effective_cells || 0
+    const windowMissing = feat.value?.missing_cells_total || 0     // 窗口期天然缺失
+    const totalMissing = feat.value?.abnormal_missing_cells || 0   // 总缺失（窗口期+未补）
+    const uncomputed = Math.max(0, totalMissing - windowMissing)   // 未补历史数据
+    const computed = Math.max(0, totalCells - totalMissing)        // 已计算
+    uncomputedPct.value = totalCells > 0 ? Math.round(uncomputed / totalCells * 100) : 0
+    if (totalCells > 0) {
       pieInstance.setOption({
-        tooltip: { trigger:'item' },
+        tooltip: { trigger:'item', formatter(p){ return `${p.name}: ${p.value.toLocaleString()} (${p.percent}%)` } },
         series: [{
           type:'pie', radius:['40%','70%'],
           data: [
-            { value:normalMissing, name:'正常缺失(停牌/lookback)', itemStyle:{color:'#9ca3af'} },
-            { value:abnormalMissing, name:'异常缺失(需排查)', itemStyle:{color:'#ef4444'} },
+            { value:computed,    name:'已计算',         itemStyle:{color:'#10b981'} },
+            { value:uncomputed,  name:'未补(历史缺口)',  itemStyle:{color:'#f59e0b'} },
+            { value:windowMissing, name:'窗口期(天然缺失)', itemStyle:{color:'#9ca3af'} },
           ],
           label: { formatter:'{b}\n{d}%' },
         }],
       })
     } else {
       pieInstance.setOption({
-        title: { text:'无缺失数据', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
+        title: { text:'暂无统计数据', left:'center', top:'center', textStyle:{fontSize:12,color:'#9ca3af'} },
       })
     }
   }
