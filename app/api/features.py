@@ -1020,34 +1020,30 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
 def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool = False):
     """计算完成后更新特征的数据统计。
 
-    总格子     = Σ 每个股票(上市日→min(退市日,今天)) 之间的交易日数（已剔除未上市/已退市）
+    总格子     = 从 entity_stats 表读取（DAG 每日增量更新，永不 JOIN）
     正常缺失   = 停牌天数 + 活跃股票数 × lookback（天然无解的窗口期）
     异常缺失   = 总格子 - 正常缺失 - 已计算（需要排查的）
     完整度     = 已计算 / 总格子
 
     Args:
-        force_recompute: True=强制重算总格子（recompute-stats），False=复用缓存值（增量补数）
+        force_recompute: 保留兼容性，当前不再需要 JOIN 重算（entity_stats 已预计算）
     """
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
     try:
-        # 确保列存在（兜底迁移；独立事务）
-        try:
-            db.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS abnormal_missing_cells BIGINT DEFAULT 0"))
-            db.commit()
-        except Exception:
-            db.rollback()
+        # 安全网：任何查询最多等 5s 锁，避免无限阻塞
+        db.execute(text("SET LOCAL lock_timeout = '5s'"))
 
         feat = db.execute(text(
-            "SELECT f.feature_name, f.target_entity, f.depends_on, f.total_effective_cells "
+            "SELECT f.feature_name, f.target_entity, f.depends_on "
             "FROM features f WHERE f.id = :id"
         ), {"id": feature_id}).fetchone()
         if not feat:
             return
-        fn, entity, depends_on, cached_total = feat[0], feat[1], feat[2] or [], feat[3] or 0
+        fn, entity, depends_on = feat[0], feat[1], feat[2] or []
 
-        # lookback：取依赖函数的最大 lookback（features 表没有 lookback，从 functions 取）
+        # lookback：取依赖函数的最大 lookback
         if isinstance(depends_on, str):
             depends_on = json.loads(depends_on)
         max_lookback = 0
@@ -1057,45 +1053,16 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
             ), {"names": depends_on}).scalar() or 0
             max_lookback = max(max_lookback, lb_rows)
 
-        # 1. 理论总格子：首次计算或 force_recompute 时全量统计（~24s JOIN）
-        #    后续补数复用缓存值，跳过 2200 万行 JOIN
-        if cached_total > 0 and not force_recompute:
-            total_cells = cached_total
-            # 快速取 stock_count（用于 lookback 计算）
-            if entity == 'global':
-                stock_count = 1
-            else:
-                ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
-                if entity == 'index':
-                    ent_filter = "AND sm.stock_type='index'"
-                elif entity == 'etf':
-                    ent_filter = "AND sm.stock_type='etf'"
-                stock_count = db.execute(text(f"""
-                    SELECT COUNT(*) FROM stock_master sm WHERE sm.status = 'N' {ent_filter}
-                """)).scalar() or 1
-        elif entity == 'global':
-            total_cells = db.execute(text(
-                "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= CURRENT_DATE AND is_trade_day = true"
-            )).scalar() or 0
-            stock_count = 1
+        # 1. 理论总格子：从 entity_stats 读（DAG 每日增量更新）
+        es = db.execute(text(
+            "SELECT total_cells, active_count FROM entity_stats WHERE entity_type = :et"
+        ), {"et": entity}).fetchone()
+        if es:
+            total_cells, stock_count = es[0], max(es[1], 1)
         else:
-            ent_filter = "AND sm.stock_type='stock' AND sm.status='N' AND sm.exchange IN ('SSE','SZSE')"
-            if entity == 'index':
-                ent_filter = "AND sm.stock_type='index'"
-            elif entity == 'etf':
-                ent_filter = "AND sm.stock_type='etf'"
-
-            total_cells = db.execute(text(f"""
-                SELECT COUNT(*)
-                FROM stock_master sm
-                JOIN trade_calendar tc ON tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01') AND CURRENT_DATE
-                WHERE sm.status = 'N' {ent_filter}
-                  AND tc.is_trade_day = true
-            """)).scalar() or 0
-
-            stock_count = db.execute(text(f"""
-                SELECT COUNT(*) FROM stock_master sm WHERE sm.status = 'N' {ent_filter}
-            """)).scalar() or 1
+            # entity_stats 未初始化时的回退（不应发生）
+            total_cells = 1
+            stock_count = 1
 
         # 2. 实际已计算
         actual = db.execute(text(

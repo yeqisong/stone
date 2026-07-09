@@ -1765,6 +1765,155 @@ def dag_task_completeness(trade_date=None, **kw):
         raise
 
 
+def dag_task_entity_stats(trade_date=None, **kw):
+    """每日增量更新 entity_stats 表 — 各实体类型的 total_cells。
+
+    首次运行：JOIN 计算基线（~25s per entity type）。
+    后续运行：增量更新 — 新增交易日 × active_count + 新股交易天数。
+    """
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    from datetime import date as _dd, timedelta
+    td = trade_date or str(_dd.today())
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('entity_stats')
+    write_node_log(log_id=log_id, status='running', detail='更新实体统计')
+    try:
+        db = get_sync_db()
+
+        # 检查是否是交易日
+        is_td = db.execute(text(
+            "SELECT is_trade_day FROM trade_calendar WHERE cal_date=:d AND exchange='SSE'"
+        ), {"d": td}).scalar()
+        if not is_td:
+            db.close()
+            write_node_log(log_id=log_id, status='success', rows=0, detail='非交易日，跳过')
+            return 0
+
+        entity_configs = [
+            ("stock",  "AND sm.stock_type='stock' AND sm.exchange IN ('SSE','SZSE')"),
+            ("index",  "AND sm.stock_type='index'"),
+            ("etf",    "AND sm.stock_type='etf'"),
+            ("global", ""),
+        ]
+
+        updated = 0
+        for etype, ent_filter in entity_configs:
+            # 读取当前状态
+            stat = db.execute(text(
+                "SELECT total_cells, active_count, base_date FROM entity_stats WHERE entity_type=:et"
+            ), {"et": etype}).fetchone()
+            if not stat:
+                continue
+            total_cells, active_count, base_date = stat[0], stat[1], stat[2]
+
+            if etype == "global":
+                # global total_cells = 自 2000-01-01 以来的交易日总数
+                new_total = db.execute(text(
+                    "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= :d AND is_trade_day = true"
+                ), {"d": td}).scalar() or 0
+                new_active = 1
+            else:
+                # 活跃实体数
+                new_active = db.execute(text(f"""
+                    SELECT COUNT(*) FROM stock_master sm
+                    WHERE sm.status = 'N' AND sm.ipo_date <= :d {ent_filter}
+                """), {"d": td}).scalar() or 0
+
+                if total_cells == 0:
+                    # 首次运行：JOIN 计算基线
+                    new_total = db.execute(text(f"""
+                        SELECT COUNT(*)
+                        FROM stock_master sm
+                        JOIN trade_calendar tc ON tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01') AND :d
+                        WHERE sm.status = 'N' {ent_filter}
+                          AND tc.is_trade_day = true
+                    """), {"d": td}).scalar() or 0
+                else:
+                    # 增量：新增的交易日 × active_count（近似，忽略个股粒度差异）
+                    new_days = db.execute(text("""
+                        SELECT COUNT(*) FROM trade_calendar
+                        WHERE cal_date > :bd AND cal_date <= :d AND is_trade_day = true
+                    """), {"bd": base_date, "d": td}).scalar() or 0
+                    new_total = total_cells + new_days * active_count
+
+                    # 处理新股上市：base_date 之后上市的新股
+                    new_listings = db.execute(text(f"""
+                        SELECT sm.stock_code, sm.ipo_date FROM stock_master sm
+                        WHERE sm.status = 'N' {ent_filter}
+                          AND sm.ipo_date > :bd AND sm.ipo_date <= :d
+                    """), {"bd": base_date, "d": td}).fetchall()
+                    for nl in new_listings:
+                        code, ipo = nl[0], nl[1]
+                        td_cnt = db.execute(text("""
+                            SELECT COUNT(*) FROM trade_calendar
+                            WHERE cal_date BETWEEN :ipo AND :d AND is_trade_day = true
+                        """), {"ipo": ipo, "d": td}).scalar() or 0
+                        new_total += td_cnt
+
+            # 更新
+            db.execute(text("""
+                UPDATE entity_stats SET total_cells=:tc, active_count=:ac,
+                    base_date=:bd, updated_at=CURRENT_TIMESTAMP
+                WHERE entity_type=:et
+            """), {"tc": new_total, "ac": new_active, "bd": td, "et": etype})
+            updated += 1
+
+        db.commit()
+        db.close()
+        write_node_log(log_id=log_id, status='success', rows=updated,
+                       detail=f'更新 {updated} 种实体类型')
+        return updated
+    except Exception as e:
+        try: db.rollback(); db.close()
+        except: pass
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
+
+def _init_entity_stats(db):
+    """启动时初始化 entity_stats 基线（不走 DAG 日志，直接 JOIN 计算）。
+
+    仅当 entity_stats 表为空（total_cells=0）时调用，计算各实体类型的总格子数。
+    """
+    from sqlalchemy import text
+    from datetime import date as _dd
+    td = str(_dd.today())
+
+    entity_configs = [
+        ("stock",  "AND sm.stock_type='stock' AND sm.exchange IN ('SSE','SZSE')"),
+        ("index",  "AND sm.stock_type='index'"),
+        ("etf",    "AND sm.stock_type='etf'"),
+        ("global", ""),
+    ]
+
+    for etype, ent_filter in entity_configs:
+        if etype == "global":
+            total = db.execute(text(
+                "SELECT COUNT(*) FROM trade_calendar WHERE cal_date >= '2000-01-01' AND cal_date <= :d AND is_trade_day = true"
+            ), {"d": td}).scalar() or 0
+            active = 1
+        else:
+            total = db.execute(text(f"""
+                SELECT COUNT(*)
+                FROM stock_master sm
+                JOIN trade_calendar tc ON tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01') AND :d
+                WHERE sm.status = 'N' {ent_filter} AND tc.is_trade_day = true
+            """), {"d": td}).scalar() or 0
+            active = db.execute(text(f"""
+                SELECT COUNT(*) FROM stock_master sm
+                WHERE sm.status = 'N' AND sm.ipo_date <= :d {ent_filter}
+            """), {"d": td}).scalar() or 0
+
+        db.execute(text("""
+            INSERT INTO entity_stats (entity_type, total_cells, active_count, base_date, updated_at)
+            VALUES (:et, :tc, :ac, :bd, CURRENT_TIMESTAMP)
+            ON CONFLICT (entity_type) DO UPDATE SET
+                total_cells=EXCLUDED.total_cells, active_count=EXCLUDED.active_count,
+                base_date=EXCLUDED.base_date, updated_at=CURRENT_TIMESTAMP
+        """), {"et": etype, "tc": total, "ac": active, "bd": td})
+
+
 dag = DagExecutor()
 
 def _node_enter(name, status, **ctx):
@@ -1861,6 +2010,7 @@ NODE_FN_MAP = {
     'model_health':       dag_task_model_health,
     'feature_compute':    dag_task_feature_compute,
     'feature_backfill':  dag_task_feature_backfill,
+    'entity_stats':      dag_task_entity_stats,
 }
 
 # 从 dag_config 表动态加载拓扑（唯一来源），绑定 fn_map 中的函数

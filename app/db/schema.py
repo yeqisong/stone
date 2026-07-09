@@ -685,6 +685,16 @@ CREATE INDEX IF NOT EXISTS idx_sm_name_time ON system_metrics (metric_name, chec
 CREATE INDEX IF NOT EXISTS idx_sm_status ON system_metrics (status, checked_at DESC);
 """
 
+CREATE_ENTITY_STATS = """
+CREATE TABLE IF NOT EXISTS entity_stats (
+    entity_type  VARCHAR(10) NOT NULL PRIMARY KEY,  -- stock/index/etf/global
+    total_cells  BIGINT NOT NULL DEFAULT 0,
+    active_count INT NOT NULL DEFAULT 0,
+    base_date    DATE NOT NULL DEFAULT '2000-01-01',
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # ── 默认数据 ──
 
 DEFAULT_STRATEGY_CONFIG = """
@@ -743,6 +753,7 @@ ALL_TABLES = [
     ("feature_values", CREATE_FEATURE_VALUES),
     ("dag_flows", CREATE_DAG_FLOWS),
     ("dag_flow_versions", CREATE_DAG_FLOW_VERSIONS),
+    ("entity_stats", CREATE_ENTITY_STATS),
 ]
 
 
@@ -835,6 +846,26 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS {col} INTEGER DEFAULT 0"))
         except Exception:
             sync_session.rollback()
+
+    # 迁移：entity_stats 表 + dag_config 节点（v2.8 entity_stats 增量）
+    try:
+        sync_session.execute(text("""
+            INSERT INTO entity_stats (entity_type, total_cells, active_count, base_date)
+            VALUES
+                ('stock',  0, 0, '2000-01-01'),
+                ('index',  0, 0, '2000-01-01'),
+                ('etf',    0, 0, '2000-01-01'),
+                ('global', 0, 0, '2000-01-01')
+            ON CONFLICT (entity_type) DO NOTHING
+        """))
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('entity_stats', 'kline', '实体统计', 55)
+            ON CONFLICT (node_name) DO NOTHING
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
 
     # 迁移：function_versions 表（v2.0 重构）
     try:

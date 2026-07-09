@@ -51,6 +51,21 @@ async def lifespan(app: FastAPI):
         if not dag._nodes:
             dag.load_from_db(db, NODE_FN_MAP)
             logger.info(f"DAG reloaded: {len(dag._nodes)} nodes")
+        # 初始化 entity_stats（首次启动时 JOIN 计算基线，后续 DAG 每日增量更新）
+        try:
+            es_rows = db.execute(text(
+                "SELECT COUNT(*) FROM entity_stats WHERE total_cells > 0"
+            )).scalar() or 0
+            if es_rows == 0:
+                logger.info("[startup] entity_stats 为空，计算基线（~40s）...")
+                from scripts.pipeline import _init_entity_stats
+                _init_entity_stats(db)
+                db.commit()
+                logger.info("[startup] entity_stats 基线计算完成")
+        except Exception as e:
+            logger.warning(f"[startup] entity_stats 初始化失败（非致命）: {e}")
+            db.rollback()
+
         # 恢复异常终止的模型训练任务
         try:
             r = db.execute(text("UPDATE model_versions SET status='DRAFT' WHERE status='TRAINING'"))
