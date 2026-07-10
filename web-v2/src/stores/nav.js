@@ -6,6 +6,7 @@ export const useNavStore = defineStore('nav', () => {
   const tab = ref('p')
   const dcode = ref('')
   const fid = ref(null)   // feature detail id
+  const flowId = ref(null) // DAG flow editor id (null=list, 'new'=新建, number=编辑)
   const prevTab = ref('')
   const pendingEditFeatureId = ref(null)  // 从详情页点编辑时传回列表
 
@@ -20,6 +21,12 @@ export const useNavStore = defineStore('nav', () => {
       const id = parseInt(hash.split('/')[2])
       if (id) { fid.value = id; tab.value = 'v'; return }
     }
+    if (hash.startsWith('/dag-flows/')) {
+      const id = hash.split('/')[2]
+      if (id === 'new') { flowId.value = 'new'; tab.value = 'g'; return }
+      const num = parseInt(id)
+      if (num > 0) { flowId.value = num; tab.value = 'g'; return }
+    }
     if (hash.startsWith('/market/')) {
       tab.value = 'm'
       const parts = hash.split('/')
@@ -33,16 +40,31 @@ export const useNavStore = defineStore('nav', () => {
     const path = hash.includes('?') ? hash.split('?')[0] : hash
     const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o','/functions':'f','/features':'e','/dag-flows':'g'}
     tab.value = map[path] || 'p'
+    if (path === '/dag-flows') flowId.value = null  // 普通列表页清空编辑id
   }
 
   function syncHash() {
     const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',g:'/dag-flows',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
-    const target = map[tab.value] || '/'
+    let target = map[tab.value] || '/'
+    if (tab.value === 'g' && flowId.value !== null) {
+      target = '/dag-flows/' + flowId.value
+    }
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
   }
 
   function switchTab(t) {
     tab.value = t
+  }
+
+  function showFlowEditor(id) {
+    prevTab.value = tab.value
+    flowId.value = id
+    tab.value = 'g'
+  }
+
+  function backFromFlowEditor() {
+    flowId.value = null
+    tab.value = prevTab.value || 'g'
   }
 
   function showDetail(code) {
@@ -65,14 +87,16 @@ export const useNavStore = defineStore('nav', () => {
     tab.value = prevTab.value || 'e'
   }
 
-  // tab 变化时同步 URL
-  watch(tab, syncHash)
+  // tab 变化时同步 URL + 离开 g 页清空 flowId
+  watch(tab, (t) => { if (t !== 'g') flowId.value = null; syncHash() })
   watch(dcode, () => { if (tab.value === 'd') syncHash() })
   watch(fid, () => { if (tab.value === 'v') syncHash() })
+
+  watch(flowId, () => { if (tab.value === 'g') syncHash() })
 
   // 页面加载时解析 URL
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, prevTab, pendingEditFeatureId, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, parseHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, parseHash }
 })

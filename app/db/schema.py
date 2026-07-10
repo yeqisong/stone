@@ -270,103 +270,6 @@ CREATE INDEX IF NOT EXISTS idx_tm_date_metric ON stock_treemap_cache (trade_date
 CREATE INDEX IF NOT EXISTS idx_tc_date ON stock_treemap_cache (trade_date, parent);
 """
 
-# ── 模型训练：共享指标池（6张窄表，按指标类型分表） ──
-
-CREATE_INDICATORS_BOLL = """
--- ↓ 以下 6 张 indicators 表 + indicator_calc_log 已停用（v2.6 KEPL feature_compute 替代），保留 DDL 仅因模型训练代码仍 JOIN 它们
-CREATE TABLE IF NOT EXISTS stock_indicators_boll (
-    stock_code VARCHAR(10) NOT NULL,
-    trade_date DATE NOT NULL,
-    upper      DECIMAL(12,4),
-    mid        DECIMAL(12,4),
-    lower      DECIMAL(12,4),
-    pct_b      DECIMAL(8,4),
-    width      DECIMAL(8,4),
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_boll_date ON stock_indicators_boll (trade_date);
-"""
-
-CREATE_INDICATORS_MACD = """
-CREATE TABLE IF NOT EXISTS stock_indicators_macd (
-    stock_code VARCHAR(10) NOT NULL,
-    trade_date DATE NOT NULL,
-    dif        DECIMAL(12,4),
-    dea        DECIMAL(12,4),
-    hist       DECIMAL(12,4),
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_macd_date ON stock_indicators_macd (trade_date);
-"""
-
-CREATE_INDICATORS_RSI = """
-CREATE TABLE IF NOT EXISTS stock_indicators_rsi (
-    stock_code VARCHAR(10) NOT NULL,
-    trade_date DATE NOT NULL,
-    rsi        DECIMAL(8,4),
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_rsi_date ON stock_indicators_rsi (trade_date);
-"""
-
-CREATE_INDICATORS_ATR = """
-CREATE TABLE IF NOT EXISTS stock_indicators_atr (
-    stock_code VARCHAR(10) NOT NULL,
-    trade_date DATE NOT NULL,
-    atr        DECIMAL(12,4),
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_atr_date ON stock_indicators_atr (trade_date);
-"""
-
-CREATE_INDICATORS_MA = """
-CREATE TABLE IF NOT EXISTS stock_indicators_ma (
-    stock_code VARCHAR(10) NOT NULL,
-    trade_date DATE NOT NULL,
-    ma5        DECIMAL(12,4),
-    ma20       DECIMAL(12,4),
-    ma60       DECIMAL(12,4),
-    ma250      DECIMAL(12,4),
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_ma_date ON stock_indicators_ma (trade_date);
-"""
-
-CREATE_INDICATORS_VOLUME = """
-CREATE TABLE IF NOT EXISTS stock_indicators_volume (
-    stock_code VARCHAR(10) NOT NULL,
-    trade_date DATE NOT NULL,
-    vol_ma5    DECIMAL(18,4),
-    vol_ratio  DECIMAL(8,4),
-    obv        DECIMAL(18,4),
-    obv_ma5    DECIMAL(18,4),
-    obv_ma10   DECIMAL(18,4),
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_volume_date ON stock_indicators_volume (trade_date);
-"""
-
-CREATE_INDICATOR_CALC_LOG = """
-CREATE TABLE IF NOT EXISTS indicator_calc_log (
-    id               SERIAL PRIMARY KEY,
-    stock_code       VARCHAR(10) NOT NULL,
-    calc_date        DATE NOT NULL,
-    params_snapshot  JSONB NOT NULL DEFAULT '{}',
-    row_count        INTEGER DEFAULT 0,
-    status           VARCHAR(20) NOT NULL DEFAULT 'success',
-    error_detail     TEXT,
-    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (stock_code, calc_date)
-);
-CREATE INDEX IF NOT EXISTS idx_icl_date ON indicator_calc_log (calc_date);
-"""
-
 # ── 模型训练：版本管理 ──
 
 CREATE_MODEL_VERSIONS = """
@@ -504,8 +407,9 @@ CREATE TABLE IF NOT EXISTS feature_values (
     calc_status     VARCHAR(10) DEFAULT 'OK',
     PRIMARY KEY (feature_name, stock_code, trade_date)
 );
-CREATE INDEX IF NOT EXISTS idx_fv_feature_date ON feature_values (feature_name, trade_date);
+CREATE INDEX IF NOT EXISTS idx_fv_feature_date ON feature_values (feature_name, trade_date DESC, stock_code);
 CREATE INDEX IF NOT EXISTS idx_fv_stock_date ON feature_values (stock_code, trade_date);
+-- 旧单列索引 idx_fv_feature_date 被上面的复合索引替代，可后续 DROP
 """
 
 # ── DAG 流程编排（v2.0 重构 迭代 4.1）──
@@ -714,7 +618,6 @@ ON CONFLICT (strategy_name) DO NOTHING;
 
 ALL_TABLES = [
     ("backfill_tasks", CREATE_BACKFILL_TASKS),
-    ("indicator_calc_log", CREATE_INDICATOR_CALC_LOG),
     ("trade_calendar", CREATE_TRADE_CALENDAR),
     ("stock_master", CREATE_STOCK_MASTER),
     ("daily_quote", CREATE_DAILY_QUOTE),
@@ -730,12 +633,6 @@ ALL_TABLES = [
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
-    ("stock_indicators_boll", CREATE_INDICATORS_BOLL),
-    ("stock_indicators_macd", CREATE_INDICATORS_MACD),
-    ("stock_indicators_rsi", CREATE_INDICATORS_RSI),
-    ("stock_indicators_atr", CREATE_INDICATORS_ATR),
-    ("stock_indicators_ma", CREATE_INDICATORS_MA),
-    ("stock_indicators_volume", CREATE_INDICATORS_VOLUME),
     ("daily_completeness", CREATE_DAILY_COMPLETENESS),
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),
@@ -1022,6 +919,12 @@ def init_db(sync_session) -> None:
     # 迁移：abnormal_missing_cells 列（v2.5）
     try:
         sync_session.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS abnormal_missing_cells BIGINT DEFAULT 0"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：features 表新增 actual_row_count 列（v2.8 — 数据预览优化）
+    try:
+        sync_session.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS actual_row_count BIGINT DEFAULT 0"))
     except Exception:
         sync_session.rollback()
 

@@ -1,7 +1,7 @@
 # 个股买卖点监测系统 (K道) — 架构设计文档
 
-> **版本**: v2.7  
-> **最后更新**: 2026-07-09  
+> **版本**: v2.8  
+> **最后更新**: 2026-07-15  
 > **生产地址**: https://s.pmlab.top
 
 ---
@@ -12,11 +12,12 @@
 
 | 能力 | 描述 |
 |------|------|
-| 数据采集 | 每日自动从 baostock 拉取 A 股 / 指数 / ETF 日 K 线 + 基本面数据 |
-| 策略引擎 | 3 策略并行计算（布林线 / 量价背离 / 周趋势），投票融合买卖信号 |
-| 可视化 | ECharts 市值树图（行业 drill-down）、持仓盈亏、K 线 + 技术指标 |
-| 飞书机器人 | DeepSeek AI 驱动的飞书 Bot，自然语言查行情/管持仓/调策略 |
-| DAG 流水线 | 有向无环图调度器，自动编排数据采集 → 基本面 → 树图 → 策略 → 统计 |
+| 数据采集 | 多数据源适配器（AKShare / baostock），A 股 / 指数 / ETF 日 K 线 + 基本面 + 历史补数 |
+| 特征引擎 | KEPL 公式语言 + Lark 解析器 + pandas 向量化计算，支持时序/截面函数 + 自定义函数 |
+| 模型引擎 | XGBoost 模型训练/回测/实盘信号，基于特征宽表的机器学习信号生成 |
+| 可视化 | ECharts 市值树图（行业 drill-down）、持仓盈亏、K 线 + 技术指标、DAG 流程图 |
+| 飞书机器人 | DeepSeek AI 驱动的飞书 Bot，8 个 Function Calling 工具，自然语言查行情/管持仓 |
+| DAG 流水线 | 有向无环图调度器，计划-执行分离模型，WebSocket 实时推送，手工触发+心跳+终止 |
 | 实时推送 | WebSocket 服务器推送模块，支持 DAG 状态/日志/连接状态等实时事件广播 |
 
 ---
@@ -89,11 +90,13 @@
 | 缓存 | Redis 7 | — |
 | 认证 | JWT (python-jose) | 3.3.0 |
 | 数据处理 | Pandas + NumPy | 2.2.3 / 2.2.1 |
-| 数据源 | baostock | 0.9.2 |
+| 数据源 | baostock / AKShare | 0.9.2 / 1.18+ |
 | AI | DeepSeek API (OpenAI SDK) | 1.58.1 |
 | 飞书 SDK | lark-oapi | 1.4.6 |
 | 日志 | Loguru | 0.7.3 |
 | 配置 | pydantic-settings | 2.7.1 |
+| 解析器 | Lark + RestrictedPython | 1.3+ / 8.0+ |
+| 模型 | XGBoost + Optuna | — |
 
 ### 3.2 前端
 
@@ -105,6 +108,8 @@
 | 图表 | ECharts | 5.5 |
 | 状态管理 | Pinia | 3.0 |
 | HTTP | Axios | 1.6 |
+| DAG 可视化 | AntV X6 + X6-Vue-Shape | 3.1.7 |
+| 代码编辑器 | Monaco Editor | 0.55.1 |
 
 ### 3.3 部署
 
@@ -205,19 +210,100 @@
 
 | 路径 | 说明 |
 |------|------|
-| `/ws/dag` | 服务器推送事件（DAG 状态/日志），有运行中任务时每 2s 广播，空闲时每 30s 广播 |
+| `/api/ws/dag` | 服务器推送事件（DAG 状态/日志），有运行中任务时每 2s 广播，空闲时每 30s 广播 |
+
+### 4.11 模型管理 (v2.2+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/models?type=` | 模型版本列表（支持按类型/状态筛选） |
+| POST | `/api/v1/models` | 创建新模型版本 |
+| GET | `/api/v1/models/{version}` | 模型版本详情（含参数/指标/特征） |
+| PUT | `/api/v1/models/{version}` | 更新模型配置 |
+| DELETE | `/api/v1/models/{version}` | 软删除模型版本 |
+| POST | `/api/v1/models/{version}/train` | 启动 XGBoost 训练 |
+| POST | `/api/v1/models/{version}/evaluate` | 回测评估 |
+| POST | `/api/v1/models/{version}/deploy` | 部署为实盘信号 |
+| POST | `/api/v1/models/{version}/stop` | 停止训练 |
+| GET | `/api/v1/models/{version}/signals` | 模型实时信号 |
+
+### 4.12 函数管理 (v2.2+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/functions` | 自定义函数列表（分页） |
+| POST | `/api/functions` | 创建函数（含 AST 安全校验） |
+| GET | `/api/functions/{id}` | 函数详情+源码 |
+| PUT | `/api/functions/{id}` | 更新函数 |
+| DELETE | `/api/functions/{id}` | 删除函数 |
+| POST | `/api/functions/validate` | 语法+安全校验 |
+| POST | `/api/functions/{id}/test-run` | 沙箱试运行（5s 超时） |
+
+### 4.13 特征管理 (v2.3+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/features` | 特征列表（分页/搜索/分类） |
+| POST | `/api/features` | 创建特征 |
+| GET | `/api/features/{id}` | 特征详情（含公式/依赖/统计） |
+| PUT | `/api/features/{id}` | 更新特征/公式 |
+| DELETE | `/api/features/{id}` | 删除特征 |
+| POST | `/api/features/{id}/compute-range` | 指定日期范围计算 |
+| POST | `/api/features/compute-all` | 全量特征计算 |
+| POST | `/api/features/check-stats-integrity` | 全库完整性校验 |
+| POST | `/api/features/{id}/recompute-stats` | 重算统计（不触发计算） |
+
+### 4.14 KEPL 解析 (v2.2+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/kepl/parse` | 解析 KEPL 公式，返回 AST + 错误 |
+
+### 4.15 DAG 节点类型 (v2.4+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/dag/node-types` | DAG 节点类型列表 |
+| GET | `/api/dag/node-types/{name}` | 节点内部子步骤定义 |
+
+### 4.16 DAG 流程管理 (v2.4+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/dag/flows` | 流程列表 |
+| POST | `/api/dag/flows` | 创建流程 |
+| GET | `/api/dag/flows/{id}` | 流程详情+版本 |
+| PUT | `/api/dag/flows/{id}` | 更新流程 |
+| DELETE | `/api/dag/flows/{id}` | 删除流程 |
+| POST | `/api/dag/flows/{id}/publish` | 发布新版本 |
+| POST | `/api/dag/flows/validate` | 流程校验 |
+| POST | `/api/dag/execute` | 触发流程执行 |
+
+### 4.17 信号统计 (v2.5+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/signal/stats` | 信号效果统计（胜率/收益/行业分布） |
+
+### 4.18 补数管理 (v2.5+)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/data_status/backfill` | 启动历史补数任务 |
+| GET | `/api/data_status/backfill/tasks` | 补数任务列表 |
+| DELETE | `/api/data_status/backfill/tasks/{id}` | 取消补数任务 |
 
 ---
 
 ## 5. 数据库核心表
 
-共 18 张表：
+共 30+ 张表（完整 DDL 见 `app/db/schema.py`）：
 
 | 表名 | 用途 |
 |------|------|
 | `trade_calendar` | 交易日历（含法定节假日） |
 | `stock_master` | 股票主表（代码/名称/交易所/类型/状态） |
-| `daily_quote` | A股日K线（含前后复权价、复权因子） |
+| `daily_quote` | A股日K线（含前后复权价、复权因子、除权标记） |
 | `index_daily_quote` | 指数日K线 |
 | `corporate_actions` | 除权除息记录 |
 | `portfolio` | 用户持仓（软删除） |
@@ -230,16 +316,28 @@
 | `stock_fundamentals` | 基本面（PE/PB/ROE/市值/股本） |
 | `stock_fundamentals_history` | 基本面历史（时序分位数计算） |
 | `stock_treemap_cache` | 树图缓存（按日期+指标） |
-| `dag_run_log` | DAG 执行日志（含心跳） |
-| `dag_config` | DAG 节点定义（名称/依赖/标签） |
+| `features` | 特征定义（名称/公式/分类/状态） |
+| `feature_values` | 特征值（长格式：stock_code+date→value） |
+| `feature_stats` | 特征统计（均值/标准差/分位数/anomaly 标记） |
+| `functions` | 自定义函数（源码/语言/安全校验状态） |
+| `dag_run_log` | DAG 执行日志（含心跳/进度） |
+| `dag_config` | DAG 节点定义（名称/依赖/标签/排序） |
+| `dag_flows` | DAG 流程定义 |
+| `dag_flow_versions` | DAG 流程版本历史 |
+| `model_versions` | XGBoost 模型版本（参数/特征列/状态） |
+| `entity_stats` | 实体统计（总格子/已计算/完整度） |
+| `daily_completeness` | 每日数据完整性 |
 | `data_stats_cache` | 统计快照缓存 |
-| `system_metrics` | 系统指标（每日策略运行记录） |
+| `system_metrics` | 系统指标（每日运行记录） |
+| `backfill_logs` | 补数任务日志 |
 
 ---
 
 ## 6. DAG 数据流水线
 
-### 6.1 拓扑结构
+### 6.1 拓扑结构（数据库驱动）
+
+> 实际拓扑从 `dag_config` 表动态加载，以下为典型结构。
 
 ```
                     ┌──────┐
@@ -247,7 +345,7 @@
                     └──┬───┘
                        │
                   ┌────▼─────┐
-                  │daily_update│ (每日增量汇总)
+                  │daily_update│ (标记节点)
                   └─┬──┬──┬──┘
                     │  │  │
           ┌─────────┘  │  └─────────┐
@@ -260,24 +358,24 @@
     ┌────▼────┐       │            │
     │  fund   │       │            │
     │ 基本面   │       │            │
-    └─┬─────┬─┘       │            │
-      │     │         │            │
-      ▼     ▼         │            │
-┌────────┐┌──────────┐│            │
-│treemap ││ strategy ││            │
-│ 树图   ││ 策略计算  ││            │
-└───┬────┘└────┬─────┘│            │
-    │          │      │            │
-    └──────────┼──────┼────────────┘
-               ▼      ▼
-          ┌──────────────────┐
-          │      stats       │ (全库统计)
-          └────────┬─────────┘
-                   ▼
-          ┌──────────────────┐
-          │daily_completeness│ (日历统计)
-          └──────────────────┘
+    └──┬──────┘       │            │
+       │              │            │
+       ▼              ▼            ▼
+    ┌──────────┐  ┌──────────────────────┐
+    │ treemap  │  │ feature_compute(API) │ ← API 手工触发
+    │ 树图(4种)│  │  model_train/signal   │
+    └────┬─────┘  └──────────────────────┘
+         │
+         ▼
+    ┌──────────┐
+    │  stats   │ (全库统计)
+    └──────────┘
 ```
+
+**数据节点**（DAG 自动调度）：kline → fund → treemap → stats
+**API 触发节点**：model_train, model_signal, feature_compute, feature_backfill
+
+> **历史变更**：indicator_incr/indicator_full 已移除（v2.6），strategy 和 daily_completeness 不再由 DAG 自动调度。
 
 ### 6.2 执行模型：计划-执行分离
 
@@ -926,7 +1024,7 @@ ssh myhuawei "docker logs stock-app --tail 20"
 
 | 字段 | 类型 | 可选值 | 含义 |
 |------|------|--------|------|
-| `tab` | `string` | `p` `m` `s` `l` `d` `x` `o` | 当前页面 Tab |
+| `tab` | `string` | `p` `m` `s` `l` `d` `x` `a` `f` `e` `g` `o` | 当前页面 Tab |
 | `dcode` | `string` | 6 位数字 | 详情页股票代码 |
 | `prevTab` | `string` | 同 `tab` | 进入详情前的 Tab（返回用） |
 
@@ -939,6 +1037,10 @@ ssh myhuawei "docker logs stock-app --tail 20"
 | `l` | 个股列表 Stocks | `/stocks` |
 | `d` | 个股详情 Detail | `/detail/{code}` |
 | `x` | 数据状态 Status | `/status` |
+| `a` | 模型 Model | `/model` |
+| `f` | 函数 Functions | `/functions` |
+| `e` | 特征 Features | `/features` |
+| `g` | DAG 流程 | `/dag` |
 | `o` | 系统设置 Settings | `/settings` |
 
 #### market store (`stores/market.js`)
@@ -966,6 +1068,20 @@ ssh myhuawei "docker logs stock-app --tail 20"
 | `running` | 蓝色 | 正在执行 |
 | `success` | 绿色 | 执行成功 |
 | `failed` | 红色 | 执行失败 |
+
+#### model store (`stores/model.js`)
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `versions` | `array` | 模型版本列表 |
+| `selectedVersion` | `string\|null` | 当前选中版本 |
+| `statusLabel` | `string` | 当前选中版本的状态标签 |
+
+#### theme store (`stores/theme.js`)
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `mode` | `'light'\|'dark'\|'auto'` | 当前主题模式 |
 
 ### 15.4 DAG 日志状态枚举
 
@@ -1226,8 +1342,6 @@ RestrictedPython>=8.0   # 沙箱执行 (27KB)
 # 后端
 uvicorn app.main:app --reload --port 8000        # 开发服务器
 python3 scripts/pipeline.py 2026-06-07            # 手动跑 DAG
-python3 scripts/pipeline.py 2026-06-07 kline      # 触发单节点
-python3 scripts/init_dev_data.py                   # 初始化开发数据
 
 # 前端
 cd web-v2 && npm run dev                          # Vite dev (port 3000)

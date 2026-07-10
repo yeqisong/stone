@@ -14,7 +14,7 @@
         <div :style="{padding:'8px 24px',borderBottom:'1px solid '+theme.colors.border,display:'flex',alignItems:'center',justifyContent:'space-between',background:theme.colors.bgHeader}">
           <div>
             <span :style="{fontSize:'18px',fontWeight:700,color:theme.colors.text}">K道</span>
-            <span v-if="dag.hasRunning" :style="{fontSize:'11px',color:'#f59e0b',marginLeft:'10px',animation:'pulse 1.5s infinite'}">⟳ 数据更新中</span>
+
             <span :style="{fontSize:'11px',color:theme.colors.textDimmer,marginLeft:'12px'}" id="header-date"></span>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
@@ -52,7 +52,7 @@
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
           <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => { nav.backFromFeatureDetail(); nav.pendingEditFeatureId = id }" /></div>
-          <div v-if="nav.tab==='g'"><DagFlowEdit /></div>
+          <div v-if="nav.tab==='g'"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" /></div>
           <div v-if="nav.tab==='o'"><SettingsView /></div>
         </div>
       </div>
@@ -68,16 +68,13 @@ import axios from 'axios'
 import { useAuthStore } from './stores/auth'
 import { useNavStore } from './stores/nav'
 import { useThemeStore } from './stores/theme'
-import { useDagStore } from './stores/dag'
+
 import { connectWebSocket, wsState } from './utils/ws'
 
 const theme = useThemeStore()
-const dag = useDagStore()
-
 const wsConnected = ref(false)
 onMounted(() => {
   connectWebSocket()
-  dag.initWs()
   theme.startAutoTimer()
   setInterval(() => { wsConnected.value = wsState.connected }, 1000)
 })
@@ -120,6 +117,7 @@ const titleMap = {
   a: '模型管理 - K道',
   f: '函数管理 - K道',
   e: '特征管理 - K道',
+  g: 'DAG 流程 - K道',
   o: '系统设置 - K道',
 }
 

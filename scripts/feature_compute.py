@@ -51,10 +51,10 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
         conditions.append("trade_date <= :ed")
         params["ed"] = end_date
     if stock_codes:
-        conditions.append("stock_code = ANY(:codes)")
+        conditions.append(f"{table}.stock_code = ANY(:codes)")
         params["codes"] = stock_codes
     if target_entity == "stock":
-        conditions.append("exchange IN ('SSE','SZSE')")
+        conditions.append(f"{table}.exchange IN ('SSE','SZSE')")
 
     where = " AND ".join(conditions) if conditions else "1=1"
 

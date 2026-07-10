@@ -715,6 +715,13 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
 
     def _run_indicator_backfill(self, task: BackfillTask):
+        """基础指标加工补数 — 已废弃（v2.6），KEPL feature_compute 替代。"""
+        task.status = "failed"
+        task.error_message = "指标补数已废弃（v2.6），请使用特征管理 → 特征补数 (/api/features/{id}/compute-range)"
+        db.close()
+        return
+
+        db = get_sync_db()
         """基础指标加工补数。依赖 daily_quote 已有数据。"""
         db = get_sync_db()
 
@@ -771,39 +778,6 @@ class BackfillManager:
             return
         db.close()
 
-        from scripts.pipeline import dag_task_indicator_full
-
-        try:
-            def _indicator_progress(done, total):
-                task.stocks_done = done
-                task.stocks_total = total
-                task.current_batch = done
-                task.updated_at = datetime.now().isoformat()
-                self._update_task_db(task)
-                self._wake_ws()
-
-            def _is_cancelled():
-                return task._stop_requested
-
-            dag_task_indicator_full(
-                codes=remaining,
-                trade_date=task.end_date,
-                start_date=task.start_date,
-                progress_cb=_indicator_progress,
-                cancel_cb=_is_cancelled,
-            )
-            task.status = "completed"
-        except Exception as e:
-            logger.error(f"[Backfill] 指标计算失败: {e}")
-            task.status = "failed"
-            task.error_message = str(e)[:500]
-
-        task.updated_at = datetime.now().isoformat()
-        self._wake_ws()
-        db.close()
-
-    # ═══════════════════════════════════════════════
-    #  日历完整度补数
     # ═══════════════════════════════════════════════
 
     def _run_calendar_backfill(self, task: BackfillTask):

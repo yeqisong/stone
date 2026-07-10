@@ -1,7 +1,7 @@
 <template>
 <div>
   <n-spin v-if="loading" style="padding:60px" />
-  <template v-else>
+  <div v-if="!loading">
   <!-- Overview Strip (same style as portfolio page) -->
   <div style="display:flex;gap:10px;justify-content:center;padding:8px 0 12px;flex-wrap:wrap">
     <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">行情总条数</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{fmt(overview.total_rows)}}</div></div>
@@ -60,7 +60,7 @@
             <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
           </div>
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
-            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="doSyncClick(d)" @contextmenu.prevent="confirmSync(d)">
+            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)">
               <span v-if="d.day!==null" style="font-size:10px;font-weight:500">{{d.day}}</span>
               <div v-if="d.syncing" style="position:absolute;top:0;right:2px;font-size:8px;color:#2080f0">⟳</div>
               <div v-if="d.td&&d.cp&&!d.syncing" style="font-size:7px;line-height:1.1">
@@ -79,60 +79,8 @@
         </div>
       </div>
 
-      <!-- Latest 3 log entries -->
-      <div style="margin-top:8px;flex:1">
-        <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
-          <span>📥 最近记录</span>
-          <n-button v-if="dlog.length>3" size="tiny" text style="font-size:10px" @click="showLogModal=true">更多 →</n-button>
-        </div>
-        <div v-if="dlog.length" style="display:flex;flex-direction:column;gap:2px;font-size:10px">
-          <div v-for="r in dlog.slice(0,3)" :key="r.date+r.node" style="display:flex;align-items:center;gap:6px;padding:3px 6px;background:var(--c-card-bg);border-radius:4px">
-            <span style="color:var(--c-text-dimmer);min-width:55px">{{(r.date||'').slice(5)}}</span>
-            <span :style="{color:r.status==='success'?'#10b981':r.status==='running'?'#2080f0':r.status==='pending'?'#f59e0b':'#ef4444'}">{{r.status==='success'?'✓':r.status==='running'?'⟳':r.status==='pending'?'◻':'✗'}}</span>
-            <span style="color:var(--c-text-dim);min-width:60px">{{nodeName(r.node)}}</span>
-            <span style="font-size:8px;color:var(--c-text-faint);min-width:50px">{{r.run_id||''}}</span>
-            <span style="color:var(--c-text-faint);margin-left:auto">{{r.node==='daily_update'||r.node==='cron'?'—':(r.rows||0)+'条'}}</span>
-          </div>
-        </div>
-        <div v-else style="font-size:10px;color:var(--c-text-faint);padding:4px 6px">暂无记录</div>
-      </div>
     </div>
   </div>
-
-  <!-- Data Status DAG Flow -->
-  <div style="margin-top:14px">
-    <DagFlowView />
-  </div>
-
-  <!-- DAG 节点类型 -->
-  <div style="margin-top:14px">
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🔧 节点注册中心</div>
-    <n-data-table v-if="nodeTypes.length" :columns="nodeTypeCols" :data="nodeTypes" size="small" :row-props="nodeTypeRowProps" />
-  </div>
-
-  <!-- 节点详情弹窗 -->
-  <n-modal v-model:show="showNodeDetail" preset="card" :title="'节点: ' + nodeDetail?.node_name" style="width:500px;max-width:92vw">
-    <template v-if="nodeDetail">
-      <div style="display:flex;gap:8px;margin-bottom:12px">
-        <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'">{{ nodeDetail.has_function ? '✅ 已注册' : '⏸ 未注册' }}</n-tag>
-        <n-tag size="tiny" v-if="nodeDetail.deps.length">上游: {{ nodeDetail.deps.join(', ') }}</n-tag>
-      </div>
-      <div v-if="nodeDetail.sub_steps?.length" style="margin-top:8px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">📋 内部依赖子图</div>
-        <div v-for="(s, i) in nodeDetail.sub_steps" :key="i" style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--c-border)">
-          <span style="font-size:11px;font-weight:600;color:var(--c-text);min-width:20px">{{ i+1 }}.</span>
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--c-text)">{{ s.name }}</div>
-            <div style="font-size:10px;color:var(--c-text-dim)">{{ s.desc }}</div>
-          </div>
-        </div>
-      </div>
-      <div v-if="nodeDetail.downstream?.length" style="margin-top:12px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">⬇ 下游节点</div>
-        <n-tag v-for="d in nodeDetail.downstream" :key="d.node_name" size="tiny" style="margin:2px">{{ d.label || d.node_name }}</n-tag>
-      </div>
-    </template>
-  </n-modal>
 
   <!-- ══════════════════════════════════════════ -->
   <!--  服务器监控                                            -->
@@ -222,29 +170,7 @@
   <!-- Backfill Modal -->
   <BackfillModal :show="bfModalShow" :type="bfModalType" @close="bfModalShow=false" @started="onBackfillStarted" />
 
-  <!-- Log History Modal -->
-  <!-- Sync Mode Modal -->
-  <n-modal v-model:show="showSyncModal" preset="card" title="📥 数据采集" style="width:360px;max-width:85vw" :mask-closable="false">
-    <div style="text-align:center;padding:10px 0">
-      <div style="font-size:14px;color:var(--c-text);margin-bottom:16px">重新采集 [{{syncDate}}] 的数据？</div>
-      <div style="display:flex;gap:10px;justify-content:center">
-        <n-button @click="showSyncModal=false">取 消</n-button>
-        <n-button type="warning" @click="doSyncForce">强制更新</n-button>
-        <n-button type="primary" @click="doSyncQuick">快速更新</n-button>
-      </div>
-    </div>
-  </n-modal>
-
-  <n-modal v-model:show="showLogModal" preset="card" title="📥 运行日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadLogModal">
-    <n-space vertical>
-      <div v-if="logLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
-      <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <n-data-table :columns="logColumns" :data="logPageData" size="small" :row-props="()=>({style:{fontSize:'12px'}})" scroll-x="700" />
-      </div>
-      <n-pagination v-if="logTotalPages>1" v-model:page="logPage" :page-count="logTotalPages" size="small" />
-    </n-space>
-  </n-modal>
-  </template>
+</div>
 </div>
 </template>
 
@@ -252,7 +178,6 @@
 import { ref, computed, onMounted, h } from 'vue'
 import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag } from 'naive-ui'
 import axios from 'axios'
-import DagFlowView from './DagFlowView.vue'
 import BackfillModal from './BackfillModal.vue'
 import { addWsListener } from '../utils/ws'
 
@@ -260,31 +185,15 @@ const API = window.location.origin
 const loading = ref(true)
 const overview = ref({total_rows:0,total_stocks:0,latest_date:'',exchanges:{}})
 const missingDates = ref([])
-const dlog = ref([])
 const todayStrategy = ref(null)
 const dataTables = ref([])
 const statsTime = ref('')
 const statsLoading = ref(false)
 const cal = ref([])
 const smonth = ref(new Date().toISOString().slice(0,7))
-const showLogModal = ref(false)
-const logPage = ref(1)
-const logPageSize = 20
-const logLoading = ref(false)
 const dataSources = ref([])
 const activeSource = ref(null)
 
-async function loadLogModal() {
-  logLoading.value = true
-  logPage.value = 1
-  try {
-    const r = await axios.get(window.location.origin + '/api/dag_logs')
-    if (r.data && r.data.nodes) {
-      dlog.value = r.data.nodes
-    }
-  } catch(e) {}
-  logLoading.value = false
-}
 
 const monthLabel = computed(() => {
   const y = parseInt(smonth.value.slice(0,4)), m = parseInt(smonth.value.slice(5,7))
@@ -292,30 +201,6 @@ const monthLabel = computed(() => {
 })
 
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
-
-const logTotalPages = computed(() => Math.ceil(dlog.value.length / logPageSize))
-const logPageData = computed(() => {
-  const s = (logPage.value - 1) * logPageSize
-  return dlog.value.slice(s, s + logPageSize)
-})
-
-const nodeNames = {
-  daily_update:'更新汇总', kline:'A股日K线', index:'指数', etf:'ETF', fund:'基本面',
-  treemap:'树图', strategy:'策略', stats:'统计', test_node:'测试'
-}
-const nodeName = n => nodeNames[n] || n
-
-const logColumns = [
-  { title:'日期', key:'date', width:80, ellipsis:{tooltip:true} },
-  { title:'节点', key:'node', width:65, render(r){return nodeName(r.node)}, ellipsis:{tooltip:true} },
-  { title:'状态', width:44, render(r){return r.status==='success'?'✅':r.status==='running'?'⏳':r.status==='pending'?'◻':'❌'}, className:'nowrap-cell' },
-  { title:'行数', width:42, render(r){return r.node==='daily_update'||r.node==='cron'?'—':r.rows||0}, className:'nowrap-cell' },
-  { title:'任务ID', key:'run_id', width:72, ellipsis:{tooltip:true} },
-  { title:'创建', key:'created_at', width:130, ellipsis:{tooltip:true}, className:'nowrap-cell' },
-  { title:'开始', key:'started_at', width:130, ellipsis:{tooltip:true}, className:'nowrap-cell' },
-  { title:'完成', key:'finished_at', width:130, ellipsis:{tooltip:true}, className:'nowrap-cell' },
-  { title:'详情', key:'detail', minWidth:120, ellipsis:{tooltip:true} },
-]
 
 const calBg = d => {
   if(d.day===null) return 'transparent'
@@ -330,47 +215,6 @@ const calBd = d => {
   return 'transparent'
 }
 
-const showSyncModal = ref(false)
-const syncDate = ref('')
-function confirmSync(d) {
-  syncDate.value = d.date
-  showSyncModal.value = true
-}
-function doSyncForce() {
-  showSyncModal.value = false
-  const dateStr = syncDate.value
-  if(!dateStr) return
-  // 标记日历为同步中
-  const day = cal.value.find(d => d.date === dateStr)
-  if(day) day.syncing = true
-  axios.post(API+'/api/data_status/sync_date', {date:dateStr, mode:'force'}).then(r => {
-    if(r.data.busy){ 
-      alert(r.data.error||'任务进行中，请等待')
-      if(day) day.syncing = false
-      return 
-    }
-  }).catch(() => {})
-}
-function doSyncQuick() {
-  showSyncModal.value = false
-  const dateStr = syncDate.value
-  if(!dateStr) return
-  const day = cal.value.find(d => d.date === dateStr)
-  if(day) day.syncing = true
-  axios.post(API+'/api/data_status/sync_date', {date:dateStr, mode:'quick'}).then(r => {
-    if(r.data.busy){ 
-      alert(r.data.error||'任务进行中，请等待')
-      if(day) day.syncing = false
-      return 
-    }
-  }).catch(() => {})
-}
-
-function doSyncClick(d) {
-  if(!d.td||d.syncing) return
-  confirmSync(d)
-}
-// 旧 confirmSync 已替换为 showSyncModal 弹窗
 
 function calTitle(d) {
   if(!d.td) return d.date+' 非交易日'
@@ -407,7 +251,6 @@ async function loadDataStatus() {
     const data = r.data
     if(data.overview) overview.value = data.overview
     missingDates.value = data.missing_dates||[]
-    dlog.value = []  // 日志由 WS 推送，初始清空
     todayStrategy.value = data.today_strategy||null
     dataTables.value = data.data_tables||[]
     statsTime.value = data.stats_computed_at||''
@@ -432,81 +275,12 @@ async function loadDataSources() {
   } catch(e) { /* API 不可用时静默 */ }
 }
 
-async function loadRecentLogs() {
-  try {
-    const r = await axios.get(API + '/api/dag_logs')
-    if (r.data?.nodes?.length) {
-      dlog.value = r.data.nodes
-    }
-  } catch(e) {}
-}
-
-// ── 节点类型 ──
-const nodeTypes = ref([])
-const showNodeDetail = ref(false)
-const nodeDetail = ref(null)
-
-async function loadNodeTypes() {
-  try {
-    const r = await axios.get(API + '/api/dag/node-types')
-    nodeTypes.value = r.data.items || []
-  } catch(e) {}
-}
-
-async function openNodeDetail(row) {
-  try {
-    const r = await axios.get(API + `/api/dag/node-types/${row.node_name}`)
-    nodeDetail.value = r.data
-  } catch(e) {
-    nodeDetail.value = row
-  }
-  showNodeDetail.value = true
-}
-
-const nodeTypeCols = [
-  { title:'节点', key:'node_name', width:120, render(row) {
-    return h('span', { style:{cursor:'pointer',color:'#2080f0',textDecoration:'underline'}, onClick:() => openNodeDetail(row) }, row.node_name)
-  }},
-  { title:'标签', key:'label', width:100 },
-  { title:'状态', key:'status', width:80, render(row) {
-    return h(NTag, { size:'tiny', type:row.has_function?'success':'default' }, () => row.has_function?'已注册':'未注册')
-  }},
-  { title:'排序', key:'sort_order', width:50 },
-]
-
-function nodeTypeRowProps(row) {
-  return { style: 'cursor:pointer', onClick: () => openNodeDetail(row) }
-}
 
 onMounted(() => {
   loadDataStatus()
   loadDataSources()
-  loadRecentLogs()
   loadSysMetrics()
-  loadNodeTypes()
   addWsListener((data) => {
-    if (data.type === 'dag_log') {
-      // WS 推送的新日志：合并到现有列表头部，去重，保留最近 50 条
-      const incoming = data.nodes || []
-      if (incoming.length) {
-        const existing = new Map(dlog.value.map(n => [n.run_id + n.node, n]))
-        for (const n of incoming) {
-          existing.set(n.run_id + n.node, n)
-        }
-        dlog.value = [...existing.values()].sort((a, b) => {
-          const da = a.created_at || a.started_at || ''
-          const db = b.created_at || b.started_at || ''
-          return db.localeCompare(da)
-        }).slice(0, 50)
-      }
-    }
-    if (data.type === 'dag_status') {
-      const rs = data.run_status || {}
-      statsLoading.value = rs.stats?.status === 'running' || rs.stats?.status === 'pending'
-      if (!data.has_running) {
-        cal.value.forEach(d => { d.syncing = false })
-      }
-    }
     // 补数进度
     if (data.type === 'sys_metrics') {
       const d = data.data

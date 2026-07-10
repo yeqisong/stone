@@ -34,18 +34,27 @@ class UpdateFlow(BaseModel):
 
 @router.get("/flows")
 def list_flows():
-    """列出所有 DAG 流程。"""
+    """列出所有 DAG 流程（含节点数）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
     try:
-        rows = db.execute(text("SELECT id, flow_name, description, cron_expr, status, is_active, created_at FROM dag_flows ORDER BY created_at DESC")).fetchall()
+        rows = db.execute(text("""
+            SELECT f.id, f.flow_name, f.description, f.cron_expr, f.status, f.is_active, f.created_at,
+                   COALESCE(v.node_count, 0) AS node_count
+            FROM dag_flows f
+            LEFT JOIN (
+                SELECT flow_id, COUNT(*) AS node_count FROM dag_flow_versions GROUP BY flow_id
+            ) v ON v.flow_id = f.id
+            ORDER BY f.created_at DESC
+        """)).fetchall()
         items = []
         for r in rows:
             items.append({
                 "id": r[0], "flow_name": r[1], "description": r[2],
                 "cron_expr": r[3], "status": r[4], "is_active": r[5],
                 "created_at": str(r[6])[:19] if r[6] else None,
+                "node_count": r[7],
             })
         db.close()
         return {"items": items, "total": len(items)}

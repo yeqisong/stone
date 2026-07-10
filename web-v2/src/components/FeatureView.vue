@@ -356,18 +356,30 @@ async function doCompute() {
     return
   }
   computeSubmitting.value = true
+  // 先注册 WS 监听（避免错过 POST 返回前后端发出的进度消息）
+  const featureId = computeTarget.value.id
+  const currentDateRange = computeDateRange.value
+  computeProgress.value = { progress_pct: 0, current_date: '任务已提交...' }
+  listenComputeProgress(null, featureId)  // taskId=null 表示暂时监听该 feature 的所有进度
   try {
-    const [s, e] = computeDateRange.value
+    const [s, e] = currentDateRange
     const fd = (d) => {
       const dt = new Date(d)
       return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0')
     }
-    const r = await axios.post(API + '/api/features/' + computeTarget.value.id + '/compute-range', {
+    const r = await axios.post(API + '/api/features/' + featureId + '/compute-range', {
       start_date: fd(s), end_date: fd(e), force: computeForce.value
     }, { headers: authHeaders() })
     if (r.data.ok) {
-      computeProgress.value = { progress_pct: 0, current_date: '任务已提交...' }
-      listenComputeProgress(r.data.task_id, computeTarget.value.id)
+      // 拿到真实 taskId 后缩小 WS 过滤范围
+      listenComputeProgress(r.data.task_id, featureId)
+      // 立即轮询一次最新进度，弥补注册监听前丢失的 WS 消息
+      try {
+        const st = await axios.get(API + '/api/features/' + featureId + '/compute-status')
+        if (st.data.has_task) {
+          computeProgress.value = { ...st.data }
+        }
+      } catch(_) {}
     }
   } catch(e) {
     alert(e.response?.data?.detail || '提交失败')
@@ -378,9 +390,12 @@ async function doCompute() {
 function listenComputeProgress(taskId, featureId) {
   if (computeWsUnwatch) computeWsUnwatch()
   computeWsUnwatch = addWsListener((data) => {
-    if (data.type === 'feature_compute_progress' && data.task_id === taskId) {
-      computeProgress.value = data
-      if (data.status === 'completed' || data.status === 'failed') {
+    if (data.type !== 'feature_compute_progress') return
+    // taskId 为 null 时匹配该 feature 的任意 task；非 null 时精确匹配
+    if (taskId && data.task_id !== taskId) return
+    if (data.feature_id !== featureId) return
+    computeProgress.value = data
+    if (data.status === 'completed' || data.status === 'failed') {
         if (computeWsUnwatch) { computeWsUnwatch(); computeWsUnwatch = null }
         if (data.status === 'failed') {
           // 失败时不自动关闭，让用户看到错误信息
@@ -392,7 +407,6 @@ function listenComputeProgress(taskId, featureId) {
           computeTarget.value = null
           loadData()
         }, 2000)
-      }
     }
   })
 }

@@ -630,6 +630,11 @@ def get_feature_data(
 
         # 从 feature_values 表查询特征值
         base_params = {"fn": feature_name, "lim": page_size, "off": (page-1)*page_size}
+        # 从 features 表读取缓存行数，避免 COUNT(*) 全表扫描
+        cached_total = db.execute(text(
+            "SELECT COALESCE(actual_row_count, 0) FROM features WHERE id = :id"
+        ), {"id": feature_id}).scalar() or 0
+
         if entity == "global":
             sql = """
                 SELECT '' as stock_code, trade_date, value
@@ -638,7 +643,6 @@ def get_feature_data(
                 ORDER BY trade_date DESC
                 LIMIT :lim OFFSET :off
             """
-            count_sql = "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
         elif code:
             sql = """
                 SELECT stock_code, trade_date, value
@@ -647,7 +651,6 @@ def get_feature_data(
                 ORDER BY trade_date DESC
                 LIMIT :lim OFFSET :off
             """
-            count_sql = "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn AND stock_code = :code"
             base_params["code"] = code
         else:
             sql = """
@@ -657,10 +660,9 @@ def get_feature_data(
                 ORDER BY trade_date DESC, stock_code
                 LIMIT :lim OFFSET :off
             """
-            count_sql = "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
 
         try:
-            total = db.execute(text(count_sql), {k:v for k,v in base_params.items() if k not in ("lim","off")}).scalar() or 0
+            total = cached_total
             rows = db.execute(text(sql), base_params).fetchall()
 
             items = []
@@ -1033,11 +1035,16 @@ def recompute_stats(feature_id: int, user: str = Depends(get_current_user)):
 
 @router.get("/{feature_id}/compute-status")
 def compute_status(feature_id: int):
-    """查询当前特征的补数进度。"""
+    """查询当前特征的补数进度。返回最新的 running 任务（按 started_at 倒序）。"""
     with _compute_lock:
+        candidates = []
         for t in _compute_tasks.values():
             if t["feature_id"] == feature_id and t["status"] == "running":
-                return {"has_task": True, **{k: v for k, v in t.items()}}
+                candidates.append(t)
+        if candidates:
+            # 按 started_at 倒序取最新的
+            latest = max(candidates, key=lambda t: t.get("started_at", 0))
+            return {"has_task": True, **{k: v for k, v in latest.items()}}
     return {"has_task": False}
 
 
@@ -1073,7 +1080,11 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
         _logger.info(f"[compute] {feature_name} range {start_date}~{end_date}: {rows_count} rows")
 
         if not r.get('ok'):
-            _report(0, f"计算失败: {r.get('error', '未知错误')}")
+            error_msg = f"计算失败: {r.get('error', '未知错误')}"
+            _report(0, error_msg)
+            with _compute_lock:
+                _compute_tasks[task_id]["status"] = "failed"
+                _compute_tasks[task_id]["error"] = error_msg
             db.close()
             return
 
@@ -1169,12 +1180,14 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
                 data_completeness = :comp,
                 missing_cells_total = :win,       -- 窗口期天然缺失
                 abnormal_missing_cells = :totmiss, -- 总缺失（窗口期 + 未补）
+                actual_row_count = :actual,       -- 实际行数缓存，避免 COUNT(*)
                 latest_computed_date = CURRENT_DATE,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :id
         """), {
             "tot": total_cells, "comp": completeness,
             "win": lookback_missing, "totmiss": total_missing,
+            "actual": actual,
             "id": feature_id,
         })
 
@@ -1194,10 +1207,13 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
 
 
 # 暴露补数任务列表给 WS 广播使用
+STALE_RUNNING_TIMEOUT = 300  # 5 分钟无进展视为僵尸任务
+
 def get_active_compute_tasks():
     """返回 running + 刚完成的 completed/failed 任务。
 
     completed/failed 任务首次广播后标记 _broadcasted，下次不再返回。
+    清理僵尸 running 任务（超过 5 分钟且无进展）。
     """
     import time as _time
     now = _time.time()
@@ -1206,6 +1222,13 @@ def get_active_compute_tasks():
         stale = []
         for k, v in list(_compute_tasks.items()):
             if v["status"] == "running":
+                # 检测僵尸任务：超过 STALE_RUNNING_TIMEOUT 秒且 progress_pct == 0
+                started = v.get("started_at", 0)
+                if now - started > STALE_RUNNING_TIMEOUT and v.get("progress_pct", 0) == 0:
+                    v["status"] = "failed"
+                    v["error"] = "任务超时无进展，已自动标记为失败"
+                    stale.append(k)
+                    continue
                 result.append({"task_id": k, **v})
             elif v["status"] in ("completed", "failed") and not v.get("_broadcasted"):
                 v["_broadcasted"] = True

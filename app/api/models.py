@@ -412,21 +412,6 @@ def delete_model(version: str, mode: str = Query("soft"), user: str = Depends(ge
         db.close()
 
 
-@router.get("/v1/indicators/{name}/status")
-def get_indicator_status(name: str):
-    """指标表状态：行数 + 最新日期。"""
-    valid = {'boll','macd','rsi','atr','ma','volume'}
-    if name not in valid:
-        raise HTTPException(400, f"无效指标名: {name}，可选: {', '.join(valid)}")
-    db = get_sync_db()
-    try:
-        table = f"stock_indicators_{name}"
-        cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0
-        latest = db.execute(text(f"SELECT MAX(trade_date) FROM {table}")).scalar()
-        return {"name": name, "rows": cnt, "latest": str(latest) if latest else None}
-    finally:
-        db.close()
-
 @router.post("/v1/models/{version}/approve")
 def approve_model(version: str, user: str = Depends(get_current_user)):
     """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。"""
