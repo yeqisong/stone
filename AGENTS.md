@@ -4,7 +4,7 @@ Python + FastAPI 后端 + Vue 3 前端 + PostgreSQL 的全栈 A 股量化监测�
 
 ## Project
 
-- **Stack**: Python 3.11, FastAPI, SQLAlchemy (async+sync), PostgreSQL 15, Redis 7, Vue 3, Vite, Naive UI, ECharts, AntV X6, Monaco Editor
+- **Stack**: Python 3.11, FastAPI, SQLAlchemy (async+sync), PostgreSQL 15, Redis 7, Vue 3, Vite, Naive UI, ECharts, Vue Flow, Monaco Editor
 - **Entry point**: `app/main.py` — FastAPI application, lifespan 中初始化 DB + DAG + entity_stats
 - **Config**: `app/config.py` — pydantic-settings, 读取 `.env` 文件
 - **Frontend**: `web-v2/` — Vue 3 + Vite, dev proxy → 后端 :8000
@@ -72,10 +72,10 @@ Python + FastAPI 后端 + Vue 3 前端 + PostgreSQL 的全栈 A 股量化监测�
   - `indicators.py` — 纯 numpy/pandas 技术指标（无 TA-Lib）
 
 - **`web-v2/`** — 前端 V2
-  - Vue 3 + Vite + Naive UI + ECharts + Pinia + AntV X6 (DAG 流程图) + Monaco Editor (代码编辑)
-  - 21 个页面组件（含 Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, Settings, SignalStats, ModelView/ModelTraining/ModelEval/ModelLive, FunctionView, FeatureView/FeatureDetail, DagFlowEdit/DagFlowView/DagView, BackfillModal, MonacoEditor）
-  - 6 个 Pinia Store: `auth`, `nav`, `dag`, `model`, `market`, `theme`
-  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, x=状态, a=模型, f=函数, e=特征, g=DAG, o=设置, d=详情
+  - Vue 3 + Vite + Naive UI + ECharts + Pinia + Vue Flow (DAG 流程图) + Monaco Editor (代码编辑)
+  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, DagNode
+  - 5 个 Pinia Store: `auth`, `nav`, `model`, `market`, `theme`
+  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, x=状态, a=模型, f=函数, e=特征, g=DAG, d=详情, q=日志, r=查看
 
 - **`nginx/`** — Nginx 配置
   - `default.conf` — Docker 内部 nginx（SSL + 反代）
@@ -119,11 +119,68 @@ baostock/akshare → crawler/adapters → PostgreSQL → DAG pipeline (kline→f
 - **API**: FastAPI Router 模式，统一前缀 `/api`（feishu webhook 除外）
 - **错误处理**: loguru 记录，try/except + rollback，不抛未处理异常
 - **测试**: pytest + pytest-asyncio；fixtures 提供模拟数据；`Test` 类 + `test_` 方法
-- **DAG**: `DagNode(name, deps, fn)` 注册，配置存 `dag_config` 表；`dag.start()` 统一入口
-- **启动初始化**: lifespan 中同步 DB schema + DAG 加载 + entity_stats 基线 + 恢复异常模型
+- **DAG**: 流程拓扑全部由 `dag_flows` 表动态编排，`dag_config` 仅存储节点类型定义。`dag.load_from_db()` 已移除
+- **启动初始化**: lifespan 中同步 DB schema + entity_stats 基线 + Cron 调度器 + 僵尸任务清理
 - **Docker**: Python 3.11-slim，阿里云镜像加速；docker-compose (app + PostgreSQL + Redis)
 - **环境变量**: `.env` + pydantic-settings；`APP_ENV=dev|prod`
 - **前端**: Axios 拦截器自动带 JWT Token；401 自动清 token 跳转登录
+
+
+## Deployment
+
+- **SSH**: `ssh myhuawei`（别名）
+- **路径**: `/usr/local/htdoc/stone/`
+- **容器**: docker compose (app + db + redis)
+- **生产域名**: `https://s.pmlab.top`
+- **HTTPS**: certbot，`nginx/host-nginx.conf`
+- **Nginx**: 宿主机反代 :8000，`Dockerfile` 内置 nginx
+
+### 目录部署方式
+
+| 目录 | 方式 |
+|------|------|
+| `app/` `crawler/` `scripts/` `strategy/` | 构建到镜像 → `docker compose build app` |
+| `web-v2/dist/` | volume 挂载 → rsync 即可 |
+| `nginx/` | volume 挂载 → 重启 nginx |
+
+### 部署流程
+
+```bash
+# 0. 本地测试
+pytest tests/ -v
+npm --prefix web-v2 run build
+
+# 1. 打 tag
+git add -A && git commit -m "vX.Y: ..."
+git tag vX.Y && git push origin vX.Y
+
+# 2. 同步前端（volume，rsync 即可）
+rsync -avz web-v2/dist/ myhuawei:/usr/local/htdoc/stone/web-v2/dist/
+
+# 3. 同步后端源码（构建到镜像）
+rsync -avz app/ myhuawei:/usr/local/htdoc/stone/app/
+rsync -avz scripts/ myhuawei:/usr/local/htdoc/stone/scripts/
+rsync -avz strategy/ myhuawei:/usr/local/htdoc/stone/strategy/
+rsync -avz crawler/ myhuawei:/usr/local/htdoc/stone/crawler/
+rsync -avz Dockerfile myhuawei:/usr/local/htdoc/stone/Dockerfile
+
+# 4. 备份数据库
+ssh myhuawei "cd /usr/local/htdoc/stone && docker compose exec -T db pg_dump -U stock stock_monitor > backup-\$(date +%Y%m%d).sql"
+
+# 5. 重建并重启
+ssh myhuawei "cd /usr/local/htdoc/stone && docker compose build --no-cache app && docker compose up -d app"
+
+# 6. 验证
+ssh myhuawei "curl -s https://s.pmlab.top/health"
+ssh myhuawei "docker logs stock-app --tail 20"
+```
+
+### 禁止行为
+- ❌ SSH 直接改服务器代码
+- ❌ 未打 tag 部署
+- ❌ 未备份数据库就迁移
+- ❌ 覆盖生产 `.env`
+
 
 ## Notes
 
