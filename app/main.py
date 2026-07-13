@@ -46,11 +46,6 @@ async def lifespan(app: FastAPI):
     try:
         init_db(db)
         logger.info("Database initialized successfully")
-        # init_db 后重新加载 DAG 拓扑（首次部署时模块级加载会因表不存在而跳过）
-        from scripts.pipeline import dag, NODE_FN_MAP
-        if not dag._nodes:
-            dag.load_from_db(db, NODE_FN_MAP)
-            logger.info(f"DAG reloaded: {len(dag._nodes)} nodes")
         # 初始化 entity_stats（首次启动时 JOIN 计算基线，后续 DAG 每日增量更新）
         try:
             es_rows = db.execute(text(
@@ -85,6 +80,9 @@ async def lifespan(app: FastAPI):
     from app.signal import set_main_loop
     set_main_loop(asyncio.get_running_loop())
     broadcast_task = asyncio.create_task(broadcast_dag_status())
+    # 启动 Cron 定时调度器（后台线程）
+    from scripts.cron_scheduler import start_cron_scheduler
+    start_cron_scheduler()
 
     yield
 

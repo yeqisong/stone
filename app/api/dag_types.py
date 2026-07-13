@@ -8,10 +8,7 @@ router = APIRouter(prefix="/api/dag", tags=["dag"])
 NODE_SUB_STEPS = {
     'cron': [
         {'name': '交易日检查', 'desc': '查询 trade_calendar 判断今日是否为交易日'},
-        {'name': '触发 daily_update', 'desc': '交易日则传播到 daily_update 节点'},
-    ],
-    'daily_update': [
-        {'name': '更新状态标记', 'desc': '记录当日已完成数据更新，无实际数据处理'},
+        {'name': '触发 daily_update', 'desc': '交易日则传播到后续节点'},
     ],
     'kline': [
         {'name': '检测交易日', 'desc': '校验目标日期是否为交易日'},

@@ -97,11 +97,23 @@
           </div>
           <ModelLive v-else-if="store.detailTab==='live'" :version="store.selected" />
           <div v-else-if="store.detailTab==='indicators'" style="display:flex;flex-direction:column;gap:8px">
-            <div style="font-size:12px;color:var(--c-text-dim)">模型使用的特征（来自特征注册中心）</div>
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:12px;color:var(--c-text-dim)">模型使用的特征</span>
+              <n-button size="tiny" @click="loadFeatureCheck" :loading="fcLoading">🔄 预检</n-button>
+            </div>
             <div v-if="featuresForModel.length" style="display:flex;flex-wrap:wrap;gap:4px">
               <n-tag v-for="f in featuresForModel" :key="f" size="small" type="info" :bordered="false">{{ f }}</n-tag>
             </div>
             <n-empty v-else description="未配置特征" style="padding:20px" />
+            <div v-if="fcResult" style="margin-top:8px">
+              <div :style="{fontSize:'11px',color:fcResult.ready?'#10b981':'#ef4444',marginBottom:'6px'}">
+                {{ fcResult.ready ? '✅ 全部特征数据就绪' : '⚠️ ' + fcResult.warnings.length + ' 个问题' }}
+              </div>
+              <div v-if="fcResult.warnings?.length" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px">
+                <div v-for="w in fcResult.warnings" :key="w" style="font-size:10px;color:#f59e0b">{{ w }}</div>
+              </div>
+              <n-data-table v-if="fcResult.features?.length" :columns="fcCols" :data="fcResult.features" size="small" :bordered="false" />
+            </div>
           </div>
         </template>
         <n-empty v-else description="选择一个模型版本" style="padding:60px 0" />
@@ -214,8 +226,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch } from 'naive-ui'
+import { ref, reactive, computed, onMounted, h, watch } from 'vue'
+import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch, NDataTable } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import ModelTraining from './ModelTraining.vue'
@@ -226,6 +238,29 @@ const featuresForModel = computed(() => {
   const c = store.selected?.config || {}
   return c.feature_names || c.features || []
 })
+
+const fcLoading = ref(false)
+const fcResult = ref(null)
+const fcCols = [
+  { title:'特征', key:'name', width:100 },
+  { title:'数据起', key:'start', width:85, render(r) { return r.start || '—' } },
+  { title:'数据止', key:'end', width:85, render(r) { return r.end || '—' } },
+  { title:'股票', key:'stocks', width:50, align:'right' },
+  { title:'行数', key:'rows', width:70, align:'right', render(r) { return (r.rows||0).toLocaleString() } },
+  { title:'覆盖', key:'ok', width:45, render(r) { return r.ok ? '✅' : '❌' } },
+]
+
+async function loadFeatureCheck() {
+  if (!store.selectedId) return
+  fcLoading.value = true
+  try {
+    const r = await axios.get(window.location.origin + `/api/v1/models/${store.selectedId}/feature-check`)
+    fcResult.value = r.data
+  } catch(e) { fcResult.value = null }
+  fcLoading.value = false
+}
+
+watch(() => store.selectedId, () => { if (store.selected) loadFeatureCheck() })
 const loading = ref(true)
 const showCreate = ref(false)
 const editMode = ref(false)
@@ -378,14 +413,32 @@ const basicMetrics = computed(() => {
 
 async function startTrain() {
   try {
+    await loadFeatureCheck()
+    if (fcResult.value && !fcResult.value.ready) {
+      const msg = fcResult.value.warnings.join('<br>')
+      const { useDialog } = await import('naive-ui')
+      const dialog = useDialog()
+      dialog.warning({
+        title: '⚠️ 特征数据不完整',
+        content: () => h('div', { innerHTML: msg, style: 'font-size:12px;line-height:1.6' }),
+        positiveText: '仍然训练',
+        negativeText: '取消',
+        onPositiveClick: () => dostartTrain(),
+      })
+    } else {
+      dostartTrain()
+    }
+  } catch(e) { alert('预检失败: ' + (e.response?.data?.detail || e.message)) }
+}
+
+async function dostartTrain() {
+  try {
     if (store.selected.status === 'REJECTED') {
       await axios.post(window.location.origin + `/api/v1/models/${store.selectedId}/retrain`)
     }
     await axios.post(window.location.origin + '/api/dag_trigger', { node:'model_train', include_downstream:false })
     store.selected.status = 'TRAINING'
-  } catch(e) {
-    alert(e.response?.data?.detail || '启动训练失败')
-  }
+  } catch(e) { alert(e.response?.data?.detail || '启动训练失败') }
 }
 async function approveModel() {
   try {

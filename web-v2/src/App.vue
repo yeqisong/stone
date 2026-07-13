@@ -34,12 +34,12 @@
           <n-button :type="nav.tab==='m'?'primary':'default'" size="small" @click="nav.switchTab('m')" :style="{flexShrink:0}">📊 选股</n-button>
           <n-button :type="nav.tab==='s'?'primary':'default'" size="small" @click="nav.switchTab('s')" :style="{flexShrink:0}">🔴 信号</n-button>
           <n-button :type="nav.tab==='l'?'primary':'default'" size="small" @click="nav.switchTab('l')" :style="{flexShrink:0}">📋 个股</n-button>
-          <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')" :style="{flexShrink:0}">📊 状态</n-button>
           <n-button :type="nav.tab==='a'?'primary':'default'" size="small" @click="nav.switchTab('a')" :style="{flexShrink:0}">🧠 模型</n-button>
           <n-button :type="nav.tab==='f'?'primary':'default'" size="small" @click="nav.switchTab('f')" :style="{flexShrink:0}">🔧 函数</n-button>
           <n-button :type="nav.tab==='e'?'primary':'default'" size="small" @click="nav.switchTab('e')" :style="{flexShrink:0}">🔬 特征</n-button>
           <n-button :type="nav.tab==='g'?'primary':'default'" size="small" @click="nav.switchTab('g')" :style="{flexShrink:0}">🔀 DAG</n-button>
-          <n-button :type="nav.tab==='o'?'primary':'default'" size="small" @click="nav.switchTab('o')" :style="{flexShrink:0}">⚙️ 设置</n-button>
+          <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')" :style="{flexShrink:0}">📊 状态</n-button>
+
         </div>
         <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
           <div v-if="nav.tab==='p'"><PortfolioView @show-detail="nav.showDetail" /></div>
@@ -52,8 +52,10 @@
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
           <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => { nav.backFromFeatureDetail(); nav.pendingEditFeatureId = id }" /></div>
-          <div v-if="nav.tab==='g'"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" /></div>
-          <div v-if="nav.tab==='o'"><SettingsView /></div>
+          <div v-if="nav.tab==='g'"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" @show-log="(id) => { nav.flowId = parseInt(id); nav.tab = 'q' }" /></div>
+          <div v-if="nav.tab==='q'"><FlowLogView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
+          <div v-if="nav.tab==='r'"><FlowRunView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
+
         </div>
       </div>
     </n-message-provider>
@@ -85,12 +87,14 @@ import TreemapView from './components/TreemapView.vue'
 import StocksView from './components/StocksView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
-import SettingsView from './components/SettingsView.vue'
+
 import ModelView from './components/ModelView.vue'
 import FunctionView from './components/FunctionView.vue'
 import FeatureView from './components/FeatureView.vue'
 import FeatureDetail from './components/FeatureDetail.vue'
 import DagFlowEdit from './components/DagFlowEdit.vue'
+import FlowLogView from './components/FlowLogView.vue'
+import FlowRunView from './components/FlowRunView.vue'
 
 const auth = useAuthStore()
 const nav = useNavStore()

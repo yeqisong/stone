@@ -236,6 +236,9 @@ class DagExecutor:
                 # 没有就绪节点 → 死锁或依赖链断裂
                 remaining_names = ', '.join(remaining)
                 logger.error(f"[dag] 无就绪节点，剩余: {remaining_names}")
+                for name in remaining:
+                    if self.on_node_enter:
+                        self.on_node_enter(name, 'failed', **context)
                 break
 
             # 为本次运行创建终止事件（线程安全）
@@ -270,7 +273,7 @@ class DagExecutor:
                         logger.info(f"[dag] {name} ✓ ({elapsed:.1f}s)")
                     except Exception as e:
                         logger.error(f"[dag] {name} ✗ 失败: {e}")
-                        # 不标记完成 → 下游依赖不满足 → 自动跳过
+                        self._completed[name] = time.time()  # 标记完成（失败态），下游可继续而非卡死
 
             # 从剩余列表中移除已执行的节点
             for name in ready:

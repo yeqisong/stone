@@ -21,18 +21,14 @@
     </div>
   </div>
 
-  <!-- 属性栏 (编辑模式 - 只保留简洁校验+警告) -->
   <div v-if="editMode && validation" :style="{flexShrink:0,marginBottom:'6px',padding:'6px 10px',borderRadius:'6px',fontSize:'11px',background:validation.ok?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)',border:'1px solid '+(validation.ok?'rgba(16,185,129,.2)':'rgba(239,68,68,.2)')}">
     <span v-if="validation.ok" style="color:#10b981">✅ 校验通过</span>
     <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#ef4444;margin-right:12px">❌ {{ e }}</span>
   </div>
 
-  <!-- 已发布警告 -->
   <div v-if="editMode && flowStatus==='published'" style="padding:6px 12px;margin-bottom:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;font-size:11px;color:#f59e0b;flex-shrink:0">⚠ 此流程已发布，修改后将影响线上执行</div>
 
-  <!-- Editor Area -->
   <div v-if="editMode" style="display:flex;flex:1;min-height:0;gap:0;border:1px solid var(--c-border);border-radius:8px;overflow:hidden">
-    <!-- Node Palette -->
     <div style="width:160px;flex-shrink:0;background:var(--c-card-bg);border-right:1px solid var(--c-border);padding:10px;overflow-y:auto">
       <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">节点类型</div>
       <div v-for="nt in nodeTypes.filter(t => t.node_name !== 'cron')" :key="nt.name"
@@ -41,57 +37,79 @@
         {{ nt.label || nt.name }}
       </div>
     </div>
-    <!-- X6 Canvas -->
-    <div ref="canvasRef" style="flex:1;min-width:0;position:relative">
-      <div style="position:absolute;bottom:10px;right:10px;z-index:10;font-size:10px;color:var(--c-text-faint);background:var(--c-card-bg);padding:4px 10px;border-radius:12px;border:1px solid var(--c-border);opacity:.7">
-        Shift+拖拽=平移 · Ctrl+滚轮=缩放 · Delete=删除 · 双击节点=设置/详情
-      </div>
+
+    <div style="flex:1;min-width:0;position:relative">
+      <VueFlow id="dag-flow" v-model:nodes="nodes" v-model:edges="edges" @nodes-change="filterCron"
+        :node-types="customNodeTypes"
+        :default-viewport="{ x: 0, y: 0, zoom: 1 }"
+        :snap-to-grid="true" :snap-grid="[20,20]"
+        :delete-key-code="'Backspace'" :multi-selection-key-code="'Shift'"
+        :pan-on-drag="true" :zoom-on-scroll="true"
+        :edges-updatable="true"
+        :connection-line-style="{ stroke: 'var(--c-text-dim)', strokeWidth: 2 }"
+        @node-double-click="onNodeDblClick" @pane-click="onPaneClick" @connect="onConnect" @node-drag-stop="onNodeDragStop"
+        :default-edge-options="defaultEdgeOpts"
+        :only-render-visible-elements="true">
+        <Background variant="dots" :gap="20" />
+        <Controls position="bottom-right" />
+        <div style="position:absolute;bottom:12px;right:52px;z-index:10;font-size:11px;color:var(--c-text-dim);background:var(--c-card-bg);padding:2px 6px;border-radius:4px;border:1px solid var(--c-border);pointer-events:none">
+          {{ Math.round(viewport.zoom * 100) }}%
+        </div>
+      </VueFlow>
     </div>
 
-    <!-- 统一右侧边栏：流程属性 / 节点详情 -->
-    <div v-if="sidebarMode" style="width:260px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
+    <div v-if="sidebarMode" style="width:280px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span style="font-weight:700;color:var(--c-text)">{{ sidebarMode==='flow' ? '⚙️ 流程属性' : (nodeDetail?.label || nodeDetail?.node_name || '') }}</span>
         <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="sidebarMode=null">✕</span>
       </div>
-      <!-- 流程属性 -->
       <template v-if="sidebarMode==='flow'">
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">📋 流程名</div>
         <n-input v-model:value="flowName" size="small" placeholder="流程名称" />
         <div style="margin-top:12px;font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">⏰ 定时执行 (Cron)</div>
-        <n-tabs v-model:value="cronTab" type="segment" size="small" @update:value="onCronTab">
-          <n-tab-pane name="day" tab="每天" />
-          <n-tab-pane name="week" tab="每周" />
-          <n-tab-pane name="month" tab="每月" />
-          <n-tab-pane name="custom" tab="自定义" />
-        </n-tabs>
+        <n-select v-model:value="cronTab" :options="cronTabs" size="small" style="width:100%" @update:value="onCronTab" />
         <div style="margin-top:6px">
-          <div v-if="cronTab==='day'" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-            <n-select v-model:value="cronHour" :options="hourOpts" size="tiny" style="width:60px" />
-            <span>:</span>
-            <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="width:60px" />
+          <!-- 每 N 分钟 -->
+          <div v-if="cronTab==='min'" style="display:flex;gap:4px;align-items:center">
+            <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">每</span>
+            <n-input-number v-model:value="cronInterval" :min="1" :max="60" size="tiny" style="flex:1;min-width:0" />
+            <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">分钟</span>
           </div>
-          <div v-if="cronTab==='week'">
-            <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
-              <n-select v-model:value="cronWeekDay" :options="weekOpts" size="tiny" style="width:70px" />
-              <n-select v-model:value="cronHour" :options="hourOpts" size="tiny" style="width:60px" />
-              <span>:</span>
-              <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="width:60px" />
+          <!-- 每 N 小时 -->
+          <div v-if="cronTab==='hour'" style="display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;gap:4px;align-items:center">
+              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">每</span>
+              <n-input-number v-model:value="cronInterval" :min="1" :max="12" size="tiny" style="flex:1;min-width:0" />
+              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">小时</span>
+            </div>
+            <div style="display:flex;gap:4px;align-items:center">
+              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">在第</span>
+              <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="flex:1;min-width:0" />
+              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">分</span>
             </div>
           </div>
-          <div v-if="cronTab==='month'" style="display:flex;gap:4px;align-items:center">
-            <n-select v-model:value="cronMonthDay" :options="monthDayOpts" size="tiny" style="width:60px" />
-            <n-select v-model:value="cronHour" :options="hourOpts" size="tiny" style="width:60px" />
-            <span>:</span>
-            <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="width:60px" />
+          <!-- 每天 / 每周 / 每月：n-time-picker 统一时间选择 -->
+          <div v-if="['day','week','month'].includes(cronTab)" style="margin-bottom:4px">
+            <n-time-picker v-model:value="cronTime" format="HH:mm" size="small" style="width:100%" @update:value="buildCron" />
           </div>
-          <div v-if="cronTab==='custom'">
-            <n-input v-model:value="flowCron" size="tiny" placeholder="0 8 * * 1-5" />
+          <!-- 每周（多选） -->
+          <div v-if="cronTab==='week'">
+            <div style="font-size:10px;color:var(--c-text-dim);margin-bottom:2px">选择工作日</div>
+            <div style="display:flex;flex-wrap:wrap;gap:2px">
+              <n-tag v-for="d in weekOpts" :key="d.value" size="tiny" :type="cronWeekDays.includes(d.value)?'primary':'default'" :bordered="false" style="cursor:pointer" @click="toggleWeekDay(d.value)">{{ d.label }}</n-tag>
+            </div>
           </div>
+          <!-- 每月（多选） -->
+          <div v-if="cronTab==='month'">
+            <div style="font-size:10px;color:var(--c-text-dim);margin-bottom:2px">选择日期</div>
+            <n-select v-model:value="cronMonthDays" :options="monthDayOpts" multiple size="tiny" style="width:100%" :max-tag-count="3" />
+          </div>
+          <!-- 自定义 -->
+          <div v-if="cronTab==='custom'"><n-input v-model:value="cronCustomVal" size="small" placeholder="0 8 * * 1-5" @update:value="applyCustom" /></div>
         </div>
-        <div style="margin-top:6px;font-size:10px;color:var(--c-text-faint)">当前: {{ flowCron || '未设置' }}</div>
+        <div v-if="cronError" style="margin-top:4px;font-size:10px;color:#ef4444">{{ cronError }}</div>
+        <div v-if="cronPreview && !cronError" style="margin-top:4px;font-size:10px;color:var(--c-text-dim)">💡 {{ cronPreview }}</div>
       </template>
-      <!-- 节点详情 -->
       <template v-else-if="sidebarMode==='node' && nodeDetail">
         <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'" style="margin-bottom:8px">{{ nodeDetail.has_function ? '✅ 已注册' : '⏸ 未注册' }}</n-tag>
         <div v-if="nodeDetail.sub_steps?.length">
@@ -105,19 +123,17 @@
     </div>
   </div>
 
-  <!-- Flow List -->
   <div v-else style="flex:1;overflow-y:auto">
     <n-data-table :columns="flowCols" :data="flows" size="small" :loading="loading" />
     <n-empty v-if="!loading && !flows.length" description="暂无流程，点击「+ 新建」创建" style="padding:40px" />
   </div>
 
-  <!-- 执行弹窗 -->
   <n-modal v-model:show="showExecModal" preset="card" :title="'▶ 执行「' + (flowName || selectedFlow) + '」'" style="width:360px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">选择执行日期（默认今天）</div>
       <n-date-picker v-model:value="execDate" type="date" size="small" style="width:100%" />
       <div v-if="execResult" style="margin-top:8px;padding:8px;background:var(--c-card-bg);border-radius:6px;font-size:11px">
-        <div v-if="execResult.ok" style="color:#10b981">✅ 已触发 — {{ execResult.run_id }}</div>
+        <div v-if="execResult.ok" style="color:#10b981">✅ 已触发 — {{ execResult.task_id }}</div>
         <div v-else style="color:#ef4444">❌ {{ execResult.error }}</div>
       </div>
     </n-space>
@@ -127,7 +143,6 @@
     </template>
   </n-modal>
 
-  <!-- 保存/发布确认弹窗 -->
   <n-modal v-model:show="showConfirmModal" preset="card" :title="confirmTitle" style="width:400px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">{{ confirmMsg }}</div>
@@ -142,17 +157,27 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, h, watch } from 'vue'
-import { NButton, NSelect, NInput, NDataTable, NTag, NModal, NSpace, NDatePicker, NPopover, NTabs, NTabPane, NEmpty } from 'naive-ui'
+import { ref, onMounted, nextTick, h, watch, markRaw, onBeforeUnmount } from 'vue'
+import { NButton, NSelect, NInput, NInputNumber, NDataTable, NTag, NModal, NSpace, NDatePicker, NEmpty, NTimePicker } from 'naive-ui'
 import { useMessage } from 'naive-ui'
-import { Graph } from '@antv/x6'
+import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { Background } from '@vue-flow/background'
+import { Controls } from '@vue-flow/controls'
+import { cronstrue } from 'cronstrue'
+import cronValidator from 'cron-validator'
+import '@vue-flow/core/dist/style.css'
+import '@vue-flow/core/dist/theme-default.css'
+import '@vue-flow/controls/dist/style.css'
 import axios from 'axios'
 import { useNavStore } from '../stores/nav'
+import DagNode from './DagNode.vue'
+import { addWsListener } from '../utils/ws'
 const nav = useNavStore()
 const message = useMessage()
+const customNodeTypes = markRaw({ 'dag-node': DagNode })
 
 const props = defineProps({ flowId: [Number, String] })
-const emit = defineEmits(['back'])
+const emit = defineEmits(['back', 'show-log'])
 
 const API = window.location.origin
 const loading = ref(false)
@@ -164,8 +189,40 @@ const flowCron = ref('')
 const cronTab = ref('day')
 const cronMin = ref('0')
 const cronHour = ref('8')
-const cronWeekDay = ref('1')
-const cronMonthDay = ref('1')
+const cronWeekDays = ref(['1','2','3','4','5'])
+const cronMonthDays = ref(['1'])
+const cronInterval = ref(5)
+const cronCustomVal = ref('')
+const cronError = ref('')
+const cronPreview = ref('')
+const cronTime = ref(makeTimeMs(8, 0))  // n-time-picker 默认 08:00
+const cronTabs = [{label:'每分钟',value:'min'},{label:'每小时',value:'hour'},{label:'每天',value:'day'},{label:'每周',value:'week'},{label:'每月',value:'month'},{label:'自定义',value:'custom'}]
+
+function makeTimeMs(h, m) { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() }
+
+function toggleWeekDay(v) { const s = new Set(cronWeekDays.value); s.has(v)?s.delete(v):s.add(v); cronWeekDays.value = [...s]; buildCron() }
+function toggleMonthDay(v) { const s = new Set(cronMonthDays.value); s.has(v)?s.delete(v):s.add(v); cronMonthDays.value = [...s]; buildCron() }
+
+function buildCron() {
+  let expr = ''
+  // 从 cronTime 提取小时和分钟
+  const d2 = new Date(cronTime.value)
+  const h = String(d2.getHours()).padStart(2,'0')
+  const m = String(d2.getMinutes()).padStart(2,'0')
+  switch (cronTab.value) {
+    case 'min': expr = `*/${cronInterval.value} * * * *`; break
+    case 'hour': expr = `${cronMin.value} */${cronInterval.value} * * *`; break
+    case 'day': expr = `${m} ${h} * * *`; break
+    case 'week': { const days = [...cronWeekDays.value].sort((a,b)=>parseInt(a)-parseInt(b)).join(','); expr = `${m} ${h} * * ${days}`; break }
+    case 'month': { const days = [...cronMonthDays.value].sort((a,b)=>parseInt(a)-parseInt(b)).join(','); expr = `${m} ${h} ${days} * *`; break }
+    case 'custom': expr = cronCustomVal.value; break
+  }
+  flowCron.value = expr
+  try { cronPreview.value = cronstrue.toString(expr, { locale: 'zh_CN' }) } catch { cronPreview.value = '' }
+  try { cronError.value = cronValidator(expr) ? '' : '表达式格式有误' } catch { cronError.value = '' }
+}
+function onCronTab() { buildCron() }
+function applyCustom() { buildCron() }
 
 const hourOpts = Array.from({length:24},(_,i)=> ({label:String(i).padStart(2,'0')+':00', value:String(i)}))
 const minOpts = Array.from({length:60},(_,i)=> ({label:String(i).padStart(2,'0'), value:String(i)}))
@@ -174,445 +231,252 @@ const weekOpts = [
   {label:'周四',value:'4'},{label:'周五',value:'5'},{label:'周六',value:'6'},{label:'周日',value:'0'},
 ]
 const monthDayOpts = Array.from({length:28},(_,i)=> ({label:(i+1)+'号', value:String(i+1)}))
-const quickWeekDays = [
-  {label:'周一',value:'1'},{label:'周二',value:'2'},{label:'周三',value:'3'},
-  {label:'周四',value:'4'},{label:'周五',value:'5'},{label:'六日',value:'6,0'},
-]
 
-function applyCron() {
-  if (cronTab.value === 'day') flowCron.value = `${cronMin.value} ${cronHour.value} * * *`
-  else if (cronTab.value === 'week') flowCron.value = `${cronMin.value} ${cronHour.value} * * ${cronWeekDay.value}`
-  else if (cronTab.value === 'month') flowCron.value = `${cronMin.value} ${cronHour.value} ${cronMonthDay.value} * *`
+// ── Vue Flow ──
+const nodes = ref([])
+const edges = ref([])
+const { screenToFlowCoordinate, getNodes, viewport, fitView } = useVueFlow('dag-flow')
+
+const nodeDefaults = { type: 'default', style: { background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', borderRadius: 8, color: 'var(--c-text)', fontSize: 11, fontWeight: 600, width: 120, padding: '10px 6px', textAlign: 'center' } }
+const defaultEdgeOpts = { type: 'default', animated: false, updatable: true, style: { stroke: 'var(--c-text-dim)', strokeWidth: 2 } }
+
+function makeVfNode(id, label, x, y) {
+  return { id, type: 'dag-node', position: { x: x ?? 100, y: y ?? 100 }, data: { label: label || id } }
 }
 
-function onCronTab() { applyCron() }
-function applyCustom() {} // flowCron already bound
+function onNodeDblClick({ node }) {
+  if (node.id === 'cron') { sidebarMode.value = 'flow'; return }
+  axios.get(API + `/api/dag/node-types/${node.id}`).then(r => {
+    nodeDetail.value = r.data; sidebarMode.value = 'node'
+  }).catch(() => {})
+}
+function onNodeDragStop({ node }) {
+  // 拖拽后自动更新边端点方向（根据相对位置选择最优 Handle）
+  edges.value.forEach(edge => {
+    if (edge.source !== node.id && edge.target !== node.id) return
+    const srcNode = nodes.value.find(n => n.id === edge.source)
+    const tgtNode = nodes.value.find(n => n.id === edge.target)
+    if (!srcNode || !tgtNode) return
+    const dx = tgtNode.position.x - srcNode.position.x
+    const dy = tgtNode.position.y - srcNode.position.y
+    if (Math.abs(dx) > Math.abs(dy)) {
+      edge.sourceHandle = dx > 0 ? 's-right' : 't-left'
+      edge.targetHandle = dx > 0 ? 't-left' : 's-right'
+    } else {
+      edge.sourceHandle = 's-bottom'
+      edge.targetHandle = 't-top'
+    }
+  })
+}
+
+function onPaneClick() { sidebarMode.value = null }
+function onConnect(conn) {
+  // 阻止自环
+  if (conn.source === conn.target) return
+  // 阻止反向边（避免双向边形成环）
+  const reverse = conn.target + '->' + conn.source
+  if (edges.value.find(e => e.id === reverse)) return
+  const sid = conn.source + '->' + conn.target
+  if (!edges.value.find(e => e.id === sid)) {
+    edges.value.push({ id: sid, source: conn.source, target: conn.target, ...defaultEdgeOpts })
+  }
+  dirty.value = true
+}
+
+function filterCron(changes) {
+  if (loadingFlow.value) return
+  const removed = changes.find(c => c.type === 'remove' && c.id === 'cron')
+  if (removed) { nodes.value.push({ id: 'cron', type: 'dag-node', position: { x: 100, y: 80 }, data: { label: 'cron' } }); dirty.value = true }
+}
+
+const nodeTypes = ref([])
 const validation = ref(null)
 const saving = ref(false)
 const flowStatus = ref('draft')
-const canvasRef = ref(null)
-
-let graph = null
-const nodeTypes = ref([])
-const showNodeDetail = ref(false)
 const nodeDetail = ref(null)
 const showExecModal = ref(false)
 const execDate = ref(null)
 const execLoading = ref(false)
 const execResult = ref(null)
-const changeLogInput = ref('')
 const editingName = ref(false)
 const nameInputRef = ref(null)
-const sidebarMode = ref(null)  // null | 'flow' | 'node'
+const loadingFlow = ref(false)
+const sidebarMode = ref(null)
+const dirty = ref(false)
 const showConfirmModal = ref(false)
 const confirmTitle = ref('')
 const confirmMsg = ref('')
 const confirmChangelog = ref('')
 const confirmCallback = ref(null)
 
-function startEditName() {
-  editingName.value = true
-  nextTick(() => { nameInputRef.value?.focus() })
-}
+function startEditName() { editingName.value = true; nextTick(() => nameInputRef.value?.focus()) }
 
-const flowOptions = ref([])
 function cronReadable(c) {
   if (!c) return '未设置'
-  const parts = c.split(' ')
-  if (parts.length === 6) parts.shift() // 去除秒
-  if (parts.length < 5) return c
-  const [m, h, dom, mon, dow] = parts
-  if (dom === '*' && mon === '*' && dow === '*') return `⏰ ${h.padStart(2,'0')}:${m.padStart(2,'0')} 每天`
-  if (dom === '*' && mon === '*' && dow !== '*' && /^\d(,\d)*$/.test(dow.replaceAll('-',''))) {
-    const days = {1:'一',2:'二',3:'三',4:'四',5:'五',6:'六',7:'日'}
-    const ds = dow.split(',').map(d => days[parseInt(d)]).filter(Boolean).join(',')
-    return `⏰ ${h.padStart(2,'0')}:${m.padStart(2,'0')} 周${ds}`
-  }
-  if (dow === '*' && dom === '*' && mon === '*') return `⏰ ${h.padStart(2,'0')}:${m.padStart(2,'0')}`
-  return c
+  try { return cronstrue.toString(c, { locale: 'zh_CN' }) } catch { return c }
 }
 
 const flowCols = [
-  { title:'流程名', key:'flow_name', width:150 },
-  { title:'状态', key:'status', width:80, render(r){ return r.status==='published'?'✅ 已发布':'📝 '+r.status } },
-  { title:'节点', key:'node_count', width:55, align:'center', render(r){ return r.node_count||0 } },
-  { title:'Cron', key:'cron_expr', width:140, render(r){ return cronReadable(r.cron_expr) } },
-  { title:'操作', key:'actions', width:200, render(r){
+  { title:'流程名', key:'flow_name', width:130 },
+  { title:'状态', key:'status', width:65, render(r){ return r.status==='published'?'✅ 已发布':'📝 '+r.status } },
+  { title:'节点', key:'node_count', width:45, align:'center', render(r){ return r.node_count||0 } },
+  { title:'Cron', key:'cron_expr', width:130, render(r){ return cronReadable(r.cron_expr) } },
+  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'#2080f0',fontSize:'11px'}},'⟳ 执行中') } },
+  { title:'操作', key:'actions', width:240, render(r){
+    const hasRun = taskStatuses[r.id] && taskStatuses[r.id].status === 'running'
     return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},[
       h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'✎ 编辑'),
       r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'success',onClick:()=>doPublishList(r.id)},()=>'▶ 发布') : null,
       r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'⏸ 下线') : null,
-      r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'⚡ 执行') : null,
+      r.status==='published' && !hasRun ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'⚡ 执行') : null,
+      h(NButton,{size:'tiny',quaternary:true,onClick:()=>{ nav.flowId = r.id; nav.tab = 'r' }},()=>'👁 查看'),
+      h(NButton,{size:'tiny',quaternary:true,onClick:()=>showFlowLog(r.id, r.flow_name)},()=>'📋 日志'),
     ])
   }},
 ]
 
+const taskStatuses = ref({})
+const wsUnwatch = ref(null)
+
+function showFlowLog(id, name) {
+  emit('show-log', id)
+}
+
+async function loadTaskStatuses() {
+  for (const f of flows.value) {
+    try {
+      const r = await axios.get(API + `/api/dag/flows/${f.id}/task-status`)
+      if (r.data.has_task) taskStatuses.value[f.id] = r.data
+      else delete taskStatuses.value[f.id]
+    } catch(e) {}
+  }
+}
+
 async function loadFlows() {
   loading.value = true
-  try {
-    const r = await axios.get(API + '/api/dag/flows')
-    flows.value = r.data.items || []
-    flowOptions.value = flows.value.map(f => ({ label: f.flow_name, value: f.id }))
-  } catch(e) { console.error(e) }
+  try { const r = await axios.get(API + '/api/dag/flows'); flows.value = r.data.items || [] } catch(e) { console.error(e) }
   loading.value = false
 }
-
 async function loadNodeTypes() {
-  try {
-    const r = await axios.get(API + '/api/dag/node-types')
-    nodeTypes.value = r.data.items || []
-  } catch(e) { console.error(e) }
+  try { const r = await axios.get(API + '/api/dag/node-types'); nodeTypes.value = r.data.items || [] } catch(e) { console.error(e) }
 }
-
-function initGraph() {
-  if (graph) { graph.dispose(); graph = null }
-  if (!canvasRef.value) return
-
-  graph = new Graph({
-    container: canvasRef.value,
-    autoResize: true,
-    grid: { visible: true, size: 20, args: { color: 'var(--c-border)' } },
-    panning: { enabled: true, modifiers: 'shift' },
-    mousewheel: { enabled: true, modifiers: ['ctrl','meta'] },
-    connecting: { 
-      snap: { radius: 20 },
-      allowBlank: false,
-      connector: { name: 'smooth' },
-      createEdge() { return { attrs: { line: { stroke: 'var(--c-text-dim)', strokeWidth: 2, targetMarker: { name:'block',width:8,height:6 } } } } },
-    },
-    selecting: { enabled: true, multiple: false },
-    keyboard: { enabled: true },
-    history: { enabled: true },
-  })
-
-  // Delete key removes selected node (cron 不可删除)
-  graph.bindKey('delete', () => {
-    const cells = graph.getSelectedCells()
-    cells.forEach(c => {
-      if (c.getData()?.node_name === 'cron') return
-      graph.removeCell(c)
-    })
-  })
-
-  // 双击 cron 节点 → 流程属性侧边栏（含 Cron 设置）；双击其他 → 节点详情
-  graph.on('node:dblclick', ({ node }) => {
-    const name = node.getData()?.node_name
-    if (!name) return
-    if (name === 'cron') { sidebarMode.value = 'flow'; return }
-    axios.get(API + `/api/dag/node-types/${name}`).then(r => {
-      nodeDetail.value = r.data
-      sidebarMode.value = 'node'
-    }).catch(() => {})
-  })
-  // Click canvas → close sidebar
-  graph.on('blank:click', () => { sidebarMode.value = null })
-}
-
-function makeNode(name, label, x, y) {
-  return {
-    x: x || 100, y: y || 100,
-    width: 120, height: 40,
-    shape: 'rect',
-    label: label || name,
-    data: { node_name: name },
-    attrs: {
-      body: { rx: 8, ry: 8, fill: 'var(--c-card-bg)', stroke: 'var(--c-border)', strokeWidth: 2 },
-      label: { fill: 'var(--c-text)', fontSize: 11, fontWeight: 600 },
-    },
-    ports: {
-      groups: {
-        top: { position: 'top', attrs: { circle: { r: 5, magnet: true, fill: '#60a5fa', stroke: 'var(--c-card-bg)', strokeWidth: 2 } } },
-        bottom: { position: 'bottom', attrs: { circle: { r: 5, magnet: true, fill: '#f59e0b', stroke: 'var(--c-card-bg)', strokeWidth: 2 } } },
-      },
-      items: [{ group: 'top' }, { group: 'bottom' }],
-    },
-  }
-}
-
-function labelFor(name) {
-  const found = nodeTypes.value.find(nt => nt.node_name === name)
-  return found?.label || name
-}
-
+function labelFor(name) { return nodeTypes.value.find(nt => nt.node_name === name)?.label || name }
 function parseCron(cron) {
-  if (!cron) return
-  const parts = cron.split(' ')
-  if (parts.length === 6) parts.shift()
-  if (parts.length < 5) return
-  const [m, h, dom, mon, dow] = parts
-  cronMin.value = m
-  cronHour.value = h
-  if (dom === '*' && mon === '*' && dow === '*') { cronTab.value = 'day' }
-  else if (dom === '*' && mon === '*' && dow !== '*' && /^\d\d?$/.test(dow)) { cronTab.value = 'week'; cronWeekDay.value = dow }
-  else if (dow === '*' && mon === '*' && /^\d\d?$/.test(dom)) { cronTab.value = 'month'; cronMonthDay.value = dom }
-  else { cronTab.value = 'custom' }
+  if (!cron) return; const p = cron.split(' ')
+  if (p.length === 6) p.shift(); if (p.length < 5) return
+  const [m, h, dom, mon, dow] = p; cronMin.value = m; cronHour.value = h
+  // 设置 cronTime
+  cronTime.value = makeTimeMs(parseInt(h), parseInt(m))
+  // 检测模式
+  if (dom === '*' && mon === '*' && dow === '*' && /^\*\//.test(m)) { cronTab.value = 'min'; cronInterval.value = parseInt(m.replace('*/','')) || 5 }
+  else if (dom === '*' && mon === '*' && dow === '*' && /^\*\//.test(h)) { cronTab.value = 'hour'; cronInterval.value = parseInt(h.replace('*/','')) || 1 }
+  else if (dom === '*' && mon === '*' && dow === '*') cronTab.value = 'day'
+  else if (dom === '*' && mon === '*' && /^[\d,]+$/.test(dow)) { cronTab.value = 'week'; cronWeekDays.value = dow.split(',').sort() }
+  else if (dow === '*' && mon === '*' && /^[\d,]+$/.test(dom)) { cronTab.value = 'month'; cronMonthDays.value = dom.split(',').sort() }
+  else { cronTab.value = 'custom'; cronCustomVal.value = cron; buildCron(); return }
+  buildCron()
 }
-
 function addNode(nt) {
-  if (!graph) return
-  const c = graph.getGraphArea().getCenter()
-  graph.addNode(makeNode(nt.node_name || nt.name, nt.label, c.x - 60 + Math.random() * 100, c.y - 20 + Math.random() * 60))
+  if (!nodes.value) return
+  const vp = screenToFlowCoordinate({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+  nodes.value.push(makeVfNode(nt.node_name || nt.name, nt.label || nt.name, vp.x + Math.random() * 100 - 50, vp.y + Math.random() * 60 - 30))
+  dirty.value = true
 }
-
 async function openEdit(id) {
-  editMode.value = true
-  validation.value = null
-  loadNodeTypes()  // 编辑时按需加载节点类型
+  editMode.value = true; validation.value = null; loadNodeTypes()
+  loadingFlow.value = true
   try {
-    const r = await axios.get(API + `/api/dag/flows/${id}`)
-    const d = r.data
-    flowName.value = d.flow_name
-    flowCron.value = d.cron_expr || ''
-    parseCron(d.cron_expr)
-    flowStatus.value = d.status || 'draft'
-    selectedFlow.value = id
+    const r = await axios.get(API + `/api/dag/flows/${id}`); const d = r.data
+    flowName.value = d.flow_name; flowCron.value = d.cron_expr || ''
+    parseCron(d.cron_expr); flowStatus.value = d.status || 'draft'; selectedFlow.value = id
     await nextTick()
-    initGraph()
-    // Load existing nodes with saved positions
-    const nodeMap = {}
-    for (const n of d.nodes || []) {
-      const pos = n.position || {}
-      const node = graph.addNode(makeNode(n.node_name, labelFor(n.node_name), pos.x || 100 + Math.random()*400, pos.y || 50 + Math.random()*300))
-      nodeMap[n.node_name] = node
-    }
-    // Draw edges
-    for (const n of d.nodes || []) {
-      for (const dep of n.deps || []) {
-        if (nodeMap[dep] && nodeMap[n.node_name]) {
-          graph.addEdge({
-            source: { cell: nodeMap[dep].id, port: 'bottom' },
-            target: { cell: nodeMap[n.node_name].id, port: 'top' },
-            attrs: { line: { stroke: 'var(--c-text-dim)', strokeWidth: 2, targetMarker: { name:'block',width:8,height:6 } } },
-          })
-        }
-      }
-    }
-    // auto-add cron if missing
-    if (!nodeMap['cron']) {
-      const cronNode = graph.addNode(makeNode('cron', 'cron', 100, 80))
-      nodeMap['cron'] = cronNode
-    }
-  } catch(e) { console.error(e) }
+    const newNodes = (d.nodes || []).map(n => { const pos = n.position || {}; return makeVfNode(n.node_name, labelFor(n.node_name), pos.x, pos.y) })
+    if (!d.nodes?.find(n => n.node_name === 'cron')) newNodes.push(makeVfNode('cron', 'cron', 100, 80))
+    const newEdges = []
+    for (const n of d.nodes || []) { for (const dep of n.deps || []) { const sid = dep + '->' + n.node_name; if (!newEdges.find(e => e.id === sid)) newEdges.push({ id: sid, source: dep, target: n.node_name, ...defaultEdgeOpts }) } }
+    nodes.value = newNodes; edges.value = newEdges; dirty.value = false
+    await nextTick(); fitView({ padding: 0.2, maxZoom: 1 })
+  } catch(e) { console.error(e) } finally { loadingFlow.value = false }
 }
-
 function getFlowData() {
-  if (!graph) return { nodes: [], edges: [] }
-  const nodes = graph.getNodes().map(n => {
-    const incoming = graph.getIncomingEdges(n.id) || []
-    const pos = n.getPosition()
-    const deps = incoming.map(e => graph.getCell(e.getSourceCellId())?.getData()?.node_name).filter(Boolean)
-    return {
-      node_name: n.getData()?.node_name || '',
-      deps: [...new Set(deps)],
-      position: { x: Math.round(pos.x), y: Math.round(pos.y) },
-    }
-  })
-  return { nodes }
+  const ns = getNodes.value
+  if (!ns.length) return { nodes: [] }
+  return { nodes: ns.map(n => ({ node_name: n.id, deps: [...new Set(edges.value.filter(e => e.target === n.id).map(e => e.source))], position: { x: Math.round(n.position.x), y: Math.round(n.position.y) } })) }
 }
-
 async function doValidate() {
-  const data = getFlowData()
-  try {
-    const r = await axios.post(API + '/api/dag/flows/validate', data)
-    validation.value = r.data
-  } catch(e) {
-    validation.value = { ok: false, errors: [e.response?.data?.detail || e.message] }
-  }
+  try { const r = await axios.post(API + '/api/dag/flows/validate', getFlowData()); validation.value = r.data }
+  catch(e) { validation.value = { ok: false, errors: [e.response?.data?.detail || e.message] } }
 }
-
 function doSave() {
-  confirmTitle.value = '💾 保存流程'
-  confirmMsg.value = `即将保存「${flowName.value || '新流程'}」`
-  confirmChangelog.value = '手动编辑'
+  confirmTitle.value = '💾 保存流程'; confirmMsg.value = `即将保存「${flowName.value || '新流程'}」`; confirmChangelog.value = '手动编辑'
   confirmCallback.value = async () => {
-    saving.value = true
-    const data = getFlowData()
+    saving.value = true; const data = getFlowData()
     try {
-      if (selectedFlow.value) {
-        await axios.put(API + `/api/dag/flows/${selectedFlow.value}`, {
-          nodes: data.nodes,
-          cron_expr: flowCron.value,
-          change_log: confirmChangelog.value.trim() || '手动编辑',
-        })
-      } else {
-        await axios.post(API + '/api/dag/flows', {
-          flow_name: flowName.value,
-          nodes: data.nodes,
-          cron_expr: flowCron.value,
-        })
-      }
-      validation.value = { ok: true, errors: [] }
-      showConfirmModal.value = false
-      message.success('保存成功')
-      loadFlows()
-    } catch(e) {
-      message.error(e.response?.data?.detail || '保存失败')
-    }
+      if (selectedFlow.value) await axios.put(API + `/api/dag/flows/${selectedFlow.value}`, { nodes: data.nodes, cron_expr: flowCron.value, change_log: confirmChangelog.value.trim() || '手动编辑' })
+      else await axios.post(API + '/api/dag/flows', { flow_name: flowName.value, nodes: data.nodes, cron_expr: flowCron.value })
+      validation.value = { ok: true, errors: [] }; showConfirmModal.value = false; message.success('保存成功'); dirty.value = false; loadFlows()
+    } catch(e) { message.error(e.response?.data?.detail || '保存失败') }
     saving.value = false
-  }
-  showConfirmModal.value = true
+  }; showConfirmModal.value = true
 }
-
 async function doPublish() {
-  confirmTitle.value = '🚀 发布流程'
-  confirmMsg.value = `发布「${flowName.value}」，定时任务将生效`
-  confirmChangelog.value = ''
+  confirmTitle.value = '🚀 发布流程'; confirmMsg.value = `发布「${flowName.value}」，定时任务将生效`; confirmChangelog.value = ''
   confirmCallback.value = async () => {
-    if (!selectedFlow.value) return
-    saving.value = true
-    try {
-      await axios.post(API + `/api/dag/flows/${selectedFlow.value}/publish`)
-      flowStatus.value = 'published'
-      showConfirmModal.value = false
-      loadFlows()
-    } catch(e) { message.error(e.response?.data?.detail || '发布失败') }
+    if (!selectedFlow.value) return; saving.value = true
+    try { await axios.post(API + `/api/dag/flows/${selectedFlow.value}/publish`); flowStatus.value = 'published'; showConfirmModal.value = false; loadFlows() }
+    catch(e) { message.error(e.response?.data?.detail || '发布失败') }
     saving.value = false
-  }
-  showConfirmModal.value = true
+  }; showConfirmModal.value = true
 }
-
-function confirmAction() {
-  if (confirmCallback.value) confirmCallback.value()
-}
-
-async function doPublishList(id) {
-  try { await axios.post(API + `/api/dag/flows/${id}/publish`); loadFlows() } catch(e) {}
-}
-async function doUnpublishList(id) {
-  try { await axios.post(API + `/api/dag/flows/${id}/unpublish`); loadFlows() } catch(e) {}
-}
-
+function confirmAction() { if (confirmCallback.value) confirmCallback.value() }
+async function doPublishList(id) { try { await axios.post(API + `/api/dag/flows/${id}/publish`); loadFlows() } catch(e) {} }
+async function doUnpublishList(id) { try { await axios.post(API + `/api/dag/flows/${id}/unpublish`); loadFlows() } catch(e) {} }
 async function doUnpublish() {
-  if (!selectedFlow.value) return
-  saving.value = true
-  try {
-    await axios.post(API + `/api/dag/flows/${selectedFlow.value}/unpublish`)
-    flowStatus.value = 'draft'
-    loadFlows()
-  } catch(e) { alert(e.response?.data?.detail || '下线失败') }
+  if (!selectedFlow.value) return; saving.value = true
+  try { await axios.post(API + `/api/dag/flows/${selectedFlow.value}/unpublish`); flowStatus.value = 'draft'; loadFlows() } catch(e) { alert(e.response?.data?.detail || '下线失败') }
   saving.value = false
 }
-
 async function doExecute() {
-  if (!selectedFlow.value) return
-  execLoading.value = true; execResult.value = null
+  if (!selectedFlow.value) return; execLoading.value = true; execResult.value = null
   try {
-    const fd = (d) => {
-      if (!d) return ''
-      const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0')
-    }
-    const r = await axios.post(API + `/api/dag/flows/${selectedFlow.value}/execute`, {
-      trade_date: fd(execDate.value)
-    })
+    const fd = (d) => { if (!d) return ''; const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0') }
+    const r = await axios.post(API + `/api/dag/flows/${selectedFlow.value}/execute`, { trade_date: fd(execDate.value) })
     execResult.value = r.data
-  } catch(e) {
-    execResult.value = { ok: false, error: e.response?.data?.detail || e.message }
-  }
+  } catch(e) { execResult.value = { ok: false, error: e.response?.data?.detail || e.message } }
   execLoading.value = false
 }
-
 async function doExecuteQuick(id, name) {
   if (!confirm(`⚡ 立即执行「${name}」？`)) return
-  try {
-    const r = await axios.post(API + `/api/dag/flows/${id}/execute`, {})
-    alert(`✅ 已触发 — ${r.data.run_id}`)
-  } catch(e) {
-    alert(e.response?.data?.detail || '执行失败')
-  }
+  try { const r = await axios.post(API + `/api/dag/flows/${id}/execute`, {}); alert(`✅ 已触发 — ${r.data.task_id}`) } catch(e) { alert(e.response?.data?.detail || '执行失败') }
 }
-
 function autoLayout() {
-  if (!graph) return
-  const nodes = graph.getNodes()
-  const edges = graph.getEdges()
-  // 拓扑排序：统计入度
-  const inDeg = {}
-  const adj = {}
-  nodes.forEach(n => {
-    const name = n.getData()?.node_name
-    inDeg[name] = 0; adj[name] = []
-  })
-  edges.forEach(e => {
-    const src = graph.getCell(e.getSourceCellId())?.getData()?.node_name
-    const tgt = graph.getCell(e.getTargetCellId())?.getData()?.node_name
-    if (src && tgt && inDeg[tgt] !== undefined) { inDeg[tgt]++; adj[src].push(tgt) }
-  })
-  // BFS 分层
-  const layers = []
-  const queue = Object.keys(inDeg).filter(k => inDeg[k] === 0).map(k => ({ name: k, depth: 0 }))
-  const visited = new Set()
-  while (queue.length) {
-    const cur = queue.shift()
-    if (visited.has(cur.name)) continue
-    visited.add(cur.name)
-    if (!layers[cur.depth]) layers[cur.depth] = []
-    layers[cur.depth].push(cur.name)
-    ;(adj[cur.name] || []).forEach(next => {
-      if (!visited.has(next)) queue.push({ name: next, depth: cur.depth + 1 })
-    })
-  }
-  // 孤立节点放第0层
-  nodes.forEach(n => {
-    const name = n.getData()?.node_name
-    if (!visited.has(name)) {
-      if (!layers[0]) layers[0] = []
-      layers[0].push(name)
-      visited.add(name)
+  const ns = getNodes.value; const es = edges.value
+  if (!ns.length) return
+  const inDeg = {}; const adj = {}
+  ns.forEach(n => { inDeg[n.id] = 0; adj[n.id] = [] })
+  es.forEach(e => { if (inDeg[e.target] !== undefined) { inDeg[e.target]++; adj[e.source]?.push(e.target) } })
+  const layers = []; const queue = Object.keys(inDeg).filter(k => inDeg[k] === 0).map(k => ({ name: k, depth: 0 })); const visited = new Set()
+  while (queue.length) { const cur = queue.shift(); if (visited.has(cur.name)) continue; visited.add(cur.name); if (!layers[cur.depth]) layers[cur.depth] = []; layers[cur.depth].push(cur.name); (adj[cur.name] || []).forEach(next => { if (!visited.has(next)) queue.push({ name: next, depth: cur.depth + 1 }) }) }
+  ns.forEach(n => { if (!visited.has(n.id)) { if (!layers[0]) layers[0] = []; layers[0].push(n.id); visited.add(n.id) } })
+  const gapX = 160; const gapY = 80
+  layers.forEach((layer, li) => { const totalW = layer.length * gapX; const offsetX = 80 - totalW / 2 + gapX / 2; layer.forEach((name, ni) => { const n = ns.find(nd => nd.id === name); if (n) n.position = { x: offsetX + ni * gapX + 300, y: 60 + li * gapY } }) })
+}
+onMounted(async () => {
+  addWsListener((data) => {
+    if (data.type === "task_progress" && taskStatuses.value) {
+      if (data.status === "running") taskStatuses.value[data.flow_id] = data
+      else delete taskStatuses.value[data.flow_id]
     }
   })
-  // 按层排列
-  const nodeMap = {}
-  nodes.forEach(n => { nodeMap[n.getData()?.node_name] = n })
-  const startX = 80, startY = 60, gapX = 160, gapY = 80
-  layers.forEach((layer, li) => {
-    const totalW = layer.length * gapX
-    const offsetX = startX - totalW / 2 + gapX / 2
-    layer.forEach((name, ni) => {
-      const n = nodeMap[name]
-      if (n) n.setPosition(offsetX + ni * gapX + graph.getGraphArea().width / 2, startY + li * gapY)
-    })
-  })
-}
-
-onMounted(() => {
-  loadFlows()
-  // 如果 URL 带有 flowId，自动打开编辑
-  if (props.flowId === 'new') {
-    createNew()
-  } else if (props.flowId > 0) {
-    openEdit(props.flowId)
-  }
-})
-
-// 响应从列表点击编辑/新建的 prop 变化（组件不重新挂载）
-watch(() => props.flowId, (newId) => {
-  if (newId === 'new') {
-    createNew()
-  } else if (newId > 0) {
-    openEdit(newId)
-  }
-})
-
-// 关闭执行弹窗时清空结果
+  await loadFlows()
+  loadTaskStatuses()
+  if (props.flowId === 'new') { createNew() } else if (props.flowId > 0) { openEdit(props.flowId) } })
+watch(() => props.flowId, (newId) => { if (newId === 'new') { createNew() } else if (newId > 0) { openEdit(newId) } })
 watch(showExecModal, (v) => { if (!v) execResult.value = null })
-
-// 退出编辑模式时检测未保存的变更
-function doExitEdit() {
-  if (graph && graph.getNodes().length > 0 && !confirm('有未保存的修改，确定退出？')) return
-  editMode.value = false
-  validation.value = null
-  emit('back')
-}
-
-// 新建流程：先加载节点类型，再初始化画布，默认添加 cron 节点
-async function createNew() {
-  editMode.value = true
-  flowName.value = ''
-  flowCron.value = ''
-  validation.value = null
-  await loadNodeTypes()
-  initGraph()
-  // 默认添加 cron 节点（左上角固定位置）
-  graph.addNode(makeNode('cron', 'cron', 100, 80))
-}
+function doExitEdit() { if (dirty.value && !confirm('有未保存的修改，确定退出？')) return; editMode.value = false; validation.value = null; emit('back') }
+async function createNew() { editMode.value = true; flowName.value = ''; flowCron.value = ''; validation.value = null; await loadNodeTypes(); loadingFlow.value = true; nodes.value = []; edges.value = []; nodes.value.push(makeVfNode('cron', 'cron', 100, 80)); buildCron(); dirty.value = false; await nextTick(); fitView({ padding: 0.2, maxZoom: 1 }); loadingFlow.value = false }
 </script>
+
+<style>
+.vue-flow__node-default { padding: 10px 6px !important; }
+</style>

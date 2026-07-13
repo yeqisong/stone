@@ -229,8 +229,7 @@ def get_dag_status():
     from app.db.connection import get_sync_db
     from sqlalchemy import text
 
-    from scripts.pipeline import _load_dag_structure
-    structure = _load_dag_structure()
+    structure = []  # 已废弃，由 dag_flows 动态管理
 
     # 看门狗：检测心跳超过 10 分钟未更新的 running 节点 → 卡死
     db = get_sync_db()
@@ -305,7 +304,7 @@ _sync_tasks: dict = {}
 
 class SyncDateRequest(BaseModel):
     date: str
-    node: str = "daily_update"
+    node: str = "cron"
     mode: str = "quick"  # force=全量覆盖, quick=跳过已有
 
 
@@ -339,7 +338,7 @@ def sync_date(body: SyncDateRequest, user: str = Depends(get_current_user)):
         return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
     import uuid
     task_id = str(uuid.uuid4())[:8]
-    node = getattr(body, 'node', 'daily_update') or 'daily_update'
+    node = getattr(body, 'node', 'cron') or 'cron'
     force = (body.mode == 'force')
     logger.info(f"手动触发数据采集: {body.date} mode={body.mode} force={force} (task={task_id})")
     thread = threading.Thread(target=_run_dag_background, args=(node, body.date, task_id, force), daemon=True)
@@ -367,8 +366,7 @@ def dag_terminate(body: dict, user: str = Depends(get_current_user)):
 @router.get("/dag_config")
 def get_dag_config():
     """返回当前 DAG 流程结构（从 dag_config 表读取，无任务时也可渲染）。"""
-    from scripts.pipeline import _load_dag_structure
-    structure = _load_dag_structure()
+    structure = []  # 已废弃，由 dag_flows 动态管理
     return {"structure": structure}
 
 
@@ -639,6 +637,20 @@ async def broadcast_dag_status():
                 tasks = get_active_compute_tasks()
                 for t in tasks:
                     payload = _json.dumps({"type": "feature_compute_progress", **t})
+                    dead = set()
+                    for ws in _ws_clients:
+                        try: await ws.send_text(payload)
+                        except: dead.add(ws)
+                    _ws_clients -= dead
+            except Exception:
+                pass
+
+            # ── 统一任务进度推送（TaskManager）──
+            try:
+                from app.task import TaskManager
+                tm = TaskManager()
+                for t in tm.get_active_tasks():
+                    payload = _json.dumps({"type": "task_progress", **t.to_dict()})
                     dead = set()
                     for ws in _ws_clients:
                         try: await ws.send_text(payload)

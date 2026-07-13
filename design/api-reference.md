@@ -826,3 +826,82 @@ GET /api/features/1/missing-heatmap?days=120&top_n=50
 - 已剔除未上市/已退市日期
 - 停牌和 lookback 窗口期归入正常缺失
 - 计算完成后自动恢复 `data_anomaly` → `enabled`（完整度 ≥ 60%）
+
+---
+
+## 20. 统一任务日志 (v2.8)
+
+### GET /api/dag/logs
+获取最近任务日志（合并 TaskManager 内存 + dag_run_log 历史表）。
+
+| 属性 | 值 |
+|------|-----|
+| Auth | 无 |
+| Query | `limit`(默认50), `flow_id`(可选) |
+
+**响应 200**
+```json
+{
+  "items": [
+    {
+      "task_id": "task-a1b2c3d4",
+      "task_type": "dag_flow",
+      "flow_id": 2,
+      "flow_name": "test-2node",
+      "status": "completed",
+      "progress_pct": 100,
+      "nodes": [
+        {"node_name": "cron", "status": "success", "rows": 0},
+        {"node_name": "kline", "status": "success", "rows": 4520}
+      ]
+    }
+  ],
+  "total": 37
+}
+```
+
+### GET /api/dag/flows/{flow_id}/task-status
+查询流程当前是否有活跃任务。
+
+| 属性 | 值 |
+|------|-----|
+| Auth | Bearer Token |
+
+**响应 200**
+```json
+{"has_task": true, "task_id": "task-...", "status": "running", "progress_pct": 60}
+```
+
+## 21. 模型特征预检 (v2.8)
+
+### GET /api/v1/models/{version}/feature-check
+训练前检查特征数据覆盖情况。
+
+| 属性 | 值 |
+|------|-----|
+| Auth | 无 |
+
+**响应 200**
+```json
+{
+  "ready": false,
+  "warnings": ["特征'ma_5'数据截至2026-06-22，早于训练结束2026-07-05"],
+  "features": [
+    {"name": "ma_5", "start": "2020-01-02", "end": "2026-06-22", "stocks": 5391}
+  ]
+}
+```
+
+## 22. 全局偏好 (v2.8)
+
+### GET /api/settings/preference
+读取全局交易偏好。
+
+| 属性 | 值 |
+|------|-----|
+| Auth | Bearer Token |
+
+**响应 200**
+```json
+{"mode": "balanced"}
+```

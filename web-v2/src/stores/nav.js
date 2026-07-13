@@ -27,6 +27,17 @@ export const useNavStore = defineStore('nav', () => {
       const num = parseInt(id)
       if (num > 0) { flowId.value = num; tab.value = 'g'; return }
     }
+    if (hash.startsWith('/dag-logs/')) {
+      const parts = hash.split('/')
+      flowId.value = parseInt(parts[2]) || null
+      tab.value = 'q'
+      return
+    }
+    if (hash.startsWith('/dag-flow-view/')) {
+      flowId.value = parseInt(hash.split('/')[2]) || null
+      tab.value = 'r'
+      return
+    }
     if (hash.startsWith('/market/')) {
       tab.value = 'm'
       const parts = hash.split('/')
@@ -38,16 +49,20 @@ export const useNavStore = defineStore('nav', () => {
     }
     // 去掉 query 参数进行路径匹配
     const path = hash.includes('?') ? hash.split('?')[0] : hash
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/settings':'o','/functions':'f','/features':'e','/dag-flows':'g'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','':'','/functions':'f','/features':'e','/dag-flows':'g'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null  // 普通列表页清空编辑id
   }
 
   function syncHash() {
-    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',o:'/settings',f:'/functions',e:'/features',g:'/dag-flows',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
+    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',f:'/functions',e:'/features',g:'/dag-flows',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
     let target = map[tab.value] || '/'
     if (tab.value === 'g' && flowId.value !== null) {
       target = '/dag-flows/' + flowId.value
+    }
+    if ((tab.value === 'q' || tab.value === 'r') && flowId.value !== null) {
+      const prefix = tab.value === 'q' ? '/dag-logs/' : '/dag-flow-view/'
+      target = prefix + flowId.value
     }
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
   }
@@ -88,11 +103,11 @@ export const useNavStore = defineStore('nav', () => {
   }
 
   // tab 变化时同步 URL + 离开 g 页清空 flowId
-  watch(tab, (t) => { if (t !== 'g') flowId.value = null; syncHash() })
+  watch(tab, (t) => { if (t !== 'g' && t !== 'q' && t !== 'r') flowId.value = null; syncHash() })
   watch(dcode, () => { if (tab.value === 'd') syncHash() })
   watch(fid, () => { if (tab.value === 'v') syncHash() })
 
-  watch(flowId, () => { if (tab.value === 'g') syncHash() })
+  watch(flowId, () => { if (tab.value === 'g' || tab.value === 'q' || tab.value === 'r') syncHash() })
 
   // 页面加载时解析 URL
   parseHash()

@@ -960,7 +960,6 @@ def init_db(sync_session) -> None:
     except Exception:
         sync_session.rollback()
 
-    # 迁移：移除 indicator 节点（v2.6 — KEPL feature_compute 替代）
     try:
         sync_session.execute(text("DELETE FROM dag_config WHERE node_name IN ('indicator_incr','indicator_full')"))
         sync_session.commit()

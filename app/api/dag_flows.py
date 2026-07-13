@@ -4,8 +4,8 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from typing import Optional, List
-import json
+from typing import Optional, List, Dict, Any
+import json, threading
 
 from app.auth.auth import get_current_user
 
@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/dag", tags=["dag-flows"])
 class FlowNode(BaseModel):
     node_name: str
     deps: List[str] = []
+    position: Optional[Dict[str, Any]] = None
 
 
 class CreateFlow(BaseModel):
@@ -39,22 +40,15 @@ def list_flows():
     from sqlalchemy import text
     db = get_sync_db()
     try:
-        rows = db.execute(text("""
-            SELECT f.id, f.flow_name, f.description, f.cron_expr, f.status, f.is_active, f.created_at,
-                   COALESCE(v.node_count, 0) AS node_count
-            FROM dag_flows f
-            LEFT JOIN (
-                SELECT flow_id, COUNT(*) AS node_count FROM dag_flow_versions GROUP BY flow_id
-            ) v ON v.flow_id = f.id
-            ORDER BY f.created_at DESC
-        """)).fetchall()
+        rows = db.execute(text("SELECT * FROM dag_flows ORDER BY created_at DESC")).fetchall()
         items = []
         for r in rows:
+            nodes = json.loads(r[3]) if isinstance(r[3], str) else (r[3] or [])
             items.append({
                 "id": r[0], "flow_name": r[1], "description": r[2],
-                "cron_expr": r[3], "status": r[4], "is_active": r[5],
-                "created_at": str(r[6])[:19] if r[6] else None,
-                "node_count": r[7],
+                "cron_expr": r[5], "status": r[6], "is_active": r[7],
+                "created_at": str(r[8])[:19] if r[8] else None,
+                "node_count": len(nodes),
             })
         db.close()
         return {"items": items, "total": len(items)}
@@ -76,7 +70,8 @@ def create_flow(body: CreateFlow, user: str = Depends(get_current_user)):
             db.close()
             raise HTTPException(400, "; ".join(errors))
 
-        nodes_json = json.dumps([{"node_name": n.node_name, "deps": n.deps} for n in body.nodes])
+        # 结果在 INSERT 中复用
+        nodes_json = json.dumps([n.model_dump() for n in body.nodes])
         edges = []
         for n in body.nodes:
             for dep in n.deps:
@@ -169,7 +164,7 @@ def update_flow(flow_id: int, body: UpdateFlow, user: str = Depends(get_current_
             if errors:
                 db.close()
                 raise HTTPException(400, "; ".join(errors))
-            nodes_json = json.dumps([{"node_name": n.node_name, "deps": n.deps} for n in body.nodes])
+            nodes_json = json.dumps([n.model_dump() for n in body.nodes])
             edges = [{"source": dep, "target": n.node_name} for n in body.nodes for dep in n.deps]
             updates.append("nodes = :nodes")
             params["nodes"] = nodes_json
@@ -258,6 +253,17 @@ def unpublish_flow(flow_id: int, user: str = Depends(get_current_user)):
         raise HTTPException(500, str(e)[:200])
 
 
+@router.get("/flows/{flow_id}/task-status")
+def get_flow_task_status(flow_id: int):
+    """查询流程当前是否有活跃任务及其状态。"""
+    from app.task import TaskManager
+    tm = TaskManager()
+    task = tm.get_flow_active_task(flow_id)
+    if not task:
+        return {"has_task": False}
+    return {"has_task": True, **task.to_dict()}
+
+
 @router.get("/flows/{flow_id}/versions")
 def list_flow_versions(flow_id: int):
     """流程版本历史。"""
@@ -299,6 +305,7 @@ def execute_flow(flow_id: int, body: dict = {}, user: str = Depends(get_current_
     from scripts.dag import DagExecutor, DagNode
     from datetime import date as _date
     import uuid, threading, json as _json
+    from app.task import TaskManager
 
     db = get_sync_db()
     try:
@@ -311,9 +318,15 @@ def execute_flow(flow_id: int, body: dict = {}, user: str = Depends(get_current_
         flow_name = r[0]
         nodes_raw = _json.loads(r[1]) if isinstance(r[1], str) else (r[1] or [])
         td = body.get("trade_date", "") or str(_date.today())
-        run_id = f"run-{uuid.uuid4().hex[:8]}"
 
-        # 构建临时 DagExecutor，设置 on_node_enter 以写入 dag_run_log
+        # 通过 TaskManager 创建统一任务
+        tm = TaskManager()
+        task = tm.create_task(task_type="dag_flow", flow_id=flow_id,
+                              flow_name=flow_name, nodes=nodes_raw)
+        if task.status == "failed":
+            raise HTTPException(429, task.error or "任务创建失败")
+
+        # 构建临时 DagExecutor
         executor = DagExecutor()
         for n in nodes_raw:
             name = n.get("node_name", "")
@@ -323,25 +336,69 @@ def execute_flow(flow_id: int, body: dict = {}, user: str = Depends(get_current_
                 fn = lambda **kw: True
             executor.add(DagNode(name, deps, fn))
 
-        # 复用 pipeline 的节点日志回调
         from scripts.pipeline import _node_enter
         executor.on_node_enter = _node_enter
 
-        # 后台线程执行（使用共享的 context 初始化）
-        def _bg():
+        # 后台线程执行
+        def _bg(tid, ename, enodes, eexec, etd):
             from loguru import logger
+            from datetime import datetime
+            tm.start_task(tid)
             try:
-                rid, sorted_names, ctx = executor.prepare_context(trade_date=td)
-                logger.info(f"[flow] {flow_name} 开始执行 {rid}, 节点: {sorted_names}")
-                executor._execute(sorted_names, **ctx)
-                logger.info(f"[flow] {flow_name} 执行完成 {rid}")
-            except Exception as e:
-                logger.error(f"[flow] {flow_name} 执行失败: {e}")
+                rid, sorted_names, ctx = eexec.prepare_context(trade_date=etd)
+                logger.info(f"[flow] {ename} 开始执行 {rid}, 节点: {sorted_names}")
 
-        thread = threading.Thread(target=_bg, daemon=True)
+                # 在每个节点执行前后更新 TaskManager
+                original_execute = eexec._execute
+                def tracked_execute(sorted_names, **ctx2):
+                    # 初始化所有节点为 pending
+                    for nm in sorted_names:
+                        tm.update_node(tid, nm, status="pending")
+                    # 按原有逻辑执行，在节点完成后更新状态
+                    for nm in sorted_names:
+                        node = eexec._nodes.get(nm)
+                        if not node:
+                            continue
+                        # 检查依赖是否都完成了
+                        deps_ok = all(eexec._completed.get(d) for d in node.deps)
+                        if not deps_ok:
+                            tm.update_node(tid, nm, status="failed", error="依赖未完成")
+                            from scripts.pipeline import write_node_log
+                            log_ids = ctx2.get('_node_log_ids', {})
+                            lid = log_ids.get(nm)
+                            if lid: write_node_log(log_id=lid, status='failed', detail='依赖未完成，跳过执行')
+                            continue
+                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        tm.update_node(tid, nm, status="running", started_at=ts)
+                        try:
+                            node.fn(**ctx2)
+                            import time as _t
+                            eexec._completed[nm] = _t.time()
+                            ts2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            tm.update_node(tid, nm, status="success", finished_at=ts2)
+                        except Exception as e:
+                            logger.error(f"[flow] 节点 {nm} 失败: {e}")
+                            ts2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            tm.update_node(tid, nm, status="failed", error=str(e)[:200], finished_at=ts2)
+                            from scripts.pipeline import write_node_log
+                            log_ids = ctx2.get("_node_log_ids", {})
+                            lid = log_ids.get(nm)
+                            if lid: write_node_log(log_id=lid, status="failed", detail=str(e)[:200])
+                tracked_execute(sorted_names, **ctx)
+                task_obj = tm._tasks.get(tid)
+                if task_obj and any(n.status == "failed" for n in task_obj.nodes):
+                    tm.fail_task(tid, "部分节点执行失败")
+                else:
+                    tm.complete_task(tid)
+                logger.info(f"[flow] {ename} 执行完成 {rid}")
+            except Exception as e:
+                logger.error(f"[flow] {ename} 执行失败: {e}")
+                tm.fail_task(tid, str(e)[:200])
+
+        thread = threading.Thread(target=_bg, args=(task.task_id, flow_name, nodes_raw, executor, td), daemon=True)
         thread.start()
 
-        return {"ok": True, "run_id": run_id, "flow_name": flow_name, "trade_date": td, "status": "started"}
+        return {"ok": True, "task_id": task.task_id, "flow_name": flow_name, "trade_date": td, "status": "started"}
     except HTTPException:
         raise
     except Exception as e:
@@ -415,3 +472,74 @@ def _validate_flow(nodes: List[FlowNode], db) -> List[str]:
                 errors.append(f"节点 '{n.node_name}' 依赖的 '{dep}' 不在流程中且不是已知节点类型")
 
     return errors
+
+@router.get("/logs")
+def list_task_logs(limit: int = Query(50, le=200), flow_id: int = Query(None)):
+    """获取最近任务日志，合并 TaskManager 内存 + dag_run_log 历史表。"""
+    from app.task import TaskManager
+    tm = TaskManager()
+    seen = set()
+    items = []
+
+    # 1. 活跃任务优先（TaskManager 内存）
+    for t in sorted(tm._tasks.values(), key=lambda x: x.created_at or "", reverse=True):
+        d = t.to_dict()
+        seen.add(d["task_id"])
+        items.append(d)
+
+    # 2. 历史任务（dag_run_log 表，排除已在内存中的）
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT run_id, trade_date, node_name, status, rows, detail,
+                   created_at, started_at, finished_at
+            FROM dag_run_log ORDER BY id DESC
+        """)).fetchall()
+        db.close()
+
+        groups = {}
+        for r in rows:
+            rid = r[0]
+            if rid in seen:
+                continue
+            if rid not in groups:
+                groups[rid] = {
+                    "task_id": rid, "task_type": "dag_flow",
+                    "flow_name": "", "status": "completed",
+                    "progress_pct": 0, "current_detail": "", "nodes": [],
+                    "error": None,
+                    "created_at": str(r[6])[:19] if r[6] else "",
+                    "trade_date": str(r[1])[:10] if r[1] else "",
+                    "started_at": None, "finished_at": None,
+                }
+            groups[rid]["nodes"].append({
+                "node_name": r[2], "status": r[3], "rows": r[4] or 0,
+                "detail": r[5] or "", "error": None,
+                "progress_pct": 0,
+                "started_at": str(r[7])[:19] if r[7] else None,
+                "finished_at": str(r[8])[:19] if r[8] else None,
+            })
+            if r[8] and (not groups[rid]["finished_at"] or str(r[8]) > groups[rid]["finished_at"]):
+                groups[rid]["finished_at"] = str(r[8])[:19]
+        for g in groups.values():
+            nodes = g["nodes"]
+            if any(n["status"] == "failed" for n in nodes):
+                g["status"] = "failed"
+            elif any(n["status"] == "running" for n in nodes):
+                g["status"] = "running"
+            done = sum(1 for n in nodes if n["status"] in ("success", "failed"))
+            g["progress_pct"] = int(done / len(nodes) * 100) if nodes else 0
+        items.extend(groups.values())
+    except Exception:
+        try: db.close()
+        except: pass
+
+    # 3. 过滤 + 排序
+    # 过滤：仅对 TaskManager 内存任务做 flow_id 过滤，历史条目全部保留
+    if flow_id:
+        memory_ids = {t.task_id for t in tm._tasks.values()}
+        items = [t for t in items if t.get("task_id") not in memory_ids or t.get("flow_id") == flow_id]
+    items.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+    return {"items": items[:limit], "total": len(items)}

@@ -412,6 +412,57 @@ def delete_model(version: str, mode: str = Query("soft"), user: str = Depends(ge
         db.close()
 
 
+@router.get("/v1/models/{version}/feature-check")
+def check_model_features(version: str):
+    """训练前置检查：特征数据覆盖情况。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        cfg = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else {})
+        feature_names = cfg.get("feature_names", [])
+        train_start = cfg.get("train_start", "2021-01-01")
+        train_end = cfg.get("train_end", "2025-12-31")
+
+        if not feature_names:
+            return {"ready": False, "warnings": ["模型未配置特征，请在编辑中至少选择一个特征"], "features": []}
+
+        warnings = []
+        features_info = []
+        all_ready = True
+
+        for fn in feature_names[:20]:
+            row = db.execute(text("""
+                SELECT MIN(trade_date), MAX(trade_date), COUNT(DISTINCT stock_code)
+                FROM feature_values WHERE feature_name = :fn
+            """), {"fn": fn}).fetchone()
+
+            if not row or not row[0]:
+                features_info.append({"name": fn, "start": None, "end": None, "stocks": 0})
+                warnings.append(f"特征「{fn}」无任何数据，请先执行特征补数")
+                all_ready = False
+                continue
+
+            f_start = str(row[0]); f_end = str(row[1]); stocks = row[2] or 0
+            if f_start > train_start:
+                warnings.append(f"特征「{fn}」数据从 {f_start} 开始，晚于训练起始 {train_start}")
+                all_ready = False
+            if f_end < train_end:
+                warnings.append(f"特征「{fn}」数据截至 {f_end}，早于训练结束 {train_end}")
+                all_ready = False
+            features_info.append({"name": fn, "start": f_start, "end": f_end, "stocks": stocks})
+
+        return {"ready": all_ready, "warnings": warnings, "features": features_info}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e)[:200])
+    finally:
+        db.close()
+
+
 @router.post("/v1/models/{version}/approve")
 def approve_model(version: str, user: str = Depends(get_current_user)):
     """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。"""

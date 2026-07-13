@@ -108,7 +108,7 @@
 | 图表 | ECharts | 5.5 |
 | 状态管理 | Pinia | 3.0 |
 | HTTP | Axios | 1.6 |
-| DAG 可视化 | AntV X6 + X6-Vue-Shape | 3.1.7 |
+| DAG 可视化 | Vue Flow | 1.48+ |
 | 代码编辑器 | Monaco Editor | 0.55.1 |
 
 ### 3.3 部署
@@ -194,11 +194,8 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/settings` | 获取所有策略配置 |
-| POST | `/api/settings/toggle_strategy` | 启用/停用策略 |
-| POST | `/api/settings/preference` | 切换交易偏好 |
-| POST | `/api/settings/update_params` | 更新策略参数 |
-| POST | `/api/settings/deepseek_key` | 设置 DeepSeek API Key |
+| GET | `/api/settings` | 获取/更新全局偏好（含 DeepSeek Key 脱敏） |
+| POST | `/api/settings/preference` | 切换交易偏好（left/balanced/right） |
 
 ### 4.9 飞书
 
@@ -221,11 +218,13 @@
 | GET | `/api/v1/models/{version}` | 模型版本详情（含参数/指标/特征） |
 | PUT | `/api/v1/models/{version}` | 更新模型配置 |
 | DELETE | `/api/v1/models/{version}` | 软删除模型版本 |
-| POST | `/api/v1/models/{version}/train` | 启动 XGBoost 训练 |
-| POST | `/api/v1/models/{version}/evaluate` | 回测评估 |
-| POST | `/api/v1/models/{version}/deploy` | 部署为实盘信号 |
-| POST | `/api/v1/models/{version}/stop` | 停止训练 |
+| POST | `/api/v1/models/{version}/approve` | 审批通过（ACTIVE） |
+| POST | `/api/v1/models/{version}/reject` | 审批拒绝 |
 | GET | `/api/v1/models/{version}/signals` | 模型实时信号 |
+| GET | `/api/v1/models/{version}/health` | 模型健康度 |
+| GET | `/api/v1/models/{version}/diagnosis` | 模型诊断 |
+| GET | `/api/v1/models/{version}/delete-check` | 删除前检查 |
+| GET | `/api/v1/models/{version}/feature-check` | 训练前特征数据覆盖预检 (v2.8+) |
 
 ### 4.12 函数管理 (v2.2+)
 
@@ -276,8 +275,11 @@
 | PUT | `/api/dag/flows/{id}` | 更新流程 |
 | DELETE | `/api/dag/flows/{id}` | 删除流程 |
 | POST | `/api/dag/flows/{id}/publish` | 发布新版本 |
+| POST | `/api/dag/flows/{id}/unpublish` | 下线流程 |
 | POST | `/api/dag/flows/validate` | 流程校验 |
-| POST | `/api/dag/execute` | 触发流程执行 |
+| POST | `/api/dag/flows/{id}/execute` | 触发流程执行 |
+| GET | `/api/dag/flows/{id}/task-status` | 查询流程活跃任务状态 (v2.8+) |
+| GET | `/api/dag/flows/{id}/versions` | 流程版本历史 |
 
 ### 4.17 信号统计 (v2.5+)
 

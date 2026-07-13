@@ -102,6 +102,19 @@
   <!-- ══════════════════════════════════════════ -->
   <!--  历史补数                                              -->
   <!-- ══════════════════════════════════════════ -->
+  <!--  全局交易偏好                                            -->
+  <!-- ══════════════════════════════════════════ -->
+  <div style="margin-top:14px">
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🎯 全局交易偏好</div>
+    <n-radio-group v-model:value="prefMode" @update:value="setPref">
+      <n-radio-button value="left" label="左侧" />
+      <n-radio-button value="balanced" label="均衡" />
+      <n-radio-button value="right" label="右侧" />
+    </n-radio-group>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!--  历史补数                                            -->
   <div style="margin-top:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <span style="font-size:14px;font-weight:600;color:var(--c-text)">📥 历史补数</span>
@@ -176,12 +189,23 @@
 
 <script setup>
 import { ref, computed, onMounted, h } from 'vue'
-import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag } from 'naive-ui'
+import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NRadioGroup, NRadioButton } from 'naive-ui'
 import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
 import { addWsListener } from '../utils/ws'
 
 const API = window.location.origin
+const prefMode = ref('balanced')
+
+async function loadPref() {
+  try {
+    const r = await axios.get(API + '/api/settings')
+    prefMode.value = r.data.preference?.mode || 'balanced'
+  } catch(e) { prefMode.value = 'balanced' }
+}
+async function setPref(m) {
+  try { await axios.post(API + '/api/settings/preference', { mode: m }) } catch(e) {}
+}
 const loading = ref(true)
 const overview = ref({total_rows:0,total_stocks:0,latest_date:'',exchanges:{}})
 const missingDates = ref([])
@@ -280,6 +304,7 @@ onMounted(() => {
   loadDataStatus()
   loadDataSources()
   loadSysMetrics()
+  loadPref()
   addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
@@ -434,7 +459,7 @@ const bfLogColumns = [
   }},
   { title: '行数', width: 72, className: 'nowrap-cell', align: 'right', render(r) { return (r.progress?.rows || 0).toLocaleString() }},
   { title: '耗时', width: 70, className: 'nowrap-cell', render(r) { return fmtDuration(r.elapsed_seconds) }},
-  { title: '错误', width: 35, className: 'nowrap-cell', align: 'right', render(r) { return r.progress?.errors || 0 }},
+  { title: '错误', width: 150, ellipsis: { tooltip: true }, render(r) { return r.error_message || (r.progress?.errors || 0) }},
 ]
 
 function bfLogRowProps(row) {

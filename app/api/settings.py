@@ -84,6 +84,27 @@ def toggle_strategy(body: StrategyToggle, user: str = Depends(optional_auth)):
         db.close()
 
 
+@router.get("/settings/preference")
+def get_preference(user: str = Depends(optional_auth)):
+    """读取全局交易偏好。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    import json
+    db = get_sync_db()
+    try:
+        r = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='global_preference'"
+        )).fetchone()
+        db.close()
+        if r:
+            params = json.loads(r[0]) if isinstance(r[0], str) else {}
+            return {"mode": params.get("mode", "balanced")}
+        return {"mode": "balanced"}
+    except Exception:
+        db.close()
+        return {"mode": "balanced"}
+
+
 @router.post("/settings/preference")
 def set_preference(body: PreferenceSet, user: str = Depends(optional_auth)):
     """切换全局交易偏好（保留已有 deepseek_key，不覆盖）。"""

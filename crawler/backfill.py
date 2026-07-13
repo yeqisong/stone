@@ -275,15 +275,31 @@ class BackfillManager:
             elif task.task_type == "calendar":
                 self._run_calendar_backfill(task)
         except Exception as e:
-            logger.error(f"[Backfill] 任务 {task.task_id} 异常: {e}")
+            import traceback
+            tb = traceback.format_exc()[-800:]
+            logger.error(f"[Backfill] 任务 {task.task_id} 异常: {e}\n{tb}")
             task.status = "failed"
-            task.error_message = str(e)[:500]
+            task.error_message = f"{type(e).__name__}: {e}"[:500]
         finally:
             if task.status == "running":
                 task.status = "completed"  # 正常结束
             task.completed_at = datetime.now().isoformat()
             task.updated_at = task.completed_at
-            self._persist_task(task)  # 落库：最终状态
+            # 确保持久化：写入后从 DB 读回验证
+            from sqlalchemy import text
+            for attempt in range(3):
+                self._persist_task(task)
+                try:
+                    vdb = get_sync_db()
+                    r = vdb.execute(text(
+                        "SELECT status FROM backfill_tasks WHERE task_id=:tid"
+                    ), {"tid": task.task_id}).scalar()
+                    vdb.close()
+                    if r == task.status:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
             self._wake_ws()
 
             with self._lock:
@@ -308,23 +324,20 @@ class BackfillManager:
         stock_type_map = {"kline": "stock", "index": "index", "etf": "etf"}
         stock_type = stock_type_map[task.task_type]
 
-        try:
-            adapter._ensure_login()
-            stock_list = adapter.get_stock_list(stock_type)
-        except Exception as e:
-            task.status = "failed"
-            task.error_message = f"获取股票列表失败: {e}"
-            return
+        # 从 stock_master 读取所有股票（含已退市 status='D'）
+        type_filter = {"stock": "stock_type='stock'", "index": "stock_type='index'", "etf": "stock_type='etf'"}[stock_type]
+        db = get_sync_db()
+        rows = db.execute(text(
+            f"SELECT stock_code, ipo_date FROM stock_master WHERE {type_filter}"
+        )).fetchall()
+        all_codes = [r[0] for r in rows]
+        ipo_map = {r[0]: str(r[1]) for r in rows if r[1]}  # 停牌检测用
 
-        all_codes = [s.stock_code for s in stock_list]
         if not all_codes:
             task.status = "failed"
-            task.error_message = f"未找到任何{LABEL_MAP[task.task_type]}代码"
+            task.error_message = f"stock_master 中无{LABEL_MAP[task.task_type]}代码"
+            db.close()
             return
-
-        # 更新 stock_master 的 ipo_date（adapter 返回的数据含 IPO 日期）
-        db = get_sync_db()
-        self._sync_ipo_dates(db, stock_list, stock_type)
         db.close()
 
         # ── 确定表、取数函数、写入函数 ──
@@ -352,11 +365,7 @@ class BackfillManager:
             ), {"d": task.start_date}).fetchall()
             skip_set = {r[0] for r in rows}
         else:
-            rows = db.execute(text(
-                f"SELECT DISTINCT {code_col} FROM {table} "
-                f"WHERE trade_date BETWEEN :s AND :e"
-            ), {"s": task.start_date, "e": task.end_date}).fetchall()
-            skip_set = {r[0] for r in rows}
+            skip_set = set()  # 多日补数：不查跳过集，UPSERT 保证不重复
 
         remaining = [c for c in all_codes if c not in skip_set]
         task.stocks_total = len(remaining)
@@ -365,27 +374,13 @@ class BackfillManager:
 
         if not remaining:
             task.status = "completed"
-            task.error_message = "数据已完整，无需补数"
             db.close()
             adapter._logout()
             return
 
-        # ── IPO 日期映射（停牌检测用）──
-        ipo_map = self._load_ipo_map(db, stock_type)
+        # ── IPO 日期映射已在查询 stock_master 时构建 ──
 
-        # ── 会话刷新：get_stock_list 后重置连接，防止 baostock TCP 连接退化 ──
-        try:
-            adapter._logout()
-        except Exception:
-            pass
-        time.sleep(2)
-        try:
-            adapter._ensure_login()
-        except Exception as e:
-            task.status = "failed"
-            task.error_message = f"数据源重连失败: {e}"
-            db.close()
-            return
+
 
         # ── 分批执行（含自适应并发调整）──
         _bs = bs  # 当前动态批次大小，初始为用户设定值
@@ -404,7 +399,7 @@ class BackfillManager:
                 return
 
             # 自适应并发：内存 >90% 降 1 只，<70% 恢复 1 只
-            _mem = _mem_used_pct()
+            _mem = _mem_used_pct() or 50
             if _mem > 90 and _bs > 1:
                 _bs -= 1
                 logger.warning(f"[Backfill] 内存 {_mem}%>90%, 并发降为 {_bs}")
@@ -421,33 +416,60 @@ class BackfillManager:
                         task.task_type, _batch_count, task.total_batches, len(batch), _bs, _mem)
 
             try:
-                rows = fetch_fn(batch, task.start_date, task.end_date)
+                # ── 后台拉取 + 心跳 + 超时 ──
+                import concurrent.futures
+                FETCH_TIMEOUT = 180  # 单批最大等待 3 分钟
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(fetch_fn, batch, task.start_date, task.end_date)
+                    waited = 0
+                    while not future.done():
+                        if waited >= FETCH_TIMEOUT:
+                            raise TimeoutError(f"批次 {_batch_count} 超时 {FETCH_TIMEOUT}s")
+                        time.sleep(3)
+                        waited += 3
+                        task.updated_at = datetime.now().isoformat()
+                        self._update_task_db(task, status='running')
+                        self._wake_ws()
+                    rows = future.result()
                 saved = write_fn(db, rows) if rows else 0
                 task.rows += saved
                 logger.info("[Backfill] {} 批次 {}/{}: {} rows → 写入 {} 行",
                             task.task_type, _batch_count, task.total_batches,
                             len(rows) if rows else 0, saved)
+            except Exception:
+                # 连接异常时重连 + 超时保护重试
+                logger.warning(f"[Backfill] {task.task_type} 批次 {_batch_count} 首次失败/超时，重试...")
+                time.sleep(1)
+                try: adapter._logout()
+                except: pass
+                try: adapter._ensure_login()
+                except: pass
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(fetch_fn, batch, task.start_date, task.end_date)
+                        rows = future.result(timeout=FETCH_TIMEOUT)
+                    saved = write_fn(db, rows) if rows else 0
+                    task.rows += saved
+                except Exception as e2:
+                    logger.error(f"[Backfill] {task.task_type} 批次 {_batch_count} 重试仍失败: {e2}")
+                    task.errors += len(batch)
+                    task.failed_codes.extend(batch[:5])
+                    saved = 0; rows = None
 
-                # 停牌检测：返回 0 行但已上市 → 写入停牌标记
-                if rows:
-                    fetched = self._extract_codes(rows, task.task_type)
-                else:
-                    fetched = set()
-                for code in batch:
-                    if code not in fetched:
-                        ipo = ipo_map.get(code)
-                        if ipo and ipo <= (task.end_date or task.start_date):
-                            self._write_suspension_marker(
-                                db, table, code_col, code,
-                                task.task_type, task.end_date or task.start_date
-                            )
-
-                task.stocks_done += len(batch)
-
-            except Exception as e:
-                logger.error(f"[Backfill] {task.task_type} 批次 {_batch_count} 失败: {e}")
-                task.errors += len(batch)
-                task.failed_codes.extend(batch[:5])
+            # 停牌检测
+            if rows:
+                fetched = self._extract_codes(rows, task.task_type)
+            else:
+                fetched = set()
+            for code in batch:
+                if code not in fetched:
+                    ipo = ipo_map.get(code)
+                    if ipo and ipo <= (task.end_date or task.start_date):
+                        self._write_suspension_marker(
+                            db, table, code_col, code,
+                            task.task_type, task.end_date or task.start_date
+                        )
+            task.stocks_done += len(batch)
 
             _done += len(batch)
             task.updated_at = datetime.now().isoformat()
@@ -459,40 +481,7 @@ class BackfillManager:
                 del rows
             gc.collect()
 
-            # 批次间刷新 DB session（避免 session 累积数百万行导致内存膨胀）
-            if _done < _total_stocks:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-                db = get_sync_db()
 
-            # 批次间会话维护（连接退化防护 + 自适应降级切换数据源）
-            if _done < _total_stocks:
-                try:
-                    adapter._logout()
-                except Exception:
-                    pass
-                time.sleep(2)
-                try:
-                    if not adapter._login():
-                        # 尝试切换备选数据源
-                        try:
-                            adapter = manager.get_source()
-                            adapter._ensure_login()
-                            fetch_fn = adapter.fetch_stock_kline if task.task_type == "kline" else (
-                                adapter.fetch_index_kline if task.task_type == "index" else adapter.fetch_etf_kline)
-                            logger.warning(f"[Backfill] {task.task_type} 切换数据源到 {adapter.name}")
-                        except Exception:
-                            task.status = "failed"
-                            task.error_message = "所有数据源均不可用"
-                            db.close()
-                            return
-                except Exception as e:
-                    task.status = "failed"
-                    task.error_message = f"数据源重连异常: {e}"
-                    db.close()
-                    return
 
         task.status = "completed"
         try:
@@ -593,7 +582,7 @@ class BackfillManager:
 
             for batch_idx in range(0, len(q_remaining), _bs):
                 # 自适应并发
-                _mem = _mem_used_pct()
+                _mem = _mem_used_pct() or 50
                 if _mem > 90 and _bs > 1: _bs -= 1
                 elif _mem < 70 and _bs < _bs_max: _bs += 1
                 if task._stop_requested:
@@ -862,27 +851,6 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
     #  工具函数
     # ═══════════════════════════════════════════════
-
-    @staticmethod
-    def _sync_ipo_dates(db, stock_list, stock_type: str):
-        """批量更新 stock_master 的 ipo_date（从 adapter 返回数据中获取）。"""
-        for start in range(0, len(stock_list), 500):
-            chunk = stock_list[start:start + 500]
-            placeholders = []
-            params = {}
-            for j, s in enumerate(chunk):
-                if not s.ipo_date:
-                    continue
-                idx = start + j
-                placeholders.append(f"(:c{idx},:t{idx},:i{idx})")
-                params.update({f"c{idx}": s.stock_code, f"t{idx}": stock_type, f"i{idx}": s.ipo_date})
-            if placeholders:
-                db.execute(text(
-                    "INSERT INTO stock_master (stock_code,stock_type,ipo_date,status) "
-                    "VALUES " + ",".join(placeholders) + " "
-                    "ON CONFLICT (stock_code,stock_type) DO UPDATE SET ipo_date=EXCLUDED.ipo_date"
-                ), params)
-        db.commit()
 
     @staticmethod
     def _load_ipo_map(db, stock_type: str) -> Dict[str, str]:

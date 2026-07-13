@@ -552,3 +552,19 @@ ON CONFLICT (stock_code, report_date) DO UPDATE SET ...
 - 邮件/飞书通知补数完成（后续可加）
 - 与 `init_5year_adapter.py` 合并（后续迭代）
 - WebSocket 新开独立端点（复用现有 `/ws/dag`，新增消息类型）
+
+| 2026-07-15 | v3.1 | 跨日期 skip_set 查询移除（BETWEEN 跨年扫数百万行）；批间 `logout/sleep(2)/login` 移除；180s 超时保护；股票列表从 `stock_master` 读取 | 开发 |
+
+## 优化变更说明 (v3.1)
+
+### 跳过集查询移除
+多日补数不再执行 `SELECT DISTINCT stock_code WHERE trade_date BETWEEN :s AND :e` 查跳过集。UPSERT 保证不产生重复数据，该查询的代价远大于收益。
+
+### 批间重连移除
+删除每批后的 `adapter._logout() + sleep(2) + _login()` 和 `db.close() + get_sync_db()`。连接在批次异常时按需重连：`sleep(1) + logout + login + 重试一次`，仍失败则跳过该批。
+
+### 超时保护
+单批 fetch 调用通过 ThreadPoolExecutor 后台执行，等待超过 180 秒时主动中断并触发重连流程，防止 baostock 连接退化后永久卡死。
+
+### 股票列表来源
+从 `adapter.get_stock_list()` 改为 `SELECT stock_code, ipo_date FROM stock_master`，覆盖在库全部股票（含已退市 `status='D'`）。不再需要 `_sync_ipo_dates` 静态方法。
