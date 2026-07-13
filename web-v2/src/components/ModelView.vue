@@ -15,7 +15,12 @@
           </div>
         </div>
         <div style="flex:1;overflow-y:auto;padding:0 8px">
-          <div v-for="v in store.versions" :key="v.version"
+          <div style="display:flex;gap:4px;margin-bottom:8px">
+    <n-button size="tiny" :type="currentEntity==='stock'?'primary':'default'" @click="switchEntity('stock')">📈 个股</n-button>
+    <n-button size="tiny" :type="currentEntity==='index'?'primary':'default'" @click="switchEntity('index')">📊 指数</n-button>
+    <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')">💹 ETF</n-button>
+  </div>
+  <div v-for="v in store.versions" :key="v.version"
             :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-border)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-card-bg-hover)':'transparent'}"
             @click="store.selectVersion(v.version)"
             @mouseenter="hoveredVersion = v.version" @mouseleave="hoveredVersion = null">
@@ -84,7 +89,7 @@
           </div>
           <div v-else-if="store.detailTab==='train'">
             <div v-if="store.selected.status==='DRAFT' || store.selected.status==='REJECTED'" style="margin-bottom:14px">
-              <n-button type="primary" @click="startTrain">{{ store.selected.status==='REJECTED' ? '重新训练' : '开始训练' }}</n-button>
+              <n-button type="primary" @click="startTrain" :loading="trainingLoading">{{ store.selected.status==='REJECTED' ? '重新训练' : '开始训练' }}</n-button>
             </div>
             <ModelTraining :version="store.selected" />
           </div>
@@ -227,13 +232,16 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, h, watch } from 'vue'
-import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch, NDataTable } from 'naive-ui'
+import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch, NDataTable, NSelect } from 'naive-ui'
+import { useDialog } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import ModelTraining from './ModelTraining.vue'
 import ModelEval from './ModelEval.vue'
 import ModelLive from './ModelLive.vue'
 const store = useModelStore()
+const dialog = useDialog()
+const trainingLoading = ref(false)
 const featuresForModel = computed(() => {
   const c = store.selected?.config || {}
   return c.feature_names || c.features || []
@@ -242,25 +250,29 @@ const featuresForModel = computed(() => {
 const fcLoading = ref(false)
 const fcResult = ref(null)
 const fcCols = [
-  { title:'特征', key:'name', width:100 },
-  { title:'数据起', key:'start', width:85, render(r) { return r.start || '—' } },
-  { title:'数据止', key:'end', width:85, render(r) { return r.end || '—' } },
-  { title:'股票', key:'stocks', width:50, align:'right' },
-  { title:'行数', key:'rows', width:70, align:'right', render(r) { return (r.rows||0).toLocaleString() } },
-  { title:'覆盖', key:'ok', width:45, render(r) { return r.ok ? '✅' : '❌' } },
+  { title:'特征', key:'name', width:80 },
+  { title:'股票', key:'stocks', width:45, align:'right' },
+  { title:'总量', key:'total_rows', width:65, align:'right', render(r) { return (r.total_rows||0).toLocaleString() } },
+  { title:'训练', key:'train', width:65, align:'right', render(r) { return (r.train||0).toLocaleString() } },
+  { title:'', key:'train_pct', width:45, render(r) { return (r.train_pct||0)+'%' } },
+  { title:'验证', key:'val', width:65, align:'right', render(r) { return (r.val||0).toLocaleString() } },
+  { title:'', key:'val_pct', width:45, render(r) { return (r.val_pct||0)+'%' } },
+  { title:'测试', key:'test', width:65, align:'right', render(r) { return (r.test||0).toLocaleString() } },
+  { title:'', key:'test_pct', width:45, render(r) { return (r.test_pct||0)+'%' } },
 ]
 
-async function loadFeatureCheck() {
+async function loadFeatureCheck(force) {
   if (!store.selectedId) return
   fcLoading.value = true
   try {
-    const r = await axios.get(window.location.origin + `/api/v1/models/${store.selectedId}/feature-check`)
+    const params = force ? { force: 'true' } : {}
+    const r = await axios.get(window.location.origin + `/api/v1/models/${store.selectedId}/feature-check`, { params })
     fcResult.value = r.data
   } catch(e) { fcResult.value = null }
   fcLoading.value = false
 }
 
-watch(() => store.selectedId, () => { if (store.selected) loadFeatureCheck() })
+watch(() => store.selectedId, () => { if (store.selected && store.detailTab === 'indicators') loadFeatureCheck(false) })
 const loading = ref(true)
 const showCreate = ref(false)
 const editMode = ref(false)
@@ -277,6 +289,7 @@ const showSidebar = computed({
 })
 const hoveredVersion = ref(null)
 const createForm = reactive({
+  entity: 'stock',
   train_start: '2021-01-01', train_end: '2025-12-31',
   test_start: '2026-01-01', test_end: null,
   feature_names: [],
@@ -293,10 +306,20 @@ const createForm = reactive({
   },
   stop_loss_pct: 8, signal_timeout_days: 20,  // 保留兼容旧字段
 })
+const currentEntity = ref('stock')
+
+function switchEntity(e) {
+  currentEntity.value = e
+  loadFeatureOptions()
+  store.loadVersions(e)
+}
+
 const featureOptions = ref([])
 async function loadFeatureOptions() {
   try {
-    const r = await axios.get(window.location.origin + '/api/features?entity=stock&status=enabled&page_size=200')
+    const r = await axios.get(window.location.origin + '/api/features', {
+      params: { entity: currentEntity.value, status: 'enabled', page_size: 200 }
+    })
     featureOptions.value = (r.data.items || []).map(f => ({
       key: f.feature_name, label: f.feature_name, display: f.display_name, completeness: f.data_completeness
     }))
@@ -352,7 +375,7 @@ async function doSaveConfig() {
     })
     showCreate.value = false
     editMode.value = false
-    await store.loadVersions()
+    await store.loadVersions(currentEntity.value)
   } catch(e) {
     alert(e.response?.data?.detail || '保存失败')
   } finally { creating.value = false }
@@ -382,7 +405,7 @@ async function doCreate() {
     })
     showCreate.value = false
     createName.value = ''
-    await store.loadVersions()
+    await store.loadVersions(currentEntity.value)
     if (store.versions.length) store.selectVersion(store.versions[0].version)
   } catch(e) {
     alert(e.response?.data?.detail || '创建失败')
@@ -412,23 +435,25 @@ const basicMetrics = computed(() => {
 })
 
 async function startTrain() {
+  trainingLoading.value = true
   try {
-    await loadFeatureCheck()
+    await loadFeatureCheck(false)
     if (fcResult.value && !fcResult.value.ready) {
-      const msg = fcResult.value.warnings.join('<br>')
-      const { useDialog } = await import('naive-ui')
-      const dialog = useDialog()
+      trainingLoading.value = false
       dialog.warning({
-        title: '⚠️ 特征数据不完整',
-        content: () => h('div', { innerHTML: msg, style: 'font-size:12px;line-height:1.6' }),
+        title: '⚠️ 特征数据不完整（最近预检结果）',
+        content: () => h('div', { innerHTML: fcResult.value.warnings.join('<br>'), style: 'font-size:12px;line-height:1.6' }),
         positiveText: '仍然训练',
         negativeText: '取消',
-        onPositiveClick: () => dostartTrain(),
+        onPositiveClick: () => { trainingLoading.value = true; dostartTrain() },
       })
     } else {
       dostartTrain()
     }
-  } catch(e) { alert('预检失败: ' + (e.response?.data?.detail || e.message)) }
+  } catch(e) {
+    trainingLoading.value = false
+    dialog.error({ title: '预检失败', content: e.response?.data?.detail || e.message })
+  }
 }
 
 async function dostartTrain() {
@@ -436,14 +461,14 @@ async function dostartTrain() {
     if (store.selected.status === 'REJECTED') {
       await axios.post(window.location.origin + `/api/v1/models/${store.selectedId}/retrain`)
     }
-    await axios.post(window.location.origin + '/api/dag_trigger', { node:'model_train', include_downstream:false })
+    await axios.post(window.location.origin + `/api/v1/models/${store.selectedId}/train`)
     store.selected.status = 'TRAINING'
   } catch(e) { alert(e.response?.data?.detail || '启动训练失败') }
 }
 async function approveModel() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`)
-    await store.loadVersions()
+    await store.loadVersions(currentEntity.value)
   } catch(e) {
     alert(e.response?.data?.detail || '审批失败')
   }
@@ -451,7 +476,7 @@ async function approveModel() {
 async function rejectModel() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/reject`)
-    await store.loadVersions()
+    await store.loadVersions(currentEntity.value)
   } catch(e) {
     alert(e.response?.data?.detail || '操作失败')
   }
@@ -483,7 +508,7 @@ async function confirmDelete() {
 }
 
 onMounted(async () => {
-  await store.loadVersions()
+  await store.loadVersions(currentEntity.value)
   if (store.versions.length) store.selectVersion(store.versions[0].version)
   loading.value = false
 })

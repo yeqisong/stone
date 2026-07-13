@@ -305,6 +305,7 @@ class BackfillManager:
             with self._lock:
                 if self._active_task is task:
                     self._active_task = None
+            self._wake_ws()  # 再次广播，通知前端进度条消失
 
     # ═══════════════════════════════════════════════
     #  K线补数（个股/指数/ETF 通用）

@@ -1,6 +1,6 @@
 # 个股买卖点监测系统 (K道) — 架构设计文档
 
-> **版本**: v2.8  
+> **版本**: v2.9  
 > **最后更新**: 2026-07-15  
 > **生产地址**: https://s.pmlab.top
 
@@ -224,7 +224,7 @@
 | GET | `/api/v1/models/{version}/health` | 模型健康度 |
 | GET | `/api/v1/models/{version}/diagnosis` | 模型诊断 |
 | GET | `/api/v1/models/{version}/delete-check` | 删除前检查 |
-| GET | `/api/v1/models/{version}/feature-check` | 训练前特征数据覆盖预检 (v2.8+) |
+| GET | `/api/v1/models/{version}/feature-check` | 训练前特征数据覆盖预检 (v2.9+) |
 
 ### 4.12 函数管理 (v2.2+)
 
@@ -278,7 +278,7 @@
 | POST | `/api/dag/flows/{id}/unpublish` | 下线流程 |
 | POST | `/api/dag/flows/validate` | 流程校验 |
 | POST | `/api/dag/flows/{id}/execute` | 触发流程执行 |
-| GET | `/api/dag/flows/{id}/task-status` | 查询流程活跃任务状态 (v2.8+) |
+| GET | `/api/dag/flows/{id}/task-status` | 查询流程活跃任务状态 (v2.9+) |
 | GET | `/api/dag/flows/{id}/versions` | 流程版本历史 |
 
 ### 4.17 信号统计 (v2.5+)

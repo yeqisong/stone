@@ -19,9 +19,11 @@ export const useModelStore = defineStore('model', () => {
     return { DRAFT: '草稿', TRAINING: '训练中', VALIDATING: '验证中', PENDING: '待审批', ACTIVE: '已上线', REJECTED: '已拒绝', ARCHIVED: '已归档' }[s] || s
   }
 
-  async function loadVersions() {
+  async function loadVersions(entity) {
+    let url = window.location.origin + '/api/v1/models'
+    if (entity) url += '?entity=' + entity
     try {
-      const r = await axios.get(window.location.origin + '/api/v1/models')
+      const r = await axios.get(url)
       versions.value = r.data?.versions || []
       isMock.value = false
     } catch(e) {

@@ -29,6 +29,7 @@ from typing import Optional, List
 class CreateModel(BaseModel):
     model_name: str
     # 数据配置
+    entity: str = "stock"            # stock / index / etf
     stock_pool: str = "all"          # all / custom
     train_start: str = "2021-01-01"
     train_end: str = "2025-12-31"
@@ -65,7 +66,7 @@ class CreateModel(BaseModel):
 
 
 @router.get("/v1/models")
-def list_models():
+def list_models(entity: str = Query("stock")):
     """模型版本列表。"""
     db = get_sync_db()
     try:
@@ -75,9 +76,9 @@ def list_models():
                        evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
                        created_at, trained_at, activated_at
                 FROM model_versions
-                WHERE deleted_at IS NULL
+                WHERE deleted_at IS NULL AND COALESCE(config->>'entity', 'stock') = :ent
                 ORDER BY created_at DESC
-            """)).fetchall()
+            """), {"ent": entity}).fetchall()
         except Exception:
             db.rollback()
             # deleted_at 列未迁移时回退
@@ -157,6 +158,7 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
         version = f"v{major}.{minor}"
 
         config = {
+            "entity": body.entity,
             "stock_pool": body.stock_pool,
             "train_start": body.train_start,
             "train_end": body.train_end,
@@ -413,51 +415,111 @@ def delete_model(version: str, mode: str = Query("soft"), user: str = Depends(ge
 
 
 @router.get("/v1/models/{version}/feature-check")
-def check_model_features(version: str):
-    """训练前置检查：特征数据覆盖情况。"""
+def check_model_features(version: str, force: bool = Query(False)):
+    """训练前置检查：特征数据覆盖（分训练/验证/测试三阶段，仅 A 股）。"""
     db = get_sync_db()
     try:
         r = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
         if not r:
             raise HTTPException(404, "版本不存在")
         cfg = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else {})
-        feature_names = cfg.get("feature_names", [])
-        train_start = cfg.get("train_start", "2021-01-01")
-        train_end = cfg.get("train_end", "2025-12-31")
+        
+        # 有缓存且非强制 → 直接返回
+        cached = cfg.get("_feature_check")
+        if cached and not force:
+            db.close()
+            return cached
+
+        feature_names = cfg.get("feature_names") or cfg.get("features") or []
 
         if not feature_names:
-            return {"ready": False, "warnings": ["模型未配置特征，请在编辑中至少选择一个特征"], "features": []}
+            return {"ready": False, "warnings": ["模型未配置特征"], "features": [], "phases": None}
+
+        # A 股过滤条件（排除 ETF/指数/科创板等非主板A股）
+        a_stock_filter = "stock_code NOT LIKE '15%' AND stock_code NOT LIKE '5%' AND stock_code NOT LIKE '0%' AND stock_code NOT LIKE '3%' AND stock_code NOT LIKE '68%'"
+
+        # 取前 3 个样本特征算日期范围（用于三点切分）
+        all_dates = set()
+        for fn in feature_names[:3]:
+            dr = db.execute(text(
+                f"SELECT DISTINCT trade_date FROM feature_values WHERE feature_name=:fn AND {a_stock_filter}"
+            ), {"fn": fn}).fetchall()
+            all_dates.update(str(d[0]) for d in dr)
+
+        if not all_dates:
+            return {"ready": False, "warnings": ["所有特征均无A股数据，请先执行特征补数"], "features": [], "phases": None}
+
+        dates = sorted(all_dates)
+        n = len(dates)
+        cut1 = int(n * 0.6) if n > 5 else n
+        cut2 = int(n * 0.8) if n > 5 else n
+
+        def dr(dl):
+            if not dl: return {"start": None, "end": None, "days": 0}
+            return {"start": dl[0], "end": dl[-1], "days": len(dl)}
+
+        phases = {
+            "train": {**dr(dates[:cut1]), "label": "训练 60%"},
+            "val":   {**dr(dates[cut1:cut2]), "label": "验证 20%"},
+            "test":  {**dr(dates[cut2:]), "label": "测试 20%"},
+        }
 
         warnings = []
         features_info = []
         all_ready = True
+        limits = [cut1, cut2]
 
-        for fn in feature_names[:20]:
-            row = db.execute(text("""
-                SELECT MIN(trade_date), MAX(trade_date), COUNT(DISTINCT stock_code)
-                FROM feature_values WHERE feature_name = :fn
-            """), {"fn": fn}).fetchone()
+        for fn in feature_names:
+            stats = {}
+            for phase, pi in [("train", 0), ("val", 1), ("test", 2)]:
+                s = dates[limits[pi-1]] if pi > 0 and limits[pi-1] < len(dates) else dates[0]
+                e = dates[min(limits[pi], len(dates))-1] if pi < len(limits) and limits[pi] > 0 and limits[pi] <= len(dates) else dates[-1]
+                if not dates: cnt = 0
+                else:
+                    cnt = db.execute(text(
+                        f"SELECT COUNT(*) FROM feature_values WHERE feature_name=:fn AND trade_date BETWEEN :s AND :e AND {a_stock_filter}"
+                    ), {"fn": fn, "s": s, "e": e}).scalar() or 0
+                stats[phase] = cnt
 
-            if not row or not row[0]:
-                features_info.append({"name": fn, "start": None, "end": None, "stocks": 0})
-                warnings.append(f"特征「{fn}」无任何数据，请先执行特征补数")
+            fn_row = db.execute(text(
+                f"SELECT MIN(trade_date), MAX(trade_date), COUNT(DISTINCT stock_code), COUNT(*) "
+                f"FROM feature_values WHERE feature_name=:fn AND {a_stock_filter}"
+            ), {"fn": fn}).fetchone()
+
+            if not fn_row or not fn_row[0]:
+                features_info.append({"name": fn, "train": 0, "val": 0, "test": 0, "start": None, "end": None, "stocks": 0})
+                warnings.append(f"「{fn}」无 A 股数据")
                 all_ready = False
                 continue
 
-            f_start = str(row[0]); f_end = str(row[1]); stocks = row[2] or 0
-            if f_start > train_start:
-                warnings.append(f"特征「{fn}」数据从 {f_start} 开始，晚于训练起始 {train_start}")
-                all_ready = False
-            if f_end < train_end:
-                warnings.append(f"特征「{fn}」数据截至 {f_end}，早于训练结束 {train_end}")
-                all_ready = False
-            features_info.append({"name": fn, "start": f_start, "end": f_end, "stocks": stocks})
+            info = {
+                "name": fn, "start": str(fn_row[0]), "end": str(fn_row[1]),
+                "stocks": fn_row[2] or 0, "total_rows": fn_row[3] or 0,
+                "train": stats["train"], "val": stats["val"], "test": stats["test"],
+            }
+            tot = sum(stats.values()) or 1
+            info["train_pct"] = round(stats["train"] / tot * 100, 1)
+            info["val_pct"] = round(stats["val"] / tot * 100, 1)
+            info["test_pct"] = round(stats["test"] / tot * 100, 1)
+            for phase, label in [("train", "训练"), ("val", "验证"), ("test", "测试")]:
+                if stats[phase] < 1000:
+                    warnings.append(f"「{fn}」{label}阶段仅 {stats[phase]} 行，建议 ≥1000")
+                    all_ready = False
+            features_info.append(info)
 
-        return {"ready": all_ready, "warnings": warnings, "features": features_info}
+        # 缓存结果到 config._feature_check
+        result = {"ready": all_ready, "warnings": warnings, "features": features_info, "phases": phases}
+        cfg["_feature_check"] = result
+        db.execute(text("UPDATE model_versions SET config=:cfg WHERE version=:v"),
+                   {"cfg": json.dumps(cfg), "v": version})
+        db.commit()
+        db.close()
+        return result
     except HTTPException:
         raise
     except Exception as e:
-        db.rollback()
+        try: db.close()
+        except: pass
         raise HTTPException(500, str(e)[:200])
     finally:
         db.close()
@@ -468,12 +530,18 @@ def approve_model(version: str, user: str = Depends(get_current_user)):
     """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。"""
     db = get_sync_db()
     try:
-        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
         if not r:
             raise HTTPException(404, "版本不存在")
         if r[0] != 'PENDING':
             raise HTTPException(400, f"当前状态为 {r[0]}，只有 PENDING 状态可审批")
-        db.execute(text("UPDATE model_versions SET status='ARCHIVED', archived_at=CURRENT_TIMESTAMP WHERE status='ACTIVE'"))
+        cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
+        entity = cfg.get("entity", "stock")
+        # 仅归档同主体的旧 ACTIVE
+        db.execute(text(
+            "UPDATE model_versions SET status='ARCHIVED', archived_at=CURRENT_TIMESTAMP "
+            "WHERE status='ACTIVE' AND (config->>'entity') = :ent"
+        ), {"ent": entity})
         db.execute(text("UPDATE model_versions SET status='ACTIVE', activated_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": version})
         db.commit()
         return {"ok": True, "version": version, "status": "ACTIVE"}
@@ -533,6 +601,61 @@ def stop_training(version: str, user: str = Depends(get_current_user)):
         raise HTTPException(500, f"操作失败: {str(e)[:200]}")
     finally:
         db.close()
+
+
+@router.post("/v1/models/{version}/train")
+def train_model(version: str, user: str = Depends(get_current_user)):
+    """触发模型训练（通过 TaskManager 管理进度）。"""
+    from app.task import TaskManager
+    import threading
+
+    tm = TaskManager()
+    nodes = [
+        {"node_name": "train_load_data"},
+        {"node_name": "train_feature_eng"},
+        {"node_name": "train_optuna"},
+        {"node_name": "train_evaluate"},
+    ]
+    task = tm.create_task(task_type="model_train", flow_name=f"训练 {version}", nodes=nodes)
+    if task.status == "failed":
+        return {"ok": False, "error": task.error}
+
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        if r[0] not in ('DRAFT', 'REJECTED'):
+            raise HTTPException(400, f"当前状态为 {r[0]}，只有 DRAFT/REJECTED 可训练")
+        db.execute(text("UPDATE model_versions SET status='TRAINING', trained_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": version})
+        db.commit()
+    except HTTPException:
+        raise
+    finally:
+        db.close()
+
+    def _bg(tid, ver):
+        from datetime import datetime as _dt
+        from app.task import TaskManager as _TM
+        from scripts.pipeline import dag_task_model_train as _train
+        tm2 = _TM()
+        tm2.start_task(tid)
+        try:
+            tm2.update_node(tid, "train_load_data", status="running")
+            # 训练函数内部有自己的进度，这里先传版本参数
+            _train(trade_date="", version=ver)
+            tm2.update_node(tid, "train_load_data", status="success")
+            tm2.update_node(tid, "train_feature_eng", status="success")
+            tm2.update_node(tid, "train_optuna", status="success")
+            tm2.update_node(tid, "train_evaluate", status="success")
+            tm2.complete_task(tid)
+        except Exception as e:
+            tm2.update_node(tid, "train_optuna", status="failed", error=str(e)[:200])
+            tm2.fail_task(tid, str(e)[:200])
+
+    thread = threading.Thread(target=_bg, args=(task.task_id, version), daemon=True)
+    thread.start()
+    return {"ok": True, "task_id": task.task_id, "version": version, "status": "training started"}
 
 
 @router.post("/v1/models/{version}/retrain")
