@@ -121,7 +121,7 @@
       <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()">📋 日志</n-button>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-      <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" @click="openBackfill(btn.type)">
+      <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" :data-bf="btn.type" @click="openBackfill(btn.type)">
         {{ btn.icon }} {{ btn.label }}
       </n-button>
     </div>
@@ -342,6 +342,7 @@ const backfillBtns = [
   { type: 'etf', label: 'ETF日K线', icon: '💹' },
   { type: 'fund', label: '基本面', icon: '📋' },
   { type: 'calendar', label: '日历统计', icon: '📅' },
+  { type: 'stock_master', label: '更新股票列表', icon: '🔄' },
 ]
 
 const STATUS_LABELS = {
@@ -361,6 +362,15 @@ const bfPct = computed(() => {
 })
 
 function openBackfill(type) {
+  if (type === 'stock_master') {
+    if (!confirm('将刷新全量股票列表（IPO/退市/名称），确定继续？')) return
+    axios.post(window.location.origin + '/api/data_status/backfill', { type: 'stock_master' }).then(() => {
+      alert('✅ 已启动')
+    }).catch(e => {
+      alert('❌ ' + (e.response?.data?.error || e.message))
+    })
+    return
+  }
   bfModalType.value = type
   bfModalShow.value = true
 }

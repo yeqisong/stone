@@ -158,7 +158,6 @@ class BackfillManager:
     def __init__(self):
         self._lock = threading.Lock()
         self._active_task: Optional[BackfillTask] = None
-        self._last_completed_task: Optional[dict] = None
         self._history: List[BackfillTask] = []
         # 启动时恢复：将上次异常终止的 running 任务标记为 failed
         self._recover_orphaned_tasks()
@@ -305,22 +304,11 @@ class BackfillManager:
                     pass
                 time.sleep(0.5)
             self._wake_ws()
-            time.sleep(0.3)
 
             with self._lock:
-                self._last_completed_task = task.to_dict()
                 if self._active_task is task:
                     self._active_task = None
-            self._wake_ws()
-
-            def _clear():
-                import time as _t2
-                _t2.sleep(5)
-                with self._lock:
-                    if self._last_completed_task and self._last_completed_task.get('task_id') == task.task_id:
-                        self._last_completed_task = None
-            import threading as _th
-            _th.Thread(target=_clear, daemon=True).start()
+            self._wake_ws()  # 再次广播，通知前端进度条消失
 
     # ═══════════════════════════════════════════════
     #  K线补数（个股/指数/ETF 通用）
@@ -865,15 +853,9 @@ class BackfillManager:
         db.close()
 
     # ═══════════════════════════════════════════════
-    #  stock_master 更新
-    # ═══════════════════════════════════════════════
-
-    def _run_stock_master(self, task):
-        """更新 stock_master：从适配器拉全量股票列表，UPSERT 名称/IPO/交易所，标记退市。"""
+    #  工具函数
+        """更新股票列表：从 baostock 拉全量，UPSERT stock_master。"""
         from crawler.adapters import get_data_source_manager
-        from sqlalchemy import text as _t
-        from datetime import datetime
-
         manager = get_data_source_manager()
         try:
             adapter = manager.get_source()
@@ -894,7 +876,8 @@ class BackfillManager:
                 ipo = s.ipo_date if hasattr(s, "ipo_date") and s.ipo_date else None
                 name = getattr(s, "stock_name", code) or code
                 ex = "SSE" if code.startswith("6") else ("SZSE" if code[:1] in ("0","3") else "BSE")
-                db.execute(_t("""
+                from sqlalchemy import text
+                db.execute(text("""
                     INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
                     VALUES (:c, 'stock', :n, :ex, :ipo, 'N')
                     ON CONFLICT (stock_code, stock_type) DO UPDATE SET
@@ -910,25 +893,25 @@ class BackfillManager:
                     task.updated_at = datetime.now().isoformat()
                     self._persist_task(task)
                     self._wake_ws()
-            all_known = db.execute(_t("SELECT stock_code FROM stock_master WHERE stock_type='stock'")).fetchall()
+            all_known = db.execute(text("SELECT stock_code FROM stock_master WHERE stock_type='stock'")).fetchall()
             for r in all_known:
                 if r[0] not in current_codes:
-                    db.execute(_t("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type='stock'"), {"c": r[0]})
+                    db.execute(text("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type='stock'"), {"c": r[0]})
                     delisted += 1
             db.commit()
             task.rows = updated
-            task.error_message = f"更新 {updated} 只，退市 {delisted} 只"
+            task.error_message = f"update {updated} stocks, delisted {delisted}"
         except Exception as e:
             db.rollback()
             task.status = "failed"
-            task.error_message = str(e)[:500]
+            task.error_message = f"{type(e).__name__}: {e}"[:500]
         finally:
             try: adapter._logout()
             except: pass
             db.close()
 
     # ═══════════════════════════════════════════════
-    #  工具函数
+
     @staticmethod
     def _load_ipo_map(db, stock_type: str) -> Dict[str, str]:
         """加载股票 IPO 日期映射。"""

@@ -80,6 +80,11 @@ NODE_SUB_STEPS = {
         {'name': 'JOIN 计算总格子', 'desc': 'daily_quote 行数 × 特征数 = 总预期格子'},
         {'name': '写入 entity_stats', 'desc': '每只股票一行的数据完整度基线'},
     ],
+    'stock_master': [
+        {'name': '拉取股票列表', 'desc': 'baostock get_stock_list("stock")'},
+        {'name': 'UPSERT stock_master', 'desc': '逐行写入/更新（IPO/退市/名称/交易所）'},
+        {'name': '标记退市', 'desc': '当前列表中不存在的股票 → status=D'},
+    ],
 }
 
 

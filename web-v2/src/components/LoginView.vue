@@ -1,5 +1,5 @@
 <template>
-<div style="height:100vh;display:flex;align-items:center;justify-content:center;background:var(--c-bg)">
+<div style="height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;--c-text:#e5e5e5;--c-text-dim:#a1a1aa;--c-text-dimmer:#71717a;--c-bg:#101014;--c-card-bg:#1e1e22;--c-card-bg-hover:#27272a;--c-border:#27272a">
   <div style="background:#1e1e22;border:1px solid var(--c-border);border-radius:16px;padding:40px;width:380px;max-width:90vw">
     <h1 style="font-size:24px;text-align:center;margin-bottom:4px;color:var(--c-text)">K道</h1>
     <div style="font-size:11px;color:var(--c-text-dimmer);text-align:center;margin-bottom:28px">Stock Signal Monitor</div>

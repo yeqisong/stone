@@ -298,6 +298,8 @@ const showExecModal = ref(false)
 const execDate = ref(null)
 const execLoading = ref(false)
 const execResult = ref(null)
+const quickExecFlowId = ref(null)
+const quickExecFlowName = ref('')
 const editingName = ref(false)
 const nameInputRef = ref(null)
 const loadingFlow = ref(false)
@@ -437,17 +439,23 @@ async function doUnpublish() {
   saving.value = false
 }
 async function doExecute() {
-  if (!selectedFlow.value) return; execLoading.value = true; execResult.value = null
+  const fid = selectedFlow.value || quickExecFlowId.value
+  if (!fid) return; execLoading.value = true; execResult.value = null
   try {
     const fd = (d) => { if (!d) return ''; const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0') }
-    const r = await axios.post(API + `/api/dag/flows/${selectedFlow.value}/execute`, { trade_date: fd(execDate.value) })
+    const r = await axios.post(API + `/api/dag/flows/${fid}/execute`, { trade_date: fd(execDate.value) })
     execResult.value = r.data
+    loadTaskStatuses()
   } catch(e) { execResult.value = { ok: false, error: e.response?.data?.detail || e.message } }
   execLoading.value = false
 }
+
 async function doExecuteQuick(id, name) {
-  if (!confirm(`⚡ 立即执行「${name}」？`)) return
-  try { const r = await axios.post(API + `/api/dag/flows/${id}/execute`, {}); alert(`✅ 已触发 — ${r.data.task_id}`) } catch(e) { alert(e.response?.data?.detail || '执行失败') }
+  quickExecFlowId.value = id
+  quickExecFlowName.value = name
+  execDate.value = null
+  execResult.value = null
+  showExecModal.value = true
 }
 function autoLayout() {
   const ns = getNodes.value; const es = edges.value

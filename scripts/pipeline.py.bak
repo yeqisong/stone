@@ -2076,7 +2076,7 @@ def dag_task_stock_master(trade_date=None, **kw):
 
 
 NODE_FN_MAP = {
-    'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
+    'cron':               dag_task_cron,
     'kline':              dag_task_kline,
     'index':              dag_task_index,
     'etf':                dag_task_etf,

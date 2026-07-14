@@ -683,26 +683,13 @@ async def broadcast_dag_status():
 # ══════════════════════════════════════════
 
 @router.get("/dag_logs")
-def get_dag_logs(log_id: int = Query(None)):
-    """获取 DAG 执行日志。传 log_id 查单条，否则取最新运行组。"""
+def get_dag_logs():
+    """返回最近的 DAG 运行日志（最近一次完整运行的所有节点）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     try:
         db = get_sync_db()
-        if log_id:
-            row = db.execute(text(
-                "SELECT id, node_name, trade_date, status, detail, rows, started_at, finished_at "
-                "FROM dag_run_log WHERE id = :lid"
-            ), {"lid": log_id}).fetchone()
-            db.close()
-            if not row:
-                return {"ok": True, "nodes": []}
-            return {"ok": True, "nodes": [{
-                "id": row[0], "node_name": row[1], "trade_date": str(row[2]) if row[2] else "",
-                "status": row[3], "detail": row[4] or "", "rows": row[5] or 0,
-                "started_at": str(row[6])[:19] if row[6] else None,
-                "finished_at": str(row[7])[:19] if row[7] else None,
-            }]}
+        # 找最近一次运行的 run_id（优先 running，其次最近完成/失败的）
         run_id = db.execute(text("""
             SELECT run_id FROM dag_run_log
             WHERE status='running' AND heartbeat_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
@@ -757,6 +744,65 @@ def data_sources_health():
 #  历史补数
 # ═══════════════════════════════════════════════
 
+@router.post("/data_status/refresh_stock_master")
+def refresh_stock_master(user_data: dict = Body(None)):
+    """拉取全量股票列表并更新 stock_master（IPO 日期 / 退市状态）。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    from crawler.adapters import get_data_source_manager
+    from loguru import logger
+    from scripts.pipeline import write_node_log, update_node_progress
+    from datetime import date as _date
+    import threading
+
+    td = str(_date.today())
+    log_id = write_node_log(td, 'stock_master', 'pending', detail='准备中')
+    write_node_log(log_id=log_id, status='running', detail='获取股票列表…')
+
+    def _run():
+        updated, delisted = 0, 0
+        try:
+            manager = get_data_source_manager()
+            adapter = manager.get_source()
+            adapter._ensure_login()
+            stock_list = adapter.get_stock_list("stock")
+            db = get_sync_db()
+            current_codes = set()
+            total = len(stock_list)
+            for i, s in enumerate(stock_list):
+                current_codes.add(s.stock_code)
+                ipo = s.ipo_date if hasattr(s, 'ipo_date') else None
+                db.execute(text("""
+                    INSERT INTO stock_master (stock_code, stock_type, stock_name, ipo_date, status)
+                    VALUES (:c, 'stock', :n, :ipo, 'N')
+                    ON CONFLICT (stock_code, stock_type) DO UPDATE SET
+                        stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
+                        ipo_date = EXCLUDED.ipo_date,
+                        status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
+                """), {"c": s.stock_code, "n": getattr(s, 'stock_name', s.stock_code), "ipo": ipo})
+                updated += 1
+                if i % 100 == 0:
+                    update_node_progress(log_id=log_id, rows=updated, detail=f'处理 {updated}/{total} 只')
+            # 标记退市
+            all_known = db.execute(text("SELECT stock_code FROM stock_master WHERE stock_type='stock'")).fetchall()
+            for r in all_known:
+                if r[0] not in current_codes:
+                    db.execute(text("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type='stock'"), {"c": r[0]})
+                    delisted += 1
+            db.commit()
+            adapter._logout()
+            db.close()
+            write_node_log(log_id=log_id, status='success', rows=updated,
+                          detail=f'更新 {updated} 只，退市 {delisted} 只')
+        except Exception as e:
+            logger.error(f"[refresh_stock_master] 异常: {e}")
+            write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"ok": True, "status": "started", "log_id": log_id}
+
+
 @router.post("/data_status/backfill")
 def backfill_start(payload: dict):
     """启动补数任务。
@@ -766,7 +812,7 @@ def backfill_start(payload: dict):
     from crawler.backfill import BackfillManager, BusyError
 
     task_type = payload.get("type", "")
-    if task_type not in ("kline", "index", "etf", "fund", "indicator", "calendar", "stock_master"):
+    if task_type not in ("kline", "index", "etf", "fund", "indicator", "calendar"):
         return {"ok": False, "error": "不支持的补数类型"}
 
     start_date = payload.get("start_date")
