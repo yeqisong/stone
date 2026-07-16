@@ -299,6 +299,11 @@ def validate_flow_nodes(body: dict):
 @router.post("/flows/{flow_id}/execute")
 def execute_flow(flow_id: int, body: dict = {}, user: str = Depends(get_current_user)):
     """触发流程执行。body: {"trade_date": "2026-07-08"}（默认今天）。"""
+    return _execute_flow_internal(flow_id, body)
+
+
+def _execute_flow_internal(flow_id: int, body: dict = {}) -> dict:
+    """内部执行流程（无 auth 要求，供 cron 调度器调用）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     from scripts.pipeline import NODE_FN_MAP

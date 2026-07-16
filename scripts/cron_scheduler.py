@@ -13,7 +13,7 @@ def _check_and_trigger():
     """扫描所有已发布的流程，检查 cron 表达式是否到期。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
-    from app.api.dag_flows import execute_flow
+    from app.api.dag_flows import _execute_flow_internal
 
     db = get_sync_db()
     try:
@@ -28,7 +28,7 @@ def _check_and_trigger():
                 prev = cron.get_prev(datetime)
                 if prev and (now - prev).total_seconds() < 70:
                     logger.info(f"[cron] 触发 {f[1]} (id={f[0]})")
-                    result = execute_flow(f[0], {"trade_date": now.strftime("%Y-%m-%d")})
+                    result = _execute_flow_internal(f[0], {"trade_date": now.strftime("%Y-%m-%d")})
                     if result.get("error"):
                         logger.warning(f"[cron] {f[1]} 触发失败: {result.get('error')}")
             except Exception as e:
