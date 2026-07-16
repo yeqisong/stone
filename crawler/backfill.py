@@ -432,45 +432,75 @@ class BackfillManager:
                         task.task_type, _batch_count, task.total_batches, len(batch), _bs, _mem)
 
             try:
-                # ── 后台拉取 + 心跳 + 超时 ──
+                # ── 按年分段（跨年 > 365 天拆为多次调用，避免 baostock 超时）──
+                from datetime import date as _dt
+                sd = _dt.fromisoformat(task.start_date)
+                ed = _dt.fromisoformat(task.end_date or task.start_date)
+                rng_days = (ed - sd).days
+                if rng_days <= 365:
+                    date_ranges = [(task.start_date, task.end_date or task.start_date)]
+                else:
+                    date_ranges = []
+                    y = sd.year
+                    while y <= ed.year:
+                        ys = max(sd, _dt(y, 1, 1)).strftime("%Y-%m-%d")
+                        ye = min(ed, _dt(y, 12, 31)).strftime("%Y-%m-%d")
+                        date_ranges.append((ys, ye))
+                        y += 1
                 import concurrent.futures
-                FETCH_TIMEOUT = 180  # 单批最大等待 3 分钟
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(fetch_fn, batch, task.start_date, task.end_date)
-                    waited = 0
-                    while not future.done():
-                        if waited >= FETCH_TIMEOUT:
-                            raise TimeoutError(f"批次 {_batch_count} 超时 {FETCH_TIMEOUT}s")
-                        time.sleep(3)
-                        waited += 3
-                        task.updated_at = datetime.now().isoformat()
-                        self._update_task_db(task, status='running')
-                        self._wake_ws()
-                    rows = future.result()
-                saved = write_fn(db, rows) if rows else 0
-                task.rows += saved
-                logger.info("[Backfill] {} 批次 {}/{}: {} rows → 写入 {} 行",
-                            task.task_type, _batch_count, task.total_batches,
-                            len(rows) if rows else 0, saved)
-            except Exception:
-                # 连接异常时重连 + 超时保护重试
-                logger.warning(f"[Backfill] {task.task_type} 批次 {_batch_count} 首次失败/超时，重试...")
-                time.sleep(1)
-                try: adapter._logout()
-                except: pass
-                try: adapter._ensure_login()
-                except: pass
-                try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        future = pool.submit(fetch_fn, batch, task.start_date, task.end_date)
-                        rows = future.result(timeout=FETCH_TIMEOUT)
-                    saved = write_fn(db, rows) if rows else 0
-                    task.rows += saved
-                except Exception as e2:
-                    logger.error(f"[Backfill] {task.task_type} 批次 {_batch_count} 重试仍失败: {e2}")
+                FETCH_TIMEOUT = 180
+                batch_rows = []
+                batch_errors = []
+                for dr_s, dr_e in date_ranges:
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                            future = pool.submit(fetch_fn, batch, dr_s, dr_e)
+                            waited = 0
+                            while not future.done():
+                                if waited >= FETCH_TIMEOUT:
+                                    raise TimeoutError(f"{dr_s}~{dr_e} 超时")
+                                time.sleep(3)
+                                waited += 3
+                                task.updated_at = datetime.now().isoformat()
+                                self._update_task_db(task, status='running')
+                                self._wake_ws()
+                            yr_rows = future.result()
+                        if yr_rows:
+                            saved = write_fn(db, yr_rows)
+                            task.rows += saved
+                            batch_rows.extend(yr_rows)
+                    except Exception as e1:
+                        logger.warning(f"[Backfill] {task.task_type} {dr_s}~{dr_e} 失败: {e1}")
+                        time.sleep(1)
+                        try: adapter._logout(); adapter._ensure_login()
+                        except: pass
+                        try:
+                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                                future = pool.submit(fetch_fn, batch, dr_s, dr_e)
+                                yr_rows = future.result(timeout=FETCH_TIMEOUT)
+                            if yr_rows:
+                                saved = write_fn(db, yr_rows)
+                                task.rows += saved
+                                batch_rows.extend(yr_rows)
+                        except Exception as e2:
+                            logger.error(f"[Backfill] {task.task_type} {dr_s}~{dr_e} 重试仍失败: {e2}")
+                            batch_errors.append(f"{dr_s}:{type(e2).__name__}")
+                rows = batch_rows or None
+                if batch_errors:
                     task.errors += len(batch)
                     task.failed_codes.extend(batch[:5])
-                    saved = 0; rows = None
+                    prev = task.error_message or ""
+                    task.error_message = (prev + "; " + "; ".join(batch_errors[:3])).strip("; ")[:500]
+                saved = len(batch_rows)
+                logger.info("[Backfill] {} 批次 {}/{}: {} rows → 写入 {} 行",
+                            task.task_type, _batch_count, task.total_batches,
+                            saved, saved)
+            except Exception as e_batch:
+                logger.error(f"[Backfill] {task.task_type} 批次 {_batch_count} 异常: {e_batch}")
+                prev = task.error_message or ""
+                task.error_message = (prev + f"; 批次{_batch_count}:{type(e_batch).__name__}").strip("; ")[:500]
+                task.errors += len(batch)
+                saved = 0; rows = None
 
             # 停牌检测
             if rows:
@@ -869,55 +899,89 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
 
     def _run_stock_master(self, task):
-        """更新 stock_master：从适配器拉全量股票列表，UPSERT 名称/IPO/交易所，标记退市。"""
+        """更新 stock_master：拉全量股票/指数/ETF 列表，UPSERT 名称/IPO/交易所，标记退市。"""
         from crawler.adapters import get_data_source_manager
         from sqlalchemy import text as _t
         from datetime import datetime
+        from loguru import logger
 
         manager = get_data_source_manager()
-        try:
-            adapter = manager.get_source()
-        except RuntimeError as e:
+        # 清除健康缓存 + 重试（akshare 偶发连接重置）
+        adapter = None
+        for retry_i in range(3):
+            manager._health_cache.clear()
+            try:
+                adapter = manager.get_source()
+                break
+            except RuntimeError:
+                if retry_i < 2:
+                    import time
+                    time.sleep(5)
+                else:
+                    raise
+        if adapter is None:
             task.status = "failed"
-            task.error_message = str(e)[:500]
+            task.error_message = "数据源获取失败，重试3次均失败"
             return
         adapter._ensure_login()
-        stock_list = adapter.get_stock_list("stock")
+
+        type_labels = {"stock": "个股", "index": "指数", "etf": "ETF"}
+        all_updated = 0
+        all_delisted = 0
         db = get_sync_db()
-        updated = delisted = 0
-        current_codes = set()
-        total = len(stock_list)
         try:
-            for i, s in enumerate(stock_list):
-                code = getattr(s, "stock_code", "") or ""
-                current_codes.add(code)
-                ipo = s.ipo_date if hasattr(s, "ipo_date") and s.ipo_date else None
-                name = getattr(s, "stock_name", code) or code
-                ex = "SSE" if code.startswith("6") else ("SZSE" if code[:1] in ("0","3") else "BSE")
-                db.execute(_t("""
-                    INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
-                    VALUES (:c, 'stock', :n, :ex, :ipo, 'N')
-                    ON CONFLICT (stock_code, stock_type) DO UPDATE SET
-                        stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
-                        exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
-                        ipo_date = EXCLUDED.ipo_date,
-                        status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
-                """), {"c": code, "n": name, "ex": ex, "ipo": ipo})
-                updated += 1
-                if i % 200 == 0 or i == total - 1:
-                    task.stocks_done = updated
-                    task.stocks_total = total
-                    task.updated_at = datetime.now().isoformat()
-                    self._persist_task(task)
-                    self._wake_ws()
-            all_known = db.execute(_t("SELECT stock_code FROM stock_master WHERE stock_type='stock'")).fetchall()
-            for r in all_known:
-                if r[0] not in current_codes:
-                    db.execute(_t("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type='stock'"), {"c": r[0]})
-                    delisted += 1
+            for stype in ("stock", "index", "etf"):
+                stock_list = adapter.get_stock_list(stype)
+                # akshare 不支持 index/ETF → 从已有数据反推
+                if not stock_list and stype != "stock":
+                    if stype == "index":
+                        rows = db.execute(_t("SELECT DISTINCT index_code FROM index_daily_quote")).fetchall()
+                        stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
+                    elif stype == "etf":
+                        rows = db.execute(_t("SELECT DISTINCT stock_code FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")).fetchall()
+                        stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
+                updated = delisted = 0
+                current_codes = set()
+                total = len(stock_list)
+                for i, s in enumerate(stock_list):
+                    code = getattr(s, "stock_code", "") or ""
+                    current_codes.add(code)
+                    ipo = s.ipo_date if hasattr(s, "ipo_date") and s.ipo_date else None
+                    name = getattr(s, "stock_name", code) or code
+                    ex = "SSE" if code.startswith("6") or (code[:1] in ("0","3") and code[:3] in ("000","001","002","003")) \
+                        else ("SZSE" if code[:1] in ("0","3") else "BSE")
+                    db.execute(_t("""
+                        INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
+                        VALUES (:c, :t, :n, :ex, :ipo, 'N')
+                        ON CONFLICT (stock_code, stock_type) DO UPDATE SET
+                            stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
+                            exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
+                            ipo_date = EXCLUDED.ipo_date,
+                            status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
+                    """), {"c": code, "t": stype, "n": name, "ex": ex, "ipo": ipo})
+                    updated += 1
+                    all_updated += 1
+                    if i % 300 == 0:
+                        task.stocks_done = all_updated
+                        task.updated_at = datetime.now().isoformat()
+                        self._persist_task(task)
+                        self._wake_ws()
+                # 标记退市
+                all_known = db.execute(_t(
+                    "SELECT stock_code FROM stock_master WHERE stock_type=:t"
+                ), {"t": stype}).fetchall()
+                for r in all_known:
+                    if r[0] not in current_codes:
+                        db.execute(_t("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type=:t"),
+                                  {"c": r[0], "t": stype})
+                        delisted += 1
+                        all_delisted += 1
+                logger.info(f"[stock_master] {type_labels[stype]}: 更新 {updated}, 退市 {delisted}")
             db.commit()
-            task.rows = updated
-            task.error_message = f"更新 {updated} 只，退市 {delisted} 只"
+            task.rows = all_updated
+            task.stocks_done = all_updated
+            task.stocks_total = all_updated
+            task.error_message = f"更新 {all_updated} 只 (退市 {all_delisted})"
         except Exception as e:
             db.rollback()
             task.status = "failed"

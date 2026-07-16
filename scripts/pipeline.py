@@ -2017,42 +2017,72 @@ def _get_preference_thresholds(db) -> dict:
 # ═══════════════════════════════════════════════
 
 def _run_stock_master_update():
-    """核心逻辑：从 baostock 拉全量股票列表，UPSERT stock_master，返回 {rows, detail}。"""
+    """核心逻辑：拉全量股票/指数/ETF，UPSERT stock_master，返回 {rows, detail}。"""
     from crawler.adapters import get_data_source_manager
     from app.db.connection import get_sync_db
     from sqlalchemy import text as _t
-    from datetime import date as _d2
+    from loguru import logger
     manager = get_data_source_manager()
-    adapter = manager.get_source()
+    # 清除健康缓存 + 重试（akshare 偶发连接重置）
+    manager._health_cache.clear()
+    for _ in range(3):
+        try:
+            adapter = manager.get_source()
+            break
+        except RuntimeError:
+            import time
+            time.sleep(5)
+            manager._health_cache.clear()
+    else:
+        raise RuntimeError("数据源获取失败，重试3次均失败")
     adapter._ensure_login()
-    stock_list = adapter.get_stock_list("stock")
+
+    type_labels = {"stock": "个股", "index": "指数", "etf": "ETF"}
+    all_updated = 0
+    all_delisted = 0
     db = get_sync_db()
-    updated = delisted = 0
-    current_codes = set()
     try:
-        for i, s in enumerate(stock_list):
-            code = getattr(s, 'stock_code', '') or ''
-            current_codes.add(code)
-            ipo = s.ipo_date if hasattr(s, 'ipo_date') and s.ipo_date else None
-            name = getattr(s, 'stock_name', code) or code
-            ex = 'SSE' if code.startswith('6') else ('SZSE' if code[:1] in ('0','3') else 'BSE')
-            db.execute(_t("""
-                INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
-                VALUES (:c, 'stock', :n, :ex, :ipo, 'N')
-                ON CONFLICT (stock_code, stock_type) DO UPDATE SET
-                    stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
-                    exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
-                    ipo_date = EXCLUDED.ipo_date,
-                    status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
-            """), {"c": code, "n": name, "ex": ex, "ipo": ipo})
-            updated += 1
-        all_known = db.execute(_t("SELECT stock_code FROM stock_master WHERE stock_type='stock'")).fetchall()
-        for r in all_known:
-            if r[0] not in current_codes:
-                db.execute(_t("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type='stock'"), {"c": r[0]})
-                delisted += 1
+        for stype in ("stock", "index", "etf"):
+            stock_list = adapter.get_stock_list(stype)
+            # akshare 不支持 index/ETF → 从已有数据反推
+            if not stock_list and stype != "stock":
+                from sqlalchemy import text as _t2
+                if stype == "index":
+                    rows = db.execute(_t2("SELECT DISTINCT index_code FROM index_daily_quote")).fetchall()
+                    stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
+                elif stype == "etf":
+                    rows = db.execute(_t2("SELECT DISTINCT stock_code FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")).fetchall()
+                    stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
+            updated = delisted = 0
+            current_codes = set()
+            for s in stock_list:
+                code = getattr(s, 'stock_code', '') or ''
+                current_codes.add(code)
+                ipo = s.ipo_date if hasattr(s, 'ipo_date') and s.ipo_date else None
+                name = getattr(s, 'stock_name', code) or code
+                ex = "SSE" if code.startswith("6") or (code[:1] in ("0","3") and code[:3] in ("000","001","002","003")) \
+                    else ("SZSE" if code[:1] in ("0","3") else "BSE")
+                db.execute(_t("""
+                    INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
+                    VALUES (:c, :t, :n, :ex, :ipo, 'N')
+                    ON CONFLICT (stock_code, stock_type) DO UPDATE SET
+                        stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
+                        exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
+                        ipo_date = EXCLUDED.ipo_date,
+                        status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
+                """), {"c": code, "t": stype, "n": name, "ex": ex, "ipo": ipo})
+                updated += 1
+                all_updated += 1
+            all_known = db.execute(_t("SELECT stock_code FROM stock_master WHERE stock_type=:t"), {"t": stype}).fetchall()
+            for r in all_known:
+                if r[0] not in current_codes:
+                    db.execute(_t("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type=:t"),
+                              {"c": r[0], "t": stype})
+                    delisted += 1
+                    all_delisted += 1
+            logger.info(f"[stock_master] {type_labels[stype]}: 更新 {updated}, 退市 {delisted}")
         db.commit()
-        return {'rows': updated, 'detail': f'更新 {updated} 只，退市 {delisted} 只'}
+        return {'rows': all_updated, 'detail': f'更新 {all_updated} 只 (退市 {all_delisted})'}
     except Exception as e:
         db.rollback()
         raise

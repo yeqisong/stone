@@ -84,15 +84,9 @@ class AKShareAdapter(DataSourceAdapter):
     # ── DataSourceAdapter 接口 ──
 
     def check_health(self) -> bool:
-        """轻量健康检查：尝试获取 000001 最近 1 天数据。"""
+        """轻量健康检查：尝试获取全量股票列表（比单只 K 线更稳定）。"""
         try:
-            today = date.today()
-            start = (today - timedelta(days=7)).strftime("%Y%m%d")
-            end = today.strftime("%Y%m%d")
-            df = ak.stock_zh_a_hist(
-                symbol="000001", period="daily",
-                start_date=start, end_date=end, adjust=""
-            )
+            df = ak.stock_info_a_code_name()
             return df is not None and len(df) > 0
         except Exception:
             return False

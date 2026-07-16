@@ -60,7 +60,7 @@
             <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
           </div>
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
-            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)">
+            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td&&d.detail?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="d.td&&d.detail?showCalDetail(d):null">
               <span v-if="d.day!==null" style="font-size:10px;font-weight:500">{{d.day}}</span>
               <div v-if="d.syncing" style="position:absolute;top:0;right:2px;font-size:8px;color:#2080f0">⟳</div>
               <div v-if="d.td&&d.cp&&!d.syncing" style="font-size:7px;line-height:1.1">
@@ -183,6 +183,11 @@
   <!-- Backfill Modal -->
   <BackfillModal :show="bfModalShow" :type="bfModalType" @close="bfModalShow=false" @started="onBackfillStarted" />
 
+  <n-modal v-model:show="showCalDtl" preset="card" :title="'📊 ' + calDtlDate + ' 数据明细'" style="width:380px;max-width:92vw">
+    <n-data-table v-if="calDtlData" :columns="calDtlCols" :data="calDtlRows" size="small" :bordered="false" :single-line="false" />
+    <div v-else style="padding:20px;text-align:center;color:var(--c-text-dim);font-size:12px">无明细数据</div>
+  </n-modal>
+
 </div>
 </div>
 </template>
@@ -217,6 +222,9 @@ const cal = ref([])
 const smonth = ref(new Date().toISOString().slice(0,7))
 const dataSources = ref([])
 const activeSource = ref(null)
+const calDtlDate = ref('')
+const calDtlData = ref(null)
+const showCalDtl = ref(false)
 
 
 const monthLabel = computed(() => {
@@ -246,6 +254,27 @@ function calTitle(d) {
   return d.date+' | '+d.cp.rows+'条 ('+d.cp.pct+'%)'
 }
 
+const calDtlCols = [
+  { title:'类别', key:'label', width:50 },
+  { title:'实际', key:'actual', width:65, align:'right' },
+  { title:'应有', key:'baseline', width:65, align:'right' },
+  { title:'完整度', key:'pct', align:'right', render(r){ return (r.pct||0)+'%' } },
+]
+const calDtlRows = computed(() => {
+  if(!calDtlData.value) return []
+  return [
+    { label:'个股', ...calDtlData.value.stock },
+    { label:'指数', ...calDtlData.value.index },
+    { label:'ETF', ...calDtlData.value.etf },
+    { label:'基本面', ...calDtlData.value.fund },
+  ]
+})
+function showCalDetail(d) {
+  calDtlDate.value = d.date
+  calDtlData.value = d.detail
+  showCalDtl.value = true
+}
+
 function prevMonth() {
   const d = new Date(smonth.value+'-01')
   d.setMonth(d.getMonth()-1)
@@ -263,8 +292,8 @@ function goToday() {
 async function refreshStats() {
   statsLoading.value = true
   try {
-    const r = await axios.post(API+'/api/refresh_stats')
-    if (r.data.busy) { alert(r.data.error||'任务进行中，请等待'); statsLoading.value=false; return }
+    const r = await axios.post(API + '/api/refresh_stats')
+    if (r.data.busy) { alert('任务进行中'); statsLoading.value = false }
   } catch(e) { statsLoading.value = false }
 }
 
@@ -280,7 +309,8 @@ async function loadDataStatus() {
     statsTime.value = data.stats_computed_at||''
     const arr = (data.calendar||[]).map(x => ({
       day: parseInt(x.date.slice(8)), td:x.is_trade_day, cp:x.completeness,
-      future: new Date(x.date)>new Date(), date:x.date, syncing:false
+      future: new Date(x.date)>new Date(), date:x.date, syncing:false,
+      detail: x.detail
     }))
     const y=parseInt(smonth.value.slice(0,4)), m=parseInt(smonth.value.slice(5,7))
     const fd=new Date(y,m-1,1).getDay()
@@ -329,6 +359,11 @@ onMounted(() => {
             bfTask.value = null
           }
         }, 30000)
+      }
+    }
+    if (data.type === 'task_progress') {
+      if ((data.status === 'completed' || data.status === 'failed') && statsLoading.value) {
+        statsLoading.value = false
       }
     }
   })

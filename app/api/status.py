@@ -110,7 +110,15 @@ def get_data_status(
                 rows = dd['stock']
                 if days_ago <= 7 and pct < 80 and rows > 0: missing_dates.append(d)
                 elif days_ago <= 30 and rows == 0 and current <= today: missing_dates.append(d)
-                calendar.append({"date": d, "is_trade_day": True, "completeness": {"rows": rows, "pct": pct, "baseline": sb}, "weekday": current.weekday()})
+                calendar.append({"date": d, "is_trade_day": True,
+                    "completeness": {"rows": rows, "pct": pct, "baseline": sb},
+                    "detail": {
+                        "stock":  {"actual": dd['stock'],  "baseline": sb, "pct": sp},
+                        "index":  {"actual": dd['index'],  "baseline": ib, "pct": ip},
+                        "etf":    {"actual": dd['etf'],    "baseline": eb, "pct": ep},
+                        "fund":   {"actual": dd['fund'],   "baseline": fb, "pct": fp},
+                    },
+                    "weekday": current.weekday()})
             else:
                 if is_trade and days_ago <= 30 and current <= today: missing_dates.append(d)
                 calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": 0, "pct": 0, "baseline": 0} if is_trade else None, "weekday": current.weekday()})
@@ -211,15 +219,35 @@ def dag_trigger(body: dict, user: str = Depends(get_current_user)):
 
 @router.post("/refresh_stats")
 def refresh_stats(user: str = Depends(get_current_user)):
-    """手工触发全库数据统计（DAG stats 节点，后台执行）。"""
-    if _has_running_task():
-        return {"ok": False, "error": "待上一个任务完成后再进行", "busy": True}
-    import uuid
-    td = str(date.today())
-    task_id = str(uuid.uuid4())[:8]
-    thread = threading.Thread(target=_run_dag_background, args=("stats", td, task_id), daemon=True)
+    """手工触发全库数据统计（TaskManager + 后台 generate_stats）。"""
+    from app.task import TaskManager
+    tm = TaskManager()
+    task = tm.create_task(task_type="stats", flow_name="全库统计")
+    if task.status == "failed":
+        return {"ok": False, "error": task.error}
+    tm.start_task(task.task_id)
+
+    def _run():
+        import signal as _sig
+        try:
+            from scripts.pipeline import generate_stats
+            # 60 秒超时保护
+            _sig.alarm(60)
+            try:
+                rows = generate_stats()
+            except Exception:
+                raise
+            finally:
+                _sig.alarm(0)
+            tm.update_node(task.task_id, "node-0", status="success", rows=rows, progress_pct=100)
+            tm.complete_task(task.task_id)
+        except Exception as e:
+            tm.update_node(task.task_id, "node-0", status="failed", error=str(e))
+            tm.fail_task(task.task_id, str(e))
+
+    thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    return {"ok": True, "task_id": task_id, "node": "stats", "date": td, "status": "started"}
+    return {"ok": True, "task_id": task.task_id}
 
 
 @router.get("/dag_status")
