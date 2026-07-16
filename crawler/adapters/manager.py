@@ -227,6 +227,15 @@ def get_manager() -> DataSourceManager:
     except Exception as e:
         logger.warning(f"[DataSource] BaostockAdapter 注册失败: {e}")
 
+    # 尝试注册 TuShare 适配器（第三备选）
+    try:
+        from crawler.adapters.tushare_adapter import TuShareAdapter
+        _manager.register(TuShareAdapter())
+    except ImportError:
+        logger.debug("[DataSource] TuShareAdapter 未安装，跳过注册")
+    except Exception as e:
+        logger.warning(f"[DataSource] TuShareAdapter 注册失败: {e}")
+
     return _manager
 
 

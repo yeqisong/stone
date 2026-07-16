@@ -26,7 +26,7 @@ class AKShareAdapter(DataSourceAdapter):
     """AKShare 数据源适配器（首选源，priority=10）。"""
 
     name = "akshare"
-    priority = 10
+    priority = 15
 
     def __init__(self):
         self._name_cache: Optional[Dict[str, str]] = None  # code → name

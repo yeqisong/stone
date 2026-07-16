@@ -26,7 +26,7 @@ class BaostockAdapter(DataSourceAdapter):
     """Baostock 数据源适配器（备选源，priority=20）。"""
 
     name = "baostock"
-    priority = 20
+    priority = 5
 
     def __init__(self):
         self._logged_in = False

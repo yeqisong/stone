@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     LOGIN_USERNAME: str = "admin"
     LOGIN_PASSWORD: str = ""  # 必须通过环境变量 LOGIN_PASSWORD 设置
 
+    # ── TuShare ──
+    TUSHARE_TOKEN: str = ""
+
     # ── CORS ──
     CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "https://s.pmlab.top"]
 
