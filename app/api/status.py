@@ -778,6 +778,16 @@ def data_sources_health():
         return {"sources": [], "active_source": None, "error": str(e)}
 
 
+@router.get("/tushare_quota")
+def tushare_quota():
+    """tushare 当日配额状态（供状态页展示剩余配额/风险等级）。"""
+    try:
+        from crawler.adapters.tushare_quota import TushareQuota
+        return TushareQuota.get().snapshot()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ═══════════════════════════════════════════════
 #  历史补数
 # ═══════════════════════════════════════════════

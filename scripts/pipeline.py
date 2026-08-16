@@ -349,31 +349,17 @@ def dag_task_kline(trade_date=None, **kw):
     force = (kw.get('_node_force', {}) or {}).get('kline', kw.get('force', False))
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
+        # v3.2 单路径：tushare 按交易日全市场拉取（覆盖退市股历史，停牌自然缺失）
         from crawler.adapters import get_data_source_manager
+        from app.db.connection import get_sync_db
+        from crawler.writers import batch_upsert_kline
         manager = get_data_source_manager()
         source = manager.get_source()
-
-        if source.name == "baostock":
-            # 首选路径：baostock 高性能并行下载
-            from crawler.baostock_crawler import BaostockCrawler
-            c = BaostockCrawler()
-            r = c.download_daily_update(date.fromisoformat(td), force=force)
-            c.logout()
-            r['_source'] = 'baostock'
-            return r
-        else:
-            # Fallback 路径：通过适配器串行拉取
-            from app.db.connection import get_sync_db
-            from crawler.writers import batch_upsert_kline
-            from sqlalchemy import text as _text
-            db = get_sync_db()
-            codes = [r[0] for r in db.execute(_text(
-                "SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'"
-            )).fetchall()]
-            rows = source.fetch_stock_kline(codes, td, td)
-            saved = batch_upsert_kline(db, rows)
-            db.close()
-            return {'rows': saved, '_source': source.name}
+        db = get_sync_db()
+        rows = source.fetch_stock_kline([], td, td)
+        saved = batch_upsert_kline(db, rows)
+        db.close()
+        return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
@@ -394,29 +380,17 @@ def dag_task_index(trade_date=None, **kw):
     force = (kw.get('_node_force', {}) or {}).get('index', kw.get('force', False))
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
+        # v3.2 单路径：tushare index_daily 按交易日全市场
         from crawler.adapters import get_data_source_manager
+        from app.db.connection import get_sync_db
+        from crawler.writers import batch_upsert_index_kline
         manager = get_data_source_manager()
         source = manager.get_source()
-
-        if source.name == "baostock":
-            from crawler.baostock_crawler import BaostockCrawler
-            c = BaostockCrawler()
-            r = c.download_all_index_daily(td, force=force)
-            c.logout()
-            r['_source'] = 'baostock'
-            return r
-        else:
-            from app.db.connection import get_sync_db
-            from crawler.writers import batch_upsert_index_kline
-            from sqlalchemy import text as _text
-            db = get_sync_db()
-            codes = [r[0] for r in db.execute(_text(
-                "SELECT DISTINCT index_code FROM index_daily_quote"
-            )).fetchall()]
-            rows = source.fetch_index_kline(codes, td, td)
-            saved = batch_upsert_index_kline(db, rows)
-            db.close()
-            return {'rows': saved, '_source': source.name}
+        db = get_sync_db()
+        rows = source.fetch_index_kline([], td, td)
+        saved = batch_upsert_index_kline(db, rows)
+        db.close()
+        return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0) if isinstance(r, dict) else r
@@ -436,27 +410,34 @@ def dag_task_etf(trade_date=None, **kw):
     force = (kw.get('_node_force', {}) or {}).get('etf', kw.get('force', False))
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
+        # v3.2 单路径：tushare fund_daily 按交易日全市场；
+        # ETF 后复权由 baostock 补充器补齐（tushare fund_adj 需高积分）
         from crawler.adapters import get_data_source_manager
+        from app.db.connection import get_sync_db
+        from crawler.writers import batch_upsert_kline
         manager = get_data_source_manager()
         source = manager.get_source()
-
-        if source.name == "baostock":
-            from crawler.baostock_crawler import BaostockCrawler
-            c = BaostockCrawler(); r = c.download_etf_daily(td, force=force); c.logout()
-            r['_source'] = 'baostock'
-            return r
-        else:
-            from app.db.connection import get_sync_db
-            from crawler.writers import batch_upsert_kline
-            from sqlalchemy import text as _text
-            db = get_sync_db()
-            codes = [r[0] for r in db.execute(_text(
-                "SELECT stock_code FROM stock_master WHERE stock_type='etf'"
-            )).fetchall()]
-            rows = source.fetch_etf_kline(codes, td, td)
-            saved = batch_upsert_kline(db, rows)
-            db.close()
-            return {'rows': saved, '_source': source.name}
+        db = get_sync_db()
+        rows = source.fetch_etf_kline([], td, td)
+        # baostock 补充 ETF 后复权（不可用时 close_hfq=close，缺口留待补数修复）
+        sup = manager.get_supplement()
+        if sup is not None and rows:
+            codes = list({r.stock_code for r in rows})
+            try:
+                hfq_map = sup.fetch_etf_hfq(codes, td, td)
+                filled = 0
+                for r in rows:
+                    k = (r.stock_code, r.trade_date)
+                    if k in hfq_map:
+                        r.close_hfq = hfq_map[k]
+                        filled += 1
+                if filled:
+                    logger.info(f"[etf] baostock 补充后复权 {filled} 行")
+            except Exception as e:
+                logger.warning(f"[etf] baostock 复权补充失败（close_hfq=close）: {e}")
+        saved = batch_upsert_kline(db, rows)
+        db.close()
+        return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
@@ -476,36 +457,30 @@ def dag_task_fund(trade_date=None, **kw):
     if not td: from datetime import date as _dd; td = str(_dd.today())
     log_id = (kw.get('_node_log_ids', {}) or {}).get('fund')
     force = (kw.get('_node_force', {}) or {}).get('fund', kw.get('force', False))
-    progress = {'count': 0}
-    def progress_cb(n):
-        progress['count'] = n
-        update_node_progress(log_id=log_id, rows=n, detail=f'处理中 ({n}只)')
     write_node_log(log_id=log_id, status='running', detail='采集中')
     def _run():
         from crawler.adapters import get_data_source_manager
+        from app.db.connection import get_sync_db
+        from crawler.writers import batch_upsert_fundamentals, supplement_fundamentals_extra
         manager = get_data_source_manager()
         source = manager.get_source()
-
-        if source.name == "baostock":
-            from crawler.baostock_crawler import BaostockCrawler
-            c = BaostockCrawler()
-            r = c.download_fundamentals(force=force, progress_cb=progress_cb)
-            c.logout()
-            if isinstance(r, dict):
-                r['_source'] = 'baostock'
-            return r
-        else:
-            from app.db.connection import get_sync_db
-            from crawler.writers import batch_upsert_fundamentals
-            from sqlalchemy import text as _text
-            db = get_sync_db()
-            codes = [r[0] for r in db.execute(_text(
-                "SELECT stock_code FROM stock_master WHERE status='N'"
-            )).fetchall()]
-            rows = source.fetch_fundamentals(codes)
-            saved = batch_upsert_fundamentals(db, rows)
-            db.close()
-            return {'rows': saved, '_source': source.name}
+        db = get_sync_db()
+        rows = source.fetch_fundamentals([])
+        saved = batch_upsert_fundamentals(db, rows)
+        # baostock 补充 ROE/营收/净利（tushare daily_basic 无此 3 字段）
+        # 不可用时主字段照常入库，缺口留待补数修复
+        sup = manager.get_supplement()
+        if sup is not None and rows:
+            codes = [r.stock_code for r in rows]
+            try:
+                extras = sup.fetch_fundamentals_extra(codes)
+                fixed = supplement_fundamentals_extra(db, extras)
+                if fixed:
+                    logger.info(f"[fund] baostock 补充 ROE/营收/净利 {fixed} 只")
+            except Exception as e:
+                logger.warning(f"[fund] baostock 补充失败（ROE 等留待补数）: {e}")
+        db.close()
+        return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0) if isinstance(r, dict) else r

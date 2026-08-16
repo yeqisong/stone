@@ -52,10 +52,8 @@ Python + FastAPI 后端 + Vue 3 前端 + PostgreSQL 的全栈 A 股量化监测�
   - `app/signal.py` — DAG ↔ WebSocket 解耦桥梁（asyncio Event + 线程安全唤醒）
 
 - **`crawler/`** — 数据采集层
-  - `baostock_crawler.py` — baostock 原生爬虫
-  - `adapters/` — 数据源适配器模式（抽象基类 DataSourceAdapter + TuShare/Baostock 实现 + DataSourceManager 自动 fallback）
-  - `backfill.py` — 历史补数管理器（≈50KB，含进度/断点续传）
-  - `catch_up.py` — 缺失交易日补采
+  - `adapters/` — 数据源适配器（TuShare 主源 + Baostock 补充器 + 配额计数）
+  - `backfill.py` — 历史补数管理器（按交易日补数、配额预算、断点续传）
   - `trade_calendar.py` — 交易日历同步
   - `writers.py` — 统一 UPSERT 写入
   - `progress.py` — 下载进度管理（JSON 文件 + 断点续传）

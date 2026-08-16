@@ -1,15 +1,50 @@
 """统一数据库写入函数。
 
 接收标准化 dataclass 列表，执行 UPSERT 到对应的数据库表。
-从 BaostockCrawler._batch_insert_rows() 提取并泛化。
-
-设计参考：design/data-source-adapter-design.md 第八章 §8.3
+统一 UPSERT 写入（tushare 主源 + baostock 补充共用）。
 """
 from typing import List
 from sqlalchemy import text
 from loguru import logger
 
 from crawler.adapters.base import KlineRow, IndexKlineRow, FundamentalRow
+
+
+def supplement_fundamentals_extra(db, rows: List[FundamentalRow]) -> int:
+    """baostock 补充 ROE/营收/净利（tushare daily_basic 无此 3 字段）。
+
+    用 baostock 补充器的 fetch_fundamentals_extra 结果，按 COALESCE 语义
+    仅更新这 3 个字段（不覆盖已有值）。baostock 不可用时调用方自行降级。
+
+    Args:
+        db: 同步 session
+        rows: 含 roe/revenue_yoy/profit_yoy 的 FundamentalRow 列表（可为空）
+
+    Returns:
+        实际更新的股票数
+    """
+    vals = [r for r in rows
+            if r.roe is not None or r.revenue_yoy is not None or r.profit_yoy is not None]
+    if not vals:
+        return 0
+    db.execute(text("""
+        UPDATE stock_fundamentals sf SET
+            roe = COALESCE(v.roe, sf.roe),
+            revenue_yoy = COALESCE(v.revenue_yoy, sf.revenue_yoy),
+            profit_yoy = COALESCE(v.profit_yoy, sf.profit_yoy)
+        FROM (SELECT unnest(:codes) AS stock_code,
+                     unnest(:roes) AS roe,
+                     unnest(:revs) AS revenue_yoy,
+                     unnest(:prfs) AS profit_yoy) v
+        WHERE sf.stock_code = v.stock_code
+    """), {
+        "codes": [r.stock_code for r in vals],
+        "roes": [r.roe for r in vals],
+        "revs": [r.revenue_yoy for r in vals],
+        "prfs": [r.profit_yoy for r in vals],
+    })
+    db.commit()
+    return len(vals)
 
 
 def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
@@ -33,10 +68,11 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
         params = {}
         for j, row in enumerate(chunk):
             idx = start + j
+            # 真实数据行 is_suspended=false（覆盖旧停牌标记）
             placeholders.append(
                 f"(:td{idx},:ex{idx},:sc{idx},:sn{idx},"
                 f":o{idx},:h{idx},:l{idx},:c{idx},:ch{idx},:cq{idx},"
-                f":v{idx},:a{idx},:t{idx})"
+                f":v{idx},:a{idx},:t{idx},false)"
             )
             params.update({
                 f'td{idx}': row.trade_date,
@@ -54,14 +90,12 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
                 f't{idx}': row.turnover,
             })
 
-        # 真实数据行 is_suspended=false（覆盖旧停牌标记）；末尾追加 false 值
-        vals = ",".join(placeholders)
         sql = (
             "INSERT INTO daily_quote "
             "(trade_date,exchange,stock_code,stock_name,"
             "open,high,low,close,close_hfq,close_qfq,"
             "volume,amount,turnover,is_suspended) "
-            "VALUES " + vals[:-1] + ",false) " +
+            "VALUES " + ",".join(placeholders) +
             " ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
             "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
             "close=EXCLUDED.close, "
@@ -75,6 +109,10 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
             total += len(chunk)
         except Exception as e:
             logger.error(f"[writers] batch_upsert_kline 异常 (batch {start}): {e}")
+            try:
+                db.rollback()  # 失败批次回滚，避免后续批次 InFailedSqlTransaction
+            except Exception:
+                pass
     db.commit()
     return total
 

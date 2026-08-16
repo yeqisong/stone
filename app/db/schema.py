@@ -716,6 +716,22 @@ CREATE TABLE IF NOT EXISTS stock_holder_number (
 CREATE INDEX IF NOT EXISTS idx_shn_date ON stock_holder_number (end_date);
 """
 
+# ── tushare 当日配额（状态页展示 + 补数预算策略）──
+
+CREATE_TUSHARE_QUOTA = """
+CREATE TABLE IF NOT EXISTS tushare_quota (
+    trade_date       DATE PRIMARY KEY,          -- 配额统计日（自然日）
+    calls_today      INTEGER NOT NULL DEFAULT 0, -- 当日已用 API 调用次数
+    calls_limit      INTEGER NOT NULL DEFAULT 8000,
+    minute_calls     INTEGER NOT NULL DEFAULT 0, -- 当前分钟窗口计数
+    minute_limit     INTEGER NOT NULL DEFAULT 50,
+    minute_started   TIMESTAMP,                  -- 当前分钟窗口起始
+    quota_exhausted  BOOLEAN NOT NULL DEFAULT false,
+    last_call_at     TIMESTAMP,
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # ── 顺序很重要（满足外键/依赖）──
 
 ALL_TABLES = [
@@ -758,6 +774,7 @@ ALL_TABLES = [
     ("stock_hk_hold", CREATE_HK_HOLD),
     ("stock_margin_detail", CREATE_MARGIN_DETAIL),
     ("stock_holder_number", CREATE_HOLDER_NUMBER),
+    ("tushare_quota", CREATE_TUSHARE_QUOTA),
 ]
 
 

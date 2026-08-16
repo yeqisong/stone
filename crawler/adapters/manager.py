@@ -34,6 +34,7 @@ class DataSourceManager:
             cache_ttl: 健康检查缓存有效期（秒），默认 5 分钟
         """
         self._sources: List[DataSourceAdapter] = []
+        self._supplements: List[DataSourceAdapter] = []  # 补充器（baostock），不参与选源
         self._health_cache: dict[str, Tuple[bool, float]] = {}  # {name: (healthy, timestamp)}
         self._cache_ttl = cache_ttl
 
@@ -96,25 +97,35 @@ class DataSourceManager:
             self._health_cache.clear()
 
     def get_source(self) -> DataSourceAdapter:
-        """返回优先级最高的健康数据源。
+        """返回唯一主数据源（tushare）。
+
+        v3.2 简化：不再多源 fallback。tushare 不可用即失败（配额耗尽由
+        QuotaExhausted 异常表达，不属于"源不可用"）。
 
         Raises:
-            RuntimeError: 所有数据源均不可用
+            RuntimeError: tushare 未注册或健康检查失败
         """
         if not self._sources:
             raise RuntimeError("未注册任何数据源适配器")
-
         health = self.check_all_health()
         for src in self._sources:
             if health.get(src.name, False):
                 return src
-
-        # 全部不可用时的错误信息
         status_str = ", ".join(f"{s.name}=❌" for s in self._sources)
-        raise RuntimeError(f"所有数据源均不可用: [{status_str}]")
+        raise RuntimeError(f"主数据源不可用: [{status_str}]")
+
+    def get_supplement(self, name: str = "baostock"):
+        """返回字段补充器（baostock），未注册返回 None。"""
+        for s in self._supplements:
+            if s.name == name:
+                return s
+        return None
 
     def get_health_summary(self) -> dict:
         """获取健康状态摘要（供 API 接口使用）。
+
+        主源（tushare）+ 补充器（baostock）的健康状态并列展示；
+        active_source 恒为主源。
 
         Returns:
             {
@@ -123,10 +134,11 @@ class DataSourceManager:
             }
         """
         from datetime import datetime
+        all_adapters = list(self._sources) + list(self._supplements)
         health = self.check_all_health()
         sources = []
         active = None
-        for src in self._sources:
+        for src in all_adapters:
             cached = self._health_cache.get(src.name)
             checked_at = datetime.fromtimestamp(cached[1]).isoformat() if cached else None
             healthy = health.get(src.name, False)
@@ -136,15 +148,12 @@ class DataSourceManager:
                 "healthy": healthy,
                 "checked_at": checked_at,
             })
-            if healthy and active is None:
+            if healthy and active is None and src in self._sources:
                 active = src.name
         return {"sources": sources, "active_source": active}
 
     def fetch_with_fallback(self, method_name: str, *args, **kwargs) -> Tuple[Any, str]:
-        """带自动切换的数据拉取。
-
-        按优先级遍历所有健康源，首个成功即返回。
-        某源失败后标记为不健康，自动尝试下一个。
+        """数据拉取（v3.2 简化：仅走主源 tushare，无 fallback）。
 
         Args:
             method_name: 适配器方法名（如 "fetch_stock_kline"）
@@ -154,38 +163,19 @@ class DataSourceManager:
             (数据结果, 数据源名称)
 
         Raises:
-            RuntimeError: 所有数据源均失败
+            RuntimeError: tushare 不可用或方法失败
         """
         if not self._sources:
             raise RuntimeError("未注册任何数据源适配器")
-
-        health = self.check_all_health()
-        errors = []
-
-        for src in self._sources:
-            if not health.get(src.name, False):
-                continue
-            # 检查方法是否存在
-            fn = getattr(src, method_name, None)
-            if fn is None:
-                logger.warning(f"[DataSource] {src.name} 未实现 {method_name}")
-                continue
-            try:
-                result = fn(*args, **kwargs)
-                logger.info(f"[DataSource] {method_name} 成功 (来源: {src.name})")
-                return result, src.name
-            except Exception as e:
-                error_msg = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"[DataSource] {src.name}.{method_name} 失败: {error_msg}")
-                errors.append((src.name, error_msg))
-                # 标记为不健康，后续本轮不再尝试
-                self._health_cache[src.name] = (False, time.time())
-
-        # 全部失败
-        error_detail = "; ".join(f"{name}: {msg}" for name, msg in errors)
-        raise RuntimeError(
-            f"所有数据源均失败 ({method_name}): [{error_detail}]"
-        )
+        src = self._sources[0]
+        fn = getattr(src, method_name, None)
+        if fn is None:
+            raise RuntimeError(f"{src.name} 未实现 {method_name}")
+        try:
+            result = fn(*args, **kwargs)
+            return result, src.name
+        except Exception as e:
+            raise RuntimeError(f"主数据源 {src.name}.{method_name} 失败: {type(e).__name__}: {str(e)[:200]}") from e
 
     def __repr__(self):
         names = [f"{s.name}(p={s.priority})" for s in self._sources]
@@ -200,8 +190,9 @@ _manager: Optional[DataSourceManager] = None
 def get_manager() -> DataSourceManager:
     """获取全局 DataSourceManager 单例。
 
-    首次调用时初始化并尝试注册可用的适配器。
-    适配器模块不存在时（尚未实现）会优雅跳过。
+    v3.2 架构简化：tushare 为唯一主数据源；
+    baostock 降级为"字段补充器"（ROE/营收净利、ETF 复权），
+    不再参与选源/fallback，仅保留健康状态供状态页展示。
     """
     global _manager
     if _manager is not None:
@@ -209,7 +200,7 @@ def get_manager() -> DataSourceManager:
 
     _manager = DataSourceManager()
 
-    # 尝试注册 TuShare 适配器（首选）
+    # 注册 TuShare 主源（数据获取的唯一来源）
     try:
         from crawler.adapters.tushare_adapter import TuShareAdapter
         _manager.register(TuShareAdapter())
@@ -218,12 +209,13 @@ def get_manager() -> DataSourceManager:
     except Exception as e:
         logger.warning(f"[DataSource] TuShareAdapter 注册失败: {e}")
 
-    # 尝试注册 Baostock 适配器（备选）
+    # Baostock 补充器（仅健康展示，不注册为可拉取源）
     try:
         from crawler.adapters.baostock_adapter import BaostockAdapter
-        _manager.register(BaostockAdapter())
+        _manager._supplements.append(BaostockAdapter())
+        logger.info("[DataSource] 注册 baostock 补充器（ROE/营收净利/ETF复权）")
     except ImportError:
-        logger.debug("[DataSource] BaostockAdapter 尚未实现，跳过注册")
+        logger.debug("[DataSource] BaostockAdapter 未安装，跳过")
     except Exception as e:
         logger.warning(f"[DataSource] BaostockAdapter 注册失败: {e}")
 

@@ -23,7 +23,6 @@ from app.db.connection import get_sync_db
 from app import signal as app_signal
 from crawler.adapters import get_data_source_manager
 from crawler.adapters.base import KlineRow, IndexKlineRow, FundamentalRow
-from crawler.adapters.baostock_adapter import _quarter_end_date as _qed
 import crawler.writers as writers
 
 BATCH_SIZE = 20  # 每批 20 只，控制内存峰值，防止 OOM（服务器仅 1.8G 内存）
@@ -327,215 +326,108 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
 
     def _run_kline_backfill(self, task: BackfillTask):
-        """K线补数 — 含单日增量 / 跨日期批量策略分发。"""
-        # ── 初始化适配器 ──
+        """K线补数 — v3.2 按交易日逐日全市场拉取（tushare 主源）。
+
+        - 按日期拉天然覆盖退市股历史、停牌股自然缺失（行业标准，无需停牌标记行）
+        - 断点续传按"日期完整度"判定（当日行数 >= 活跃数 80% 视为已完成）
+        - 配额预算：剩余调用 < 10 次自动收尾，断点留待明日续跑（不会中途耗尽报错）
+        """
+        from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import QuotaExhausted
+
         manager = get_data_source_manager()
         try:
             adapter = manager.get_source()
         except RuntimeError as e:
             task.status = "failed"
-            task.error_message = f"所有数据源均不可用: {e}"
+            task.error_message = f"主数据源不可用: {e}"
             return
 
         stock_type_map = {"kline": "stock", "index": "index", "etf": "etf"}
         stock_type = stock_type_map[task.task_type]
 
-        # 从 stock_master 读取所有股票（含已退市 status='D'）
-        type_filter = {"stock": "stock_type='stock'", "index": "stock_type='index'", "etf": "stock_type='etf'"}[stock_type]
-        db = get_sync_db()
-        rows = db.execute(text(
-            f"SELECT stock_code, ipo_date FROM stock_master WHERE {type_filter}"
-        )).fetchall()
-        all_codes = [r[0] for r in rows]
-        ipo_map = {r[0]: str(r[1]) for r in rows if r[1]}  # 停牌检测用
-
-        if not all_codes:
-            task.status = "failed"
-            task.error_message = f"stock_master 中无{LABEL_MAP[task.task_type]}代码"
-            db.close()
-            return
-        db.close()
-
-        # ── 确定表、取数函数、写入函数 ──
-        is_single_day = (task.start_date == task.end_date)
-
+        # 确定表与写入函数
         if task.task_type == "index":
             table = "index_daily_quote"
-            code_col = "index_code"
             fetch_fn = adapter.fetch_index_kline
             write_fn = writers.batch_upsert_index_kline
         else:
             table = "daily_quote"
-            code_col = "stock_code"
-            write_fn = writers.batch_upsert_kline
             fetch_fn = adapter.fetch_etf_kline if task.task_type == "etf" else adapter.fetch_stock_kline
+            write_fn = writers.batch_upsert_kline
 
-        db = get_sync_db()
-
-        # ── 断点续传：确定跳过集 ──
-        if task.force:
-            skip_set: Set[str] = set()
-        elif is_single_day:
-            rows = db.execute(text(
-                f"SELECT DISTINCT {code_col} FROM {table} WHERE trade_date = :d"
-            ), {"d": task.start_date}).fetchall()
-            skip_set = {r[0] for r in rows}
-        else:
-            skip_set = set()  # 多日补数：不查跳过集，UPSERT 保证不重复
-
-        remaining = [c for c in all_codes if c not in skip_set]
-        task.stocks_total = len(remaining)
-        bs = task._batch_size
-        task.total_batches = max((len(remaining) + bs - 1) // bs, 1)
-
-        if not remaining:
-            task.status = "completed"
-            db.close()
-            adapter._logout()
+        # 区间内交易日（倒序 = 最新优先）
+        tds = adapter._trade_days(task.start_date, task.end_date)
+        if not tds:
+            task.status = "failed"
+            task.error_message = f"区间 {task.start_date}~{task.end_date} 内无交易日（检查交易日历）"
             return
 
-        # ── IPO 日期映射已在查询 stock_master 时构建 ──
-
-
-
-        # ── 分批执行（含自适应并发调整）──
-        _bs = bs  # 当前动态批次大小，初始为用户设定值
-        _bs_max = bs  # 上限为用户设定值
-        _total_stocks = len(remaining)
-        _done = 0
-        _batch_count = 0
-        while _done < _total_stocks:
-            if task._stop_requested:
-                task.status = "cancelled"
-                try: adapter._logout()
-                except: pass
-                try: db.close()
-                except: pass
-                gc.collect()
-                return
-
-            # 自适应并发：内存 >90% 降 1 只，<70% 恢复 1 只
-            _mem = _mem_used_pct() or 50
-            if _mem > 90 and _bs > 1:
-                _bs -= 1
-                logger.warning(f"[Backfill] 内存 {_mem}%>90%, 并发降为 {_bs}")
-            elif _mem < 70 and _bs < _bs_max:
-                _bs += 1
-                logger.info(f"[Backfill] 内存 {_mem}%<70%, 并发恢复为 {_bs}")
-
-            _actual_bs = min(_bs, _total_stocks - _done)
-            batch = remaining[_done:_done + _actual_bs]
-            _batch_count += 1
-            task.current_batch = _batch_count
-            task.total_batches = (_total_stocks + _bs - 1) // _bs if _bs > 0 else 1
-            logger.info("[Backfill] {} 批次 {}/{}: {} 只开始拉取 (并发={}, 内存={}%)",
-                        task.task_type, _batch_count, task.total_batches, len(batch), _bs, _mem)
-
-            try:
-                # ── 按年分段（跨年 > 365 天拆为多次调用，避免 baostock 超时）──
-                from datetime import date as _dt
-                sd = _dt.fromisoformat(task.start_date)
-                ed = _dt.fromisoformat(task.end_date or task.start_date)
-                rng_days = (ed - sd).days
-                if rng_days <= 365:
-                    date_ranges = [(task.start_date, task.end_date or task.start_date)]
-                else:
-                    date_ranges = []
-                    y = sd.year
-                    while y <= ed.year:
-                        ys = max(sd, _dt(y, 1, 1)).strftime("%Y-%m-%d")
-                        ye = min(ed, _dt(y, 12, 31)).strftime("%Y-%m-%d")
-                        date_ranges.append((ys, ye))
-                        y += 1
-                import concurrent.futures
-                FETCH_TIMEOUT = 180
-                batch_rows = []
-                batch_errors = []
-                for dr_s, dr_e in date_ranges:
-                    try:
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                            future = pool.submit(fetch_fn, batch, dr_s, dr_e)
-                            waited = 0
-                            while not future.done():
-                                if waited >= FETCH_TIMEOUT:
-                                    raise TimeoutError(f"{dr_s}~{dr_e} 超时")
-                                time.sleep(3)
-                                waited += 3
-                                task.updated_at = datetime.now().isoformat()
-                                self._update_task_db(task, status='running')
-                                self._wake_ws()
-                            yr_rows = future.result()
-                        if yr_rows:
-                            saved = write_fn(db, yr_rows)
-                            task.rows += saved
-                            batch_rows.extend(yr_rows)
-                    except Exception as e1:
-                        logger.warning(f"[Backfill] {task.task_type} {dr_s}~{dr_e} 失败: {e1}")
-                        time.sleep(1)
-                        try: adapter._logout(); adapter._ensure_login()
-                        except: pass
-                        try:
-                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                                future = pool.submit(fetch_fn, batch, dr_s, dr_e)
-                                yr_rows = future.result(timeout=FETCH_TIMEOUT)
-                            if yr_rows:
-                                saved = write_fn(db, yr_rows)
-                                task.rows += saved
-                                batch_rows.extend(yr_rows)
-                        except Exception as e2:
-                            logger.error(f"[Backfill] {task.task_type} {dr_s}~{dr_e} 重试仍失败: {e2}")
-                            batch_errors.append(f"{dr_s}:{type(e2).__name__}")
-                rows = batch_rows or None
-                if batch_errors:
-                    task.errors += len(batch)
-                    task.failed_codes.extend(batch[:5])
-                    prev = task.error_message or ""
-                    task.error_message = (prev + "; " + "; ".join(batch_errors[:3])).strip("; ")[:500]
-                saved = len(batch_rows)
-                logger.info("[Backfill] {} 批次 {}/{}: {} rows → 写入 {} 行",
-                            task.task_type, _batch_count, task.total_batches,
-                            saved, saved)
-            except Exception as e_batch:
-                logger.error(f"[Backfill] {task.task_type} 批次 {_batch_count} 异常: {e_batch}")
-                prev = task.error_message or ""
-                task.error_message = (prev + f"; 批次{_batch_count}:{type(e_batch).__name__}").strip("; ")[:500]
-                task.errors += len(batch)
-                saved = 0; rows = None
-
-            # 停牌检测：仅当批次拉取成功时，未返回的股票才写停牌标记
-            # 失败批次不写标记（否则断点续传会把失败股票永久跳过）
-            if rows:
-                fetched = self._extract_codes(rows, task.task_type)
-                for code in batch:
-                    if code not in fetched:
-                        ipo = ipo_map.get(code)
-                        if ipo and ipo <= (task.end_date or task.start_date):
-                            self._write_suspension_marker(
-                                db, table, code_col, code,
-                                task.task_type, task.end_date or task.start_date
-                            )
-            else:
-                task.failed_codes.extend(batch[:5])
-            task.stocks_done += len(batch)
-
-            _done += len(batch)
-            task.updated_at = datetime.now().isoformat()
-            self._update_task_db(task)  # 每批完成后落库进度
-            self._wake_ws()
-
-            # 释放内存：显式删除 rows 引用 + 强制 GC
-            if rows:
-                del rows
-            gc.collect()
-
-
-
-        task.status = "completed"
+        db = get_sync_db()
         try:
-            adapter._logout()
-        except Exception:
-            pass
-        db.close()
+            # 断点续传：force 全补；否则跳过"当日行数 >= 活跃数 80%"的日期
+            active = db.execute(text(
+                "SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type=:t"
+            ), {"t": stock_type}).scalar() or 0
+            threshold = max(int(active * 0.8), 500)
+            remaining_days = tds
+            skipped = 0
+            if not task.force:
+                kept = []
+                for td in tds:
+                    cnt = db.execute(text(
+                        f"SELECT COUNT(*) FROM {table} WHERE trade_date=:d"
+                    ), {"d": td}).scalar() or 0
+                    if cnt >= threshold:
+                        skipped += 1
+                    else:
+                        kept.append(td)
+                remaining_days = kept
+
+            task.total_batches = len(remaining_days)
+            task.stocks_total = active
+            done = 0
+            for i, td in enumerate(remaining_days):
+                if getattr(task, "_stop_requested", False):
+                    task.status = "cancelled"
+                    task.error_message = f"已取消（已完成 {done}/{len(remaining_days)} 天）"
+                    return
+                # 配额预算：剩余 < 10 次则收尾（每天约 3 次调用）
+                if adapter.quota.remaining() < 10:
+                    task.status = "completed"
+                    task.error_message = (f"tushare 配额将尽（剩余 {adapter.quota.remaining()} 次），"
+                                          f"已补 {done}/{len(remaining_days)} 天，剩余 {len(remaining_days) - done} 天可明日续跑")
+                    return
+                td_str = td.strftime("%Y-%m-%d")
+                try:
+                    rows = fetch_fn([], td_str, td_str)
+                    saved = write_fn(db, rows)
+                except QuotaExhausted as e:
+                    task.status = "completed"
+                    task.error_message = (f"tushare 当日配额已用尽，已补 {done}/{len(remaining_days)} 天，"
+                                          f"剩余 {len(remaining_days) - done} 天明日续跑")
+                    return
+                done += 1
+                task.rows += saved
+                task.stocks_done = done
+                task.current_batch = done
+                task.updated_at = datetime.now().isoformat()
+                self._update_task_db(task)
+                self._wake_ws()
+                del rows
+                gc.collect()
+
+            task.status = "completed"
+            task.error_message = (f"补数完成 {done} 天（跳过已完成 {skipped} 天），共 {task.rows} 行"
+                                  if skipped else f"补数完成 {done} 天，共 {task.rows} 行")
+        except Exception as e:
+            db.rollback()
+            task.status = "failed"
+            task.error_message = str(e)[:500]
+        finally:
+            try: adapter._logout()
+            except Exception: pass
+            db.close()
 
     # ═══════════════════════════════════════════════
     #  基本面补数
@@ -736,36 +628,27 @@ class BackfillManager:
             db.close()
 
     def _run_fund_backfill(self, task):
-        """基本面补数：适配器拉取 → UPSERT stock_fundamentals + 行业回写 stock_master。
+        """基本面补数：tushare 主字段 → writers UPSERT → baostock 补 ROE 等 → 行业回写。
 
-        使用当前数据源（tushare 首选：daily_basic 按日全市场一次拉取）。
+        配额耗尽（QuotaExhausted）时任务收尾提示，不断言失败。
         """
         from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import QuotaExhausted
         from sqlalchemy import text as _t
         from datetime import datetime
+        from crawler.writers import batch_upsert_fundamentals, supplement_fundamentals_extra
 
         manager = get_data_source_manager()
-        adapter = None
-        for retry_i in range(3):
-            manager._health_cache.clear()
-            try:
-                adapter = manager.get_source()
-                break
-            except RuntimeError:
-                if retry_i < 2:
-                    import time
-                    time.sleep(5)
-                else:
-                    raise
-        if adapter is None:
+        try:
+            adapter = manager.get_source()
+        except RuntimeError as e:
             task.status = "failed"
-            task.error_message = "数据源获取失败，重试3次均失败"
+            task.error_message = f"主数据源不可用: {e}"
             return
-        adapter._ensure_login()
 
         db = get_sync_db()
         try:
-            # 拉取全市场基本面（适配器内部按日/按股票实现）
+            # 拉取全市场基本面（tushare daily_basic 最近交易日）
             rows = adapter.fetch_fundamentals(None)
             if not rows:
                 task.rows = 0
@@ -773,15 +656,24 @@ class BackfillManager:
                 task.error_message = "无基本面数据（数据源可能暂无当日数据）"
                 return
 
-            # 统一走 writers 批量 UPSERT（与 DAG fund 节点同一写入路径，
-            # 含 market_cap 从 daily_quote 补全 + 逐字段 COALESCE 防空覆盖）
-            from crawler.writers import batch_upsert_fundamentals
+            # 统一 writers 批量 UPSERT（含 market_cap 补全 + 逐字段 COALESCE）
             upserted = batch_upsert_fundamentals(db, rows)
             task.rows = upserted
             task.stocks_done = upserted
             task.updated_at = datetime.now().isoformat()
             self._persist_task(task)
             self._wake_ws()
+
+            # baostock 补充 ROE/营收/净利（不可用时主字段已入库，缺口留待下次补数）
+            sup = manager.get_supplement()
+            if sup is not None:
+                try:
+                    extras = sup.fetch_fundamentals_extra([r.stock_code for r in rows])
+                    fixed = supplement_fundamentals_extra(db, extras)
+                    if fixed:
+                        logger.info(f"[fund_backfill] baostock 补充 ROE/营收/净利 {fixed} 只")
+                except Exception as e:
+                    logger.warning(f"[fund_backfill] baostock 补充失败（ROE 等留待下次补数）: {e}")
 
             # 行业字段跨表回写 stock_master（有值时更新，避免空覆盖）
             db.execute(_t("""
@@ -798,6 +690,9 @@ class BackfillManager:
             task.stocks_total = upserted
             task.error_message = f"基本面更新 {upserted} 只"
             logger.info(f"[fund_backfill] 完成: {upserted} 行")
+        except QuotaExhausted as e:
+            task.status = "completed"
+            task.error_message = "tushare 配额用尽，基本面未更新，明日续跑"
         except Exception as e:
             db.rollback()
             task.status = "failed"
@@ -810,71 +705,12 @@ class BackfillManager:
     # ═══════════════════════════════════════════════
     #  工具函数
     @staticmethod
-    def _load_ipo_map(db, stock_type: str) -> Dict[str, str]:
-        """加载股票 IPO 日期映射。"""
-        rows = db.execute(text(
-            "SELECT stock_code, ipo_date FROM stock_master WHERE stock_type = :t AND ipo_date IS NOT NULL"
-        ), {"t": stock_type}).fetchall()
-        return {r[0]: str(r[1]) for r in rows if r[1]}
-
-    @staticmethod
-    def _extract_codes(rows: list, task_type: str) -> Set[str]:
-        """从适配器返回的行列表中提取股票代码集合。"""
-        codes = set()
-        for r in rows:
-            if task_type == "index":
-                codes.add(r.index_code if hasattr(r, 'index_code') else '')
-            else:
-                codes.add(r.stock_code if hasattr(r, 'stock_code') else '')
-        codes.discard('')
-        return codes
-
-    @staticmethod
-    def _write_suspension_marker(db, table: str, code_col: str, code: str,
-                                  task_type: str, marker_date: str):
-        """写入停牌标记行（is_suspended=true）。
-
-        对单日补数：标记该日期。
-        对跨日期补数：在 end_date 写入一条标记，使断点续传跳过该股票。
-        """
-        if task_type == "index":
-            sql = (
-                f"INSERT INTO {table} (trade_date, {code_col}, index_name, "
-                "open, high, low, close, volume, amount, is_suspended) "
-                "VALUES (:d, :c, '', 0, 0, 0, 0, 0, 0, true) "
-                f"ON CONFLICT (trade_date, {code_col}) DO UPDATE SET is_suspended = true"
-            )
-        else:
-            # 与适配器 code_to_exchange 保持一致（6→SSE, 0/2/3→SZSE, 4/8/9→BSE）
-            from crawler.adapters.base import code_to_exchange
-            exchange = code_to_exchange(code)
-            sql = (
-                f"INSERT INTO {table} (trade_date, exchange, {code_col}, stock_name, "
-                "open, high, low, close, close_hfq, close_qfq, volume, amount, is_suspended) "
-                "VALUES (:d, :ex, :c, '', 0, 0, 0, 0, 0, 0, 0, 0, true) "
-                f"ON CONFLICT ({code_col}, exchange, trade_date) DO UPDATE SET is_suspended = true"
-            )
-        try:
-            db.execute(text(sql), {"d": marker_date, "c": code,
-                                    "ex": exchange if task_type != "index" else ""})
-            db.commit()
-        except Exception as e:
-            logger.warning(f"[Backfill] 停牌标记写入失败 {code}: {e}")
-
-    # ═══════════════════════════════════════════════
-    #  DB 持久化
-    # ═══════════════════════════════════════════════
-
-    @staticmethod
     def _get_db():
-        """获取 DB 连接（用于任务持久化，与数据 DB 共用）。
-
-        连接池满时 30s 超时抛异常，调用方静默处理，避免阻塞。
-        """
+        """获取同步 DB session（连接失败返回 None，由调用方降级）。"""
         try:
+            from app.db.connection import get_sync_db
             return get_sync_db()
-        except Exception as e:
-            logger.warning(f"[Backfill] DB 连接获取失败: {e}")
+        except Exception:
             return None
 
     def _persist_task(self, task: BackfillTask):

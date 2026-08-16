@@ -17,6 +17,20 @@
       <span :style="{color: src.healthy ? '#10b981' : '#ef4444', fontSize:'14px'}">●</span>
       <span style="color:var(--c-text)">{{src.name}}</span>
       <span v-if="src.name===activeSource" style="font-size:9px;color:#2080f0;font-weight:600">活跃</span>
+      <span v-if="src.name==='baostock'" style="font-size:9px;color:var(--c-text-faint)">补充</span>
+    </div>
+    <!-- tushare 当日配额 -->
+    <div v-if="quota.calls_limit" style="display:flex;align-items:center;gap:8px;padding:3px 12px;border-radius:12px;font-size:11px;background:var(--c-card-bg);border:1px solid var(--c-border)">
+      <span style="color:var(--c-text-dim)">tushare 配额</span>
+      <span :style="{color: quotaColor, fontSize:'12px', fontWeight:700}">{{quota.remaining}}</span>
+      <span style="color:var(--c-text-faint)">/ {{quota.calls_limit}} 次</span>
+      <div style="width:80px;height:5px;border-radius:3px;background:var(--c-border-light);overflow:hidden">
+        <div :style="{width: Math.min(quota.used_pct,100)+'%', height:'100%', background: quotaColor}"></div>
+      </div>
+      <span v-if="quota.exhausted" style="color:#ef4444;font-weight:600">⚠ 已用尽</span>
+      <span v-else-if="quota.risk_level==='high'" style="color:#ef4444;font-weight:600">⚠ 高风险</span>
+      <span v-else-if="quota.risk_level==='medium'" style="color:#f59e0b">注意</span>
+      <span style="color:var(--c-text-faint)">分钟 {{quota.minute_calls}}/{{quota.minute_limit}}</span>
     </div>
   </div>
 
@@ -228,6 +242,12 @@ const cal = ref([])
 const smonth = ref(bjDateStr().slice(0,7))
 const dataSources = ref([])
 const activeSource = ref(null)
+const quota = ref({})
+const quotaColor = computed(() => {
+  if (quota.value.exhausted || quota.value.risk_level === 'high') return '#ef4444'
+  if (quota.value.risk_level === 'medium') return '#f59e0b'
+  return '#10b981'
+})
 const calDtlDate = ref('')
 const calDtlData = ref(null)
 const showCalDtl = ref(false)
@@ -341,12 +361,22 @@ async function loadDataSources() {
   } catch(e) { /* API 不可用时静默 */ }
 }
 
+async function loadQuota() {
+  try {
+    const r = await axios.get(API + '/api/tushare_quota')
+    quota.value = r.data || {}
+  } catch(e) { /* 未配置 tushare 时静默 */ }
+}
+
 
 onMounted(() => {
   loadDataStatus()
   loadDataSources()
+  loadQuota()
   loadSysMetrics()
   loadPref()
+  // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
+  setInterval(loadQuota, 30000)
   wsUnwatch.value = addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
