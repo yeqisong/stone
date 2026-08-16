@@ -150,13 +150,10 @@ onMounted(async () => {
   await loadFlow()
   await loadTaskStatus()
   const { addWsListener } = await import('../utils/ws.js')
-  wsHandler = onWsMessage
-  addWsListener(onWsMessage)
+  wsHandler = addWsListener(onWsMessage)
 })
 
 onUnmounted(() => {
-  if (wsHandler) {
-    import('../utils/ws.js').then(m => m.removeWsListener(wsHandler))
-  }
+  if (wsHandler) wsHandler()
 })
 </script>

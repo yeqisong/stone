@@ -257,14 +257,16 @@ class BaostockCrawler:
                 "INSERT INTO daily_quote "
                 "(trade_date,exchange,stock_code,stock_name,"
                 "open,high,low,close,close_hfq,close_qfq,"
-                "volume,amount,turnover) "
-                "VALUES " + ",".join(placeholders))
+                "volume,amount,turnover,is_suspended) "
+                "VALUES " + ",".join(placeholders)[:-1] + ",false)")
             if upsert:
                 sql += (" ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
                        "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-                       "close=EXCLUDED.close, close_hfq=EXCLUDED.close_hfq, "
+                       "close=EXCLUDED.close, "
+                       "close_hfq=CASE WHEN EXCLUDED.close_hfq IS NULL OR EXCLUDED.close_hfq = 0 THEN daily_quote.close_hfq ELSE EXCLUDED.close_hfq END, "
                        "close_qfq=EXCLUDED.close_qfq, volume=EXCLUDED.volume, "
-                       "amount=EXCLUDED.amount, turnover=EXCLUDED.turnover")
+                       "amount=EXCLUDED.amount, turnover=EXCLUDED.turnover, "
+                       "is_suspended=false")
             else:
                 sql += " ON CONFLICT (stock_code, exchange, trade_date) DO NOTHING"
             try:
@@ -569,29 +571,32 @@ class BaostockCrawler:
             except Exception as e:
                 return (item, None, str(e))
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for future in as_completed({pool.submit(fetch, i): i for i in items}):
-                (bs_code, icode, name), rows, err = future.result()
-                if not rows: continue
-                for d in rows:
-                    if is_single and d[0] != sd: continue
-                    try:
-                        with lock:
-                            db.execute(text(
-                                "INSERT INTO index_daily_quote "
-                                "(trade_date,index_code,index_name,open,high,low,close,volume,amount) "
-                                "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
-                                "ON CONFLICT (trade_date,index_code) DO UPDATE SET "
-                                "open=EXCLUDED.open,high=EXCLUDED.high,low=EXCLUDED.low,"
-                                "close=EXCLUDED.close,volume=EXCLUDED.volume,amount=EXCLUDED.amount"),
-                                {"d":d[0],"c":icode,"n":name,
-                                 "o":float(d[2]) if d[2] else 0,"h":float(d[3]) if d[3] else 0,
-                                 "l":float(d[4]) if d[4] else 0,"cl":float(d[5]) if d[5] else 0,
-                                 "v":int(float(d[6])) if d[6] else 0,"a":float(d[7]) if d[7] else 0})
-                            total += 1
-                    except:
-                        db.rollback()
-                        logger.warning(f"指数插入失败 {label}, 回滚本批次")
+        # baostock 单一 TCP 连接非线程安全 → 串行拉取
+        for item in items:
+            (bs_code, icode, name), rows, err = fetch(item)
+            if err:
+                logger.warning(f"指数拉取失败 {icode}: {err}")
+                continue
+            if not rows: continue
+            for d in rows:
+                if is_single and d[0] != sd: continue
+                try:
+                    with lock:
+                        db.execute(text(
+                            "INSERT INTO index_daily_quote "
+                            "(trade_date,index_code,index_name,open,high,low,close,volume,amount) "
+                            "VALUES (:d,:c,:n,:o,:h,:l,:cl,:v,:a) "
+                            "ON CONFLICT (trade_date,index_code) DO UPDATE SET "
+                            "open=EXCLUDED.open,high=EXCLUDED.high,low=EXCLUDED.low,"
+                            "close=EXCLUDED.close,volume=EXCLUDED.volume,amount=EXCLUDED.amount"),
+                            {"d":d[0],"c":icode,"n":name,
+                             "o":float(d[2]) if d[2] else 0,"h":float(d[3]) if d[3] else 0,
+                             "l":float(d[4]) if d[4] else 0,"cl":float(d[5]) if d[5] else 0,
+                             "v":int(float(d[6])) if d[6] else 0,"a":float(d[7]) if d[7] else 0})
+                        total += 1
+                except:
+                    db.rollback()
+                    logger.warning(f"指数插入失败 {label}, 回滚本批次")
         db.commit()
         logger.info(f"指数下载完成 {label}: {total} 条")
         return {"rows": total, "errors": 0}
@@ -671,28 +676,28 @@ class BaostockCrawler:
             except Exception as e:
                 return (item, None, str(e))
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for future in as_completed({pool.submit(fetch, i): i for i in items}):
-                (bs_code, code, name, ex), rows, err = future.result()
-                if err or not rows:
-                    errors += 1; continue
-                for d in rows:
-                    if is_single and d[0] != sd: continue
-                    try:
-                        close_hfq = float(d[8]) if len(d) > 8 and d[8] else float(d[4]) if d[4] else 0
-                        with lock:
-                            buf.append((d[0], ex, code, name,
-                                float(d[1]) if d[1] else 0, float(d[2]) if d[2] else 0,
-                                float(d[3]) if d[3] else 0, float(d[4]) if d[4] else 0,
-                                close_hfq,
-                                int(float(d[5])) if d[5] else 0, float(d[6]) if d[6] else 0,
-                                float(d[7]) if d[7] else None))
-                            total += 1
-                    except: pass
-                if len(buf) >= 500:
+        # baostock 单一 TCP 连接非线程安全 → 串行拉取
+        for item in items:
+            (bs_code, code, name, ex), rows, err = fetch(item)
+            if err or not rows:
+                errors += 1; continue
+            for d in rows:
+                if is_single and d[0] != sd: continue
+                try:
+                    close_hfq = float(d[8]) if len(d) > 8 and d[8] else float(d[4]) if d[4] else 0
                     with lock:
-                        self._batch_insert_rows(db, buf)
-                        db.commit(); buf.clear()
+                        buf.append((d[0], ex, code, name,
+                            float(d[1]) if d[1] else 0, float(d[2]) if d[2] else 0,
+                            float(d[3]) if d[3] else 0, float(d[4]) if d[4] else 0,
+                            close_hfq,
+                            int(float(d[5])) if d[5] else 0, float(d[6]) if d[6] else 0,
+                            float(d[7]) if d[7] else None))
+                        total += 1
+                except: pass
+            if len(buf) >= 500:
+                with lock:
+                    self._batch_insert_rows(db, buf)
+                    db.commit(); buf.clear()
         if buf:
             self._batch_insert_rows(db, buf)
         db.commit()
@@ -826,22 +831,23 @@ class BaostockCrawler:
             res["roe"]=fund["roe"]; res["rev"]=fund["revenue_yoy"]; res["prf"]=fund["profit_yoy"]
             return res
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for i, res in enumerate(pool.map(fetch_one, codes)):
-                if res["pe"] is None: pe_missing += 1
-                if res["roe"] is None: profit_missing += 1
-                if res["rev"] is None and res["prf"] is None: growth_missing += 1
-                ind = industry_map.get(res["code"], "")
-                try:
-                    with lock:
-                        db.execute(text("INSERT INTO stock_fundamentals (stock_code,pe_ttm,pb_mrq,industry,roe,revenue_yoy,profit_yoy,total_shares,market_cap,updated_at) VALUES (:c,:pe,:pb,:ind,:roe,:rev,:prf,:ts,:mc,CURRENT_TIMESTAMP) ON CONFLICT (stock_code) DO UPDATE SET pe_ttm=EXCLUDED.pe_ttm,pb_mrq=EXCLUDED.pb_mrq,industry=EXCLUDED.industry,roe=EXCLUDED.roe,revenue_yoy=EXCLUDED.revenue_yoy,profit_yoy=EXCLUDED.profit_yoy,total_shares=EXCLUDED.total_shares,market_cap=EXCLUDED.market_cap,updated_at=CURRENT_TIMESTAMP"),
+        # baostock 内部为单一 TCP 连接，多线程并发会导致数据串扰 → 串行拉取
+        for i, code in enumerate(codes):
+            res = fetch_one(code)
+            if res["pe"] is None: pe_missing += 1
+            if res["roe"] is None: profit_missing += 1
+            if res["rev"] is None and res["prf"] is None: growth_missing += 1
+            ind = industry_map.get(res["code"], "")
+            try:
+                with lock:
+                    db.execute(text("INSERT INTO stock_fundamentals (stock_code,trade_date,pe_ttm,pb_mrq,industry,roe,revenue_yoy,profit_yoy,total_shares,market_cap,updated_at) VALUES (:c,CURRENT_DATE,:pe,:pb,:ind,:roe,:rev,:prf,:ts,:mc,CURRENT_TIMESTAMP) ON CONFLICT (stock_code, trade_date) DO UPDATE SET pe_ttm=EXCLUDED.pe_ttm,pb_mrq=EXCLUDED.pb_mrq,industry=EXCLUDED.industry,roe=EXCLUDED.roe,revenue_yoy=EXCLUDED.revenue_yoy,profit_yoy=EXCLUDED.profit_yoy,total_shares=EXCLUDED.total_shares,market_cap=EXCLUDED.market_cap,updated_at=CURRENT_TIMESTAMP"),
                             {"c":res["code"],"pe":res["pe"],"pb":res["pb"],"ind":ind,"roe":res["roe"],"rev":res["rev"],"prf":res["prf"],"ts":res["ts"],"mc":res["mc"]})
-                        updated += 1
-                        # 每 200 只报告一次进度
-                        if updated % 200 == 0 and progress_cb:
-                            progress_cb(updated)
-                except Exception as e:
-                    logger.warning(f"  基本面入库 {res['code']} 失败: {e}")
+                    updated += 1
+                    # 每 200 只报告一次进度
+                    if updated % 200 == 0 and progress_cb:
+                        progress_cb(updated)
+            except Exception as e:
+                logger.warning(f"  基本面入库 {res['code']} 失败: {e}")
         if progress_cb: progress_cb(updated)
         db.commit()
         errors = pe_missing + profit_missing + growth_missing

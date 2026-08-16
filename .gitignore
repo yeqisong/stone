@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+venv/
+.venv/
 
 # 环境
 .env
@@ -14,11 +16,13 @@ build/
 data/*.db
 data/*.db-*
 data/pgdata/
+data/pgdata*/
 data/redis/
 data/exports/
 data/backups/
 data/download_progress.json
 data/stock_monitor_dump.sql.gz
+data/restore.sql.gz
 
 # 日志
 logs/
@@ -48,4 +52,5 @@ docker-compose.override.yml
 # Git
 *.patch
 *.orig
+*.bak
 node_modules/

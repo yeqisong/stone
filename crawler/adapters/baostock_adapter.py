@@ -26,7 +26,7 @@ class BaostockAdapter(DataSourceAdapter):
     """Baostock 数据源适配器（备选源，priority=20）。"""
 
     name = "baostock"
-    priority = 5
+    priority = 20  # 备选
 
     def __init__(self):
         self._logged_in = False
@@ -261,6 +261,9 @@ class BaostockAdapter(DataSourceAdapter):
             self._delay()
         return results
 
+    def fetch_fundamentals(self, codes, year=None, quarter=None):
+        return []
+
     def _fetch_index_single(self, code: str, bs_code: str,
                              start: str, end: str) -> Optional[List[list]]:
         """拉取单只指数 K 线，含重试 + relogin 检测。
@@ -306,87 +309,6 @@ class BaostockAdapter(DataSourceAdapter):
                 return None
         return None
 
-    def fetch_fundamentals(self, codes: List[str], year: int = None,
-                            quarter: int = None) -> List[FundamentalRow]:
-        """拉取基本面数据。默认当前季度，可指定历史季度。"""
-        self._ensure_login()
-        from datetime import date
-        results = []
-        now = date.today()
-        if year is None:
-            year = now.year
-        if quarter is None:
-            quarter = (now.month - 1) // 3 + 1
-
-        # 预加载行业映射（一次 API 调用，缓存给所有股票使用）
-        industry_map = {}
-        try:
-            rs = bs.query_stock_industry()
-            if rs.error_code == '0':
-                while rs.next():
-                    d = rs.get_row_data()
-                    if d and len(d) >= 2:
-                        # baostock 返回格式: [updateDate, code, code_name, industry, industry_type, ...]
-                        raw_code = d[1] if len(d) > 1 else ''
-                        ind_name = d[3] if len(d) > 3 else ''
-                        for prefix in ('sh.', 'sz.', 'bj.'):
-                            if raw_code.startswith(prefix):
-                                code_6 = raw_code[len(prefix):]
-                                industry_map[code_6] = ind_name
-                                break
-        except Exception:
-            pass
-
-        for code in codes:
-            bs_code = self._bs_code(code)
-            row = FundamentalRow(stock_code=code, stock_name="",
-                                 industry=industry_map.get(code, None))
-            # ROE / revenue_yoy / profit_yoy → 季度财报（需试多个季度）
-            # 数据依赖：季度财报只在季度结束后才可用
-            # 当前季度未结束时回退到前一季度
-            candidates = [(year, quarter), (year, quarter - 1)]
-            if quarter == 1:
-                candidates = [(year, 1), (year - 1, 4)]
-            for y, q in candidates:
-                if row.roe is None:
-                    try:
-                        rs = bs.query_profit_data(code=bs_code, year=y, quarter=q)
-                        if rs.error_code == '0' and rs.next():
-                            d = rs.get_row_data()
-                            if len(d) > 3 and d[3]:
-                                row.roe = float(d[3]) * 100  # 小数 → %
-                    except Exception:
-                        pass
-                if row.revenue_yoy is None or row.profit_yoy is None:
-                    try:
-                        rs = bs.query_growth_data(code=bs_code, year=y, quarter=q)
-                        if rs.error_code == '0' and rs.next():
-                            d = rs.get_row_data()
-                            # d[0]=code, d[1]=publish_date, d[2]=report_date,
-                            # d[3]=营业收入同比增长率, d[4]=净利润同比增长率
-                            if len(d) > 3 and d[3]:
-                                row.revenue_yoy = float(d[3]) * 100
-                            if len(d) > 4 and d[4]:
-                                row.profit_yoy = float(d[4]) * 100
-                    except Exception:
-                        pass
-                if row.roe is not None and row.revenue_yoy is not None:
-                    break
-            # PE/PB → 取指定季度末日或最近有效值（含重试）
-            from datetime import date as dt_date
-            if year != now.year or quarter != ((now.month - 1) // 3 + 1):
-                # 历史季度：用季度末日查询 PE/PB
-                q_end = _quarter_end_date(year, quarter)
-                pe, pb = self._fetch_pe_pb(bs_code, q_end)
-            else:
-                pe, pb = self._fetch_pe_pb(bs_code)
-            row.pe_ttm = pe
-            row.pb_mrq = pb
-            results.append(row)
-            self._delay()
-        return results
-
-    def _fetch_pe_pb(self, bs_code: str, end_date: str = None) -> tuple:
         """拉取 PE(TTM)/PB(MRQ)，含重试 + login 检测。
         返回 (pe_ttm, pb_mrq)，无数据返回 (None, None)。
         """

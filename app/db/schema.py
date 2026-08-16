@@ -220,17 +220,30 @@ CREATE INDEX IF NOT EXISTS idx_fd_status ON failed_downloads (status, exchange);
 
 CREATE_STOCK_FUNDAMENTALS = """
 CREATE TABLE IF NOT EXISTS stock_fundamentals (
-    stock_code    VARCHAR(6) PRIMARY KEY,
-    stock_name    VARCHAR(20),
-    industry      VARCHAR(50),       -- 行业(证监会分类)
-    pe_ttm        NUMERIC(10,2),     -- 市盈率(TTM)
-    pb_mrq        NUMERIC(10,2),     -- 市净率(MRQ)
-    roe           NUMERIC(10,2),     -- ROE(%)
-    revenue_yoy   NUMERIC(10,2),     -- 营收同比(%)
-    profit_yoy    NUMERIC(10,2),     -- 净利同比(%)
-    total_shares  BIGINT,            -- 总股本(股)
-    market_cap    BIGINT,            -- 总市值(元)
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    stock_code      VARCHAR(6) NOT NULL,
+    trade_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+    stock_name      VARCHAR(20),
+    industry        VARCHAR(50),
+    pe_ttm          NUMERIC(10,2),
+    pe              NUMERIC(10,2),
+    pb_mrq          NUMERIC(10,2),
+    ps              NUMERIC(10,2),
+    ps_ttm          NUMERIC(10,2),
+    roe             NUMERIC(10,2),
+    revenue_yoy     NUMERIC(10,2),
+    profit_yoy      NUMERIC(10,2),
+    total_shares    BIGINT,
+    float_share     BIGINT,
+    free_share      BIGINT,
+    market_cap      BIGINT,
+    circ_mv         BIGINT,
+    dv_ratio        NUMERIC(10,4),
+    dv_ttm          NUMERIC(10,4),
+    turnover_rate   NUMERIC(10,4),
+    volume_ratio    NUMERIC(10,4),
+    limit_status    INTEGER,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, trade_date)
 );
 """
 
@@ -424,6 +437,7 @@ CREATE TABLE IF NOT EXISTS dag_flows (
     cron_expr       VARCHAR(32),
     status          VARCHAR(16) DEFAULT 'draft',
     is_active       BOOLEAN DEFAULT false,
+    last_run_at     TIMESTAMP,  -- cron 幂等触发标记（cron_scheduler 写入）
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -614,6 +628,94 @@ INSERT INTO strategy_config (strategy_name, display_name, enabled, params) VALUE
 ON CONFLICT (strategy_name) DO NOTHING;
 """
 
+# ── 龙虎榜（tushare top_list）──
+CREATE_TOP_LIST = """
+CREATE TABLE IF NOT EXISTS stock_top_list (
+    id SERIAL PRIMARY KEY,
+    trade_date DATE NOT NULL,
+    stock_code VARCHAR(6) NOT NULL,
+    stock_name VARCHAR(30),
+    close FLOAT,
+    pct_chg FLOAT,
+    turnover_ratio FLOAT,
+    total_amount FLOAT,
+    buy_amount FLOAT,
+    sell_amount FLOAT,
+    net_amount FLOAT,
+    reason VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tl_date ON stock_top_list (trade_date);
+CREATE INDEX IF NOT EXISTS idx_tl_code ON stock_top_list (stock_code);
+"""
+
+# ── 资金流向（tushare moneyflow）──
+CREATE_MONEYFLOW = """
+CREATE TABLE IF NOT EXISTS stock_moneyflow (
+    trade_date DATE NOT NULL,
+    stock_code VARCHAR(6) NOT NULL,
+    stock_name VARCHAR(30),
+    buy_lg_amt FLOAT,      -- 特大单买入额
+    sell_lg_amt FLOAT,     -- 特大单卖出额
+    buy_md_amt FLOAT,      -- 大单买入额
+    sell_md_amt FLOAT,     -- 大单卖出额
+    buy_sm_amt FLOAT,      -- 中单买入额
+    sell_sm_amt FLOAT,     -- 中单卖出额
+    net_mf_amt FLOAT,      -- 净流入额
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_mf_date ON stock_moneyflow (trade_date);
+CREATE INDEX IF NOT EXISTS idx_mf_code ON stock_moneyflow (stock_code);
+"""
+
+# ── 沪深港通持股（tushare hk_hold）──
+CREATE_HK_HOLD = """
+CREATE TABLE IF NOT EXISTS stock_hk_hold (
+    trade_date DATE NOT NULL,
+    stock_code VARCHAR(6) NOT NULL,
+    stock_name VARCHAR(30),
+    vol INT,             -- 持股数量(股)
+    amount FLOAT,        -- 持股市值(元)
+    hold_ratio FLOAT,    -- 持股比例
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_hh_date ON stock_hk_hold (trade_date);
+CREATE INDEX IF NOT EXISTS idx_hh_code ON stock_hk_hold (stock_code);
+"""
+
+# ── 融资融券明细（tushare margin_detail）──
+CREATE_MARGIN_DETAIL = """
+CREATE TABLE IF NOT EXISTS stock_margin_detail (
+    trade_date DATE NOT NULL,
+    stock_code VARCHAR(6) NOT NULL,
+    stock_name VARCHAR(30),
+    fin_amount FLOAT,     -- 融资余额
+    fin_buy_amount FLOAT, -- 融资买入额
+    sec_amount FLOAT,     -- 融券余额
+    sec_sell_amount FLOAT,-- 融券卖出额
+    total_amount FLOAT,   -- 融资融券余额
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_md_date ON stock_margin_detail (trade_date);
+CREATE INDEX IF NOT EXISTS idx_md_code ON stock_margin_detail (stock_code);
+"""
+
+# ── 股东人数变化（tushare stk_holdernumber）──
+CREATE_HOLDER_NUMBER = """
+CREATE TABLE IF NOT EXISTS stock_holder_number (
+    stock_code VARCHAR(6) NOT NULL,
+    end_date DATE NOT NULL,
+    holder_num INT,        -- 股东人数
+    change_pct FLOAT,      -- 较上期变化(%)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, end_date)
+);
+CREATE INDEX IF NOT EXISTS idx_shn_date ON stock_holder_number (end_date);
+"""
+
 # ── 顺序很重要（满足外键/依赖）──
 
 ALL_TABLES = [
@@ -651,6 +753,11 @@ ALL_TABLES = [
     ("dag_flows", CREATE_DAG_FLOWS),
     ("dag_flow_versions", CREATE_DAG_FLOW_VERSIONS),
     ("entity_stats", CREATE_ENTITY_STATS),
+    ("stock_top_list", CREATE_TOP_LIST),
+    ("stock_moneyflow", CREATE_MONEYFLOW),
+    ("stock_hk_hold", CREATE_HK_HOLD),
+    ("stock_margin_detail", CREATE_MARGIN_DETAIL),
+    ("stock_holder_number", CREATE_HOLDER_NUMBER),
 ]
 
 
@@ -662,7 +769,11 @@ def init_db(sync_session) -> None:
             if stmt and not stmt.startswith("--"):
                 try:
                     sync_session.execute(text(stmt))
+                    sync_session.commit()
                 except Exception as e:
+                    # 已存在类错误可继续；其余失败需 rollback 后再判断，
+                    # 否则事务进入 aborted 状态导致后续所有语句报错
+                    sync_session.rollback()
                     if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower() and "relation" not in str(e).lower():
                         raise
 
@@ -1021,8 +1132,113 @@ def init_db(sync_session) -> None:
         sync_session.rollback()
     sync_session.commit()
 
+    # 迁移：stock_master 扩展字段（tushare 适配器 v3.1.2）
+    for col, col_type in [("delist_date", "DATE"), ("is_hs", "VARCHAR(1)"),
+                          ("act_name", "VARCHAR(100)"), ("area", "VARCHAR(20)"),
+                          ("reg_capital", "NUMERIC"), ("employees", "INTEGER"),
+                          ("main_business", "VARCHAR(200)"),
+                          ("industry", "VARCHAR(50)")]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
+
+    # 迁移：stock_fundamentals → 双主键 + 扩展字段（v3.2 重构）
+    # 先加列
+    for col, col_type in [("trade_date_v2", "DATE"), ("ps", "NUMERIC(10,2)"),
+                          ("ps_ttm", "NUMERIC(10,2)"), ("dv_ratio", "NUMERIC(10,4)"),
+                          ("dv_ttm", "NUMERIC(10,4)"), ("turnover_rate", "NUMERIC(10,4)"),
+                          ("volume_ratio", "NUMERIC(10,4)"), ("free_share", "BIGINT"),
+                          ("circ_mv", "BIGINT"), ("pe", "NUMERIC(10,2)"),
+                          ("limit_status", "INTEGER")]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE stock_fundamentals ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
+    # 填充 trade_date_v2（用最新日期的 daily_quote trade_date）
+    try:
+        sync_session.execute(text(
+            "UPDATE stock_fundamentals SET trade_date_v2 = (SELECT MAX(trade_date) FROM daily_quote) WHERE trade_date_v2 IS NULL"
+        ))
+    except Exception:
+        sync_session.rollback()
+    sync_session.commit()
+
+    # 迁移：stock_fundamentals 扩展字段（daily_basic v3.2）
+    for col, col_type in [("ps_ttm", "NUMERIC(10,2)"), ("dv_ttm", "NUMERIC(10,2)"),
+                          ("float_share", "BIGINT"), ("circ_mv", "BIGINT")]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE stock_fundamentals ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
+
     # 交易日历：如果为空则从 baostock 同步真实日历（含法定节假日）
     cnt = sync_session.execute(text("SELECT COUNT(*) FROM trade_calendar")).scalar() or 0
     if cnt == 0:
-        from crawler.trade_calendar import sync_from_baostock
-        sync_from_baostock(sync_session, start_year=2020, end_year=2030)
+        try:
+            from crawler.trade_calendar import sync_from_baostock
+            sync_from_baostock(sync_session, start_year=2020, end_year=2030)
+            sync_session.commit()
+        except Exception as e:
+            sync_session.rollback()
+            import logging
+            logging.getLogger("loguru").warning(f"[init_db] 交易日历同步失败（降级为空日历）: {e}")
+    else:
+        sync_session.commit()
+
+    # 迁移：signal_history 补 status 列（v3.3 信号了结状态，此前缺失导致 /signal/stats 500）
+    try:
+        sync_session.execute(text("ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS status VARCHAR(10) DEFAULT NULL"))
+        sync_session.execute(text("CREATE INDEX IF NOT EXISTS idx_sh_status ON signal_history (status, signal_date)"))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：model_versions 补 feature_list / stage 列（策略扫描/归因/质量看板依赖）
+    for col, col_type in [("feature_list", "JSONB"), ("stage", "VARCHAR(20) DEFAULT 'pending'")]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE model_versions ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+    sync_session.commit()
+
+    # 迁移：dag_flows 补 last_run_at 列（cron 幂等触发）
+    try:
+        sync_session.execute(text("ALTER TABLE dag_flows ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMP"))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：stock_fundamentals 对齐新 schema（旧库为单列 PK + 无 trade_date）
+    # 1) 补 trade_date 列并回填旧数据
+    try:
+        sync_session.execute(text("ALTER TABLE stock_fundamentals ADD COLUMN IF NOT EXISTS trade_date DATE"))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+    try:
+        sync_session.execute(text(
+            "UPDATE stock_fundamentals SET trade_date = COALESCE(trade_date_v2, updated_at::date, CURRENT_DATE) WHERE trade_date IS NULL"
+        ))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+    # 2) 主键升级为 (stock_code, trade_date)（旧库单列 PK 与代码 ON CONFLICT 不匹配）
+    try:
+        pk_name = sync_session.execute(text(
+            "SELECT conname FROM pg_constraint WHERE conrelid='stock_fundamentals'::regclass AND contype='p'"
+        )).scalar()
+        pk_cols = sync_session.execute(text(
+            "SELECT array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) "
+            "FROM pg_constraint c JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum = ANY(c.conkey) "
+            "WHERE c.conrelid='stock_fundamentals'::regclass AND c.contype='p' GROUP BY c.conname"
+        )).scalar()
+        if pk_name and pk_cols and pk_cols != ['stock_code', 'trade_date']:
+            sync_session.execute(text(f"ALTER TABLE stock_fundamentals DROP CONSTRAINT {pk_name}"))
+            sync_session.execute(text("ALTER TABLE stock_fundamentals ADD PRIMARY KEY (stock_code, trade_date)"))
+            sync_session.commit()
+    except Exception:
+        sync_session.rollback()

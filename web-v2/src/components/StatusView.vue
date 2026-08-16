@@ -29,7 +29,7 @@
         <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading">{{statsLoading?'':'↻'}}</n-button>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;flex:1">
-        <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
+        <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
           <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
             <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">{{dt.label}}</span>
             <span v-if="dt.items!=null" style="font-size:9px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
@@ -170,7 +170,7 @@
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" scroll-x="700" />
       </div>
-      <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="loadBfLogs" />
+      <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="(p) => { bfLogPage = p || 1; nav.bfLogPage = bfLogPage; nav.syncHash(); loadBfLogs() }" />
     </n-space>
   </n-modal>
 
@@ -193,14 +193,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h } from 'vue'
 import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NRadioGroup, NRadioButton } from 'naive-ui'
 import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
 import { addWsListener } from '../utils/ws'
+import { useNavStore } from '../stores/nav'
+const nav = useNavStore()
 
 const API = window.location.origin
 const prefMode = ref('balanced')
+// 北京时间格式化（UTC 日期会导致每日 0-8 点显示昨天/上月）
+function bjDateStr(d = new Date()) {
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).format(d).replace(/\//g, '-')
+}
 
 async function loadPref() {
   try {
@@ -219,7 +225,7 @@ const dataTables = ref([])
 const statsTime = ref('')
 const statsLoading = ref(false)
 const cal = ref([])
-const smonth = ref(new Date().toISOString().slice(0,7))
+const smonth = ref(bjDateStr().slice(0,7))
 const dataSources = ref([])
 const activeSource = ref(null)
 const calDtlDate = ref('')
@@ -254,6 +260,12 @@ function calTitle(d) {
   return d.date+' | '+d.cp.rows+'条 ('+d.cp.pct+'%)'
 }
 
+function goStockFundList(dt) {
+  const typeMap = {'上交所A股':'stock','深交所A股':'stock','北交所':'stock','指数日K线':'index','ETF日K线':'etf'}
+  const t = typeMap[dt.label]
+  if (t) { nav.stockFundType = t; nav.tab = 'u' }
+}
+
 const calDtlCols = [
   { title:'类别', key:'label', width:50 },
   { title:'实际', key:'actual', width:65, align:'right' },
@@ -278,15 +290,15 @@ function showCalDetail(d) {
 function prevMonth() {
   const d = new Date(smonth.value+'-01')
   d.setMonth(d.getMonth()-1)
-  smonth.value = d.toISOString().slice(0,7); loadDataStatus()
+  smonth.value = d.toISOString().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
 }
 function nextMonth() {
   const d = new Date(smonth.value+'-01')
   d.setMonth(d.getMonth()+1)
-  smonth.value = d.toISOString().slice(0,7); loadDataStatus()
+  smonth.value = d.toISOString().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
 }
 function goToday() {
-  smonth.value = new Date().toISOString().slice(0,7); loadDataStatus()
+  smonth.value = new Date().toISOString().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
 }
 
 async function refreshStats() {
@@ -335,7 +347,7 @@ onMounted(() => {
   loadDataSources()
   loadSysMetrics()
   loadPref()
-  addWsListener((data) => {
+  wsUnwatch.value = addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
       const d = data.data
@@ -368,6 +380,10 @@ onMounted(() => {
     }
   })
 })
+
+// WS 监听器清理（v-if 切 tab 时防止泄漏）
+const wsUnwatch = ref(null)
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value() })
 
 // ── 历史补数 ──
 

@@ -502,19 +502,20 @@ class BackfillManager:
                 task.errors += len(batch)
                 saved = 0; rows = None
 
-            # 停牌检测
+            # 停牌检测：仅当批次拉取成功时，未返回的股票才写停牌标记
+            # 失败批次不写标记（否则断点续传会把失败股票永久跳过）
             if rows:
                 fetched = self._extract_codes(rows, task.task_type)
+                for code in batch:
+                    if code not in fetched:
+                        ipo = ipo_map.get(code)
+                        if ipo and ipo <= (task.end_date or task.start_date):
+                            self._write_suspension_marker(
+                                db, table, code_col, code,
+                                task.task_type, task.end_date or task.start_date
+                            )
             else:
-                fetched = set()
-            for code in batch:
-                if code not in fetched:
-                    ipo = ipo_map.get(code)
-                    if ipo and ipo <= (task.end_date or task.start_date):
-                        self._write_suspension_marker(
-                            db, table, code_col, code,
-                            task.task_type, task.end_date or task.start_date
-                        )
+                task.failed_codes.extend(batch[:5])
             task.stocks_done += len(batch)
 
             _done += len(batch)
@@ -540,279 +541,13 @@ class BackfillManager:
     #  基本面补数
     # ═══════════════════════════════════════════════
 
-    def _run_fund_backfill(self, task: BackfillTask):
-        """基本面补数。按季度区间回填，写入 stock_fundamentals + stock_fundamentals_history。"""
-        manager = get_data_source_manager()
-        try:
-            adapter = manager.get_source()
-        except RuntimeError as e:
-            task.status = "failed"
-            task.error_message = f"所有数据源均不可用: {e}"
-            return
-
-        try:
-            adapter._ensure_login()
-            stock_list = adapter.get_stock_list("stock")
-        except Exception as e:
-            task.status = "failed"
-            task.error_message = f"获取股票列表失败: {e}"
-            return
-
-        all_codes = [s.stock_code for s in stock_list]
-        db = get_sync_db()
-
-        # ── 解析日期范围为季度列表 ──
-        quarters = self._date_range_to_quarters(task.start_date, task.end_date)
-        logger.info("[Backfill] fund {} 只, {} 个季度: {} ~ {}",
-                    len(all_codes), len(quarters),
-                    quarters[0] if quarters else '?',
-                    quarters[-1] if quarters else '?')
-
-        task.stocks_total = len(all_codes) * len(quarters)
-        bs = task._batch_size
-        task.total_batches = max((task.stocks_total + bs - 1) // bs, 1)
-
-        # 自适应并发参数
-        _bs = bs
-        _bs_max = bs
-
-        if not all_codes or not quarters:
-            task.status = "completed"
-            task.error_message = "无股票数据或无效日期范围"
-            db.close()
-            adapter._logout()
-            return
-
-        # ── 会话刷新 ──
-        try:
-            adapter._logout()
-        except Exception:
-            pass
-        time.sleep(2)
-        try:
-            adapter._ensure_login()
-        except Exception as e:
-            task.status = "failed"
-            task.error_message = f"数据源重连失败: {e}"
-            db.close()
-            return
-
-        # ── 按季度 × 股票遍历（行业映射由 adapter.fetch_fundamentals 内部加载）──
-        ipo_map = self._load_ipo_map(db, "stock")
-        batch_count = 0
-        for q_idx, (year, quarter, report_date) in enumerate(quarters):
-            if task._stop_requested:
-                task.status = "cancelled"
-                try: adapter._logout()
-                except: pass
-                try: db.close()
-                except: pass
-                gc.collect()
-                return
-
-            # 断点续传：查询本季度已有记录的股票
-            if not task.force:
-                existing = db.execute(text(
-                    "SELECT DISTINCT stock_code FROM stock_fundamentals_history WHERE report_date = :rd"
-                ), {"rd": report_date}).fetchall()
-                q_skip = {r[0] for r in existing}
-            else:
-                q_skip = set()
-
-            # 过滤未上市股票（IPO 晚于该季度末的跳过）
-            q_end_date = report_date
-            ipo_skip = {c for c, ipo in ipo_map.items() if ipo and ipo > q_end_date} if ipo_map else set()
-            q_remaining = [c for c in all_codes if c not in q_skip and c not in ipo_skip]
-            logger.info("[Backfill] fund Q{} {}/{}: {} stocks (skip {} already, {} not listed yet, remaining {})",
-                        quarter, year, report_date, len(all_codes), len(q_skip), len(ipo_skip), len(q_remaining))
-
-            for batch_idx in range(0, len(q_remaining), _bs):
-                # 自适应并发
-                _mem = _mem_used_pct() or 50
-                if _mem > 90 and _bs > 1: _bs -= 1
-                elif _mem < 70 and _bs < _bs_max: _bs += 1
-                if task._stop_requested:
-                    task.status = "cancelled"
-                    try: adapter._logout()
-                    except: pass
-                    try: db.close()
-                    except: pass
-                    gc.collect()
-                    return
-
-                batch = q_remaining[batch_idx:batch_idx + _bs]
-                batch_count += 1
-
-                try:
-                    rows = adapter.fetch_fundamentals(batch, year=year, quarter=quarter)
-                    if rows:
-                        # 写入 stock_fundamentals_history（带 report_date）
-                        saved = writers.batch_upsert_fundamentals(db, rows)
-                        # 补充 report_date 写入 history 表
-                        for r in rows:
-                            if r.pe_ttm is not None or r.pb_mrq is not None or r.roe is not None:
-                                db.execute(text("""
-                                    INSERT INTO stock_fundamentals_history
-                                    (stock_code, report_date, pe_ttm, pb_mrq, roe, revenue_yoy, profit_yoy)
-                                    VALUES (:c, :rd, :pe, :pb, :roe, :ry, :py)
-                                    ON CONFLICT (stock_code, report_date) DO UPDATE SET
-                                    pe_ttm=EXCLUDED.pe_ttm, pb_mrq=EXCLUDED.pb_mrq,
-                                    roe=EXCLUDED.roe, revenue_yoy=EXCLUDED.revenue_yoy,
-                                    profit_yoy=EXCLUDED.profit_yoy
-                                """), {
-                                    "c": r.stock_code, "rd": report_date,
-                                    "pe": r.pe_ttm, "pb": r.pb_mrq, "roe": r.roe,
-                                    "ry": r.revenue_yoy, "py": r.profit_yoy,
-                                })
-                        db.commit()
-                        task.rows += saved
-                    task.stocks_done += len(batch)
-                except Exception as e:
-                    logger.error(f"[Backfill] fund Q{quarter}/{year} 批次失败: {e}")
-                    task.errors += len(batch)
-                    task.failed_codes.extend(batch[:5])
-
-                task.updated_at = datetime.now().isoformat()
-                task.current_batch = batch_count
-                self._update_task_db(task)
-                self._wake_ws()
-
-                # 释放内存
-                if rows:
-                    del rows
-                gc.collect()
-
-                # 批次间刷新 DB session
-                if batch_idx + _bs < len(q_remaining) or q_idx < len(quarters) - 1:
-                    try:
-                        db.close()
-                    except Exception:
-                        pass
-                    db = get_sync_db()
-
-                # 批次间会话维护（自适应降级切换数据源）
-                if batch_idx + _bs < len(q_remaining) or q_idx < len(quarters) - 1:
-                    try:
-                        adapter._logout()
-                    except Exception:
-                        pass
-                    time.sleep(2)
-                    try:
-                        if not adapter._login():
-                            try:
-                                adapter = manager.get_source()
-                                adapter._ensure_login()
-                                logger.warning(f"[Backfill] fund 切换数据源到 {adapter.name}")
-                            except Exception:
-                                task.status = "failed"
-                                task.error_message = "所有数据源均不可用"
-                                db.close()
-                                return
-                    except Exception as e2:
-                        task.status = "failed"
-                        task.error_message = f"数据源重连异常: {e2}"
-                        db.close()
-                        return
-
-        task.status = "completed"
-        try:
-            adapter._logout()
-        except Exception:
-            pass
-        db.close()
-
-    @staticmethod
-    def _date_range_to_quarters(start: str, end: str) -> list:
-        """将日期范围拆分为季度列表。
-        返回 [(year, quarter, report_date), ...] 如 [(2021,2,'2021-06-30'), ...]
-        """
-        if not start or not end:
-            from datetime import date as dt_date
-            today = dt_date.today()
-            q = (today.month - 1) // 3 + 1
-            return [(today.year, q, _qed(today.year, q))]
-        sy, sm, sd = map(int, start.split("-"))
-        ey, em, ed = map(int, end.split("-"))
-        sq = (sm - 1) // 3 + 1
-        eq = (em - 1) // 3 + 1
-        result = []
-        y, q = sy, sq
-        while y < ey or (y == ey and q <= eq):
-            result.append((y, q, _qed(y, q)))
-            q += 1
-            if q > 4:
-                q = 1
-                y += 1
-        return result
-
-    # ═══════════════════════════════════════════════
-    #  基础指标加工补数
-    # ═══════════════════════════════════════════════
-
-    def _run_indicator_backfill(self, task: BackfillTask):
+    def _run_indicator_backfill(self, task):
         """基础指标加工补数 — 已废弃（v2.6），KEPL feature_compute 替代。"""
         task.status = "failed"
         task.error_message = "指标补数已废弃（v2.6），请使用特征管理 → 特征补数 (/api/features/{id}/compute-range)"
         db.close()
         return
-
-        db = get_sync_db()
         """基础指标加工补数。依赖 daily_quote 已有数据。"""
-        db = get_sync_db()
-
-        # 前置检查：daily_quote 是否有数据
-        kline_count = db.execute(text(
-            "SELECT COUNT(*) FROM daily_quote"
-        )).fetchone()[0]
-        if kline_count == 0:
-            task.status = "failed"
-            task.error_message = "daily_quote 无数据，请先补全日K线"
-            db.close()
-            return
-
-        # 获取全部股票代码
-        all_codes = db.execute(text(
-            "SELECT stock_code FROM stock_master WHERE status='N' AND stock_type='stock'"
-        )).fetchall()
-        all_codes = [r[0] for r in all_codes]
-
-        # 断点续传：对比 indicator_calc_log 中的参数快照，参数相同且 status=success 则跳过
-        import json as _json
-        import scripts.pipeline as _pp
-        current_params = _json.dumps({
-            "boll": {"period": 20, "std_mult": 2.0},
-            "macd": {"fast": 12, "slow": 26, "signal": 9},
-            "rsi": {"period": 14},
-            "atr": {"period": 14},
-            "ma": {"periods": [5, 20, 60, 250]},
-            "volume": {"vol_ma_period": 5},
-        }, sort_keys=True)
-
-        skip_set = set()
-        if not task.force:
-            # 只有参数未变化且计算成功的才跳过
-            calc_rows = db.execute(text(
-                "SELECT stock_code, params_snapshot FROM indicator_calc_log WHERE status='success'"
-            )).fetchall()
-            for r in calc_rows:
-                try:
-                    stored = _json.dumps(_json.loads(r[1]) if isinstance(r[1], str) else r[1], sort_keys=True)
-                    if stored == current_params:
-                        skip_set.add(r[0])
-                except Exception:
-                    pass
-
-        remaining = [c for c in all_codes if c not in skip_set]
-        task.stocks_total = len(remaining)
-        task.total_batches = max((len(remaining) + 99) // 100, 1)
-
-        if not remaining:
-            task.status = "completed"
-            task.error_message = "指标数据已完整，无需补数"
-            db.close()
-            return
-        db.close()
-
     # ═══════════════════════════════════════════════
 
     def _run_calendar_backfill(self, task: BackfillTask):
@@ -948,17 +683,26 @@ class BackfillManager:
                     current_codes.add(code)
                     ipo = s.ipo_date if hasattr(s, "ipo_date") and s.ipo_date else None
                     name = getattr(s, "stock_name", code) or code
-                    ex = "SSE" if code.startswith("6") or (code[:1] in ("0","3") and code[:3] in ("000","001","002","003")) \
-                        else ("SZSE" if code[:1] in ("0","3") else "BSE")
+                    # 交易所推断：6→SSE, 0/2/3→SZSE, 4/8/9→BSE（000/001/002/003 均为深交所）
+                    from crawler.adapters.base import code_to_exchange
+                    ex = code_to_exchange(code)
                     db.execute(_t("""
-                        INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
-                        VALUES (:c, :t, :n, :ex, :ipo, 'N')
+                        INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status, delist_date, is_hs, act_name, area)
+                        VALUES (:c, :t, :n, :ex, :ipo, 'N', :dlist, :hs, :act, :area)
                         ON CONFLICT (stock_code, stock_type) DO UPDATE SET
                             stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
                             exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
-                            ipo_date = EXCLUDED.ipo_date,
+                            ipo_date = COALESCE(EXCLUDED.ipo_date, stock_master.ipo_date),
+                            delist_date = EXCLUDED.delist_date,
+                            is_hs = EXCLUDED.is_hs,
+                            act_name = COALESCE(EXCLUDED.act_name, stock_master.act_name),
+                            area = COALESCE(EXCLUDED.area, stock_master.area),
+                            industry = COALESCE(EXCLUDED.industry, stock_master.industry),
+                            reg_capital = COALESCE(EXCLUDED.reg_capital, stock_master.reg_capital),
+                            employees = COALESCE(EXCLUDED.employees, stock_master.employees),
+                            main_business = COALESCE(EXCLUDED.main_business, stock_master.main_business),
                             status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
-                    """), {"c": code, "t": stype, "n": name, "ex": ex, "ipo": ipo})
+                    """), {"c": code, "t": stype, "n": name, "ex": ex, "ipo": ipo, "dlist": getattr(s,"delist_date",None), "hs": getattr(s,"is_hs",None), "act": getattr(s,"act_name",None), "area": getattr(s,"area",None), "ind": getattr(s,"industry",None), "rc": getattr(s,"reg_capital",None), "emp": getattr(s,"employees",None), "biz": getattr(s,"main_business",None)})
                     updated += 1
                     all_updated += 1
                     if i % 300 == 0:
@@ -982,6 +726,126 @@ class BackfillManager:
             task.stocks_done = all_updated
             task.stocks_total = all_updated
             task.error_message = f"更新 {all_updated} 只 (退市 {all_delisted})"
+        except Exception as e:
+            db.rollback()
+            task.status = "failed"
+            task.error_message = str(e)[:500]
+        finally:
+            try: adapter._logout()
+            except: pass
+            db.close()
+
+    def _run_fund_backfill(self, task):
+        """基本面补数：适配器拉取 → UPSERT stock_fundamentals + 行业回写 stock_master。
+
+        使用当前数据源（tushare 首选：daily_basic 按日全市场一次拉取）。
+        """
+        from crawler.adapters import get_data_source_manager
+        from sqlalchemy import text as _t
+        from datetime import datetime
+
+        manager = get_data_source_manager()
+        adapter = None
+        for retry_i in range(3):
+            manager._health_cache.clear()
+            try:
+                adapter = manager.get_source()
+                break
+            except RuntimeError:
+                if retry_i < 2:
+                    import time
+                    time.sleep(5)
+                else:
+                    raise
+        if adapter is None:
+            task.status = "failed"
+            task.error_message = "数据源获取失败，重试3次均失败"
+            return
+        adapter._ensure_login()
+
+        db = get_sync_db()
+        try:
+            # 拉取全市场基本面（适配器内部按日/按股票实现）
+            rows = adapter.fetch_fundamentals(None)
+            if not rows:
+                task.rows = 0
+                task.stocks_done = 0
+                task.error_message = "无基本面数据（数据源可能暂无当日数据）"
+                return
+
+            upserted = 0
+            for r in rows:
+                db.execute(_t("""
+                    INSERT INTO stock_fundamentals (
+                        stock_code, trade_date, stock_name, industry, pe_ttm, pe, pb_mrq,
+                        ps, ps_ttm, roe, revenue_yoy, profit_yoy, total_shares, float_share,
+                        free_share, market_cap, circ_mv, dv_ratio, dv_ttm, turnover_rate,
+                        volume_ratio, limit_status, updated_at
+                    ) VALUES (:c, :d, :n, :ind, :pe_ttm, :pe, :pb, :ps, :ps_ttm, :roe,
+                        :rev_yoy, :prf_yoy, :ts, :fs, :free_s, :mc, :cmv, :dv, :dv_ttm,
+                        :tr, :vr, :ls, CURRENT_TIMESTAMP)
+                    ON CONFLICT (stock_code, trade_date) DO UPDATE SET
+                        stock_name = COALESCE(EXCLUDED.stock_name, stock_fundamentals.stock_name),
+                        industry = COALESCE(EXCLUDED.industry, stock_fundamentals.industry),
+                        pe_ttm = COALESCE(EXCLUDED.pe_ttm, stock_fundamentals.pe_ttm),
+                        pe = COALESCE(EXCLUDED.pe, stock_fundamentals.pe),
+                        pb_mrq = COALESCE(EXCLUDED.pb_mrq, stock_fundamentals.pb_mrq),
+                        ps = COALESCE(EXCLUDED.ps, stock_fundamentals.ps),
+                        ps_ttm = COALESCE(EXCLUDED.ps_ttm, stock_fundamentals.ps_ttm),
+                        roe = COALESCE(EXCLUDED.roe, stock_fundamentals.roe),
+                        revenue_yoy = COALESCE(EXCLUDED.revenue_yoy, stock_fundamentals.revenue_yoy),
+                        profit_yoy = COALESCE(EXCLUDED.profit_yoy, stock_fundamentals.profit_yoy),
+                        total_shares = COALESCE(EXCLUDED.total_shares, stock_fundamentals.total_shares),
+                        float_share = COALESCE(EXCLUDED.float_share, stock_fundamentals.float_share),
+                        free_share = COALESCE(EXCLUDED.free_share, stock_fundamentals.free_share),
+                        market_cap = COALESCE(EXCLUDED.market_cap, stock_fundamentals.market_cap),
+                        circ_mv = COALESCE(EXCLUDED.circ_mv, stock_fundamentals.circ_mv),
+                        dv_ratio = COALESCE(EXCLUDED.dv_ratio, stock_fundamentals.dv_ratio),
+                        dv_ttm = COALESCE(EXCLUDED.dv_ttm, stock_fundamentals.dv_ttm),
+                        turnover_rate = COALESCE(EXCLUDED.turnover_rate, stock_fundamentals.turnover_rate),
+                        volume_ratio = COALESCE(EXCLUDED.volume_ratio, stock_fundamentals.volume_ratio),
+                        limit_status = COALESCE(EXCLUDED.limit_status, stock_fundamentals.limit_status),
+                        updated_at = CURRENT_TIMESTAMP
+                """), {
+                    "c": r.stock_code, "d": r.trade_date or datetime.now().strftime("%Y-%m-%d"),
+                    "n": getattr(r, "stock_name", None), "ind": getattr(r, "industry", None),
+                    "pe_ttm": getattr(r, "pe_ttm", None), "pe": getattr(r, "pe", None),
+                    "pb": getattr(r, "pb_mrq", None), "ps": getattr(r, "ps", None),
+                    "ps_ttm": getattr(r, "ps_ttm", None), "roe": getattr(r, "roe", None),
+                    "rev_yoy": getattr(r, "revenue_yoy", None), "prf_yoy": getattr(r, "profit_yoy", None),
+                    "ts": getattr(r, "total_shares", None), "fs": getattr(r, "float_share", None),
+                    "free_s": getattr(r, "free_share", None), "mc": getattr(r, "market_cap", None),
+                    "cmv": getattr(r, "circ_mv", None), "dv": getattr(r, "dv_ratio", None),
+                    "dv_ttm": getattr(r, "dv_ttm", None), "tr": getattr(r, "turnover_rate", None),
+                    "vr": getattr(r, "volume_ratio", None), "ls": getattr(r, "limit_status", None),
+                })
+                upserted += 1
+                if upserted % 500 == 0:
+                    db.commit()
+                    task.rows = upserted
+                    task.stocks_done = upserted
+                    task.updated_at = datetime.now().isoformat()
+                    self._persist_task(task)
+                    self._wake_ws()
+            db.commit()
+
+            # 行业字段跨表回写 stock_master（有值时更新，避免空覆盖）
+            db.execute(_t("""
+                UPDATE stock_master sm SET industry = sf.industry
+                FROM (
+                    SELECT DISTINCT ON (stock_code) stock_code, industry
+                    FROM stock_fundamentals WHERE industry IS NOT NULL AND industry <> ''
+                    ORDER BY stock_code, trade_date DESC
+                ) sf
+                WHERE sm.stock_code = sf.stock_code AND sm.industry IS DISTINCT FROM sf.industry
+            """))
+            db.commit()
+
+            task.rows = upserted
+            task.stocks_done = upserted
+            task.stocks_total = upserted
+            task.error_message = f"基本面更新 {upserted} 只"
+            logger.info(f"[fund_backfill] 完成: {upserted} 行")
         except Exception as e:
             db.rollback()
             task.status = "failed"
@@ -1029,7 +893,9 @@ class BackfillManager:
                 f"ON CONFLICT (trade_date, {code_col}) DO UPDATE SET is_suspended = true"
             )
         else:
-            exchange = "SSE" if code.startswith("6") else "SZSE"
+            # 与适配器 code_to_exchange 保持一致（6→SSE, 0/2/3→SZSE, 4/8/9→BSE）
+            from crawler.adapters.base import code_to_exchange
+            exchange = code_to_exchange(code)
             sql = (
                 f"INSERT INTO {table} (trade_date, exchange, {code_col}, stock_name, "
                 "open, high, low, close, close_hfq, close_qfq, volume, amount, is_suspended) "

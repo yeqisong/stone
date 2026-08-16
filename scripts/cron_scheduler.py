@@ -26,9 +26,21 @@ def _check_and_trigger():
             try:
                 cron = croniter(f[2], now)
                 prev = cron.get_prev(datetime)
+                # 到期判定：上次执行时刻在最近 70s 内（扫描周期 60s + 余量）。
+                # 用 dag_flows.last_run_at 做幂等：同一 cron 周期只触发一次，
+                # 避免扫描延迟/重复扫描导致同一流程触发两次
                 if prev and (now - prev).total_seconds() < 70:
+                    last_run = db.execute(text(
+                        "SELECT last_run_at FROM dag_flows WHERE id=:id"
+                    ), {"id": f[0]}).scalar()
+                    if last_run and last_run >= prev:
+                        continue  # 该 cron 周期已触发过
                     logger.info(f"[cron] 触发 {f[1]} (id={f[0]})")
                     result = _execute_flow_internal(f[0], {"trade_date": now.strftime("%Y-%m-%d")})
+                    db.execute(text(
+                        "UPDATE dag_flows SET last_run_at = CURRENT_TIMESTAMP WHERE id=:id"
+                    ), {"id": f[0]})
+                    db.commit()
                     if result.get("error"):
                         logger.warning(f"[cron] {f[1]} 触发失败: {result.get('error')}")
             except Exception as e:

@@ -209,14 +209,14 @@ def get_manager() -> DataSourceManager:
 
     _manager = DataSourceManager()
 
-    # 尝试注册 AKShare 适配器（优先）
+    # 尝试注册 TuShare 适配器（首选）
     try:
-        from crawler.adapters.akshare_adapter import AKShareAdapter
-        _manager.register(AKShareAdapter())
+        from crawler.adapters.tushare_adapter import TuShareAdapter
+        _manager.register(TuShareAdapter())
     except ImportError:
-        logger.debug("[DataSource] AKShareAdapter 尚未实现，跳过注册")
+        logger.debug("[DataSource] TuShareAdapter 未安装，跳过注册")
     except Exception as e:
-        logger.warning(f"[DataSource] AKShareAdapter 注册失败: {e}")
+        logger.warning(f"[DataSource] TuShareAdapter 注册失败: {e}")
 
     # 尝试注册 Baostock 适配器（备选）
     try:
@@ -226,15 +226,6 @@ def get_manager() -> DataSourceManager:
         logger.debug("[DataSource] BaostockAdapter 尚未实现，跳过注册")
     except Exception as e:
         logger.warning(f"[DataSource] BaostockAdapter 注册失败: {e}")
-
-    # 尝试注册 TuShare 适配器（第三备选）
-    try:
-        from crawler.adapters.tushare_adapter import TuShareAdapter
-        _manager.register(TuShareAdapter())
-    except ImportError:
-        logger.debug("[DataSource] TuShareAdapter 未安装，跳过注册")
-    except Exception as e:
-        logger.warning(f"[DataSource] TuShareAdapter 注册失败: {e}")
 
     return _manager
 

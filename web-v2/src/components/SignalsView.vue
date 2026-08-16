@@ -39,13 +39,15 @@ import axios from 'axios'
 import SignalStatsView from './SignalStatsView.vue'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
-const sigDate = ref(new Date().toISOString().slice(0,10))
+// 北京时间（UTC 日期每日 0-8 点"今天"会取到昨天）
+const bjToday = () => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replace(/\//g, '-')
+const sigDate = ref(bjToday())
 const data = reactive({signals:null, scanned:0, total_signals:0})
 const showStats = ref(false)
 const showGenModal = ref(false)
 const genLoading = ref(false)
 const activeModel = ref(null)
-const todayStr = () => new Date().toISOString().slice(0,10)
+const todayStr = () => bjToday()
 const columns = [
   { title:'#', key:'index', width:35, render:(_,i)=>i+1 },
   { title:'代码', key:'stock_code', width:85, render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },

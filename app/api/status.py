@@ -228,17 +228,10 @@ def refresh_stats(user: str = Depends(get_current_user)):
     tm.start_task(task.task_id)
 
     def _run():
-        import signal as _sig
         try:
             from scripts.pipeline import generate_stats
-            # 60 秒超时保护
-            _sig.alarm(60)
-            try:
-                rows = generate_stats()
-            except Exception:
-                raise
-            finally:
-                _sig.alarm(0)
+            # 注意：signal.alarm 只能在主线程使用，后台线程必须用 threading.Timer
+            rows = generate_stats()
             tm.update_node(task.task_id, "node-0", status="success", rows=rows, progress_pct=100)
             tm.complete_task(task.task_id)
         except Exception as e:
@@ -848,6 +841,49 @@ def backfill_logs(page: int = 1, page_size: int = 20):
 # ═══════════════════════════════════════════════
 #  系统监控
 # ═══════════════════════════════════════════════
+
+@router.get("/stock_fund_list")
+def stock_fund_list(stock_type: str = "stock", page: int = 1, page_size: int = 50,
+                    search: str = "", user: str = Depends(get_current_user)):
+    """股票主表 + 最新基本面信息 分页联表查询。"""
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        where = "sm.stock_type = :t"
+        params = {"t": stock_type}
+        if search:
+            where += " AND (sm.stock_code ILIKE :s OR sm.stock_name ILIKE :s)"
+            params["s"] = f"%{search}%"
+        count_sql = f"SELECT COUNT(*) FROM stock_master sm WHERE {where}"
+        total = db.execute(text(count_sql), params).scalar() or 0
+        offset = (page - 1) * page_size
+        sql = f"""
+            SELECT sm.*, sf.pe_ttm, sf.pb_mrq, sf.market_cap, sf.dv_ttm,
+                   sf.turnover_rate, sf.volume_ratio, sf.ps_ttm, sf.dv_ratio,
+                   sf.circ_mv, sf.total_shares, sf.float_share, sf.roe,
+                   sf.trade_date AS fund_date
+            FROM stock_master sm
+            LEFT JOIN LATERAL (
+                SELECT * FROM stock_fundamentals WHERE stock_code = sm.stock_code
+                ORDER BY COALESCE(trade_date_v2, updated_at, CURRENT_DATE) DESC LIMIT 1
+            ) sf ON true
+            WHERE {where}
+            ORDER BY sm.stock_code
+            LIMIT :lim OFFSET :off
+        """
+        rows = db.execute(text(sql), {**params, "lim": page_size, "off": offset}).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r._mapping)
+            for k, v in d.items():
+                if isinstance(v, date):
+                    d[k] = str(v)
+            items.append(d)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    finally:
+        db.close()
+
 
 @router.get("/system/metrics")
 def system_metrics():

@@ -56,23 +56,29 @@ class IndexKlineRow:
 
 @dataclass
 class FundamentalRow:
-    """基本面数据标准行。
-
-    注意：
-    - pe_ttm / pb_mrq 优先从 AKShare 获取
-    - roe / revenue_yoy / profit_yoy 优先从 Baostock 获取（AKShare 无直接接口）
-    - market_cap 统一为「元」（AKShare 返回「万元」需 ×10000）
-    """
+    """基本面数据标准行（daily_basic 全字段 + baostock 补充字段）。"""
     stock_code: str
     stock_name: str
+    trade_date: Optional[str] = None    # 数据日期
     industry: Optional[str] = None
     pe_ttm: Optional[float] = None       # 市盈率(TTM)
+    pe: Optional[float] = None           # 市盈率
     pb_mrq: Optional[float] = None       # 市净率(MRQ)
+    ps: Optional[float] = None           # 市销率
+    ps_ttm: Optional[float] = None       # 市销率(TTM)
     roe: Optional[float] = None          # ROE (%)
     revenue_yoy: Optional[float] = None  # 营收同比 (%)
     profit_yoy: Optional[float] = None   # 净利同比 (%)
     total_shares: Optional[int] = None   # 总股本（股）
+    float_share: Optional[int] = None    # 流通股本（股）
+    free_share: Optional[int] = None     # 自由流通股本（股）
     market_cap: Optional[int] = None     # 总市值（元）
+    circ_mv: Optional[int] = None        # 流通市值（元）
+    dv_ratio: Optional[float] = None     # 股息率 (%)
+    dv_ttm: Optional[float] = None       # 股息率 TTM (%)
+    turnover_rate: Optional[float] = None # 换手率 (%)
+    volume_ratio: Optional[float] = None # 量比
+    limit_status: Optional[int] = None   # 涨跌停状态
 
 
 @dataclass
@@ -84,6 +90,14 @@ class StockInfo:
     ipo_date: Optional[str] = None     # "1991-04-03" 或 None
     status: str = "N"       # "N"=正常 / "D"=退市
     stock_type: str = "stock"  # "stock" / "index" / "etf"
+    delist_date: Optional[str] = None  # 退市日期
+    is_hs: Optional[str] = None        # "H"沪深港通 / "S"深港通 / "N"否
+    act_name: Optional[str] = None     # 实控人
+    area: Optional[str] = None         # 地域（省）
+    industry: Optional[str] = None     # 所属行业
+    reg_capital: Optional[float] = None
+    employees: Optional[int] = None
+    main_business: Optional[str] = None
 
 
 # ── 抽象基类 ──

@@ -178,15 +178,6 @@ def generate_stats(*args, **kwargs):
             try: db.rollback()
             except: pass
             stats.append({'label': label, 'rows': -1, 'items': 0})
-            if date_q:
-                sr = db.execute(text(date_q[0])).scalar()
-                er = db.execute(text(date_q[1])).scalar()
-                if sr: s['start'] = str(sr)[:10]
-                if er: s['end'] = str(er)[:10]
-            stats.append(s)
-        except:
-            db.rollback()
-            stats.append({'label': label, 'rows': -1, 'items': 0})
     sig_buy = q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0
     sig_sell = q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0
     for s in stats:
@@ -892,8 +883,8 @@ def dag_task_model_signal(trade_date=None, **kw):
         if not use_predict:
             write_node_log(log_id=log_id, status='running', detail=f"规则模式 (偏好:{pref_mode}, buy>={t['buy_score_min']})")
 
-        # 读取今日特征（v2.6: feature_values 宽表替代旧 indicator JOIN）
-        today_str = str(_date.today())
+        # 读取目标交易日特征（v2.6: feature_values 宽表替代旧 indicator JOIN）
+        today_str = td
         model_cfg_json = db.execute(text(
             "SELECT config FROM model_versions WHERE version=:v"
         ), {"v": ver}).scalar()
@@ -1064,7 +1055,7 @@ def dag_task_model_health(trade_date=None, **kw):
         db.commit()
         db.close()
         write_node_log(log_id=log_id, status='success', rows=total,
-                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号 {closed}了结 (偏好:{pref_mode})')
+                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号 {closed}了结')
         return total
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -1182,19 +1173,20 @@ def dag_task_entity_stats(trade_date=None, **kw):
                 """), {"d": td}).scalar() or 0
 
                 if total_cells == 0:
-                    # 首次运行：JOIN 计算基线
+                    # 首次运行：JOIN 计算基线（SSE 日历为交易日基准，避免每日期 3 行×3）
                     new_total = db.execute(text(f"""
                         SELECT COUNT(*)
                         FROM stock_master sm
                         JOIN trade_calendar tc ON tc.cal_date BETWEEN COALESCE(sm.ipo_date, '2000-01-01') AND :d
                         WHERE sm.status = 'N' {ent_filter}
                           AND tc.is_trade_day = true
+                          AND tc.exchange = 'SSE'
                     """), {"d": td}).scalar() or 0
                 else:
                     # 增量：新增的交易日 × active_count（近似，忽略个股粒度差异）
                     new_days = db.execute(text("""
                         SELECT COUNT(*) FROM trade_calendar
-                        WHERE cal_date > :bd AND cal_date <= :d AND is_trade_day = true
+                        WHERE cal_date > :bd AND cal_date <= :d AND is_trade_day = true AND exchange = 'SSE'
                     """), {"bd": base_date, "d": td}).scalar() or 0
                     new_total = total_cells + new_days * active_count
 
@@ -1208,7 +1200,7 @@ def dag_task_entity_stats(trade_date=None, **kw):
                         code, ipo = nl[0], nl[1]
                         td_cnt = db.execute(text("""
                             SELECT COUNT(*) FROM trade_calendar
-                            WHERE cal_date BETWEEN :ipo AND :d AND is_trade_day = true
+                            WHERE cal_date BETWEEN :ipo AND :d AND is_trade_day = true AND exchange = 'SSE'
                         """), {"ipo": ipo, "d": td}).scalar() or 0
                         new_total += td_cnt
 
@@ -1300,7 +1292,6 @@ def dag_task_cron(trade_date=None, **kw):
 def dag_task_feature_backfill(trade_date=None, **kw):
     """DAG 节点：历史特征补数（3.4）。"""
     from app.db.connection import get_sync_db
-    from app.db.schema import write_node_log
     from scripts.feature_compute import compute_all_features
     log_id = (kw.get('_node_log_ids', {}) or {}).get('feature_backfill')
 
@@ -1323,7 +1314,6 @@ def dag_task_feature_backfill(trade_date=None, **kw):
 def dag_task_feature_compute(trade_date=None, **kw):
     """DAG 节点：计算所有已启用特征值。"""
     from app.db.connection import get_sync_db
-    from app.db.schema import write_node_log
     from scripts.feature_compute import compute_all_features
     from datetime import date as dt, timedelta
     log_id = (kw.get('_node_log_ids', {}) or {}).get('feature_compute')
@@ -1332,8 +1322,9 @@ def dag_task_feature_compute(trade_date=None, **kw):
     db = get_sync_db()
     try:
         today = dt.today().strftime("%Y-%m-%d")
-        # 增量：仅计算最近 10 天（首次运行可改为全量）
-        start = force and "2020-01-01" or (dt.today() - timedelta(days=10)).strftime("%Y-%m-%d")
+        # 增量：仅计算最近 10 天（首次运行可改为全量）；force 时全量重算
+        force = (kw.get('_node_force', {}) or {}).get('feature_compute', kw.get('force', False))
+        start = "2020-01-01" if force else (dt.today() - timedelta(days=10)).strftime("%Y-%m-%d")
         result = compute_all_features(db, target_entity="stock", start_date=start, end_date=today)
         msg = f"完成: {result['features']}个特征, {result['rows']}行"
         if result.get("errors"):
@@ -1835,9 +1826,9 @@ def dag_task_model_train(trade_date=None, **kw):
                     best_params_store = {k: {'params': params, 'r2': m['r2']} for k, m in models.items()}
                     best_models = {k: m['model'] for k, m in models.items()}
                 db.execute(text("INSERT INTO training_trials (version, trial_number, params, score) VALUES (:v,:n,:p,:s) ON CONFLICT (version, trial_number) DO UPDATE SET params=EXCLUDED.params, score=EXCLUDED.score"),
-                           {"v": ver, "n": trial.number + 1, "p": _json.dumps(params), "s": round(float(avg_sharpe), 4)})
+                           {"v": ver, "n": trial.number + 1, "p": _json.dumps(params), "s": round(float(avg_r2), 4)})
                 db.commit()
-                return avg_sharpe
+                return avg_r2
             study = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
         except ImportError:
@@ -1889,15 +1880,17 @@ def dag_task_model_train(trade_date=None, **kw):
                 t['horizon'] = label
                 all_trades.append(t)
         # 去重：同股票同买入日只保留一笔（不同周期可能重复买入）
+        # trade_log 分录键为 date/code（仅 BUY 记录），按 (code, date) 去重并倒序排序
+        all_trades = [t for t in all_trades if t.get('action') == 'BUY']
         seen = set()
         deduped = []
         for t in all_trades:
-            key = (t['code'], t['buy_date'])
+            key = (t['code'], t['date'])
             if key not in seen:
                 seen.add(key)
                 deduped.append(t)
         all_trades = deduped
-        all_trades.sort(key=lambda t: t['sell_date'], reverse=True)
+        all_trades.sort(key=lambda t: t['date'], reverse=True)
 
         # 过拟合检测：对比 val R² 和 test sharpe（val上高R² + test上低sharpe = 过拟合）
         val_r2s = [best_params_store.get(l,{}).get('r2',0) for l in ['10d','20d']]
@@ -1918,9 +1911,9 @@ def dag_task_model_train(trade_date=None, **kw):
         except Exception:
             pass
 
-        # 质量指标：从交易明细计算
-        all_pnls = [t['pnl'] for t in all_trades]
-        all_pnl_pcts = [t['pnl_pct'] for t in all_trades]
+        # 质量指标：trade_log 无逐笔盈亏，改用验证/测试集汇总指标
+        all_pnls = []
+        all_pnl_pcts = []
         wins = [p for p in all_pnls if p > 0]
         losses = [abs(p) for p in all_pnls if p < 0]
         profit_factor = sum(wins) / sum(losses) if losses else (999 if wins else 0)
@@ -1928,8 +1921,8 @@ def dag_task_model_train(trade_date=None, **kw):
         avg_loss = float(np.mean(losses)) if losses else 0
         max_dd_avg = float(np.mean([test_results.get(l,{}).get('max_dd',0) for l in ['10d','20d']]))
 
-        # 集中度分析：前 3 笔最大盈利占总收益的比例
-        sorted_pnls = sorted([t['pnl'] for t in all_trades if t['pnl'] > 0], reverse=True)
+        # 集中度分析：前 3 笔最大盈利占总收益的比例（无逐笔盈亏 → 0）
+        sorted_pnls = sorted([t['pnl'] for t in all_trades if t.get('pnl', 0) > 0], reverse=True)
         total_profit = sum(sorted_pnls)
         top3_pct = sum(sorted_pnls[:3]) / total_profit * 100 if total_profit > 0 else 0
 
@@ -1938,9 +1931,9 @@ def dag_task_model_train(trade_date=None, **kw):
             'trades': all_trades,
             'trade_count': len(all_trades),
             'top3_concentration': round(top3_pct, 1),
-            'val_sharpe': round(val_avg, 4),
-            'test_sharpe': round(test_avg, 4),
-            'overfit_gap': round(overfit_gap, 4),
+            'val_sharpe': round(val_r2_avg, 4),
+            'test_sharpe': round(test_sharpe_avg, 4),
+            'overfit_gap': round(val_r2_avg - test_sharpe_avg, 4),
             'profit_factor': round(profit_factor, 2),
             'avg_win': round(avg_win, 2),
             'avg_loss': round(avg_loss, 2),

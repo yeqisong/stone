@@ -151,10 +151,18 @@ async def _handle_card_action(action: str, value: dict, db: AsyncSession):
         sdb = get_sync_db()
         try:
             mode_names = {"left": "左侧交易", "right": "右侧交易", "balanced": "均衡"}
+            # 先读后 merge：只更新 mode 键，避免覆盖 deepseek_key 等其他配置
+            cur = sdb.execute(text(
+                "SELECT params FROM strategy_config WHERE strategy_name = 'global_preference'"
+            )).fetchone()
+            params = {}
+            if cur and cur[0]:
+                params = json.loads(cur[0]) if isinstance(cur[0], str) else (cur[0] or {})
+            params["mode"] = mode
             sdb.execute(text(
                 "UPDATE strategy_config SET params = :p, updated_at = CURRENT_TIMESTAMP, updated_by = 'feishu' "
                 "WHERE strategy_name = 'global_preference'"
-            ), {"p": json.dumps({"mode": mode})})
+            ), {"p": json.dumps(params, ensure_ascii=False)})
             sdb.commit()
             return {"msg_type": "text", "content": {"text": f"✅ 已切换为{mode_names.get(mode, mode)}偏好。"}}
         except Exception as e:

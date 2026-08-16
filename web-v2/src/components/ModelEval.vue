@@ -196,7 +196,9 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress } from 'naive-ui'
+import axios from 'axios'
 
+const API = window.location.origin
 const props = defineProps({ version: Object })
 
 const rep = computed(() => props.version?.evaluation_report || {})

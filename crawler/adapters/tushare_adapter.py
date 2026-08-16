@@ -26,13 +26,11 @@ def _rl():
 
 class TuShareAdapter(DataSourceAdapter):
     name = "tushare"
-    priority = 10  # 低于 baostock(20) 和 akshare(10)
+    priority = 5  # 首选
 
     def __init__(self):
-        import os
         import tushare as ts
         from app.config import settings
-        os.environ["HOME"] = "/tmp"
         ts.set_token(settings.TUSHARE_TOKEN)
         self._pro = ts.pro_api()
         self._name_cache: Dict[str, str] = {}
@@ -48,8 +46,10 @@ class TuShareAdapter(DataSourceAdapter):
 
     def check_health(self) -> bool:
         try:
+            from datetime import timedelta
+            td = (date.today() - timedelta(days=2)).strftime("%Y%m%d")
             _rl()
-            df = self._pro.daily(ts_code='000001.SZ', start_date='20260714', end_date='20260714')
+            df = self._pro.daily(ts_code='000001.SZ', start_date=td, end_date=td)
             return df is not None and len(df) > 0
         except Exception:
             return False
@@ -59,23 +59,32 @@ class TuShareAdapter(DataSourceAdapter):
         try:
             if stock_type != "stock":
                 return results
-            # stock_basic 有1次/小时限制，优先尝试，失败降级到 daily
             _rl()
+            # stock_basic 有1次/小时限制，返回空时降级到 daily
+            df = None
             try:
                 df = self._pro.stock_basic(exchange='', list_status='L',
-                    fields='ts_code,name,list_date,delist_date')
-                use_daily = False
+                    fields='ts_code,name,list_date,delist_date,exchange,is_hs,act_name,area,industry')
             except Exception:
-                use_daily = True
-
-            if use_daily:
-                td = (date.today() - timedelta(days=3)).strftime("%Y%m%d")
-                _rl()
-                df = self._pro.daily(trade_date=td)
+                pass
 
             if df is None or df.empty:
-                return results
+                # 降级到 daily（查最近交易日）
+                from datetime import date, timedelta
+                for back in range(1, 10):
+                    td = (date.today() - timedelta(days=back)).strftime("%Y%m%d")
+                    try:
+                        _rl()
+                        df = self._pro.daily(trade_date=td)
+                        if df is not None and not df.empty:
+                            break
+                    except Exception:
+                        continue
+                else:
+                    return results  # 10天都无数据，放弃
+
             seen = set()
+            from_stock_basic = 'list_date' in df.columns
             for _, r in df.iterrows():
                 raw = str(r['ts_code'])
                 code = raw.split('.')[0].zfill(6)
@@ -83,121 +92,383 @@ class TuShareAdapter(DataSourceAdapter):
                     continue
                 seen.add(code)
                 ex = 'SSE' if raw.endswith('.SH') else ('SZSE' if raw.endswith('.SZ') else '')
-                results.append(StockInfo(
-                    stock_code=code, stock_name='', exchange=ex,
-                    ipo_date=None, status='N', stock_type='stock'))
+                if not from_stock_basic:
+                    results.append(StockInfo(
+                        stock_code=code, stock_name='', exchange=ex,
+                        ipo_date=None, status='N', stock_type='stock'))
+                else:
+                    results.append(StockInfo(
+                        stock_code=code, stock_name=str(r.get('name','')),
+                        exchange=ex,
+                        ipo_date=str(r['list_date']) if pd.notna(r.get('list_date')) else None,
+                        status='D' if pd.notna(r.get('delist_date')) else 'N',
+                        stock_type='stock',
+                        delist_date=str(r['delist_date']) if pd.notna(r.get('delist_date')) else None,
+                        is_hs=str(r.get('is_hs','')) if pd.notna(r.get('is_hs')) else None,
+                        act_name=str(r.get('act_name','')) if pd.notna(r.get('act_name')) else None,
+                        area=str(r.get('area','')) if pd.notna(r.get('area')) else None,
+                        industry=str(r.get('industry','')) if pd.notna(r.get('industry')) else None))
         except Exception as e:
             logger.warning(f"[tushare] get_stock_list 失败: {e}")
         return results
 
+    @staticmethod
+    def _ts_code(code: str) -> str:
+        """股票代码 → tushare ts_code（含北交所 .BJ）。"""
+        if code.startswith(('4', '8', '9', '92')):
+            return f"{code}.BJ"
+        return f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
+
+    def _enrich_kline_batch(self, ts_codes: List[str], start: str, end: str) -> dict:
+        """批量补充换手率 + 后复权价：返回 {(code, date): {'turnover','close_hfq'}}。
+
+        daily_basic / adj_factor 均支持 ts_code 逗号分隔（≤50 只/次），
+        避免逐股调用超出 50 次/分钟限流。
+        """
+        result = {}
+        if not ts_codes:
+            return result
+        s = start.replace('-', '')
+        e = end.replace('-', '')
+        for i in range(0, len(ts_codes), 50):
+            chunk = ','.join(ts_codes[i:i + 50])
+            basic = None
+            adj = None
+            try:
+                _rl()
+                basic = self._pro.daily_basic(ts_code=chunk, trade_date='',
+                    start_date=s, end_date=e, fields='ts_code,trade_date,turnover_rate')
+            except Exception as ex:
+                logger.warning(f"[tushare] daily_basic 批量失败: {ex}")
+            try:
+                _rl()
+                adj = self._pro.adj_factor(ts_code=chunk, start_date=s, end_date=e)
+            except Exception as ex:
+                logger.warning(f"[tushare] adj_factor 批量失败: {ex}")
+            if basic is not None and not basic.empty:
+                for _, r in basic.iterrows():
+                    k = (str(r['ts_code']).split('.')[0].zfill(6), str(r['trade_date']))
+                    result.setdefault(k, {})['turnover'] = (
+                        float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None)
+            if adj is not None and not adj.empty:
+                for _, r in adj.iterrows():
+                    k = (str(r['ts_code']).split('.')[0].zfill(6), str(r['trade_date']))
+                    result.setdefault(k, {})['adj_factor'] = (
+                        float(r['adj_factor']) if pd.notna(r.get('adj_factor')) else 1.0)
+        return result
+
     def fetch_stock_kline(self, codes: List[str], start: str, end: str) -> List[KlineRow]:
         results = []
-
-        # 智能分发：全市场+短区间→按日期，否则按股票
-        from datetime import date as _dt
+        from datetime import date as _dt, timedelta as _td
         sd = _dt.fromisoformat(start)
         ed = _dt.fromisoformat(end)
+        code_set = set(codes)
         day_count = (ed - sd).days
 
-        if len(codes) > 500 and day_count <= 5:
-            # 按日期循环（1 次/天取全市场）
+        # 短区间+少股票→按日期（1次/天取全市场过滤）；否则按股票分批
+        if day_count <= 10 and len(codes) <= 500:
             td = sd
-            code_set = set(codes)
             while td <= ed:
                 td_str = td.strftime("%Y%m%d")
                 try:
                     _rl()
                     df = self._pro.daily(trade_date=td_str)
                     if df is not None and not df.empty:
+                        # 当天有交易的代码 → 批量补充换手率/复权价
+                        day_codes = [str(r['ts_code']) for _, r in df.iterrows()
+                                     if str(r['ts_code']).split('.')[0].zfill(6) in code_set]
+                        enr = self._enrich_kline_batch(day_codes, td_str, td_str)
                         for _, r in df.iterrows():
                             raw_code = str(r['ts_code'])
                             code = raw_code.split('.')[0].zfill(6)
                             if code not in code_set:
                                 continue
-                            ex = 'SSE' if raw_code.endswith('.SH') else 'SZSE'
+                            ex = code_to_exchange(code)
+                            close = float(r['close'])
+                            ek = enr.get((code, str(r['trade_date'])), {})
+                            hfq = close * ek.get('adj_factor', 1.0)
                             results.append(KlineRow(
                                 trade_date=str(r['trade_date']), stock_code=code,
                                 stock_name='', exchange=ex,
                                 open=float(r['open']), high=float(r['high']),
-                                low=float(r['low']), close=float(r['close']),
-                                close_hfq=float(r['close']),
+                                low=float(r['low']), close=close,
+                                close_hfq=hfq,
                                 volume=int(r['vol']) * 100 if pd.notna(r.get('vol')) else 0,
                                 amount=float(r['amount']) * 1000 if pd.notna(r.get('amount')) else 0,
-                                turnover=None,
-                            ))
+                                turnover=ek.get('turnover')))
                 except Exception as e:
-                    logger.warning(f"[tushare] 日期 {td_str} K线失败: {e}")
-                td += __import__('datetime').timedelta(days=1)
+                    logger.warning(f"[tushare] {td_str} K线失败: {e}")
+                td += _td(days=1)
         else:
-            # 按股票循环（跨年/少量股票）
-            for c in codes:
-                ex = '.SH' if c.startswith('6') else '.SZ'
+            # 长区间→按股票分批（ts_code 逗号分隔，一次最多 100 个）
+            for i in range(0, len(codes), 100):
+                batch = codes[i:i+100]
+                ts_codes = [self._ts_code(c) for c in batch]
                 try:
                     _rl()
-                    df = self._pro.daily(ts_code=f"{c}{ex}",
-                                         start_date=start.replace('-', ''),
-                                         end_date=end.replace('-', ''))
-                    if df is None or df.empty:
-                        continue
-                    for _, r in df.iterrows():
-                        results.append(KlineRow(
-                            trade_date=str(r['trade_date']), stock_code=c,
-                            stock_name='', exchange='SSE' if ex == '.SH' else 'SZSE',
-                            open=float(r['open']), high=float(r['high']),
-                            low=float(r['low']), close=float(r['close']),
-                            close_hfq=float(r['close']),
-                            volume=int(r['vol']) * 100 if pd.notna(r.get('vol')) else 0,
-                            amount=float(r['amount']) * 1000 if pd.notna(r.get('amount')) else 0,
-                            turnover=None,
-                        ))
+                    df = self._pro.daily(ts_code=','.join(ts_codes),
+                        start_date=start.replace('-', ''),
+                        end_date=end.replace('-', ''))
+                    if df is not None and not df.empty:
+                        enr = self._enrich_kline_batch(ts_codes, start, end)
+                        for _, r in df.iterrows():
+                            raw_code = str(r['ts_code'])
+                            code = raw_code.split('.')[0].zfill(6)
+                            ex = code_to_exchange(code)
+                            close = float(r['close'])
+                            ek = enr.get((code, str(r['trade_date'])), {})
+                            hfq = close * ek.get('adj_factor', 1.0)
+                            results.append(KlineRow(
+                                trade_date=str(r['trade_date']), stock_code=code,
+                                stock_name='', exchange=ex,
+                                open=float(r['open']), high=float(r['high']),
+                                low=float(r['low']), close=close,
+                                close_hfq=hfq,
+                                volume=int(r['vol']) * 100 if pd.notna(r.get('vol')) else 0,
+                                amount=float(r['amount']) * 1000 if pd.notna(r.get('amount')) else 0,
+                                turnover=ek.get('turnover')))
                 except Exception as e:
-                    logger.warning(f"[tushare] {c} K线失败: {e}")
+                    logger.warning(f"[tushare] K线批量失败: {e}")
         return results
 
     def fetch_index_kline(self, codes, start, end):
         results = []
-        for c in codes:
+        from datetime import date as _dt, timedelta as _td
+        sd = _dt.fromisoformat(start); ed = _dt.fromisoformat(end)
+        code_set = set(codes)
+        td = sd
+        while td <= ed:
+            td_str = td.strftime("%Y%m%d")
             try:
-                from datetime import date
                 _rl()
-                ex = '.SH' if c.startswith('0') or c.startswith('9') else '.SZ'
-                df = self._pro.index_daily(ts_code=f"{c}{ex}",
-                    start_date=start.replace('-',''), end_date=end.replace('-',''))
-                if df is None or df.empty: continue
-                for _, r in df.iterrows():
-                    results.append(IndexKlineRow(
-                        trade_date=str(r['trade_date']), index_code=c, index_name='',
-                        open=float(r['open']), high=float(r['high']),
-                        low=float(r['low']), close=float(r['close']),
-                        volume=int(r['vol'])*100 if pd.notna(r.get('vol')) else 0,
-                        amount=float(r['amount'])*1000 if pd.notna(r.get('amount')) else 0))
+                df = self._pro.index_daily(trade_date=td_str)
+                if df is not None and not df.empty:
+                    for _, r in df.iterrows():
+                        raw = str(r['ts_code'])
+                        c = raw.split('.')[0].zfill(6)
+                        if c not in code_set:
+                            continue
+                        results.append(IndexKlineRow(
+                            trade_date=str(r['trade_date']), index_code=c, index_name='',
+                            open=float(r['open']), high=float(r['high']),
+                            low=float(r['low']), close=float(r['close']),
+                            volume=int(r['vol'])*100 if pd.notna(r.get('vol')) else 0,
+                            amount=float(r['amount'])*1000 if pd.notna(r.get('amount')) else 0))
             except Exception as e:
-                logger.warning(f"[tushare] 指数 {c} K线失败: {e}")
+                logger.warning(f"[tushare] 指数 {td_str} 失败: {e}")
+            td += _td(days=1)
         return results
 
     def fetch_etf_kline(self, codes, start, end):
         results = []
-        for c in codes:
+        from datetime import date as _dt, timedelta as _td
+        sd = _dt.fromisoformat(start); ed = _dt.fromisoformat(end)
+        code_set = set(codes)
+        td = sd
+        while td <= ed:
+            td_str = td.strftime("%Y%m%d")
             try:
                 _rl()
-                ex = '.SH' if c.startswith('5') else '.SZ'
-                df = self._pro.fund_daily(ts_code=f"{c}{ex}",
-                    start_date=start.replace('-',''), end_date=end.replace('-',''))
-                if df is None or df.empty: continue
-                code = c.zfill(6); ex2 = 'SSE' if c.startswith('5') else 'SZSE'
-                for _, r in df.iterrows():
-                    results.append(KlineRow(
-                        trade_date=str(r['trade_date']), stock_code=code, stock_name='',
-                        exchange=ex2, open=float(r['open']), high=float(r['high']),
-                        low=float(r['low']), close=float(r['close']), close_hfq=float(r['close']),
-                        volume=int(r['vol'])*100 if pd.notna(r.get('vol')) else 0,
-                        amount=float(r['amount'])*1000 if pd.notna(r.get('amount')) else 0))
+                df = self._pro.fund_daily(trade_date=td_str)
+                if df is not None and not df.empty:
+                    for _, r in df.iterrows():
+                        raw = str(r['ts_code'])
+                        c = raw.split('.')[0].zfill(6)
+                        if c not in code_set:
+                            continue
+                        ex2 = 'SSE' if c.startswith('5') else 'SZSE'
+                        results.append(KlineRow(
+                            trade_date=str(r['trade_date']), stock_code=c, stock_name='',
+                            exchange=ex2, open=float(r['open']), high=float(r['high']),
+                            low=float(r['low']), close=float(r['close']), close_hfq=float(r['close']),
+                            volume=int(r['vol'])*100 if pd.notna(r.get('vol')) else 0,
+                            amount=float(r['amount'])*1000 if pd.notna(r.get('amount')) else 0))
             except Exception as e:
-                logger.warning(f"[tushare] ETF {c} K线失败: {e}")
+                logger.warning(f"[tushare] ETF {td_str} 失败: {e}")
+            td += _td(days=1)
         return results
 
-    def fetch_fundamentals(self, codes: List[str]) -> List:
-        return []
+    def fetch_fundamentals(self, codes: List[str]) -> List[FundamentalRow]:
+        """用 daily_basic 按日获取全市场基本面（1 次/天）。"""
+        results = []
+        from datetime import date as _dt2, timedelta
+        # 取最近工作日（跳过周末；节假日由 daily_basic 空返回降级处理）
+        td_d = _dt2.today()
+        for _ in range(10):
+            if td_d.weekday() < 5:
+                break
+            td_d -= timedelta(days=1)
+        td = td_d.strftime("%Y%m%d")
+        code_set = set(codes) if codes else None
+        try:
+            _rl()
+            df = self._pro.daily_basic(trade_date=td,
+                fields='ts_code,trade_date,total_mv,circ_mv,total_share,float_share,free_share,pe_ttm,pe,pb,ps,ps_ttm,dv_ratio,dv_ttm,turnover_rate,volume_ratio,limit_status')
+            if df is None or df.empty:
+                return results
+            for _, r in df.iterrows():
+                raw_code = str(r['ts_code'])
+                code = raw_code.split('.')[0].zfill(6)
+                if code_set is not None and code not in code_set:
+                    continue
+                results.append(FundamentalRow(
+                    stock_code=code, stock_name='',
+                    trade_date=str(r.get('trade_date','')),
+                    pe_ttm=float(r['pe_ttm']) if pd.notna(r.get('pe_ttm')) else None,
+                    pe=float(r['pe']) if pd.notna(r.get('pe')) else None,
+                    pb_mrq=float(r['pb']) if pd.notna(r.get('pb')) else None,
+                    ps=float(r['ps']) if pd.notna(r.get('ps')) else None,
+                    ps_ttm=float(r['ps_ttm']) if pd.notna(r.get('ps_ttm')) else None,
+                    dv_ratio=float(r['dv_ratio']) if pd.notna(r.get('dv_ratio')) else None,
+                    dv_ttm=float(r['dv_ttm']) if pd.notna(r.get('dv_ttm')) else None,
+                    turnover_rate=float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None,
+                    volume_ratio=float(r['volume_ratio']) if pd.notna(r.get('volume_ratio')) else None,
+                    total_shares=int(r['total_share'] * 10000) if pd.notna(r.get('total_share')) else None,
+                    float_share=int(r['float_share'] * 10000) if pd.notna(r.get('float_share')) else None,
+                    free_share=int(r['free_share'] * 10000) if pd.notna(r.get('free_share')) else None,
+                    market_cap=int(r['total_mv'] * 10000) if pd.notna(r.get('total_mv')) else None,
+                    circ_mv=int(r['circ_mv'] * 10000) if pd.notna(r.get('circ_mv')) else None,
+                    limit_status=int(r['limit_status']) if pd.notna(r.get('limit_status')) else None,
+                ))
+        except Exception as e:
+            logger.warning(f"[tushare] fundamentals {td} 失败: {e}")
+        return results
+
+    def fetch_top_list(self, trade_date: str) -> List[dict]:
+        """龙虎榜。"""
+        from datetime import date
+        td = trade_date.replace('-', '')[:8]
+        try:
+            _rl()
+            df = self._pro.top_list(trade_date=td)
+            result = []
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    result.append({
+                        "trade_date": str(r.get('trade_date',''))[:10],
+                        "stock_code": str(r.get('ts_code','')).split('.')[0].zfill(6),
+                        "stock_name": str(r.get('name','')),
+                        "close": float(r.get('close',0)),
+                        "pct_chg": float(r.get('pct_chg',0)),
+                        "turnover_ratio": float(r.get('turnover_ratio',0)) if pd.notna(r.get('turnover_ratio')) else None,
+                        "total_amount": float(r.get('amount',0)) if pd.notna(r.get('amount')) else None,
+                        "buy_amount": float(r.get('buy',0)) if pd.notna(r.get('buy')) else None,
+                        "sell_amount": float(r.get('sell',0)) if pd.notna(r.get('sell')) else None,
+                        "net_amount": float(r.get('net_amount',0)) if pd.notna(r.get('net_amount')) else None,
+                        "reason": str(r.get('reason','')),
+                    })
+            return result
+        except Exception as e:
+            logger.warning(f"[tushare] top_list {td} 失败: {e}")
+            return []
+
+    def fetch_moneyflow(self, trade_date: str) -> List[dict]:
+        """资金流向。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            _rl()
+            df = self._pro.moneyflow(trade_date=td)
+            result = []
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    result.append({
+                        "trade_date": str(r.get('trade_date',''))[:10],
+                        "stock_code": str(r.get('ts_code','')).split('.')[0].zfill(6),
+                        "stock_name": str(r.get('name','')),
+                        "buy_lg_amt": float(r.get('buy_lg_amt',0)) if pd.notna(r.get('buy_lg_amt')) else None,
+                        "sell_lg_amt": float(r.get('sell_lg_amt',0)) if pd.notna(r.get('sell_lg_amt')) else None,
+                        "buy_md_amt": float(r.get('buy_md_amt',0)) if pd.notna(r.get('buy_md_amt')) else None,
+                        "sell_md_amt": float(r.get('sell_md_amt',0)) if pd.notna(r.get('sell_md_amt')) else None,
+                        "buy_sm_amt": float(r.get('buy_sm_amt',0)) if pd.notna(r.get('buy_sm_amt')) else None,
+                        "sell_sm_amt": float(r.get('sell_sm_amt',0)) if pd.notna(r.get('sell_sm_amt')) else None,
+                        "net_mf_amt": float(r.get('net_mf_amt',0)) if pd.notna(r.get('net_mf_amt')) else None,
+                    })
+            return result
+        except Exception as e:
+            logger.warning(f"[tushare] moneyflow {td} 失败: {e}")
+            return []
+
+    def fetch_hk_hold(self, trade_date: str) -> List[dict]:
+        """沪深港通持股。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            _rl()
+            df = self._pro.hk_hold(trade_date=td)
+            result = []
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    result.append({
+                        "trade_date": str(r.get('trade_date',''))[:10],
+                        "stock_code": str(r.get('ts_code','')).split('.')[0].zfill(6),
+                        "stock_name": str(r.get('name','')),
+                        "vol": int(r.get('vol',0)) if pd.notna(r.get('vol')) else 0,
+                        "amount": float(r.get('amount',0)) if pd.notna(r.get('amount')) else None,
+                        "hold_ratio": float(r.get('ratio',0)) if pd.notna(r.get('ratio')) else None,
+                    })
+            return result
+        except Exception as e:
+            logger.warning(f"[tushare] hk_hold {td} 失败: {e}")
+            return []
+
+    def fetch_margin_detail(self, trade_date: str) -> List[dict]:
+        """融资融券明细。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            _rl()
+            df = self._pro.margin_detail(trade_date=td)
+            result = []
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    result.append({
+                        "trade_date": str(r.get('trade_date',''))[:10],
+                        "stock_code": str(r.get('ts_code','')).split('.')[0].zfill(6),
+                        "stock_name": str(r.get('name','')),
+                        "fin_amount": float(r.get('fin_amount',0)) if pd.notna(r.get('fin_amount')) else None,
+                        "fin_buy_amount": float(r.get('fin_buy_amount',0)) if pd.notna(r.get('fin_buy_amount')) else None,
+                        "sec_amount": float(r.get('sec_amount',0)) if pd.notna(r.get('sec_amount')) else None,
+                        "sec_sell_amount": float(r.get('sec_sell_amount',0)) if pd.notna(r.get('sec_sell_amount')) else None,
+                        "total_amount": float(r.get('total_amount',0)) if pd.notna(r.get('total_amount')) else None,
+                    })
+            return result
+        except Exception as e:
+            logger.warning(f"[tushare] margin_detail {td} 失败: {e}")
+            return []
+
+    def fetch_holder_number(self, stock_code: str) -> List[dict]:
+        """股东人数变化。"""
+        try:
+            _rl()
+            df = self._pro.stk_holdernumber(ts_code=stock_code)
+            result = []
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    result.append({
+                        "stock_code": str(r.get('ts_code','')).split('.')[0].zfill(6),
+                        "end_date": str(r.get('end_date',''))[:10],
+                        "holder_num": int(r.get('holder_num',0)) if pd.notna(r.get('holder_num')) else None,
+                        "change_pct": float(r.get('change_pct',0)) if pd.notna(r.get('change_pct')) else None,
+                    })
+            return result
+        except Exception as e:
+            logger.warning(f"[tushare] holder_number {stock_code} 失败: {e}")
+            return []
+
+    def fetch_company(self, ts_code: str) -> Optional[dict]:
+        """查询上市公司基本信息。"""
+        try:
+            _rl()
+            df = self._pro.stock_company(ts_code=ts_code,
+                fields='ts_code,reg_capital,employees,main_business')
+            if df is not None and not df.empty:
+                r = df.iloc[0]
+                return {
+                    "reg_capital": float(r['reg_capital']) if pd.notna(r.get('reg_capital')) else None,
+                    "employees": int(r['employees']) if pd.notna(r.get('employees')) else None,
+                    "main_business": str(r.get('main_business',''))[:200] if pd.notna(r.get('main_business')) else None,
+                }
+        except Exception:
+            pass
+        return None
 
     def get_trade_calendar(self, start_year: int, end_year: int) -> List[dict]:
         return []

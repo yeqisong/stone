@@ -236,10 +236,12 @@ import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDa
 import { useDialog } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
+import { useNavStore } from '../stores/nav'
 import ModelTraining from './ModelTraining.vue'
 import ModelEval from './ModelEval.vue'
 import ModelLive from './ModelLive.vue'
 const store = useModelStore()
+const nav = useNavStore()
 const dialog = useDialog()
 const trainingLoading = ref(false)
 const featuresForModel = computed(() => {
@@ -272,7 +274,8 @@ async function loadFeatureCheck(force) {
   fcLoading.value = false
 }
 
-watch(() => store.selectedId, () => { if (store.selected && store.detailTab === 'indicators') loadFeatureCheck(false) })
+watch(() => store.selectedId, (id) => { if (id) { nav.modelVersion = store.selected?.version || ''; nav.syncHash() }; if (store.selected && store.detailTab === 'indicators') loadFeatureCheck(false) })
+watch(store.detailTab, (t) => { nav.modelTab = t; nav.syncHash() })
 const loading = ref(true)
 const showCreate = ref(false)
 const editMode = ref(false)
@@ -306,10 +309,14 @@ const createForm = reactive({
   },
   stop_loss_pct: 8, signal_timeout_days: 20,  // 保留兼容旧字段
 })
-const currentEntity = ref('stock')
+const currentEntity = ref(nav.modelEntity || 'stock')
 
 function switchEntity(e) {
   currentEntity.value = e
+  nav.modelEntity = e
+  nav.modelVersion = ''
+  nav.modelTab = ''
+  nav.syncHash()
   loadFeatureOptions()
   store.loadVersions(e)
 }
@@ -442,7 +449,8 @@ async function startTrain() {
       trainingLoading.value = false
       dialog.warning({
         title: '⚠️ 特征数据不完整（最近预检结果）',
-        content: () => h('div', { innerHTML: fcResult.value.warnings.join('<br>'), style: 'font-size:12px;line-height:1.6' }),
+        // 文本节点渲染，避免 warnings 内容注入 HTML（存储型 XSS）
+        content: () => h('div', { style: 'font-size:12px;line-height:1.6' }, fcResult.value.warnings.map(w => h('div', null, String(w)))),
         positiveText: '仍然训练',
         negativeText: '取消',
         onPositiveClick: () => { trainingLoading.value = true; dostartTrain() },
@@ -510,6 +518,22 @@ async function confirmDelete() {
 onMounted(async () => {
   await store.loadVersions(currentEntity.value)
   if (store.versions.length) store.selectVersion(store.versions[0].version)
+  loading.value = false
+})
+
+// URL 参数恢复
+onMounted(async () => {
+  await store.loadVersions(currentEntity.value)
+  const savedVer = nav.modelVersion
+  const savedTab = nav.modelTab
+  if (store.versions.length) {
+    if (savedVer && store.versions.find(v => v.version === savedVer)) {
+      store.selectVersion(savedVer)
+      if (savedTab) store.switchTab(savedTab)
+    } else {
+      store.selectVersion(store.versions[0].version)
+    }
+  }
   loading.value = false
 })
 </script>

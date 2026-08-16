@@ -9,60 +9,81 @@ export const useNavStore = defineStore('nav', () => {
   const flowId = ref(null) // DAG flow editor id (null=list, 'new'=新建, number=编辑)
   const prevTab = ref('')
   const pendingEditFeatureId = ref(null)  // 从详情页点编辑时传回列表
+  const marketDate = ref('')
+  const stockFundType = ref('stock')     // 个股/指数/ETF 列表筛选
+  const modelEntity = ref('stock')
+  const modelVersion = ref('')
+  const modelTab = ref('')
+  const statusMonth = ref('')
+  const bfLogPage = ref(1)
 
   // URL hash 路由
   function parseHash() {
     const hash = location.hash.slice(1) || '/'
-    if (hash.startsWith('/detail/')) {
-      const code = hash.split('/')[2]
-      if (code) { dcode.value = code; tab.value = 'd'; return }
-    }
-    if (hash.startsWith('/feature/')) {
-      const id = parseInt(hash.split('/')[2])
-      if (id) { fid.value = id; tab.value = 'v'; return }
-    }
+    const path = hash.includes('?') ? hash.split('?')[0] : hash
+    const q = (k) => new URLSearchParams(hash.split('?')[1] || '').get(k) || ''
+
+    if (hash.startsWith('/detail/')) { dcode.value = hash.split('/')[2] || ''; tab.value = 'd'; return }
+    if (hash.startsWith('/feature/')) { fid.value = parseInt(hash.split('/')[2]) || null; tab.value = 'v'; return }
     if (hash.startsWith('/dag-flows/')) {
       const id = hash.split('/')[2]
       if (id === 'new') { flowId.value = 'new'; tab.value = 'g'; return }
       const num = parseInt(id)
       if (num > 0) { flowId.value = num; tab.value = 'g'; return }
     }
-    if (hash.startsWith('/dag-logs/')) {
-      const parts = hash.split('/')
-      flowId.value = parseInt(parts[2]) || null
-      tab.value = 'q'
+    if (hash.startsWith('/dag-logs/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'q'; return }
+    if (hash.startsWith('/dag-flow-view/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'r'; return }
+    if (hash.startsWith('/market/')) { marketDate.value = hash.split('/')[2] || ''; tab.value = 'm'; return }
+    if (hash.startsWith('/stock-fund/')) { stockFundType.value = hash.split('/')[2] || 'stock'; tab.value = 'u'; return }
+    if (path.startsWith('/models')) {
+      const parts = path.split('/')
+      modelEntity.value = parts[2] || 'stock'
+      modelVersion.value = parts[3] || ''
+      modelTab.value = q('tab')
+      tab.value = 'a'
       return
     }
-    if (hash.startsWith('/dag-flow-view/')) {
-      flowId.value = parseInt(hash.split('/')[2]) || null
-      tab.value = 'r'
+    if (path === '/status') {
+      statusMonth.value = q('month')
+      bfLogPage.value = parseInt(q('bf_page')) || 1
+      tab.value = 'x'
       return
     }
-    if (hash.startsWith('/market/')) {
-      tab.value = 'm'
-      const parts = hash.split('/')
-      if (parts[2]) {
-        const mkt = useMarketStore()
-        mkt.setDate(parts[2])
-      }
-      return
-    }
-    // 去掉 query 参数进行路径匹配
-    const path = hash.includes('?') ? hash.split('?')[0] : hash
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','':'','/functions':'f','/features':'e','/dag-flows':'g'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p'}
     tab.value = map[path] || 'p'
-    if (path === '/dag-flows') flowId.value = null  // 普通列表页清空编辑id
+    if (path === '/dag-flows') flowId.value = null
   }
 
   function syncHash() {
-    const map = {p:'/',m:'/market',s:'/signals',l:'/stocks',x:'/status',a:'/models',f:'/functions',e:'/features',g:'/dag-flows',v:'/feature/'+fid.value,d:'/detail/'+dcode.value}
-    let target = map[tab.value] || '/'
-    if (tab.value === 'g' && flowId.value !== null) {
-      target = '/dag-flows/' + flowId.value
-    }
-    if ((tab.value === 'q' || tab.value === 'r') && flowId.value !== null) {
-      const prefix = tab.value === 'q' ? '/dag-logs/' : '/dag-flow-view/'
-      target = prefix + flowId.value
+    let target = '/'
+    switch (tab.value) {
+      case 'p': target = '/'; break
+      case 'm': target = '/market/' + marketDate.value; break
+      case 's': target = '/signals'; break
+      case 'l': target = '/stocks'; break
+      case 'x': {
+        target = '/status'
+        const sq = []
+        if (statusMonth.value) sq.push('month=' + statusMonth.value)
+        if (bfLogPage.value > 1) sq.push('bf_page=' + bfLogPage.value)
+        if (sq.length) target += '?' + sq.join('&')
+        break
+      }
+      case 'a': {
+        target = '/models/' + modelEntity.value
+        if (modelVersion.value) target += '/' + modelVersion.value
+        if (modelTab.value) target += '?tab=' + modelTab.value
+        break
+      }
+      case 'f': target = '/functions'; break
+      case 'e': target = '/features'; break
+      case 'g': target = flowId.value !== null ? '/dag-flows/' + flowId.value : '/dag-flows'; break
+      case 'v': target = '/feature/' + fid.value; break
+      case 'd': target = '/detail/' + dcode.value; break
+      case 'q': target = '/dag-logs/' + (flowId.value || ''); break
+      case 'r': target = '/dag-flow-view/' + (flowId.value || ''); break
+      case 'u': target = '/stock-fund/' + stockFundType.value; break
+      default: target = '/'
     }
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)
   }
@@ -113,5 +134,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, parseHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, parseHash, syncHash }
 })

@@ -323,9 +323,9 @@ const flowCols = [
   { title:'状态', key:'status', width:65, render(r){ return r.status==='published'?'✅ 已发布':'📝 '+r.status } },
   { title:'节点', key:'node_count', width:45, align:'center', render(r){ return r.node_count||0 } },
   { title:'Cron', key:'cron_expr', width:130, render(r){ return cronReadable(r.cron_expr) } },
-  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'#2080f0',fontSize:'11px'}},'⟳ 执行中') } },
+  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'#2080f0',fontSize:'11px'}},'⟳ 执行中') } },
   { title:'操作', key:'actions', width:240, render(r){
-    const hasRun = taskStatuses[r.id] && taskStatuses[r.id].status === 'running'
+    const hasRun = taskStatuses.value[r.id] && taskStatuses.value[r.id].status === 'running'
     return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},[
       h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'✎ 编辑'),
       r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'success',onClick:()=>doPublishList(r.id)},()=>'▶ 发布') : null,
@@ -470,7 +470,7 @@ function autoLayout() {
   layers.forEach((layer, li) => { const totalW = layer.length * gapX; const offsetX = 80 - totalW / 2 + gapX / 2; layer.forEach((name, ni) => { const n = ns.find(nd => nd.id === name); if (n) n.position = { x: offsetX + ni * gapX + 300, y: 60 + li * gapY } }) })
 }
 onMounted(async () => {
-  addWsListener((data) => {
+  wsUnwatch.value = addWsListener((data) => {
     if (data.type === "task_progress" && taskStatuses.value) {
       if (data.status === "running") taskStatuses.value[data.flow_id] = data
       else delete taskStatuses.value[data.flow_id]
@@ -479,6 +479,7 @@ onMounted(async () => {
   await loadFlows()
   loadTaskStatuses()
   if (props.flowId === 'new') { createNew() } else if (props.flowId > 0) { openEdit(props.flowId) } })
+onBeforeUnmount(() => { if (wsUnwatch.value) wsUnwatch.value() })
 watch(() => props.flowId, (newId) => { if (newId === 'new') { createNew() } else if (newId > 0) { openEdit(newId) } })
 watch(showExecModal, (v) => { if (!v) execResult.value = null })
 function doExitEdit() { if (dirty.value && !confirm('有未保存的修改，确定退出？')) return; editMode.value = false; validation.value = null; emit('back') }

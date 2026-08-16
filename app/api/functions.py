@@ -18,6 +18,44 @@ router = APIRouter(prefix="/functions", tags=["functions"])
 _FORBIDDEN_NODES = {ast.For, ast.While, ast.AsyncFor, ast.AsyncWith}
 _FORBIDDEN_IMPORTS = {'os', 'subprocess', 'sys', 'shutil', 'socket', 'requests', 'http'}
 
+# 危险调用/属性（含 getattr 字符串绕过路径）—— 禁止直接调用，也禁止作为属性链成分
+_DANGEROUS_CALLS = {'eval', 'exec', 'open', '__import__', 'compile', 'globals', 'locals',
+                    'vars', 'getattr', 'setattr', 'hasattr', 'memoryview', 'type',
+                    '__builtins__', '__class__', '__bases__', '__subclasses__',
+                    '__globals__', '__code__', '__getattribute__', 'super', 'dir'}
+
+
+def _ast_security_scan(tree) -> Optional[str]:
+    """AST 安全扫描：递归检查所有 Call/Attribute/Name 节点。
+
+    返回错误信息，None 表示通过。
+    注意：字符串参数（如 getattr(__builtins__, 'eval')）无法被 AST 检查，
+    因此 getattr/setattr/__import__ 等必须从函数名层直接封禁。
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return "函数体禁止使用 import 语句"
+        if isinstance(node, ast.Call):
+            # 直接调用名（Name 或属性链末端）命中危险名单 → 拦截
+            fn = node.func
+            if isinstance(fn, ast.Name) and fn.id in _DANGEROUS_CALLS:
+                return f"检测到危险调用: {fn.id}"
+        # 递归检查属性链（任意深度），拦截含危险成分的链
+        if isinstance(node, ast.Attribute):
+            parts = []
+            cur = node
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, ast.Name):
+                parts.append(cur.id)
+            elif isinstance(cur, ast.Call):
+                parts.append('<call>')
+            full = '.'.join(reversed(parts))
+            if any(d in parts for d in _DANGEROUS_CALLS):
+                return f"检测到危险属性链: {full}"
+    return None
+
 
 def _validate_function_safety(source_code: str) -> Optional[str]:
     """校验自定义函数安全性。返回错误信息字符串，合法返回 None。
@@ -55,6 +93,11 @@ def _validate_function_safety(source_code: str) -> Optional[str]:
         if isinstance(node, ast.ImportFrom):
             if node.module and node.module.split('.')[0] in _FORBIDDEN_IMPORTS:
                 return f"禁止导入模块 '{node.module}'。"
+
+    # 通用 AST 安全扫描（危险调用/属性链，含 getattr 字符串绕过）
+    scan_err = _ast_security_scan(tree)
+    if scan_err:
+        return scan_err
 
     if not has_function:
         return "源码中未检测到函数定义。请至少定义一个函数（函数名需与注册名一致）。"
@@ -292,6 +335,7 @@ def test_run_function(func_id: int, body: dict, user: str = Depends(get_current_
 
 def _do_test_run(source_code, parameters, category):
     """共享试运行逻辑。"""
+    import sys as _sys
     import ast as _ast
     import subprocess as _sp
     import tempfile as _tf
@@ -309,29 +353,14 @@ def _do_test_run(source_code, parameters, category):
     func_name = m.group(1)
     params = parameters if isinstance(parameters, list) else (json.loads(parameters) if isinstance(parameters, str) else [])
 
-    # AST 安全扫描
+    # AST 安全扫描（共享扫描器：封禁 import/危险调用/属性链/getattr 绕过）
     try:
         tree = _ast.parse(code)
-        for node in _ast.walk(tree):
-            if isinstance(node, (_ast.Import, _ast.ImportFrom)):
-                raise HTTPException(400, "函数体禁止使用 import 语句")
-            if isinstance(node, _ast.Call):
-                if isinstance(node.func, _ast.Name) and node.func.id in ('eval','exec','open','__import__','compile','globals','locals','vars'):
-                    raise HTTPException(400, f"检测到危险调用: {node.func.id}")
-                if isinstance(node.func, _ast.Attribute):
-                    # 拦截 getattr(__builtins__, ...) / __builtins__.exec 等绕过
-                    attr_chain = []
-                    cur = node.func
-                    while isinstance(cur, _ast.Attribute):
-                        attr_chain.append(cur.attr)
-                        cur = cur.value
-                    if isinstance(cur, _ast.Name):
-                        attr_chain.append(cur.id)
-                    full = '.'.join(reversed(attr_chain))
-                    if any(d in full for d in ('__builtins__','__class__','__bases__','__subclasses__','__globals__','__code__','__import__','getattr','eval','exec')):
-                        raise HTTPException(400, f"检测到危险调用: {full}")
     except SyntaxError as e:
         return {"ok": False, "error": f"语法错误: {e.msg}", "status": "failed"}
+    scan_err = _ast_security_scan(tree)
+    if scan_err:
+        return {"ok": False, "error": scan_err, "status": "failed"}
 
     # 解析参数（省略，和原 test_run_function 一致）...
     OLD_TO_NEW = {'field':'series','price':'series','volume':'series','return':'series',
@@ -420,7 +449,10 @@ print(json.dumps({{"elapsed_ms": round(elapsed, 1), "preview": preview, "rows": 
         f.write(test_script)
         tmp_path = f.name
     try:
-        proc = _sp.run(["python3", tmp_path], capture_output=True, text=True, timeout=15)
+        # 用当前解释器（venv，含 pandas/numpy）+ -I 隔离模式（跳过用户 site/PYTHONPATH）
+        # 配合 AST 扫描双保险；cwd 固定在 /tmp 空目录，避免读写项目文件
+        proc = _sp.run([_sys.executable, "-I", tmp_path], capture_output=True, text=True, timeout=15,
+                       cwd="/tmp", env={"PATH": "/usr/bin:/bin"})
         if proc.returncode != 0:
             return {"ok": False, "error": proc.stderr[:500] or proc.stdout[:500], "status": "failed"}
         result = json.loads(proc.stdout.strip())

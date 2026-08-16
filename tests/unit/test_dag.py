@@ -75,36 +75,40 @@ class TestDagTopology:
 class TestForceResolution:
     """测试 force 参数的两层兼容解析。"""
 
+    def _resolve(self, force, node):
+        # _resolve_force 为实例方法（依赖 self._nodes 推导入口节点）
+        return DagExecutor()._resolve_force(force, node)
+
     def test_force_bool_true(self):
         """force=True → 所有数据节点返回 True。"""
-        assert DagExecutor._resolve_force(True, 'kline') is True
-        assert DagExecutor._resolve_force(True, 'index') is True
-        assert DagExecutor._resolve_force(True, 'etf') is True
-        assert DagExecutor._resolve_force(True, 'fund') is True
+        assert self._resolve(True, 'kline') is True
+        assert self._resolve(True, 'index') is True
+        assert self._resolve(True, 'etf') is True
+        assert self._resolve(True, 'fund') is True
 
     def test_force_bool_false(self):
         """force=False → 所有数据节点返回 False。"""
-        assert DagExecutor._resolve_force(False, 'kline') is False
-        assert DagExecutor._resolve_force(False, 'fund') is False
+        assert self._resolve(False, 'kline') is False
+        assert self._resolve(False, 'fund') is False
 
     def test_force_dict_per_node(self):
         """force 为 dict 时按节点取值，缺失默认 false。"""
         force = {"kline": True, "fund": False}
-        assert DagExecutor._resolve_force(force, 'kline') is True
-        assert DagExecutor._resolve_force(force, 'fund') is False
-        assert DagExecutor._resolve_force(force, 'index') is False  # 缺失
-        assert DagExecutor._resolve_force(force, 'etf') is False
+        assert self._resolve(force, 'kline') is True
+        assert self._resolve(force, 'fund') is False
+        assert self._resolve(force, 'index') is False  # 缺失
+        assert self._resolve(force, 'etf') is False
 
     def test_force_non_data_nodes_always_false(self):
         """非数据节点不受 force 影响。"""
-        assert DagExecutor._resolve_force(True, 'treemap') is False
-        assert DagExecutor._resolve_force(True, 'strategy') is False
-        assert DagExecutor._resolve_force(True, 'stats') is False
-        assert DagExecutor._resolve_force({"kline": True}, 'treemap') is False
+        assert self._resolve(True, 'treemap') is False
+        assert self._resolve(True, 'strategy') is False
+        assert self._resolve(True, 'stats') is False
+        assert self._resolve({"kline": True}, 'treemap') is False
 
     def test_force_dict_empty(self):
         """空 dict → 全部 false。"""
-        assert DagExecutor._resolve_force({}, 'kline') is False
+        assert self._resolve({}, 'kline') is False
 
 
 class TestLogIdFlow:

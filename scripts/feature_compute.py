@@ -555,8 +555,8 @@ def _cs_min(series: pd.Series) -> float:
     return series.min()
 
 def _cs_rank(series: pd.Series) -> float:
-    """返回当前值在序列中的分位（0~1），框架会传入包含/不包含自身的数据。"""
-    return 0.0  # rank 需要上下文（当前值），暂由框架层的 exclude_self 语义覆盖
+    """保留占位（rank 已由执行引擎按截面分位实现，此处不注册避免误用）。"""
+    return 0.0
 
 _CROSS_SECTIONAL_IMPL = {
     'avg': _cs_avg, 'sum': _cs_sum, 'max': _cs_max, 'min': _cs_min,
@@ -594,6 +594,16 @@ def _execute_ast(df: pd.DataFrame, node, db=None) -> Optional[pd.Series]:
 
         # ── 路径 1: 跨股票函数（avg/sum/max/min 等）──
         if node.name in _CROSS_SECTIONAL_BUILTIN:
+            # rank: 同交易日所有股票中该值的截面分位（0~1），逐行计算
+            if node.name == 'rank':
+                tmp = pd.DataFrame({'dt': df['trade_date'], 'v': data_series})
+                return tmp.groupby('dt')['v'].rank(pct=True)
+            # zscore: 同交易日的 z 标准化
+            if node.name == 'zscore':
+                tmp = pd.DataFrame({'dt': df['trade_date'], 'v': data_series})
+                g = tmp.groupby('dt')['v']
+                std = g.transform('std').replace(0, 1e-10)
+                return (data_series - g.transform('mean')) / std
             exclude_self = params[0] if params and isinstance(params[0], bool) else False
             fn = _CROSS_SECTIONAL_IMPL.get(node.name)
             if fn is None:
@@ -748,7 +758,15 @@ def compute_all_features(
         return {"ok": True, "features": 0, "rows": 0, "errors": []}
 
     # 拉一次全量 OHLCV，所有特征复用
-    df = _fetch_ohlcv(db, target_entity, start_date, end_date)
+    # 按所有特征的最大 lookback 扩展起始日：增量计算时滚动窗口需要历史数据，
+    # 否则 ma/rsi/boll 等窗口只有部分数据，同一日期的特征值会随每次重算漂移
+    max_lb = max((_extract_lookback(f) for _, f in rows), default=0)
+    fetch_start = start_date
+    if max_lb > 0 and start_date:
+        from datetime import datetime as _dtp, timedelta as _tdp
+        margin = max(int(max_lb * 2.0), 10)
+        fetch_start = (_dtp.strptime(start_date, "%Y-%m-%d") - _tdp(days=margin)).strftime("%Y-%m-%d")
+    df = _fetch_ohlcv(db, target_entity, fetch_start, end_date)
 
     results = []
     for r in rows:

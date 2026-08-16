@@ -142,7 +142,7 @@ def catch_up(max_days: int = 10, force: bool = False) -> dict:
 
         if failed_dates:
             logger.error(f"失败日期: {failed_dates}")
-            logger.error(f"补数失败超过阈值 ({failed_count}/{total_attempts})，需人工介入")
+            logger.error(f"补数失败 {len(failed_dates)}/{len(missing)} 天，需人工介入")
 
         return {
             "missing_count": original_count,

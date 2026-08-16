@@ -89,7 +89,15 @@ def list_stocks(
                    (SELECT COUNT(*) FROM daily_quote dq WHERE dq.stock_code=sm.stock_code)
                END as data_rows,
                sf.pe_ttm, sf.pb_mrq, sf.industry, sf.roe, sf.market_cap
-        FROM stock_master sm LEFT JOIN stock_fundamentals sf ON sf.stock_code=sm.stock_code
+        FROM stock_master sm
+        -- LATERAL 取最新一条基本面（避免 stock_fundamentals 多日期行导致笛卡尔爆炸）
+        LEFT JOIN LATERAL (
+            SELECT pe_ttm, pb_mrq, industry, roe, market_cap
+            FROM stock_fundamentals f
+            WHERE f.stock_code = sm.stock_code
+            ORDER BY f.trade_date DESC
+            LIMIT 1
+        ) sf ON true
         WHERE {where_base}
         ORDER BY {order_sql} {dir_sql} LIMIT :l OFFSET :o"""
 

@@ -46,6 +46,7 @@
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'"><SignalsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='l'"><StocksView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='u'"><StockFundView @back="nav.tab = 'x'" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
           <div v-if="nav.tab==='a'"><ModelView /></div>
@@ -85,6 +86,7 @@ import PortfolioView from './components/PortfolioView.vue'
 import SignalsView from './components/SignalsView.vue'
 import TreemapView from './components/TreemapView.vue'
 import StocksView from './components/StocksView.vue'
+import StockFundView from './components/StockFundView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 

@@ -147,11 +147,16 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
         raise HTTPException(400, "模型名称不能为空")
     db = get_sync_db()
     try:
-        # 生成版本号: 查询当前最大主版本号 + 1
-        max_ver = db.execute(text("SELECT MAX(version) FROM model_versions")).scalar()
-        if max_ver:
-            parts = max_ver.lstrip('v').split('.')
-            major = int(parts[0]) + 1
+        # 生成版本号: 数值解析所有版本号取最大主版本（字符串 MAX 会让 v9>v10）
+        rows = db.execute(text("SELECT version FROM model_versions")).fetchall()
+        majors = []
+        for (v,) in rows:
+            try:
+                majors.append(int(str(v).lstrip('v').split('.')[0]))
+            except (ValueError, IndexError):
+                continue
+        if majors:
+            major = max(majors) + 1
             minor = 0
         else:
             major, minor = 1, 0
@@ -707,9 +712,12 @@ def reject_model(version: str, user: str = Depends(get_current_user)):
 def quality_dashboard(version: str):
     db = get_sync_db()
     try:
-        mv = db.execute(text("SELECT feature_list FROM model_versions WHERE version=:v"),{"v":version}).fetchone()
+        mv = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),{"v":version}).fetchone()
         if not mv: raise HTTPException(404,"不存在")
         features = mv[0] if isinstance(mv[0],list) else (json.loads(mv[0]) if mv[0] else [])
+        if not features:  # 列未填充时回退 config
+            cfg = mv[1] if isinstance(mv[1],dict) else (json.loads(mv[1]) if mv[1] else {})
+            features = cfg.get('feature_names', [])
         fq = []
         for fn in (features or [])[:20]:
             fr = db.execute(text("SELECT data_completeness FROM features WHERE feature_name=:fn"),{"fn":fn}).fetchone()

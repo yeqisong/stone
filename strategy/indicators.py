@@ -14,14 +14,22 @@ def ema(series: pd.Series, period: int) -> pd.Series:
 
 
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    """相对强弱指标 (RSI)。"""
+    """相对强弱指标 (RSI)。
+
+    标准定义：avg_loss=0（严格上涨）→ RSI=100；avg_gain=avg_loss=0（横盘）→ RSI=50。
+    """
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
     avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi_val = 100 - (100 / (1 + rs))
+    rsi_val = pd.Series(np.nan, index=close.index)
+    valid = avg_gain.notna() & avg_loss.notna()
+    # avg_loss=0 且 avg_gain>0 → RSI=100；两者皆 0 → RSI=50
+    rs = avg_gain[valid] / avg_loss[valid].replace(0, np.nan)
+    rsi_val[valid] = 100 - (100 / (1 + rs))
+    rsi_val[valid & (avg_loss == 0) & (avg_gain > 0)] = 100.0
+    rsi_val[valid & (avg_loss == 0) & (avg_gain == 0)] = 50.0
     return rsi_val
 
 
@@ -52,7 +60,8 @@ def bollinger_bands(close: pd.Series, period: int = 20, std_mult: float = 2.0):
     bandwidth = (upper - lower) / middle
     """
     middle = sma(close, period)
-    std = close.rolling(window=period, min_periods=period).std()
+    # 布林带标准定义用总体标准差（ddof=0，与通达信/TA-Lib 一致）
+    std = close.rolling(window=period, min_periods=period).std(ddof=0)
     upper = middle + std_mult * std
     lower = middle - std_mult * std
     bandwidth = (upper - lower) / middle.replace(0, np.nan)

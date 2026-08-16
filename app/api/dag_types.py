@@ -24,10 +24,9 @@ NODE_SUB_STEPS = {
         {'name': '写入 daily_quote', 'desc': '批量写入 ETF 行情数据'},
     ],
     'fund': [
-        {'name': '遍历股票', 'desc': '逐只股票查询基本面数据'},
-        {'name': '拉取财务', 'desc': 'baostock query_stock_basic + growth/profit'},
-        {'name': '写入 stock_fundamentals', 'desc': 'INSERT ... ON CONFLICT UPDATE'},
-        {'name': '计算市值', 'desc': 'market_cap = close × total_shares'},
+        {'name': '拉取 daily_basic', 'desc': 'tushare daily_basic 全市场5400只'},
+        {'name': '写入 stock_fundamentals', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
+        {'name': '跨表更新行业', 'desc': '从 stock_master.industry 补全'},
     ],
     'treemap': [
         {'name': '拉取行情快照', 'desc': '最新交易日 close + pe + industry 分组聚合'},
@@ -81,9 +80,33 @@ NODE_SUB_STEPS = {
         {'name': '写入 entity_stats', 'desc': '每只股票一行的数据完整度基线'},
     ],
     'stock_master': [
-        {'name': '拉取股票列表', 'desc': 'baostock get_stock_list("stock")'},
+        {'name': '拉取股票列表', 'desc': 'tushare stock_basic 全量股票'},
         {'name': 'UPSERT stock_master', 'desc': '逐行写入/更新（IPO/退市/名称/交易所）'},
         {'name': '标记退市', 'desc': '当前列表中不存在的股票 → status=D'},
+    ],
+    'top_list': [
+        {'name': '拉取龙虎榜', 'desc': 'tushare top_list 每日数据'},
+        {'name': '写入 stock_top_list', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
+    ],
+    'moneyflow': [
+        {'name': '拉取资金流向', 'desc': 'tushare moneyflow 每日数据'},
+        {'name': '写入 stock_moneyflow', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
+    ],
+    'hk_hold': [
+        {'name': '拉取沪深港通持股', 'desc': 'tushare hk_hold 每日数据'},
+        {'name': '写入 stock_hk_hold', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
+    ],
+    'margin_detail': [
+        {'name': '拉取融资融券', 'desc': 'tushare margin_detail 每日数据'},
+        {'name': '写入 stock_margin_detail', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
+    ],
+    'holder_number': [
+        {'name': '拉取股东人数', 'desc': 'tushare stk_holdernumber 逐只查询'},
+        {'name': '写入 stock_holder_number', 'desc': 'UPSERT 按 stock_code+end_date 去重'},
+    ],
+    'sync_fundamentals': [
+        {'name': '拉取 daily_basic', 'desc': 'tushare daily_basic 批量100只'},
+        {'name': 'UPSERT stock_fundamentals', 'desc': '按 stock_code+trade_date 去重'},
     ],
 }
 

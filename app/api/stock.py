@@ -210,22 +210,24 @@ def get_stock_kline(
             ), {"c": code}).scalar()
 
         if stype == 'index':
-            # 指数：从 index_daily_quote 获取（无复权概念）
+            # 指数：从 index_daily_quote 获取（无复权概念），days 限制最近 N 个交易日
             result = db.execute(text("""
                 SELECT trade_date, open, high, low, close, volume
-                FROM index_daily_quote WHERE index_code=:c ORDER BY trade_date ASC
-            """), {"c": code})
+                FROM index_daily_quote WHERE index_code=:c
+                ORDER BY trade_date DESC LIMIT :days
+            """), {"c": code, "days": days})
+            rows = list(reversed(result.fetchall()))
         else:
-            # 个股/ETF：从 daily_quote 获取（支持复权）
+            # 个股/ETF：从 daily_quote 获取（支持复权），days 限制最近 N 个交易日
             # 列名来自白名单映射，安全；用两层 SQL 避免 f-string 注入风险
             col = {"none": "close", "qfq": "close_qfq", "hfq": "close_hfq"}.get(adjust, "close")
             col_param = f"COALESCE({col}, close)"  # col 仅来自白名单 dict，安全
             result = db.execute(text(f"""
                 SELECT trade_date, open, high, low, {col_param} as close, volume
-                FROM daily_quote WHERE stock_code=:c ORDER BY trade_date ASC
-            """), {"c": code})
-
-        rows = result.fetchall()
+                FROM daily_quote WHERE stock_code=:c
+                ORDER BY trade_date DESC LIMIT :days
+            """), {"c": code, "days": days})
+            rows = list(reversed(result.fetchall()))
         if not rows:
             raise HTTPException(status_code=404, detail=f"未找到 {code}")
 
@@ -291,7 +293,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
             FROM signal_history
             WHERE strategy_name='model_signal' AND signal_date >= {min_date}
             GROUP BY signal_date ORDER BY signal_date
-        """)).fetchall()
+        """), {"days": days}).fetchall()
         daily_trend = [{"date": str(r[0]), "signals": r[1], "win_rate": round(float(r[2]) if r[2] else 0, 3)} for r in daily]
 
         # 收益分布
@@ -301,7 +303,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
             WHERE strategy_name='model_signal' AND status='closed'
               AND actual_return IS NOT NULL AND signal_date >= {min_date}
             GROUP BY bucket ORDER BY bucket
-        """)).fetchall()
+        """), {"days": days}).fetchall()
         buckets = [round(-0.15 + 0.03 * i, 2) for i in range(11)]
         counts = [0] * 11
         for r in dist:
@@ -321,7 +323,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
             WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
             GROUP BY sf.industry HAVING COUNT(*) >= 5
             ORDER BY signals DESC LIMIT 15
-        """)).fetchall()
+        """), {"days": days}).fetchall()
         by_industry = [{"industry": r[0] or "未分类", "signals": r[1],
                         "win_rate": round(float(r[2]) if r[2] else 0, 3),
                         "avg_return": round(float(r[3]) if r[3] else 0, 4)} for r in industry]
@@ -337,7 +339,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
             WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
             GROUP BY sh.stock_code, sh.stock_name HAVING COUNT(*) >= 3
             ORDER BY signals DESC LIMIT 20
-        """)).fetchall()
+        """), {"days": days}).fetchall()
         top = [{"stock_code": r[0], "stock_name": r[1], "signals": r[2],
                 "win_rate": round(float(r[3]) if r[3] else 0, 3),
                 "avg_return": round(float(r[4]) if r[4] else 0, 4)} for r in top_stocks]

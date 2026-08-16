@@ -84,11 +84,7 @@ function handleWs(data) {
   if (detail.includes('加载指标')) currentStep.value = 1
   if (detail.includes('存储最优')) currentStep.value = 4
   if (detail.includes('Optuna 训练') || detail.includes('XGBoost 训练')) currentStep.value = 1
-  // 失败或数据不足
-  if (trainNode.status === 'failed') {
-    currentStep.value = steps.length + 1
-    setTimeout(() => store.loadVersions(), 500)
-  }
+  // 失败或数据不足（合并重复的 failed 分支）
   if (trainNode.status === 'failed') {
     currentStep.value = -1
     errorDetail.value = trainNode.detail || ''
