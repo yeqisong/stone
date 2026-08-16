@@ -1,6 +1,6 @@
 """数据源适配器包。
 
-提供多数据源支持（AKShare / Baostock），通过 DataSourceManager 自动选源和 fallback。
+提供多数据源支持（TuShare 首选 / Baostock 备选），通过 DataSourceManager 自动选源和 fallback。
 
 用法：
     from crawler.adapters import get_data_source_manager

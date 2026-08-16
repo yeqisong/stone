@@ -119,7 +119,7 @@ class DataSourceManager:
         Returns:
             {
                 "sources": [{"name": ..., "priority": ..., "healthy": ..., "checked_at": ...}],
-                "active_source": "akshare" | None
+                "active_source": "tushare" | None
             }
         """
         from datetime import datetime

@@ -133,6 +133,38 @@ def batch_upsert_index_kline(db, rows: List[IndexKlineRow], batch_size: int = 20
 
 
 
+def _enrich_market_cap(db, rows: List[FundamentalRow]) -> int:
+    """从本站 daily_quote 补全缺失的 market_cap（tushare 已给则跳过）。
+
+    对 rows 中 market_cap 为空的行，按 (code, 最新 close_hfq) × total_shares 估算。
+    返回补全的股票数。
+    """
+    if not rows:
+        return 0
+    missing = [r for r in rows if not r.market_cap and r.total_shares]
+    if not missing:
+        return 0
+    codes = [r.stock_code for r in missing]
+    try:
+        res = db.execute(text(
+            "SELECT DISTINCT ON (stock_code) stock_code, close_hfq "
+            "FROM daily_quote WHERE stock_code = ANY(:codes) "
+            "AND close_hfq IS NOT NULL AND close_hfq > 0 "
+            "ORDER BY stock_code, trade_date DESC"
+        ), {"codes": codes}).fetchall()
+    except Exception as e:
+        logger.warning(f"[writers] 市值补全查询失败: {e}")
+        return 0
+    close_map = {r[0]: float(r[1]) for r in res}
+    filled = 0
+    for r in missing:
+        close = close_map.get(r.stock_code)
+        if close:
+            r.market_cap = int(round(close * r.total_shares))
+            filled += 1
+    return filled
+
+
 def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 100) -> int:
     """批量 UPSERT 基本面数据到 stock_fundamentals 表。
 
@@ -157,15 +189,9 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
     total = 0
     for start in range(0, len(rows), batch_size):
         chunk = rows[start:start + batch_size]
-        placeholders = []
         params = {}
         for j, row in enumerate(chunk):
             idx = start + j
-            placeholders.append(
-                f"(:c{idx},:sn{idx},:pe{idx},:pb{idx},:ind{idx},"
-                f":roe{idx},:rev{idx},:prf{idx},:ts{idx},:mc{idx},"
-                f":ps{idx},:pe2{idx},:dvr{idx},:dvt{idx},:tr{idx},:vr{idx},:frs{idx},:ls{idx},:td{idx})"
-            )
             params.update({
                 f'c{idx}': row.stock_code,
                 f'td{idx}': getattr(row, 'trade_date', '') or '',

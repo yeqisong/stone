@@ -641,7 +641,7 @@ class BackfillManager:
         from loguru import logger
 
         manager = get_data_source_manager()
-        # 清除健康缓存 + 重试（akshare 偶发连接重置）
+        # 清除健康缓存 + 重试（数据源偶发连接失败）
         adapter = None
         for retry_i in range(3):
             manager._health_cache.clear()
@@ -667,7 +667,7 @@ class BackfillManager:
         try:
             for stype in ("stock", "index", "etf"):
                 stock_list = adapter.get_stock_list(stype)
-                # akshare 不支持 index/ETF → 从已有数据反推
+                # 数据源不支持 index/ETF 列表 → 从已有数据反推
                 if not stock_list and stype != "stock":
                     if stype == "index":
                         rows = db.execute(_t("SELECT DISTINCT index_code FROM index_daily_quote")).fetchall()
@@ -773,61 +773,15 @@ class BackfillManager:
                 task.error_message = "无基本面数据（数据源可能暂无当日数据）"
                 return
 
-            upserted = 0
-            for r in rows:
-                db.execute(_t("""
-                    INSERT INTO stock_fundamentals (
-                        stock_code, trade_date, stock_name, industry, pe_ttm, pe, pb_mrq,
-                        ps, ps_ttm, roe, revenue_yoy, profit_yoy, total_shares, float_share,
-                        free_share, market_cap, circ_mv, dv_ratio, dv_ttm, turnover_rate,
-                        volume_ratio, limit_status, updated_at
-                    ) VALUES (:c, :d, :n, :ind, :pe_ttm, :pe, :pb, :ps, :ps_ttm, :roe,
-                        :rev_yoy, :prf_yoy, :ts, :fs, :free_s, :mc, :cmv, :dv, :dv_ttm,
-                        :tr, :vr, :ls, CURRENT_TIMESTAMP)
-                    ON CONFLICT (stock_code, trade_date) DO UPDATE SET
-                        stock_name = COALESCE(EXCLUDED.stock_name, stock_fundamentals.stock_name),
-                        industry = COALESCE(EXCLUDED.industry, stock_fundamentals.industry),
-                        pe_ttm = COALESCE(EXCLUDED.pe_ttm, stock_fundamentals.pe_ttm),
-                        pe = COALESCE(EXCLUDED.pe, stock_fundamentals.pe),
-                        pb_mrq = COALESCE(EXCLUDED.pb_mrq, stock_fundamentals.pb_mrq),
-                        ps = COALESCE(EXCLUDED.ps, stock_fundamentals.ps),
-                        ps_ttm = COALESCE(EXCLUDED.ps_ttm, stock_fundamentals.ps_ttm),
-                        roe = COALESCE(EXCLUDED.roe, stock_fundamentals.roe),
-                        revenue_yoy = COALESCE(EXCLUDED.revenue_yoy, stock_fundamentals.revenue_yoy),
-                        profit_yoy = COALESCE(EXCLUDED.profit_yoy, stock_fundamentals.profit_yoy),
-                        total_shares = COALESCE(EXCLUDED.total_shares, stock_fundamentals.total_shares),
-                        float_share = COALESCE(EXCLUDED.float_share, stock_fundamentals.float_share),
-                        free_share = COALESCE(EXCLUDED.free_share, stock_fundamentals.free_share),
-                        market_cap = COALESCE(EXCLUDED.market_cap, stock_fundamentals.market_cap),
-                        circ_mv = COALESCE(EXCLUDED.circ_mv, stock_fundamentals.circ_mv),
-                        dv_ratio = COALESCE(EXCLUDED.dv_ratio, stock_fundamentals.dv_ratio),
-                        dv_ttm = COALESCE(EXCLUDED.dv_ttm, stock_fundamentals.dv_ttm),
-                        turnover_rate = COALESCE(EXCLUDED.turnover_rate, stock_fundamentals.turnover_rate),
-                        volume_ratio = COALESCE(EXCLUDED.volume_ratio, stock_fundamentals.volume_ratio),
-                        limit_status = COALESCE(EXCLUDED.limit_status, stock_fundamentals.limit_status),
-                        updated_at = CURRENT_TIMESTAMP
-                """), {
-                    "c": r.stock_code, "d": r.trade_date or datetime.now().strftime("%Y-%m-%d"),
-                    "n": getattr(r, "stock_name", None), "ind": getattr(r, "industry", None),
-                    "pe_ttm": getattr(r, "pe_ttm", None), "pe": getattr(r, "pe", None),
-                    "pb": getattr(r, "pb_mrq", None), "ps": getattr(r, "ps", None),
-                    "ps_ttm": getattr(r, "ps_ttm", None), "roe": getattr(r, "roe", None),
-                    "rev_yoy": getattr(r, "revenue_yoy", None), "prf_yoy": getattr(r, "profit_yoy", None),
-                    "ts": getattr(r, "total_shares", None), "fs": getattr(r, "float_share", None),
-                    "free_s": getattr(r, "free_share", None), "mc": getattr(r, "market_cap", None),
-                    "cmv": getattr(r, "circ_mv", None), "dv": getattr(r, "dv_ratio", None),
-                    "dv_ttm": getattr(r, "dv_ttm", None), "tr": getattr(r, "turnover_rate", None),
-                    "vr": getattr(r, "volume_ratio", None), "ls": getattr(r, "limit_status", None),
-                })
-                upserted += 1
-                if upserted % 500 == 0:
-                    db.commit()
-                    task.rows = upserted
-                    task.stocks_done = upserted
-                    task.updated_at = datetime.now().isoformat()
-                    self._persist_task(task)
-                    self._wake_ws()
-            db.commit()
+            # 统一走 writers 批量 UPSERT（与 DAG fund 节点同一写入路径，
+            # 含 market_cap 从 daily_quote 补全 + 逐字段 COALESCE 防空覆盖）
+            from crawler.writers import batch_upsert_fundamentals
+            upserted = batch_upsert_fundamentals(db, rows)
+            task.rows = upserted
+            task.stocks_done = upserted
+            task.updated_at = datetime.now().isoformat()
+            self._persist_task(task)
+            self._wake_ws()
 
             # 行业字段跨表回写 stock_master（有值时更新，避免空覆盖）
             db.execute(_t("""
@@ -841,8 +795,6 @@ class BackfillManager:
             """))
             db.commit()
 
-            task.rows = upserted
-            task.stocks_done = upserted
             task.stocks_total = upserted
             task.error_message = f"基本面更新 {upserted} 只"
             logger.info(f"[fund_backfill] 完成: {upserted} 行")

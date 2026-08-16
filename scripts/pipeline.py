@@ -1277,6 +1277,31 @@ def _node_enter(name, status, **ctx):
     return write_node_log(td, name, status, 0, '', rid)
 dag.on_node_enter = _node_enter
 
+def _ensure_module_dag_loaded():
+    """惰性初始化模块级 dag：从 dag_config 读拓扑（过滤已移除节点）。
+
+    供 dag_trigger / sync_date 等旧接口使用；dag_flows 动态流程用临时 executor，不受影响。
+    """
+    if dag._nodes:
+        return
+    from sqlalchemy import text
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("SELECT node_name, deps FROM dag_config ORDER BY sort_order")).fetchall()
+        added = 0
+        for name, deps in rows:
+            if name not in NODE_FN_MAP:
+                continue  # 旧节点（daily_update/model_train 等）已从 NODE_FN_MAP 移除
+            valid_deps = [d for d in (deps or []) if d in NODE_FN_MAP]
+            dag.add(DagNode(name, deps=valid_deps, fn=NODE_FN_MAP[name]))
+            added += 1
+        logger.info(f"[pipeline] 模块级 DAG 加载完成: {added} 个节点")
+    except Exception as e:
+        logger.warning(f"[pipeline] 模块级 DAG 加载失败（dag_trigger 将不可用）: {e}")
+    finally:
+        db.close()
+
 def dag_task_cron(trade_date=None, **kw):
     """cron 节点 — 纯标记节点，无实际操作。"""
     rid = _rid(kw)
@@ -2009,90 +2034,26 @@ def _get_preference_thresholds(db) -> dict:
 #  stock_master 更新
 # ═══════════════════════════════════════════════
 
-def _run_stock_master_update():
-    """核心逻辑：拉全量股票/指数/ETF，UPSERT stock_master，返回 {rows, detail}。"""
-    from crawler.adapters import get_data_source_manager
-    from app.db.connection import get_sync_db
-    from sqlalchemy import text as _t
-    from loguru import logger
-    manager = get_data_source_manager()
-    # 清除健康缓存 + 重试（akshare 偶发连接重置）
-    manager._health_cache.clear()
-    for _ in range(3):
-        try:
-            adapter = manager.get_source()
-            break
-        except RuntimeError:
-            import time
-            time.sleep(5)
-            manager._health_cache.clear()
-    else:
-        raise RuntimeError("数据源获取失败，重试3次均失败")
-    adapter._ensure_login()
-
-    type_labels = {"stock": "个股", "index": "指数", "etf": "ETF"}
-    all_updated = 0
-    all_delisted = 0
-    db = get_sync_db()
-    try:
-        for stype in ("stock", "index", "etf"):
-            stock_list = adapter.get_stock_list(stype)
-            # akshare 不支持 index/ETF → 从已有数据反推
-            if not stock_list and stype != "stock":
-                from sqlalchemy import text as _t2
-                if stype == "index":
-                    rows = db.execute(_t2("SELECT DISTINCT index_code FROM index_daily_quote")).fetchall()
-                    stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
-                elif stype == "etf":
-                    rows = db.execute(_t2("SELECT DISTINCT stock_code FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")).fetchall()
-                    stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
-            updated = delisted = 0
-            current_codes = set()
-            for s in stock_list:
-                code = getattr(s, 'stock_code', '') or ''
-                current_codes.add(code)
-                ipo = s.ipo_date if hasattr(s, 'ipo_date') and s.ipo_date else None
-                name = getattr(s, 'stock_name', code) or code
-                ex = "SSE" if code.startswith("6") or (code[:1] in ("0","3") and code[:3] in ("000","001","002","003")) \
-                    else ("SZSE" if code[:1] in ("0","3") else "BSE")
-                db.execute(_t("""
-                    INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status)
-                    VALUES (:c, :t, :n, :ex, :ipo, 'N')
-                    ON CONFLICT (stock_code, stock_type) DO UPDATE SET
-                        stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
-                        exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
-                        ipo_date = EXCLUDED.ipo_date,
-                        status = CASE WHEN stock_master.status = 'D' THEN stock_master.status ELSE 'N' END
-                """), {"c": code, "t": stype, "n": name, "ex": ex, "ipo": ipo})
-                updated += 1
-                all_updated += 1
-            all_known = db.execute(_t("SELECT stock_code FROM stock_master WHERE stock_type=:t"), {"t": stype}).fetchall()
-            for r in all_known:
-                if r[0] not in current_codes:
-                    db.execute(_t("UPDATE stock_master SET status='D' WHERE stock_code=:c AND stock_type=:t"),
-                              {"c": r[0], "t": stype})
-                    delisted += 1
-                    all_delisted += 1
-            logger.info(f"[stock_master] {type_labels[stype]}: 更新 {updated}, 退市 {delisted}")
-        db.commit()
-        return {'rows': all_updated, 'detail': f'更新 {all_updated} 只 (退市 {all_delisted})'}
-    except Exception as e:
-        db.rollback()
-        raise
-    finally:
-        try: adapter._logout()
-        except: pass
-        db.close()
-
-
 def dag_task_stock_master(trade_date=None, **kw):
-    """DAG 节点：从 baostock 拉取全量股票列表，更新 stock_master。"""
+    """DAG 节点：更新 stock_master（复用 BackfillManager 统一实现，与补数按钮同逻辑）。"""
+    from types import SimpleNamespace
+    from crawler.backfill import BackfillManager
     log_id = (kw.get('_node_log_ids', {}) or {}).get('stock_master')
     write_node_log(log_id=log_id, status='running', detail='获取股票列表…')
+    bm = BackfillManager.get_instance()
+    task = SimpleNamespace(
+        task_id=f"dag_stock_master_{trade_date or ''}", task_type="stock_master",
+        task_label="更新股票列表", status="running", start_date=None, end_date=None, force=True,
+        current_batch=0, total_batches=1, stocks_done=0, stocks_total=0, rows=0, errors=0,
+        failed_codes=[], started_at=None, updated_at=None, completed_at=None,
+        error_message="", _stop_requested=False,
+    )
     try:
-        r = _run_stock_master_update()
-        write_node_log(log_id=log_id, status='success', rows=r['rows'], detail=r['detail'])
-        return r
+        bm._run_stock_master(task)
+        rows = task.rows or 0
+        detail = task.error_message or f"更新 {rows} 只"
+        write_node_log(log_id=log_id, status='success', rows=rows, detail=detail)
+        return {'rows': rows, 'detail': detail}
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise

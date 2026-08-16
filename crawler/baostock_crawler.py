@@ -809,7 +809,8 @@ class BaostockCrawler:
 
         def fetch_one(code: str) -> dict:
             bs_code = self._bs_code(code)
-            res = {"code":code,"pe":None,"pb":None,"roe":None,"rev":None,"prf":None,"ts":None,"mc":None}
+            res = {"code":code,"pe":None,"pb":None,"roe":None,"rev":None,"prf":None,"ts":None,"mc":None,
+                   "date": None}  # date=数据最新交易日（与 tushare 最近工作日口径对齐）
             try:
                 r = bs.query_history_k_data_plus(bs_code, "date,close,volume,peTTM,pbMRQ,turn",
                     start_date=(date.today()-timedelta(days=7)).isoformat(),
@@ -817,6 +818,7 @@ class BaostockCrawler:
                 while r.next():
                     rr = r.get_row_data()
                     if not rr or len(rr) < 6: continue
+                    res["date"] = rr[0]  # 循环内每行赋值，最终为最新交易日
                     try:
                         if rr[3] and rr[3] != '0.000000': res["pe"] = float(rr[3])
                         if rr[4] and rr[4] != '0.000000': res["pb"] = float(rr[4])
@@ -840,8 +842,8 @@ class BaostockCrawler:
             ind = industry_map.get(res["code"], "")
             try:
                 with lock:
-                    db.execute(text("INSERT INTO stock_fundamentals (stock_code,trade_date,pe_ttm,pb_mrq,industry,roe,revenue_yoy,profit_yoy,total_shares,market_cap,updated_at) VALUES (:c,CURRENT_DATE,:pe,:pb,:ind,:roe,:rev,:prf,:ts,:mc,CURRENT_TIMESTAMP) ON CONFLICT (stock_code, trade_date) DO UPDATE SET pe_ttm=EXCLUDED.pe_ttm,pb_mrq=EXCLUDED.pb_mrq,industry=EXCLUDED.industry,roe=EXCLUDED.roe,revenue_yoy=EXCLUDED.revenue_yoy,profit_yoy=EXCLUDED.profit_yoy,total_shares=EXCLUDED.total_shares,market_cap=EXCLUDED.market_cap,updated_at=CURRENT_TIMESTAMP"),
-                            {"c":res["code"],"pe":res["pe"],"pb":res["pb"],"ind":ind,"roe":res["roe"],"rev":res["rev"],"prf":res["prf"],"ts":res["ts"],"mc":res["mc"]})
+                    db.execute(text("INSERT INTO stock_fundamentals (stock_code,trade_date,pe_ttm,pb_mrq,industry,roe,revenue_yoy,profit_yoy,total_shares,market_cap,updated_at) VALUES (:c,COALESCE(:d,CURRENT_DATE),:pe,:pb,:ind,:roe,:rev,:prf,:ts,:mc,CURRENT_TIMESTAMP) ON CONFLICT (stock_code, trade_date) DO UPDATE SET pe_ttm=EXCLUDED.pe_ttm,pb_mrq=EXCLUDED.pb_mrq,industry=EXCLUDED.industry,roe=EXCLUDED.roe,revenue_yoy=EXCLUDED.revenue_yoy,profit_yoy=EXCLUDED.profit_yoy,total_shares=EXCLUDED.total_shares,market_cap=EXCLUDED.market_cap,updated_at=CURRENT_TIMESTAMP"),
+                            {"c":res["code"],"d":res["date"],"pe":res["pe"],"pb":res["pb"],"ind":ind,"roe":res["roe"],"rev":res["rev"],"prf":res["prf"],"ts":res["ts"],"mc":res["mc"]})
                     updated += 1
                     # 每 200 只报告一次进度
                     if updated % 200 == 0 and progress_cb:

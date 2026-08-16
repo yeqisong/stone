@@ -12,7 +12,7 @@ NODE_SUB_STEPS = {
     ],
     'kline': [
         {'name': '检测交易日', 'desc': '校验目标日期是否为交易日'},
-        {'name': '拉取行情', 'desc': 'baostock/AKShare 下载日K线'},
+        {'name': '拉取行情', 'desc': 'tushare/baostock 下载日K线'},
         {'name': '写入 daily_quote', 'desc': '批量 INSERT ... ON CONFLICT UPDATE'},
     ],
     'index': [
@@ -20,7 +20,7 @@ NODE_SUB_STEPS = {
         {'name': '写入 index_daily_quote', 'desc': '批量写入指数行情表'},
     ],
     'etf': [
-        {'name': '拉取ETF日K线', 'desc': '从 baostock/AKShare 下载 ETF 行情'},
+        {'name': '拉取ETF日K线', 'desc': '从 tushare/baostock 下载 ETF 行情'},
         {'name': '写入 daily_quote', 'desc': '批量写入 ETF 行情数据'},
     ],
     'fund': [

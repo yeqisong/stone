@@ -1,9 +1,7 @@
 """数据源适配器基础层：标准化数据结构 + 抽象基类。
 
-所有适配器（AKShare / Baostock / 未来扩展）统一输出这里定义的 dataclass，
+所有适配器（TuShare / Baostock / 未来扩展）统一输出这里定义的 dataclass，
 确保数据库写入层和业务层完全不感知数据源差异。
-
-设计参考：design/data-source-adapter-design.md 第四章
 """
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -18,7 +16,7 @@ class KlineRow:
     """个股 / ETF 日K线标准行。
 
     所有适配器输出此结构，字段规范：
-    - volume 统一为「股」（AKShare 返回「手」需 ×100）
+    - volume 统一为「股」
     - amount 统一为「元」
     - turnover 为换手率百分比（如 2.5 表示 2.5%）
     - close_hfq 为后复权收盘价（用于策略回测）

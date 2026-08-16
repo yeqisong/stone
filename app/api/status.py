@@ -339,6 +339,10 @@ def _run_dag_background(node: str, trade_date: str, task_id: str, force: bool = 
         if node == "all":
             dag.run_all(**kwargs)
         else:
+            # 模块级 dag 惰性加载（dag_config 拓扑过滤已移除节点），
+            # 否则 dag_trigger/sync_date 旧接口会因空图报"未知节点"
+            from scripts.pipeline import _ensure_module_dag_loaded
+            _ensure_module_dag_loaded()
             dag.run(node, **kwargs)
         with _sync_lock:
             if task_id in _sync_tasks:

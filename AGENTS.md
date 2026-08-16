@@ -53,7 +53,7 @@ Python + FastAPI 后端 + Vue 3 前端 + PostgreSQL 的全栈 A 股量化监测�
 
 - **`crawler/`** — 数据采集层
   - `baostock_crawler.py` — baostock 原生爬虫
-  - `adapters/` — 数据源适配器模式（抽象基类 DataSourceAdapter + AKShare/Baostock 实现 + DataSourceManager 自动 fallback）
+  - `adapters/` — 数据源适配器模式（抽象基类 DataSourceAdapter + TuShare/Baostock 实现 + DataSourceManager 自动 fallback）
   - `backfill.py` — 历史补数管理器（≈50KB，含进度/断点续传）
   - `catch_up.py` — 缺失交易日补采
   - `trade_calendar.py` — 交易日历同步
@@ -90,7 +90,7 @@ Python + FastAPI 后端 + Vue 3 前端 + PostgreSQL 的全栈 A 股量化监测�
 ### 数据流
 
 ```
-baostock/akshare → crawler/adapters → PostgreSQL → DAG pipeline (kline→fund→treemap→stats)
+tushare/baostock → crawler/adapters → PostgreSQL → DAG pipeline (kline→fund→treemap→stats)
                                                      ↕
                                               feature_compute (KEPL 引擎)
                                                      ↕
