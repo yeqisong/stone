@@ -1,5 +1,5 @@
 <template>
-<div style="padding:16px;height:100vh;display:flex;flex-direction:column">
+<div style="padding:16px;height:100vh;display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden">
   <!-- Header -->
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0">
     <n-button size="small" quaternary @click="$emit('back')">← 返回</n-button>
@@ -8,9 +8,9 @@
     <n-input v-model:value="search" size="small" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
 
-  <!-- Table: single-line 强制表头/内容不换行，超长列 ellipsis + tooltip -->
-  <div style="flex:1;overflow:auto">
-    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :max-height="'calc(100vh - 200px)'" :scroll-x="2600" />
+  <!-- Table: 单滚动(仅表格内)，前2列固定左、超链接跳详情 -->
+  <div style="flex:1;min-height:0;overflow:hidden">
+    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :max-height="'calc(100vh - 190px)'" :scroll-x="2600" />
   </div>
 
   <!-- Pagination -->
@@ -32,7 +32,7 @@ import { NButton, NDataTable, NInput, NSelect, NPagination, NModal, NTag } from 
 import axios from 'axios'
 import { useNavStore } from '../stores/nav'
 
-defineEmits(['back'])
+const emit = defineEmits(['back', 'show-detail'])
 const API = window.location.origin
 const nav = useNavStore()
 
@@ -86,10 +86,15 @@ onMounted(() => {
   loadData(1, false)
 })
 
-// Columns - all stock_master + fundamentals
+// Columns - all stock_master + fundamentals（前2列固定左 + 跳详情超链接）
+const linkStyle = { color: '#2080f0', cursor: 'pointer', textDecoration: 'underline' }
 const cols = [
-  { title: '代码', key: 'stock_code', width: 65, fixed: 'left' },
-  { title: '名称', key: 'stock_name', width: 100, ellipsis: { tooltip: true } },
+  { title: '代码', key: 'stock_code', width: 72, fixed: 'left', render(r) {
+    return h('span', { style: linkStyle, onClick: () => emit('show-detail', r.stock_code) }, r.stock_code)
+  } },
+  { title: '名称', key: 'stock_name', width: 110, fixed: 'left', ellipsis: { tooltip: true }, render(r) {
+    return h('span', { style: { ...linkStyle, textDecoration: 'none' }, onClick: () => emit('show-detail', r.stock_code) }, r.stock_name || r.stock_code)
+  } },
   { title: '类型', key: 'stock_type', width: 50, render(r) { return { stock: '股', index: '指', etf: 'ETF' }[r.stock_type] || r.stock_type } },
   { title: '交易所', key: 'exchange', width: 55 },
   { title: '行业', key: 'industry', width: 130, ellipsis: { tooltip: true }, render(r) {
