@@ -4,13 +4,13 @@
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0">
     <n-button size="small" quaternary @click="$emit('back')">← 返回</n-button>
     <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ title }}</span>
-    <n-select v-model:value="filterType" :options="typeOpts" size="small" style="width:100px" @update:value="loadData(1)" />
+    <n-select v-model:value="filterType" :options="typeOpts" size="small" style="width:100px" @update:value="onTypeChange" />
     <n-input v-model:value="search" size="small" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
 
-  <!-- Table -->
+  <!-- Table: single-line 强制表头/内容不换行，超长列 ellipsis + tooltip -->
   <div style="flex:1;overflow:auto">
-    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="false" :max-height="'calc(100vh - 200px)'" />
+    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :max-height="'calc(100vh - 200px)'" :scroll-x="2600" />
   </div>
 
   <!-- Pagination -->
@@ -27,12 +27,14 @@
 </template>
 
 <script setup>
-import { ref, computed, h } from 'vue'
+import { ref, computed, h, onMounted } from 'vue'
 import { NButton, NDataTable, NInput, NSelect, NPagination, NModal, NTag } from 'naive-ui'
 import axios from 'axios'
+import { useNavStore } from '../stores/nav'
 
 defineEmits(['back'])
 const API = window.location.origin
+const nav = useNavStore()
 
 const filterType = ref('stock')
 const search = ref('')
@@ -55,7 +57,7 @@ const title = computed(() => {
 
 const pageCount = computed(() => Math.ceil(total.value / pageSize.value))
 
-async function loadData(p) {
+async function loadData(p, syncUrl = true) {
   page.value = p || 1
   loading.value = true
   try {
@@ -68,19 +70,35 @@ async function loadData(p) {
   loading.value = false
 }
 
+// 类型切换：同步 URL（path 体现 /stock-fund/:type）+ 重新加载
+function onTypeChange(v) {
+  filterType.value = v
+  nav.stockFundType = v
+  nav.syncHash()
+  loadData(1, false)
+}
+
+// 挂载时：从 URL(nav.stockFundType) 初始化并加载——否则刚进入空白
+onMounted(() => {
+  filterType.value = nav.stockFundType || 'stock'
+  nav.tab = 'u'
+  nav.syncHash()
+  loadData(1, false)
+})
+
 // Columns - all stock_master + fundamentals
 const cols = [
   { title: '代码', key: 'stock_code', width: 65, fixed: 'left' },
-  { title: '名称', key: 'stock_name', width: 100 },
+  { title: '名称', key: 'stock_name', width: 100, ellipsis: { tooltip: true } },
   { title: '类型', key: 'stock_type', width: 50, render(r) { return { stock: '股', index: '指', etf: 'ETF' }[r.stock_type] || r.stock_type } },
   { title: '交易所', key: 'exchange', width: 55 },
-  { title: '行业', key: 'industry', width: 80 },
+  { title: '行业', key: 'industry', width: 80, ellipsis: { tooltip: true } },
   { title: '上市日', key: 'ipo_date', width: 85 },
   { title: '状态', key: 'status', width: 40, render(r) { return r.status === 'N' ? '正常' : '退市' } },
   { title: '退市日', key: 'delist_date', width: 85 },
   { title: '沪深港通', key: 'is_hs', width: 55 },
   { title: '实控人', key: 'act_name', width: 80, ellipsis: { tooltip: true } },
-  { title: '地域', key: 'area', width: 60 },
+  { title: '地域', key: 'area', width: 60, ellipsis: { tooltip: true } },
   { title: '注册资本', key: 'reg_capital', width: 70, align: 'right', render(r) { return r.reg_capital != null ? (r.reg_capital / 1e8).toFixed(2) + '亿' : '—' } },
   { title: '员工', key: 'employees', width: 50, align: 'right', render(r) { return r.employees || '—' } },
   { title: '主营业务', key: 'main_business', width: 120, ellipsis: { tooltip: true } },

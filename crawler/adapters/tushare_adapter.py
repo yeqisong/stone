@@ -110,6 +110,20 @@ class TuShareAdapter(DataSourceAdapter):
                 self.quota.consume()
                 df = self._pro.stock_basic(exchange='', list_status='L',
                     fields='ts_code,name,list_date,delist_date,exchange,is_hs,act_name,area,industry')
+                # 补退市股（list_status='D' 含 delist_date），供退市日期维护
+                # 退市股可能超单次 6000 行限制，用 offset 分页拉全
+                page_n = 0
+                while True:
+                    self.quota.consume()
+                    df_d = self._pro.stock_basic(exchange='', list_status='D',
+                        offset=page_n * 6000, limit=6000,
+                        fields='ts_code,name,list_date,delist_date,exchange,is_hs,act_name,area,industry')
+                    if df_d is None or df_d.empty:
+                        break
+                    df = pd.concat([df, df_d], ignore_index=True)
+                    page_n += 1
+                    if len(df_d) < 6000:
+                        break
             except QuotaExhausted:
                 raise
             except Exception:
