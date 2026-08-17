@@ -738,6 +738,27 @@ class BackfillManager:
                         all_delisted += 1
                 logger.info(f"[stock_master] {type_labels[stype]}: 更新 {updated}, 退市 {delisted}")
             db.commit()
+            # 申万行业层级（industry_l1/l2，index_member_all 分页拉全，~2-3 次调用）
+            try:
+                sw = adapter.fetch_sw_industry()
+                if sw:
+                    import pandas as _pd
+                    codes = list(sw.keys())
+                    l1s = [sw[c]['l1'] for c in codes]
+                    l2s = [sw[c]['l2'] for c in codes]
+                    db.execute(_t("""
+                        UPDATE stock_master sm SET
+                            industry_l1 = v.l1, industry_l2 = v.l2
+                        FROM (SELECT unnest(:codes) AS stock_code,
+                                     unnest(:l1s) AS l1, unnest(:l2s) AS l2) v
+                        WHERE sm.stock_code = v.stock_code AND sm.stock_type = 'stock'
+                    """), {"codes": codes, "l1s": l1s, "l2s": l2s})
+                    db.commit()
+                    task.error_message = f"更新 {all_updated} 只 (退市 {all_delisted}), 申万行业 {len(sw)} 只"
+                    logger.info(f"[stock_master] 申万行业更新 {len(sw)} 只")
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"[stock_master] 申万行业更新失败（可稍后重试）: {e}")
             task.rows = all_updated
             task.stocks_done = all_updated
             task.stocks_total = all_updated

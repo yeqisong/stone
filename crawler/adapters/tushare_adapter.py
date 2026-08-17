@@ -510,3 +510,35 @@ class TuShareAdapter(DataSourceAdapter):
     def get_trade_calendar(self, start_year: int, end_year: int) -> List[dict]:
         """交易日历统一由 baostock 同步（trade_calendar.py），此处不实现。"""
         return []
+
+    def fetch_sw_industry(self) -> Dict[str, Dict[str, str]]:
+        """拉取申万行业层级（index_member_all，需 2000 积分）。
+
+        Returns:
+            {stock_code: {"l1": "汽车", "l2": "摩托车及其他"}}
+        """
+        result: Dict[str, Dict[str, str]] = {}
+        offset = 0
+        page_size = 3000
+        try:
+            while True:
+                self.quota.consume()
+                df = self._pro.index_member_all(offset=offset, limit=page_size)
+                if df is None or df.empty:
+                    break
+                for _, r in df.iterrows():
+                    code = str(r.get('ts_code', '')).split('.')[0].zfill(6)
+                    if not code.isdigit():
+                        continue
+                    result[code] = {
+                        'l1': str(r.get('l1_name') or '') if pd.notna(r.get('l1_name')) else '',
+                        'l2': str(r.get('l2_name') or '') if pd.notna(r.get('l2_name')) else '',
+                    }
+                if len(df) < page_size:
+                    break
+                offset += page_size
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] fetch_sw_industry 失败: {e}")
+        return result

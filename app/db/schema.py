@@ -1154,7 +1154,9 @@ def init_db(sync_session) -> None:
                           ("act_name", "VARCHAR(100)"), ("area", "VARCHAR(20)"),
                           ("reg_capital", "NUMERIC"), ("employees", "INTEGER"),
                           ("main_business", "VARCHAR(200)"),
-                          ("industry", "VARCHAR(50)")]:
+                          ("industry", "VARCHAR(50)"),
+                          # 申万行业层级（v3.2.1，tushare index_member_all）
+                          ("industry_l1", "VARCHAR(50)"), ("industry_l2", "VARCHAR(50)")]:
         try:
             sync_session.execute(text(f"ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS {col} {col_type}"))
         except Exception:

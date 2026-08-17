@@ -92,7 +92,10 @@ const cols = [
   { title: '名称', key: 'stock_name', width: 100, ellipsis: { tooltip: true } },
   { title: '类型', key: 'stock_type', width: 50, render(r) { return { stock: '股', index: '指', etf: 'ETF' }[r.stock_type] || r.stock_type } },
   { title: '交易所', key: 'exchange', width: 55 },
-  { title: '行业', key: 'industry', width: 80, ellipsis: { tooltip: true } },
+  { title: '行业', key: 'industry', width: 130, ellipsis: { tooltip: true }, render(r) {
+    const l1 = r.industry_l1, l2 = r.industry_l2
+    return (l1 && l2) ? l1 + ' > ' + l2 : (l1 || l2 || r.industry || '—')
+  } },
   { title: '上市日', key: 'ipo_date', width: 85 },
   { title: '状态', key: 'status', width: 40, render(r) { return r.status === 'N' ? '正常' : '退市' } },
   { title: '退市日', key: 'delist_date', width: 85 },
