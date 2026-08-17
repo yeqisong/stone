@@ -63,7 +63,8 @@
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
         <div>
           <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">🏢 基本面</h4>
-          <table v-if="detail.fundamentals&&detail.fundamentals.industry" style="width:100%;border-collapse:collapse;font-size:12px">
+          <!-- v-if 判断对象存在即可：industry 可能为空（tushare 无行业），不能因此隐藏整块 -->
+          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" style="width:100%;border-collapse:collapse;font-size:12px">
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">行业</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.fundamentals.industry||'-'}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">PE(TTM)</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.pe_ttm>0?(detail.fundamentals.pe_ttm<30?'error':'warning'):'success'" size="small" :bordered="false">{{detail.fundamentals.pe_ttm?detail.fundamentals.pe_ttm.toFixed(1):'-'}}</n-tag></td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">PB</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.fundamentals.pb_mrq?detail.fundamentals.pb_mrq.toFixed(2):'-'}}</td></tr>

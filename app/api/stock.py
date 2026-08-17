@@ -88,19 +88,25 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                 "SELECT COUNT(*) FROM signal_history WHERE stock_code=:c AND signal_date!=:d"
             ), {"c": code, "d": str(latest_signal_date)}).scalar() or 0
 
-        # 基本面数据
-        fund_row = db.execute(text(
-            "SELECT industry, pe_ttm, pb_mrq, roe, revenue_yoy, profit_yoy FROM stock_fundamentals WHERE stock_code=:c"
-        ), {"c": code}).fetchone()
+        # 基本面数据（行业字段从 stock_master 回退，tushare daily_basic 不含行业）
+        fund_row = db.execute(text("""
+            SELECT COALESCE(sf.industry, sm.industry), sf.pe_ttm, sf.pb_mrq, sf.roe,
+                   sf.revenue_yoy, sf.profit_yoy, sm.industry AS sm_industry
+            FROM stock_fundamentals sf
+            LEFT JOIN (SELECT DISTINCT ON (stock_code) stock_code, industry
+                       FROM stock_master WHERE stock_type='stock') sm
+                   ON sm.stock_code = sf.stock_code
+            WHERE sf.stock_code = :c
+        """), {"c": code}).fetchone()
         fundamentals = {}
         if fund_row:
             fundamentals = {
-                "industry": fund_row.industry or "",
-                "pe_ttm": float(fund_row.pe_ttm) if fund_row.pe_ttm else None,
-                "pb_mrq": float(fund_row.pb_mrq) if fund_row.pb_mrq else None,
-                "roe": float(fund_row.roe) if fund_row.roe else None,
-                "revenue_yoy": float(fund_row.revenue_yoy) if fund_row.revenue_yoy else None,
-                "profit_yoy": float(fund_row.profit_yoy) if fund_row.profit_yoy else None,
+                "industry": (fund_row[0] or "") if fund_row[0] not in (None, "") else (fund_row[6] or ""),
+                "pe_ttm": float(fund_row[1]) if fund_row[1] else None,
+                "pb_mrq": float(fund_row[2]) if fund_row[2] else None,
+                "roe": float(fund_row[3]) if fund_row[3] else None,
+                "revenue_yoy": float(fund_row[4]) if fund_row[4] else None,
+                "profit_yoy": float(fund_row[5]) if fund_row[5] else None,
             }
 
         return {

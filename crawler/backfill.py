@@ -609,8 +609,8 @@ class BackfillManager:
                     from crawler.adapters.base import code_to_exchange
                     ex = code_to_exchange(code)
                     db.execute(_t("""
-                        INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status, delist_date, is_hs, act_name, area)
-                        VALUES (:c, :t, :n, :ex, :ipo, 'N', :dlist, :hs, :act, :area)
+                        INSERT INTO stock_master (stock_code, stock_type, stock_name, exchange, ipo_date, status, delist_date, is_hs, act_name, area, industry, reg_capital, employees, main_business)
+                        VALUES (:c, :t, :n, :ex, :ipo, 'N', :dlist, :hs, :act, :area, :ind, :rc, :emp, :biz)
                         ON CONFLICT (stock_code, stock_type) DO UPDATE SET
                             stock_name = COALESCE(EXCLUDED.stock_name, stock_master.stock_name),
                             exchange = COALESCE(EXCLUDED.exchange, stock_master.exchange),
