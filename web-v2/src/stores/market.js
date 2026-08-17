@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { bjDateStr } from '../utils/date.js'
 
 export const useMarketStore = defineStore('market', () => {
-  const selDate = ref(new Date().toISOString().slice(0, 10))
+  const selDate = ref(bjDateStr())
   const drillStack = ref([])  // [{name, id}]
 
   function setDate(dateStr) {

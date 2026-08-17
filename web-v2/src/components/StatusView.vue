@@ -213,14 +213,12 @@ import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
 import { addWsListener } from '../utils/ws'
 import { useNavStore } from '../stores/nav'
+import { bjDateStr } from '../utils/date.js'
 const nav = useNavStore()
 
 const API = window.location.origin
 const prefMode = ref('balanced')
-// 北京时间格式化（UTC 日期会导致每日 0-8 点显示昨天/上月）
-function bjDateStr(d = new Date()) {
-  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).format(d).replace(/\//g, '-')
-}
+// 北京时间 YYYY-MM-DD（共享工具，见 utils/date.js）
 
 async function loadPref() {
   try {
@@ -308,17 +306,19 @@ function showCalDetail(d) {
 }
 
 function prevMonth() {
-  const d = new Date(smonth.value+'-01')
-  d.setMonth(d.getMonth()-1)
-  smonth.value = d.toISOString().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
+  const d = new Date(smonth.value + '-01T00:00:00')
+  d.setMonth(d.getMonth() - 1)
+  smonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
 }
 function nextMonth() {
-  const d = new Date(smonth.value+'-01')
-  d.setMonth(d.getMonth()+1)
-  smonth.value = d.toISOString().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
+  const d = new Date(smonth.value + '-01T00:00:00')
+  d.setMonth(d.getMonth() + 1)
+  smonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
 }
 function goToday() {
-  smonth.value = new Date().toISOString().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
+  smonth.value = bjDateStr().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
 }
 
 async function refreshStats() {

@@ -37,10 +37,10 @@ import { ref, reactive, h, onMounted } from 'vue'
 import { NDataTable, NDatePicker, NButton, NButtonGroup, NSpace, NTag, NEmpty, NModal } from 'naive-ui'
 import axios from 'axios'
 import SignalStatsView from './SignalStatsView.vue'
+import { bjDateStr } from '../utils/date.js'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
-// 北京时间（UTC 日期每日 0-8 点"今天"会取到昨天）
-const bjToday = () => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replace(/\//g, '-')
+const bjToday = () => bjDateStr()
 const sigDate = ref(bjToday())
 const data = reactive({signals:null, scanned:0, total_signals:0})
 const showStats = ref(false)
@@ -70,7 +70,7 @@ async function doGenerate() {
 
 async function load(){
   try{
-    const d = typeof sigDate.value === 'string' ? sigDate.value : (sigDate.value||new Date()).toISOString().slice(0,10)
+    const d = typeof sigDate.value === 'string' ? sigDate.value : bjDateStr()
     const r = await axios.get(API+'/api/buy_signals',{params:{signal_date:d}})
     Object.assign(data, r.data)
     const mr = await axios.get(API+'/api/v1/models')

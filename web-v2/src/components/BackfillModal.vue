@@ -46,6 +46,7 @@
 import { ref, computed, watch } from 'vue'
 import { NModal, NSpace, NButton, NSwitch, NDatePicker, NInputNumber, useMessage } from 'naive-ui'
 import axios from 'axios'
+import { bjDateStr } from '../utils/date.js'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -70,9 +71,9 @@ const visible = computed({
   set: (v) => { if (!v) onClose() },
 })
 
-// 默认日期：5年前 ~ 今天
-const today = new Date().toISOString().slice(0, 10)
-const fiveYearsAgo = `${new Date().getFullYear() - 5}${today.slice(4)}`
+// 默认日期：5年前 ~ 今天（北京时间，避免 UTC 0-8 点取到昨天）
+const today = bjDateStr()
+const fiveYearsAgo = `${parseInt(today.slice(0, 4)) - 5}${today.slice(4)}`
 
 const startDate = ref(fiveYearsAgo)
 const endDate = ref(today)
