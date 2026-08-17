@@ -104,7 +104,7 @@ const cols = [
   { title: '上市日', key: 'ipo_date', width: 85 },
   { title: '状态', key: 'status', width: 40, render(r) { return r.status === 'N' ? '正常' : '退市' } },
   { title: '退市日', key: 'delist_date', width: 85 },
-  { title: '沪深港通', key: 'is_hs', width: 55 },
+  { title: '沪深港通', key: 'is_hs', width: 70 },
   { title: '实控人', key: 'act_name', width: 80, ellipsis: { tooltip: true } },
   { title: '地域', key: 'area', width: 60, ellipsis: { tooltip: true } },
   { title: '注册资本', key: 'reg_capital', width: 70, align: 'right', render(r) { return r.reg_capital != null ? (r.reg_capital / 1e8).toFixed(2) + '亿' : '—' } },
@@ -177,3 +177,11 @@ function openHist(code) {
   loadHist(1)
 }
 </script>
+
+<style>
+/* 表头强制不换行（naive 表格 th 默认可能 word-break 长中文标题） */
+.n-data-table thead th,
+.n-data-table thead th .n-data-table-th__title {
+  white-space: nowrap;
+}
+</style>
