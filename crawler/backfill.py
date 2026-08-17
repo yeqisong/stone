@@ -402,6 +402,36 @@ class BackfillManager:
                 try:
                     rows = fetch_fn([], td_str, td_str)
                     saved = write_fn(db, rows)
+                    # ETF 后复权补充（baostock，分批 200 只 + 进度 + 可取消；不可用则跳过）
+                    if task.task_type == "etf" and saved and manager.supplement_healthy():
+                        try:
+                            sups = manager.get_supplement()
+                            etf_codes = list({r.stock_code for r in rows})
+                            applied = 0
+                            for bi in range(0, len(etf_codes), 200):
+                                if getattr(task, "_stop_requested", False):
+                                    task.status = "cancelled"
+                                    task.error_message = f"已取消（hfq 已补充 {applied} 行，主数据完整）"
+                                    return
+                                b = etf_codes[bi:bi + 200]
+                                hfq_map = sups.fetch_etf_hfq(b, td_str, td_str)
+                                for r in rows:
+                                    k = (r.stock_code, r.trade_date)
+                                    if k in hfq_map:
+                                        db.execute(text(
+                                            "UPDATE daily_quote SET close_hfq=:h WHERE stock_code=:c AND exchange=:e AND trade_date=:d"
+                                        ), {"h": hfq_map[k], "c": r.stock_code, "e": r.exchange, "d": r.trade_date})
+                                        applied += 1
+                                db.commit()
+                                task.error_message = f"ETF hfq 补充 {min(bi+200,len(etf_codes))}/{len(etf_codes)} 行"
+                                task.updated_at = datetime.now().isoformat()
+                                self._update_task_db(task)
+                                self._wake_ws()
+                            if applied:
+                                logger.info(f"[backfill] ETF 复权补充 {td_str}: {applied} 行")
+                        except Exception as ex:
+                            db.rollback()
+                            logger.warning(f"[backfill] ETF 复权补充失败（close_hfq=close）: {ex}")
                 except QuotaExhausted as e:
                     task.status = "completed"
                     task.error_message = (f"tushare 当日配额已用尽，已补 {done}/{len(remaining_days)} 天，"
@@ -665,13 +695,42 @@ class BackfillManager:
             self._wake_ws()
 
             # baostock 补充 ROE/营收/净利（不可用时主字段已入库，缺口留待下次补数）
+            # 增量语义：只补缺失股票（roe/revenue_yoy/profit_yoy 全空），单任务上限 1500 只；
+            # 分批（100 只/批）提交进度，支持取消，剩余留待下次补数续跑
             sup = manager.get_supplement()
-            if sup is not None:
+            if sup is not None and manager.supplement_healthy():
                 try:
-                    extras = sup.fetch_fundamentals_extra([r.stock_code for r in rows])
-                    fixed = supplement_fundamentals_extra(db, extras)
-                    if fixed:
-                        logger.info(f"[fund_backfill] baostock 补充 ROE/营收/净利 {fixed} 只")
+                    latest_td = db.execute(_t(
+                        "SELECT MAX(trade_date) FROM stock_fundamentals"
+                    )).scalar()
+                    missing = db.execute(_t("""
+                        SELECT stock_code FROM stock_fundamentals
+                        WHERE trade_date = :d AND roe IS NULL
+                          AND revenue_yoy IS NULL AND profit_yoy IS NULL
+                        ORDER BY stock_code LIMIT 1500
+                    """), {"d": latest_td}).fetchall()
+                    if missing:
+                        codes = [r[0] for r in missing]
+                        logger.info(f"[fund_backfill] baostock 补充缺失 ROE 股票 {len(codes)} 只（分批补充）")
+                        total_fixed = 0
+                        for i in range(0, len(codes), 100):
+                            if getattr(task, "_stop_requested", False):
+                                task.status = "cancelled"
+                                task.error_message = f"已取消（ROE 已补充 {total_fixed} 只，剩余下次续跑）"
+                                return
+                            batch = codes[i:i + 100]
+                            extras = sup.fetch_fundamentals_extra(batch)
+                            fixed = supplement_fundamentals_extra(db, extras)
+                            total_fixed += fixed
+                            task.rows += fixed
+                            task.error_message = f"ROE 补充 {total_fixed}/{len(codes)} 只"
+                            task.updated_at = datetime.now().isoformat()
+                            self._update_task_db(task)
+                            self._wake_ws()
+                        if total_fixed:
+                            logger.info(f"[fund_backfill] baostock 补充 ROE/营收/净利 {total_fixed} 只")
+                    else:
+                        logger.info("[fund_backfill] ROE 等字段已完整，无需补充")
                 except Exception as e:
                     logger.warning(f"[fund_backfill] baostock 补充失败（ROE 等留待下次补数）: {e}")
 

@@ -52,17 +52,31 @@ class TuShareAdapter(DataSourceAdapter):
         pass
 
     def check_health(self) -> bool:
-        try:
-            from datetime import timedelta
-            td = (date.today() - timedelta(days=2)).strftime("%Y%m%d")
-            _rl()
-            self.quota.consume()
-            df = self._pro.daily(ts_code='000001.SZ', start_date=td, end_date=td)
-            return df is not None and len(df) > 0
-        except QuotaExhausted:
-            raise
-        except Exception:
+        """健康检查：取最近交易日（本地日历，避免周末落到非交易日导致误判），重试 3 次。
+
+        tushare 限流时可能静默返回空，故失败重试确认。
+        """
+        from datetime import date, timedelta
+        tds = self._trade_days((date.today() - timedelta(days=10)).isoformat(),
+                               date.today().isoformat())
+        if not tds:
             return False
+        td = tds[0].strftime("%Y%m%d")
+        for attempt in range(3):
+            try:
+                _rl()
+                self.quota.consume()
+                df = self._pro.daily(ts_code='000001.SZ', start_date=td, end_date=td)
+                if df is not None and len(df) > 0:
+                    return True
+                if attempt < 2:
+                    time.sleep(2)  # 限流/瞬时空返回，稍后重试
+            except QuotaExhausted:
+                raise
+            except Exception:
+                if attempt < 2:
+                    time.sleep(2)
+        return False
 
     # ── 本地交易日历（baostock 同步，唯一源）──
 

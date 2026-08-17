@@ -152,6 +152,25 @@ class DataSourceManager:
                 active = src.name
         return {"sources": sources, "active_source": active}
 
+    def supplement_healthy(self, name: str = "baostock") -> bool:
+        """补充器健康检查（带 TTL 缓存）。
+
+        补充器不可用时调用方应跳过补充（主字段照常入库），
+        避免在慢速/不可用源上阻塞主流程（如 ETF 复权串行拉取）。
+        """
+        cached = self._health_cache.get(name)
+        if cached and (time.time() - cached[1]) < self._cache_ttl:
+            return cached[0]
+        sup = self.get_supplement(name)
+        if sup is None:
+            return False
+        try:
+            healthy = sup.check_health()
+        except Exception:
+            healthy = False
+        self._health_cache[name] = (healthy, time.time())
+        return healthy
+
     def fetch_with_fallback(self, method_name: str, *args, **kwargs) -> Tuple[Any, str]:
         """数据拉取（v3.2 简化：仅走主源 tushare，无 fallback）。
 

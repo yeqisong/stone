@@ -419,22 +419,11 @@ def dag_task_etf(trade_date=None, **kw):
         source = manager.get_source()
         db = get_sync_db()
         rows = source.fetch_etf_kline([], td, td)
-        # baostock 补充 ETF 后复权（不可用时 close_hfq=close，缺口留待补数修复）
-        sup = manager.get_supplement()
-        if sup is not None and rows:
-            codes = list({r.stock_code for r in rows})
-            try:
-                hfq_map = sup.fetch_etf_hfq(codes, td, td)
-                filled = 0
-                for r in rows:
-                    k = (r.stock_code, r.trade_date)
-                    if k in hfq_map:
-                        r.close_hfq = hfq_map[k]
-                        filled += 1
-                if filled:
-                    logger.info(f"[etf] baostock 补充后复权 {filled} 行")
-            except Exception as e:
-                logger.warning(f"[etf] baostock 复权补充失败（close_hfq=close）: {e}")
+        # ETF 后复权由 baostock 补充器提供（tushare fund_adj 需高积分）。
+        # DAG 节点不做同步补充（baostock 串行逐只，全市场需 15+ 分钟，会阻塞流程）；
+        # 缺口在补数场景由用户主动触发补充（状态页补数 ETF）。
+        if rows:
+            logger.info("[etf] close_hfq=close（ETF 复权请在补数场景触发 baostock 补充）")
         saved = batch_upsert_kline(db, rows)
         db.close()
         return {'rows': saved, '_source': source.name}
@@ -461,24 +450,16 @@ def dag_task_fund(trade_date=None, **kw):
     def _run():
         from crawler.adapters import get_data_source_manager
         from app.db.connection import get_sync_db
-        from crawler.writers import batch_upsert_fundamentals, supplement_fundamentals_extra
+        from crawler.writers import batch_upsert_fundamentals
         manager = get_data_source_manager()
         source = manager.get_source()
         db = get_sync_db()
         rows = source.fetch_fundamentals([])
         saved = batch_upsert_fundamentals(db, rows)
-        # baostock 补充 ROE/营收/净利（tushare daily_basic 无此 3 字段）
-        # 不可用时主字段照常入库，缺口留待补数修复
-        sup = manager.get_supplement()
-        if sup is not None and rows:
-            codes = [r.stock_code for r in rows]
-            try:
-                extras = sup.fetch_fundamentals_extra(codes)
-                fixed = supplement_fundamentals_extra(db, extras)
-                if fixed:
-                    logger.info(f"[fund] baostock 补充 ROE/营收/净利 {fixed} 只")
-            except Exception as e:
-                logger.warning(f"[fund] baostock 补充失败（ROE 等留待补数）: {e}")
+        # baostock 补 ROE/营收/净利仅发生在补数场景（串行逐只较慢，DAG 节点不做同步补充）
+        # DAG 每日流程：tushare 主字段入库；ROE 等缺口由状态页补数触发补充
+        if rows:
+            logger.info("[fund] DAG 节点仅写 tushare 主字段，ROE 等由补数场景补充")
         db.close()
         return {'rows': saved, '_source': source.name}
     try:
