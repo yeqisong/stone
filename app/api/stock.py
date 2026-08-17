@@ -394,7 +394,7 @@ def get_stock_pe_history(code: str):
             pb = float(r[2]) if r[2] else None
             roe = float(r[3]) if r[3] else None
             if pe: pe_vals.append(pe)
-            report_date = str(r[0])[:7]  # "2024-12-01" → "2024-12"
+            report_date = str(r[0])[:10]  # 完整日期：日度行显示交易日，季度行显示报告期
             all_data.append({"date": report_date, "pe_ttm": pe, "pb_mrq": pb, "roe": roe})
 
         # 计算分位数

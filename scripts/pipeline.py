@@ -450,16 +450,18 @@ def dag_task_fund(trade_date=None, **kw):
     def _run():
         from crawler.adapters import get_data_source_manager
         from app.db.connection import get_sync_db
-        from crawler.writers import batch_upsert_fundamentals
+        from crawler.writers import batch_upsert_fundamentals, append_fundamentals_history
         manager = get_data_source_manager()
         source = manager.get_source()
         db = get_sync_db()
         rows = source.fetch_fundamentals([])
         saved = batch_upsert_fundamentals(db, rows)
+        # 日度 PE/PB 追加到 history（PE 历史走势图数据源）
+        hist = append_fundamentals_history(db, rows)
         # baostock 补 ROE/营收/净利仅发生在补数场景（串行逐只较慢，DAG 节点不做同步补充）
         # DAG 每日流程：tushare 主字段入库；ROE 等缺口由状态页补数触发补充
         if rows:
-            logger.info("[fund] DAG 节点仅写 tushare 主字段，ROE 等由补数场景补充")
+            logger.info(f"[fund] DAG 节点写 tushare 主字段+日度PE({hist}行)，ROE 等由补数场景补充")
         db.close()
         return {'rows': saved, '_source': source.name}
     try:

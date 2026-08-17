@@ -290,13 +290,21 @@ class TuShareAdapter(DataSourceAdapter):
                 logger.warning(f"[tushare] ETF {td_str} 失败: {e}")
         return results
 
-    def fetch_fundamentals(self, codes: List[str]) -> List[FundamentalRow]:
-        """用 daily_basic 按日获取全市场基本面（1 次/天）。"""
+    def fetch_fundamentals(self, codes: List[str], trade_date: str = None) -> List[FundamentalRow]:
+        """用 daily_basic 按日获取全市场基本面（1 次/天）。
+
+        Args:
+            codes: 过滤用（可空=全市场）
+            trade_date: 指定交易日 YYYY-MM-DD（PE 历史回填用，缺省取最近交易日）
+        """
         results = []
         from datetime import date as _dt2, timedelta
-        # 取最近交易日（从本地日历倒查，周一自动回退上周五）
-        tds = self._trade_days((_dt2.today() - timedelta(days=10)).isoformat(),
-                               _dt2.today().isoformat())
+        if trade_date:
+            tds = [__import__('datetime').date.fromisoformat(trade_date)]
+        else:
+            # 取最近交易日（从本地日历倒查，周一自动回退上周五）
+            tds = self._trade_days((_dt2.today() - timedelta(days=10)).isoformat(),
+                                   _dt2.today().isoformat())
         if not tds:
             return results
         td = tds[0].strftime("%Y%m%d")

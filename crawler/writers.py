@@ -297,3 +297,51 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
             logger.error(f"[writers] batch_upsert_fundamentals 异常 (batch {start}): {e}")
     db.commit()
     return total
+
+
+def append_fundamentals_history(db, rows: List[FundamentalRow], batch_size: int = 500) -> int:
+    """按交易日追加 PE/PB 到 stock_fundamentals_history（report_date 存交易日）。
+
+    - tushare daily_basic 按日全市场，PE 历史走势数据源（图/分位用）
+    - 幂等：UNIQUE(stock_code, report_date)，同日重复拉取 DO UPDATE
+    - 只写有 PE_ttm/PB 值的行；ROE/营收等季度字段不在日度行填充
+    """
+    vals = []
+    for r in rows:
+        td = getattr(r, 'trade_date', None)
+        if not td:
+            continue
+        pe = r.pe_ttm if getattr(r, 'pe_ttm', None) is not None else getattr(r, 'pe', None)
+        if pe is None and r.pb_mrq is None:
+            continue
+        vals.append((r.stock_code, str(td)[:10], pe, r.pb_mrq))
+    if not vals:
+        return 0
+
+    total = 0
+    for start in range(0, len(vals), batch_size):
+        chunk = vals[start:start + batch_size]
+        placeholders = []
+        params = {}
+        for j, (code, td, pe, pb) in enumerate(chunk):
+            idx = start + j
+            placeholders.append(f"(:c{idx},:d{idx},:pe{idx},:pb{idx})")
+            params.update({f'c{idx}': code, f'd{idx}': td, f'pe{idx}': pe, f'pb{idx}': pb})
+        sql = (
+            "INSERT INTO stock_fundamentals_history (stock_code, report_date, pe_ttm, pb_mrq) "
+            "VALUES " + ",".join(placeholders) +
+            " ON CONFLICT (stock_code, report_date) DO UPDATE SET "
+            "pe_ttm=COALESCE(EXCLUDED.pe_ttm, stock_fundamentals_history.pe_ttm), "
+            "pb_mrq=COALESCE(EXCLUDED.pb_mrq, stock_fundamentals_history.pb_mrq)"
+        )
+        try:
+            db.execute(text(sql), params)
+            total += len(chunk)
+        except Exception as e:
+            logger.error(f"[writers] append_fundamentals_history 异常: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    db.commit()
+    return total

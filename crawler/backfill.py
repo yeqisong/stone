@@ -271,6 +271,8 @@ class BackfillManager:
                 self._run_kline_backfill(task)
             elif task.task_type == "fund":
                 self._run_fund_backfill(task)
+            elif task.task_type == "fund_history":
+                self._run_fund_history_backfill(task)
             elif task.task_type == "indicator":
                 self._run_indicator_backfill(task)
             elif task.task_type == "calendar":
@@ -457,6 +459,98 @@ class BackfillManager:
         finally:
             try: adapter._logout()
             except Exception: pass
+            db.close()
+
+    # ═══════════════════════════════════════════════
+    #  基本面 PE 历史回填（fund_history）
+    # ═══════════════════════════════════════════════
+
+    def _run_fund_history_backfill(self, task: BackfillTask):
+        """PE 历史回填：逐交易日拉 daily_basic 写 stock_fundamentals_history（每股票每日 PE/PB）。
+
+        - 断点续传：某交易日 history 已有行数 >= 活跃数 80% 视为完成
+        - 配额预算：tushare 剩余 < 10 次自动收尾（每天 1 次调用）
+        - 支持取消
+        """
+        from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import QuotaExhausted
+        from crawler.writers import append_fundamentals_history
+
+        manager = get_data_source_manager()
+        try:
+            adapter = manager.get_source()
+        except RuntimeError as e:
+            task.status = "failed"
+            task.error_message = f"主数据源不可用: {e}"
+            return
+
+        tds = adapter._trade_days(task.start_date, task.end_date)
+        if not tds:
+            task.status = "failed"
+            task.error_message = f"区间 {task.start_date}~{task.end_date} 无交易日"
+            return
+
+        db = get_sync_db()
+        try:
+            # 断点续传：当日 history 行数 >= 活跃数 80% 视为已完成
+            active = db.execute(text(
+                "SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type='stock'"
+            )).scalar() or 0
+            threshold = max(int(active * 0.8), 500)
+            remaining = tds
+            skipped = 0
+            if not task.force:
+                kept = []
+                for td in tds:
+                    cnt = db.execute(text(
+                        "SELECT COUNT(*) FROM stock_fundamentals_history WHERE report_date=:d"
+                    ), {"d": td}).scalar() or 0
+                    if cnt >= threshold:
+                        skipped += 1
+                    else:
+                        kept.append(td)
+                remaining = kept
+
+            task.total_batches = len(remaining)
+            done = 0
+            total_rows = 0
+            for i, td in enumerate(remaining):
+                if getattr(task, "_stop_requested", False):
+                    task.status = "cancelled"
+                    task.error_message = f"已取消（完成 {done}/{len(remaining)} 天，共 {total_rows} 行）"
+                    return
+                if adapter.quota.remaining() < 10:
+                    task.status = "completed"
+                    task.error_message = (f"tushare 配额将尽（剩余 {adapter.quota.remaining()} 次），"
+                                          f"已回填 {done}/{len(remaining)} 天，剩余可明日续跑")
+                    return
+                td_str = td.strftime("%Y-%m-%d")
+                try:
+                    rows = adapter.fetch_fundamentals([], trade_date=td_str)
+                    saved = append_fundamentals_history(db, rows)
+                except QuotaExhausted as e:
+                    task.status = "completed"
+                    task.error_message = f"tushare 当日配额用尽，已回填 {done} 天，明日续跑"
+                    return
+                done += 1
+                total_rows += saved
+                task.rows = total_rows
+                task.stocks_done = done
+                task.current_batch = done
+                task.updated_at = datetime.now().isoformat()
+                self._update_task_db(task)
+                self._wake_ws()
+                del rows
+                gc.collect()
+
+            task.status = "completed"
+            task.error_message = (f"PE 历史回填完成 {done} 天（跳过已完成 {skipped} 天），共 {total_rows} 行"
+                                  if skipped else f"PE 历史回填完成 {done} 天，共 {total_rows} 行")
+        except Exception as e:
+            db.rollback()
+            task.status = "failed"
+            task.error_message = str(e)[:500]
+        finally:
             db.close()
 
     # ═══════════════════════════════════════════════
@@ -688,6 +782,9 @@ class BackfillManager:
 
             # 统一 writers 批量 UPSERT（含 market_cap 补全 + 逐字段 COALESCE）
             upserted = batch_upsert_fundamentals(db, rows)
+            # 日度 PE/PB 追加 history（PE 历史走势图数据源）
+            from crawler.writers import append_fundamentals_history
+            hist = append_fundamentals_history(db, rows)
             task.rows = upserted
             task.stocks_done = upserted
             task.updated_at = datetime.now().isoformat()

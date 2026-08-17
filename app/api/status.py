@@ -801,7 +801,7 @@ def backfill_start(payload: dict):
     from crawler.backfill import BackfillManager, BusyError
 
     task_type = payload.get("type", "")
-    if task_type not in ("kline", "index", "etf", "fund", "indicator", "calendar", "stock_master"):
+    if task_type not in ("kline", "index", "etf", "fund", "fund_history", "indicator", "calendar", "stock_master"):
         return {"ok": False, "error": "不支持的补数类型"}
 
     start_date = payload.get("start_date")
