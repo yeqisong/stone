@@ -266,7 +266,8 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
                 f":roe{start+j},:rev{start+j},:prf{start+j},:ls{start+j},:ind{start+j},CURRENT_TIMESTAMP)"
                 for j in range(len(chunk))
             ) +
-            " ON CONFLICT (stock_code, trade_date) DO UPDATE SET "
+            " ON CONFLICT (stock_code) DO UPDATE SET "
+            "trade_date=EXCLUDED.trade_date, "
             "stock_name=COALESCE(EXCLUDED.stock_name, stock_fundamentals.stock_name), "
             "pe_ttm=COALESCE(EXCLUDED.pe_ttm, stock_fundamentals.pe_ttm), "
             "pe=COALESCE(EXCLUDED.pe, stock_fundamentals.pe), "

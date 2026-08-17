@@ -221,7 +221,7 @@ CREATE INDEX IF NOT EXISTS idx_fd_status ON failed_downloads (status, exchange);
 CREATE_STOCK_FUNDAMENTALS = """
 CREATE TABLE IF NOT EXISTS stock_fundamentals (
     stock_code      VARCHAR(6) NOT NULL,
-    trade_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+    trade_date      DATE NOT NULL DEFAULT CURRENT_DATE,  -- 数据日期（快照语义：最新一条）
     stock_name      VARCHAR(20),
     industry        VARCHAR(50),
     pe_ttm          NUMERIC(10,2),
@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals (
     volume_ratio    NUMERIC(10,4),
     limit_status    INTEGER,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (stock_code, trade_date)
+    PRIMARY KEY (stock_code)  -- 快照模型：每股票一条最新（历史走势由 stock_fundamentals_history 承担）
 );
 """
 
@@ -1243,7 +1243,9 @@ def init_db(sync_session) -> None:
         sync_session.commit()
     except Exception:
         sync_session.rollback()
-    # 2) 主键升级为 (stock_code, trade_date)（旧库单列 PK 与代码 ON CONFLICT 不匹配）
+    # 2) 主键 = 单列 stock_code（快照模型，每股票一条最新）
+    #    若现存双列主键（v3.2 曾升级为 code+trade_date 累积了多交易日历史行）
+    #    → 清理重复（保留每股票最新 trade_date）→ DROP 双列 PK → ADD 单列 PK
     try:
         pk_name = sync_session.execute(text(
             "SELECT conname FROM pg_constraint WHERE conrelid='stock_fundamentals'::regclass AND contype='p'"
@@ -1253,9 +1255,19 @@ def init_db(sync_session) -> None:
             "FROM pg_constraint c JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum = ANY(c.conkey) "
             "WHERE c.conrelid='stock_fundamentals'::regclass AND c.contype='p' GROUP BY c.conname"
         )).scalar()
-        if pk_name and pk_cols and pk_cols != ['stock_code', 'trade_date']:
+        if pk_name and pk_cols and pk_cols == ['stock_code', 'trade_date']:
+            # 清理历史累积：每股票只保留最新 trade_date 一行
+            sync_session.execute(text("""
+                DELETE FROM stock_fundamentals WHERE (stock_code, trade_date) IN (
+                    SELECT stock_code, trade_date FROM (
+                        SELECT stock_code, trade_date,
+                               ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                        FROM stock_fundamentals
+                    ) t WHERE rn > 1
+                )
+            """))
             sync_session.execute(text(f"ALTER TABLE stock_fundamentals DROP CONSTRAINT {pk_name}"))
-            sync_session.execute(text("ALTER TABLE stock_fundamentals ADD PRIMARY KEY (stock_code, trade_date)"))
+            sync_session.execute(text("ALTER TABLE stock_fundamentals ADD PRIMARY KEY (stock_code)"))
             sync_session.commit()
     except Exception:
         sync_session.rollback()
