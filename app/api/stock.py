@@ -94,7 +94,7 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                    sf.revenue_yoy, sf.profit_yoy, sf.dv_ratio, sf.dv_ttm,
                    sf.turnover_rate, sf.volume_ratio, sf.market_cap, sf.circ_mv,
                    sf.total_shares, sf.float_share, sf.free_share, sf.limit_status,
-                   sf.industry, sm.industry_l1, sm.industry_l2,
+                   sm.industry_l1, sm.industry_l2,
                    sm.reg_capital, sm.employees, sm.main_business
             FROM stock_fundamentals sf
             LEFT JOIN (SELECT DISTINCT ON (stock_code) stock_code, industry_l1, industry_l2,
@@ -111,10 +111,10 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                     return float(v) if v is not None else None
                 except (ValueError, TypeError):
                     return None
-            l1 = fund_row[19] or ""
-            l2 = fund_row[20] or ""
+            l1 = fund_row[18] or ""
+            l2 = fund_row[19] or ""
             fundamentals = {
-                "industry": (l1 + " > " + l2) if (l1 and l2) else (l1 or l2 or (fund_row[18] or "")),
+                "industry": (l1 + " > " + l2) if (l1 and l2) else (l1 or l2),
                 "industry_l1": l1, "industry_l2": l2,
                 "pe_ttm": F(0), "pe": F(1), "pb_mrq": F(2), "ps": F(3), "ps_ttm": F(4),
                 "roe": F(5), "revenue_yoy": F(6), "profit_yoy": F(7),
@@ -122,9 +122,9 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                 "volume_ratio": F(11), "market_cap": F(12), "circ_mv": F(13),
                 "total_shares": F(14), "float_share": F(15), "free_share": F(16),
                 "limit_status": int(fund_row[17]) if fund_row[17] is not None else None,
-                "reg_capital": float(fund_row[21]) if fund_row[21] else None,
-                "employees": int(fund_row[22]) if fund_row[22] else None,
-                "main_business": (fund_row[23] or "") if fund_row[23] else "",
+                "reg_capital": float(fund_row[20]) if fund_row[20] else None,
+                "employees": int(fund_row[21]) if fund_row[21] else None,
+                "main_business": (fund_row[22] or "") if fund_row[22] else "",
             }
 
         return {
@@ -337,17 +337,17 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
                 counts[r[0] - 1] = r[1]
         distribution = {"buckets": [f"{b:.0%}" for b in buckets], "counts": counts}
 
-        # 按行业
+        # 按行业（申万二级，替代已废弃的 fundamentals.industry）
         industry = db.execute(text(f"""
-            SELECT sf.industry,
+            SELECT sm.industry_l2,
                    COUNT(*) as signals,
                    COUNT(*) FILTER (WHERE sh.status='closed' AND sh.actual_return > 0) * 1.0 /
                      NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
             FROM signal_history sh
-            LEFT JOIN stock_fundamentals sf ON sf.stock_code = sh.stock_code
+            LEFT JOIN stock_master sm ON sm.stock_code = sh.stock_code AND sm.stock_type = 'stock'
             WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
-            GROUP BY sf.industry HAVING COUNT(*) >= 5
+            GROUP BY sm.industry_l2 HAVING COUNT(*) >= 5
             ORDER BY signals DESC LIMIT 15
         """), {"days": days}).fetchall()
         by_industry = [{"industry": r[0] or "未分类", "signals": r[1],

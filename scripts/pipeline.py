@@ -32,7 +32,7 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
                      "amount": "d.close, sm.industry_l1, sm.industry_l2, d.amount",
                      "pe": "d.close, sm.industry_l1, sm.industry_l2, NULL"}.get(metric, "d.close, sm.industry_l1, sm.industry_l2, f.market_cap, f.total_shares")
         rows = db.execute(text(f"""
-            SELECT d.stock_code, d.stock_name, {query_col}, d.trade_date
+            SELECT d.stock_code, sm.stock_name, {query_col}, d.trade_date
             FROM daily_quote d
             JOIN stock_master sm ON sm.stock_code = d.stock_code
             LEFT JOIN stock_fundamentals f ON f.stock_code = d.stock_code

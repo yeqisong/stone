@@ -1165,7 +1165,7 @@ def init_db(sync_session) -> None:
 
     # 迁移：stock_fundamentals → 双主键 + 扩展字段（v3.2 重构）
     # 先加列
-    for col, col_type in [("trade_date_v2", "DATE"), ("ps", "NUMERIC(10,2)"),
+    for col, col_type in [("ps", "NUMERIC(10,2)"),
                           ("ps_ttm", "NUMERIC(10,2)"), ("dv_ratio", "NUMERIC(10,4)"),
                           ("dv_ttm", "NUMERIC(10,4)"), ("turnover_rate", "NUMERIC(10,4)"),
                           ("volume_ratio", "NUMERIC(10,4)"), ("free_share", "BIGINT"),
@@ -1175,14 +1175,6 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE stock_fundamentals ADD COLUMN IF NOT EXISTS {col} {col_type}"))
         except Exception:
             sync_session.rollback()
-    sync_session.commit()
-    # 填充 trade_date_v2（用最新日期的 daily_quote trade_date）
-    try:
-        sync_session.execute(text(
-            "UPDATE stock_fundamentals SET trade_date_v2 = (SELECT MAX(trade_date) FROM daily_quote) WHERE trade_date_v2 IS NULL"
-        ))
-    except Exception:
-        sync_session.rollback()
     sync_session.commit()
 
     # 迁移：stock_fundamentals 扩展字段（daily_basic v3.2）
@@ -1240,8 +1232,16 @@ def init_db(sync_session) -> None:
         sync_session.rollback()
     try:
         sync_session.execute(text(
-            "UPDATE stock_fundamentals SET trade_date = COALESCE(trade_date_v2, updated_at::date, CURRENT_DATE) WHERE trade_date IS NULL"
+            "UPDATE stock_fundamentals SET trade_date = COALESCE(trade_date, updated_at::date, CURRENT_DATE) WHERE trade_date IS NULL"
         ))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：删除 stock_fundamentals 冗余列（stock_name/industry 权威在 stock_master；trade_date_v2 已被 trade_date 取代）
+    try:
+        for col in ("stock_name", "industry", "trade_date_v2"):
+            sync_session.execute(text(f"ALTER TABLE stock_fundamentals DROP COLUMN IF EXISTS {col}"))
         sync_session.commit()
     except Exception:
         sync_session.rollback()

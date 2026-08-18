@@ -880,7 +880,7 @@ def stock_fund_list(stock_type: str = "stock", page: int = 1, page_size: int = 5
             FROM stock_master sm
             LEFT JOIN LATERAL (
                 SELECT * FROM stock_fundamentals WHERE stock_code = sm.stock_code
-                ORDER BY COALESCE(trade_date_v2, updated_at, CURRENT_DATE) DESC LIMIT 1
+                ORDER BY COALESCE(trade_date, updated_at) DESC LIMIT 1
             ) sf ON true
             WHERE {where}
             ORDER BY sm.stock_code

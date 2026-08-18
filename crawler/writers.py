@@ -233,7 +233,6 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
             params.update({
                 f'c{idx}': row.stock_code,
                 f'td{idx}': getattr(row, 'trade_date', '') or '',
-                f'sn{idx}': row.stock_name,
                 f'pe{idx}': row.pe_ttm,
                 f'pe2{idx}': getattr(row, 'pe', None),
                 f'pb{idx}': row.pb_mrq,
@@ -243,7 +242,6 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
                 f'dvt{idx}': getattr(row, 'dv_ttm', None),
                 f'tr{idx}': getattr(row, 'turnover_rate', None),
                 f'vr{idx}': getattr(row, 'volume_ratio', None),
-                f'ind{idx}': row.industry,
                 f'roe{idx}': row.roe,
                 f'rev{idx}': row.revenue_yoy,
                 f'prf{idx}': row.profit_yoy,
@@ -257,18 +255,17 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
 
         sql = (
             "INSERT INTO stock_fundamentals "
-            "(stock_code,trade_date,stock_name,pe_ttm,pe,pb_mrq,ps,ps_ttm,dv_ratio,dv_ttm,"
+            "(stock_code,trade_date,pe_ttm,pe,pb_mrq,ps,ps_ttm,dv_ratio,dv_ttm,"
             "turnover_rate,volume_ratio,total_shares,float_share,free_share,market_cap,circ_mv,"
-            "roe,revenue_yoy,profit_yoy,limit_status,industry,updated_at) "
+            "roe,revenue_yoy,profit_yoy,limit_status,updated_at) "
             "VALUES " + ",".join(
-                f"(:c{start+j},:td{start+j},:sn{start+j},:pe{start+j},:pe2{start+j},:pb{start+j},:ps{start+j},:ps2{start+j},:dvr{start+j},:dvt{start+j},"
+                f"(:c{start+j},:td{start+j},:pe{start+j},:pe2{start+j},:pb{start+j},:ps{start+j},:ps2{start+j},:dvr{start+j},:dvt{start+j},"
                 f":tr{start+j},:vr{start+j},:ts{start+j},:fs{start+j},:frs{start+j},:mc{start+j},:cm{start+j},"
-                f":roe{start+j},:rev{start+j},:prf{start+j},:ls{start+j},:ind{start+j},CURRENT_TIMESTAMP)"
+                f":roe{start+j},:rev{start+j},:prf{start+j},:ls{start+j},CURRENT_TIMESTAMP)"
                 for j in range(len(chunk))
             ) +
             " ON CONFLICT (stock_code) DO UPDATE SET "
             "trade_date=EXCLUDED.trade_date, "
-            "stock_name=COALESCE(EXCLUDED.stock_name, stock_fundamentals.stock_name), "
             "pe_ttm=COALESCE(EXCLUDED.pe_ttm, stock_fundamentals.pe_ttm), "
             "pe=COALESCE(EXCLUDED.pe, stock_fundamentals.pe), "
             "pb_mrq=COALESCE(EXCLUDED.pb_mrq, stock_fundamentals.pb_mrq), "
@@ -287,7 +284,6 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
             "revenue_yoy=COALESCE(EXCLUDED.revenue_yoy, stock_fundamentals.revenue_yoy), "
             "profit_yoy=COALESCE(EXCLUDED.profit_yoy, stock_fundamentals.profit_yoy), "
             "limit_status=COALESCE(EXCLUDED.limit_status, stock_fundamentals.limit_status), "
-            "industry=COALESCE(EXCLUDED.industry, stock_fundamentals.industry), "
             "updated_at=EXCLUDED.updated_at"
         )
         try:
