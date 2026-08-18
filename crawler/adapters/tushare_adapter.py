@@ -52,13 +52,15 @@ class TuShareAdapter(DataSourceAdapter):
         pass
 
     def check_health(self) -> bool:
-        """健康检查：取最近交易日（本地日历，避免周末落到非交易日导致误判），重试 3 次。
+        """健康检查：取最近已收盘交易日（排除今天，tushare 当日数据 15:00 后才就绪），重试 3 次。
 
         tushare 限流时可能静默返回空，故失败重试确认。
         """
         from datetime import date, timedelta
-        tds = self._trade_days((date.today() - timedelta(days=10)).isoformat(),
-                               date.today().isoformat())
+        today = date.today()
+        # 最近已收盘交易日 = (today-10, today-1)；凌晨/当日早间取昨日，避免拿到未就绪的当日数据
+        tds = self._trade_days((today - timedelta(days=10)).isoformat(),
+                               (today - timedelta(days=1)).isoformat())
         if not tds:
             return False
         td = tds[0].strftime("%Y%m%d")
@@ -489,23 +491,34 @@ class TuShareAdapter(DataSourceAdapter):
             return []
 
     def fetch_company(self, ts_code: str) -> Optional[dict]:
-        """查询上市公司基本信息。"""
-        try:
-            self.quota.consume()
-            df = self._pro.stock_company(ts_code=ts_code,
-                fields='ts_code,reg_capital,employees,main_business')
-            if df is not None and not df.empty:
-                r = df.iloc[0]
-                return {
-                    "reg_capital": float(r['reg_capital']) if pd.notna(r.get('reg_capital')) else None,
-                    "employees": int(r['employees']) if pd.notna(r.get('employees')) else None,
-                    "main_business": str(r.get('main_business',''))[:200] if pd.notna(r.get('main_business')) else None,
-                }
-        except QuotaExhausted:
-            raise
-        except Exception:
-            pass
-        return None
+        """查询单只上市公司基本信息（reg_capital/employees/main_business）。"""
+        return self.fetch_company_batch([ts_code]).get(ts_code)
+
+    def fetch_company_batch(self, codes: List[str]) -> Dict[str, dict]:
+        """逐只批量查询公司基本信息（stock_company 需单项调用）。
+
+        Returns:
+            {stock_code: {"reg_capital", "employees", "main_business"}}
+        """
+        result: Dict[str, dict] = {}
+        for code in codes:
+            try:
+                self.quota.consume()
+                df = self._pro.stock_company(
+                    ts_code=self._ts_code(code) if code.startswith(('4', '8', '9')) else f"{code}.{'SH' if code.startswith('6') else 'SZ'}",
+                    fields='ts_code,reg_capital,employees,main_business')
+                if df is not None and not df.empty:
+                    r = df.iloc[0]
+                    result[code] = {
+                        "reg_capital": float(r['reg_capital']) if pd.notna(r.get('reg_capital')) else None,
+                        "employees": int(r['employees']) if pd.notna(r.get('employees')) else None,
+                        "main_business": str(r.get('main_business', ''))[:200] if pd.notna(r.get('main_business')) else None,
+                    }
+            except QuotaExhausted:
+                raise
+            except Exception:
+                pass
+        return result
 
     def get_trade_calendar(self, start_year: int, end_year: int) -> List[dict]:
         """交易日历统一由 baostock 同步（trade_calendar.py），此处不实现。"""

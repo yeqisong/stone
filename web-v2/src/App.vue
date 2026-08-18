@@ -41,12 +41,12 @@
           <n-button :type="nav.tab==='x'?'primary':'default'" size="small" @click="nav.switchTab('x')" :style="{flexShrink:0}">📊 状态</n-button>
 
         </div>
-        <div style="flex:1;overflow-y:auto;padding:6px 20px" class="main-content">
+        <div style="flex:1;overflow-y:auto;padding:6px 20px;display:flex;flex-direction:column" class="main-content">
           <div v-if="nav.tab==='p'"><PortfolioView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'"><SignalsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='l'"><StocksView @show-detail="nav.showDetail" /></div>
-          <div v-if="nav.tab==='u'"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='u'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
           <div v-if="nav.tab==='a'"><ModelView /></div>

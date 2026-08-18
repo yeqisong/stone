@@ -759,6 +759,57 @@ class BackfillManager:
             except Exception as e:
                 db.rollback()
                 logger.warning(f"[stock_master] 申万行业更新失败（可稍后重试）: {e}")
+
+            # 公司信息补充（reg_capital/employees/main_business，stock_company 逐只）
+            # 增量：只补缺失字段；分批 200 只 + 进度 + 可取消；配额将尽自动收尾
+            try:
+                missing = db.execute(_t("""
+                    SELECT stock_code FROM stock_master
+                    WHERE stock_type='stock' AND status='N'
+                      AND (reg_capital IS NULL OR employees IS NULL OR main_business IS NULL)
+                    ORDER BY stock_code LIMIT 2000
+                """)).fetchall()
+                if missing:
+                    codes = [r[0] for r in missing]
+                    logger.info(f"[stock_master] 补充公司信息（缺失 {len(codes)} 只，分批）")
+                    filled = 0
+                    for bi in range(0, len(codes), 200):
+                        if getattr(task, "_stop_requested", False):
+                            task.error_message = f"已取消（公司信息补充 {filled}/{len(codes)}，可下次续跑）"
+                            break
+                        if adapter.quota.remaining() < 5:
+                            task.error_message = f"公司信息补充 {filled}/{len(codes)}（tushare 配额将尽，可明日续跑）"
+                            break
+                        batch = codes[bi:bi + 200]
+                        comp = adapter.fetch_company_batch(batch)
+                        if comp:
+                            cc = list(comp.keys())
+                            db.execute(_t("""
+                                UPDATE stock_master sm SET
+                                    reg_capital = COALESCE(sm.reg_capital, v.rc),
+                                    employees = COALESCE(sm.employees, v.emp),
+                                    main_business = COALESCE(sm.main_business, v.biz)
+                                FROM (SELECT unnest(:codes) AS stock_code,
+                                             unnest(:rcs) AS rc,
+                                             unnest(:emps) AS emp,
+                                             unnest(:bizs) AS biz) v
+                                WHERE sm.stock_code = v.stock_code AND sm.stock_type = 'stock'
+                            """), {
+                                "codes": cc,
+                                "rcs": [comp[c]['reg_capital'] for c in cc],
+                                "emps": [comp[c]['employees'] for c in cc],
+                                "bizs": [comp[c]['main_business'] for c in cc],
+                            })
+                            db.commit()
+                            filled += len(comp)
+                        task.updated_at = datetime.now().isoformat()
+                        task.error_message = f"公司信息补充 {filled}/{len(codes)} 只"
+                        self._update_task_db(task)
+                        self._wake_ws()
+                    logger.info(f"[stock_master] 公司信息补充 {filled} 只")
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"[stock_master] 公司信息补充失败（可稍后重试）: {e}")
             task.rows = all_updated
             task.stocks_done = all_updated
             task.stocks_total = all_updated

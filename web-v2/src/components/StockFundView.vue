@@ -1,5 +1,5 @@
 <template>
-<div style="padding:16px;height:100vh;display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden">
+<div style="flex:1;min-height:0;display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden">
   <!-- Header -->
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0">
     <n-button size="small" quaternary @click="$emit('back')">← 返回</n-button>
@@ -8,9 +8,9 @@
     <n-input v-model:value="search" size="small" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
 
-  <!-- Table: 单滚动(仅表格内)，前2列固定左、超链接跳详情 -->
-  <div style="flex:1;min-height:0;overflow:hidden">
-    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :max-height="'calc(100vh - 190px)'" :scroll-x="2600" />
+  <!-- Table: 单滚动在容器（纵+横），前2列固定左、超链接跳详情 -->
+  <div style="flex:1;min-height:0;overflow:auto">
+    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" />
   </div>
 
   <!-- Pagination -->
