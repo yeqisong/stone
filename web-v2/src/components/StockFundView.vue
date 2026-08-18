@@ -8,9 +8,9 @@
     <n-input v-model:value="search" size="small" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
 
-  <!-- Table: 单滚动在容器（纵+横），前2列固定左、超链接跳详情 -->
-  <div style="flex:1;min-height:0;overflow:auto">
-    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" />
+  <!-- Table: 固定总宽 scroll-x，长文本列省略号，纵向单滚动 -->
+  <div style="flex:1;min-height:0;overflow:hidden">
+    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :scroll-x="3200" :max-height="'100%'" />
   </div>
 
   <!-- Pagination -->
@@ -88,28 +88,37 @@ onMounted(() => {
 
 // Columns - all stock_master + fundamentals（前2列固定左 + 跳详情超链接）
 const linkStyle = { color: '#2080f0', cursor: 'pointer', textDecoration: 'underline' }
+// render 列文本统一省略号（naive ellipsis 属性对 render 列不生效，需自行控制），title 悬浮全文
+const ell = (txt, extra = {}) => {
+  const s = String(txt ?? '')
+  const { onClick, style: extraStyle, maxWidth, ...rest } = extra
+  return h('span', {
+    style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: maxWidth || '100%', ...extraStyle },
+    title: s, onClick, ...rest,
+  }, s || '—')
+}
 const cols = [
-  { title: '代码', key: 'stock_code', width: 72, fixed: 'left', render(r) {
+  { title: '代码', key: 'stock_code', width: 78, fixed: 'left', render(r) {
     return h('span', { style: linkStyle, onClick: () => emit('show-detail', r.stock_code) }, r.stock_code)
   } },
-  { title: '名称', key: 'stock_name', width: 110, fixed: 'left', ellipsis: { tooltip: true }, render(r) {
-    return h('span', { style: { ...linkStyle, textDecoration: 'none' }, onClick: () => emit('show-detail', r.stock_code) }, r.stock_name || r.stock_code)
+  { title: '名称', key: 'stock_name', width: 150, fixed: 'left', render(r) {
+    return ell(r.stock_name || r.stock_code, { maxWidth: '138px', ...linkStyle, textDecoration: 'none', color: '#2080f0', cursor: 'pointer', onClick: () => emit('show-detail', r.stock_code) })
   } },
   { title: '类型', key: 'stock_type', width: 50, render(r) { return { stock: '股', index: '指', etf: 'ETF' }[r.stock_type] || r.stock_type } },
-  { title: '交易所', key: 'exchange', width: 55 },
-  { title: '行业', key: 'industry', width: 130, ellipsis: { tooltip: true }, render(r) {
+  { title: '交易所', key: 'exchange', width: 60 },
+  { title: '行业', key: 'industry', width: 170, render(r) {
     const l1 = r.industry_l1, l2 = r.industry_l2
-    return (l1 && l2) ? l1 + ' > ' + l2 : (l1 || l2 || r.industry || '—')
+    return ell((l1 && l2) ? l1 + ' > ' + l2 : (l1 || l2 || r.industry || '—'), { maxWidth: '158px' })
   } },
-  { title: '上市日', key: 'ipo_date', width: 85 },
-  { title: '状态', key: 'status', width: 40, render(r) { return r.status === 'N' ? '正常' : '退市' } },
-  { title: '退市日', key: 'delist_date', width: 85 },
-  { title: '沪深港通', key: 'is_hs', width: 70 },
-  { title: '实控人', key: 'act_name', width: 80, ellipsis: { tooltip: true } },
-  { title: '地域', key: 'area', width: 60, ellipsis: { tooltip: true } },
-  { title: '注册资本', key: 'reg_capital', width: 70, align: 'right', render(r) { return r.reg_capital != null ? (r.reg_capital / 1e8).toFixed(2) + '亿' : '—' } },
-  { title: '员工', key: 'employees', width: 50, align: 'right', render(r) { return r.employees || '—' } },
-  { title: '主营业务', key: 'main_business', width: 120, ellipsis: { tooltip: true } },
+  { title: '上市日', key: 'ipo_date', width: 90 },
+  { title: '状态', key: 'status', width: 45, render(r) { return r.status === 'N' ? '正常' : '退市' } },
+  { title: '退市日', key: 'delist_date', width: 90 },
+  { title: '沪深港通', key: 'is_hs', width: 72 },
+  { title: '实控人', key: 'act_name', width: 130, render(r) { return ell(r.act_name, { maxWidth: '118px' }) } },
+  { title: '地域', key: 'area', width: 85, render(r) { return ell(r.area, { maxWidth: '73px' }) } },
+  { title: '注册资本', key: 'reg_capital', width: 75, align: 'right', render(r) { return r.reg_capital != null ? (r.reg_capital / 1e8).toFixed(2) + '亿' : '—' } },
+  { title: '员工', key: 'employees', width: 60, align: 'right', render(r) { return r.employees || '—' } },
+  { title: '主营业务', key: 'main_business', width: 230, render(r) { return ell(r.main_business, { maxWidth: '218px' }) } },
   // Fundamentals
   { title: 'PE', key: 'pe_ttm', width: 55, align: 'right', render(r) { return r.pe_ttm != null ? r.pe_ttm.toFixed(2) : '—' } },
   { title: 'PB', key: 'pb_mrq', width: 55, align: 'right', render(r) { return r.pb_mrq != null ? r.pb_mrq.toFixed(2) : '—' } },
