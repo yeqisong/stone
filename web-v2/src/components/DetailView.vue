@@ -5,9 +5,12 @@
     <n-input v-model:value="code" placeholder="6位代码" style="width:150px" size="small" clearable @keyup.enter="load" />
     <n-button type="primary" size="small" @click="load">查询</n-button>
     <n-select v-model:value="adj" @update:value="reloadChart" size="small" style="width:105px" :options="adjOptions" />
+    <n-button size="small" :disabled="!prevCode" @click="jump(prevCode)">◀ 上一只</n-button>
+    <n-button size="small" :disabled="!nextCode" @click="jump(nextCode)">下一只 ▶</n-button>
   </n-space>
 
   <n-spin v-if="loading" />
+  <n-empty v-else-if="notFound" description="未找到该证券，请检查代码" style="padding:40px" />
   <template v-else-if="detail">
     <!-- Summary Cards - unified stat-row style -->
     <div style="display:flex;gap:8px;justify-content:center;padding:6px 0 10px;flex-wrap:wrap">
@@ -57,20 +60,22 @@
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
+        <div style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📈 均线 (MA5/10/20/60)</h4>
+          <div :id="'c6'" style="width:100%;height:180px"></div>
+        </div>
       </div>
 
       <!-- Right: Fundamentals & Overview -->
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
         <div>
           <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">🏢 基本面</h4>
-          <!-- v-if 判断对象存在即可：industry 可能为空（tushare 无行业），不能因此隐藏整块 -->
+          <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
           <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" style="width:100%;border-collapse:collapse;font-size:12px">
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">行业</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.fundamentals.industry||'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">PE(TTM)</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.pe_ttm>0?(detail.fundamentals.pe_ttm<30?'error':'warning'):'success'" size="small" :bordered="false">{{detail.fundamentals.pe_ttm?detail.fundamentals.pe_ttm.toFixed(1):'-'}}</n-tag></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">PB</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.fundamentals.pb_mrq?detail.fundamentals.pb_mrq.toFixed(2):'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">ROE</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.roe>15?'error':detail.fundamentals.roe>5?'warning':'success'" size="small" :bordered="false">{{detail.fundamentals.roe?detail.fundamentals.roe.toFixed(1)+'%':'-'}}</n-tag></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">营收同比</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.revenue_yoy>0?'error':'success'" size="small" :bordered="false">{{detail.fundamentals.revenue_yoy!=null?detail.fundamentals.revenue_yoy.toFixed(1)+'%':'-'}}</n-tag></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">净利同比</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><n-tag :type="detail.fundamentals.profit_yoy>0?'error':'success'" size="small" :bordered="false">{{detail.fundamentals.profit_yoy!=null?detail.fundamentals.profit_yoy.toFixed(1)+'%':'-'}}</n-tag></td></tr>
+            <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
+              <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px;text-align:left">{{row.lbl}}</td>
+              <td style="padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text);text-align:left">{{row.val}}</td>
+            </tr>
           </table>
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
@@ -83,8 +88,8 @@
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最低</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#10b981':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">收盘</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'#ef4444':'#10b981'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size:10px;margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'#ef4444':'#10b981'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size:10px;margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交额</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.amount?fmt(detail.amount)+'元':'-'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{detail.turnover?detail.turnover.toFixed(2):'-'}}%</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交额</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
           </table>
         </div>
       </div>
@@ -94,23 +99,76 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
+import { useNavStore } from '../stores/nav'
 
 const props = defineProps({ code: String })
 const emit = defineEmits(['back'])
 const API = window.location.origin
+const _nav = useNavStore()
 const code = ref(props.code||'')
 const loading = ref(false)
 const detail = ref(null)
+const notFound = ref(false)
 const hcnt = ref(0)
-const adj = ref('none')
+// 复权记忆：记住用户上次选择
+const adj = ref(localStorage.getItem('detail_adj') || 'none')
 let lastKline = null
 const dateRange = ref('')
 const peData = ref([])
 const peRange = ref('')
+// 上下只：从列表页跳转时写入 localStorage 的最近列表导航上下文
+const prevCode = ref(null)
+const nextCode = ref(null)
+let navList = []
+function loadNavList() {
+  try { navList = JSON.parse(localStorage.getItem('detail_nav_list') || '[]') || [] } catch (e) { navList = [] }
+}
+function updateNav() {
+  loadNavList()
+  prevCode.value = null; nextCode.value = null
+  if (!navList.length) return
+  const i = navList.indexOf(code.value)
+  if (i > 0) prevCode.value = navList[i - 1]
+  if (i >= 0 && i < navList.length - 1) nextCode.value = navList[i + 1]
+}
+function jump(c) { if (c) { _nav.dcode = c; _nav.syncHash(); code.value = c; load() } }
+// 供列表页调用：记录当前列表代码序列
+window.__setDetailNavList = (codes) => { localStorage.setItem('detail_nav_list', JSON.stringify(codes || [])) }
+
+const fundRows = computed(() => {
+  const f = detail.value?.fundamentals
+  if (!f || !Object.keys(f).length) return []
+  const Y = v => v != null ? v.toLocaleString() : '—'
+  const P = v => v != null ? Number(v).toFixed(2) : '—'
+  const B = (v, d = 0) => v != null ? (v / 1e8).toFixed(d) + '亿' : '—'
+  return [
+    { lbl:'行业', val: f.industry || '—' },
+    { lbl:'PE(TTM)', val: f.pe_ttm != null ? P(f.pe_ttm) : '—' },
+    { lbl:'PE', val: f.pe != null ? P(f.pe) : '—' },
+    { lbl:'PB', val: f.pb_mrq != null ? P(f.pb_mrq) : '—' },
+    { lbl:'PS(TTM)', val: f.ps_ttm != null ? P(f.ps_ttm) : '—' },
+    { lbl:'PS', val: f.ps != null ? P(f.ps) : '—' },
+    { lbl:'ROE', val: f.roe != null ? f.roe.toFixed(2) + '%' : '—' },
+    { lbl:'营收同比', val: f.revenue_yoy != null ? f.revenue_yoy.toFixed(1) + '%' : '—' },
+    { lbl:'净利同比', val: f.profit_yoy != null ? f.profit_yoy.toFixed(1) + '%' : '—' },
+    { lbl:'股息率', val: f.dv_ratio != null ? f.dv_ratio.toFixed(2) + '%' : '—' },
+    { lbl:'股息TTM', val: f.dv_ttm != null ? f.dv_ttm.toFixed(2) + '%' : '—' },
+    { lbl:'换手率', val: f.turnover_rate != null ? f.turnover_rate.toFixed(2) + '%' : '—' },
+    { lbl:'量比', val: f.volume_ratio != null ? P(f.volume_ratio) : '—' },
+    { lbl:'总市值', val: B(f.market_cap, 2) },
+    { lbl:'流通市值', val: B(f.circ_mv, 2) },
+    { lbl:'总股本', val: B(f.total_shares, 2) },
+    { lbl:'流通股本', val: B(f.float_share, 2) },
+    { lbl:'自由流通', val: B(f.free_share, 2) },
+    { lbl:'注册资本', val: f.reg_capital != null ? Number(f.reg_capital).toFixed(1) + '万元' : '—' },
+    { lbl:'员工', val: f.employees != null ? Y(f.employees) : '—' },
+    { lbl:'主营', val: f.main_business || '—' },
+  ]
+})
 
 const adjOptions = [
   {value:'none',label:'不复权'},
@@ -136,8 +194,10 @@ function calcPriceChange(kd){
 async function load(){
   if(!code.value) return
   loading.value = true
+  notFound.value = false
   detail.value = null
-  adj.value = 'none'
+  hoverInfo.value = null
+  updateNav()
   try{
     const [r1, r2] = await Promise.all([
       axios.get(API+'/api/stock/'+code.value+'/detail'),
@@ -145,7 +205,9 @@ async function load(){
     ])
     detail.value = r1.data; hcnt.value = r1.data.history_count
     if(r2.data.kline) lastKline = r2.data
-  }catch(e){} finally { loading.value = false }
+  }catch(e){
+    if(e.response?.status===404) notFound.value = true
+  } finally { loading.value = false }
   // PE data (best-effort, 失败不影响 main charts)
   await nextTick()
   drawCharts(lastKline)
@@ -157,20 +219,26 @@ async function load(){
 
 function drawCharts(kd){
   const dates = kd.kline.map(d=>d.trade_date)
+  const closes = kd.kline.map(d=>d.close)
   const ohlc = kd.kline.map(d=>[d.open,d.close,d.low,d.high])
   const vols = kd.kline.map(d=>d.volume)
+  const amts = kd.kline.map(d=>d.amount)
+  const trns = kd.kline.map(d=>d.turnover)
   const bmid = kd.kline.map(d=>d.boll_mid), bup = kd.kline.map(d=>d.boll_upper), blo = kd.kline.map(d=>d.boll_lower)
   const rs = kd.kline.map(d=>d.rsi), di = kd.kline.map(d=>d.dif), de = kd.kline.map(d=>d.dea), ba = kd.kline.map(d=>d.macd_bar)
+  // 均线 MA5/10/20/60（前端按 close 计算，首 N-1 点为 null）
+  const MA = (n) => closes.map((_, i) => { if (i < n - 1) return null; let s = 0; for (let j = 0; j < n; j++) s += closes[i - j]; return +(s / n).toFixed(2); })
+  const ma5 = MA(5), ma10 = MA(10), ma20 = MA(20), ma60 = MA(60)
   const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
   const bc = ba.map(v=>v>=0?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
   // 浅灰色网格线（比默认的 --c-border-light 更浅）
   const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
 
   dateRange.value = dates[0]+' ~ '+dates[dates.length-1]
-  // 默认显示最近 60 个交易日（不足则全显示）
+  // 默认显示最近 1 年（约 250 交易日；不足则全显示）
   const totalDays = dates.length
-  const dzStart = totalDays <= 60 ? 0 : ((totalDays - 60) / totalDays * 100).toFixed(1)
-  const dz = [{type:'slider',xAxisIndex:0,start:dzStart,end:100,height:22,bottom:4,handleSize:8,
+  const SHOW = totalDays <= 250 ? 0 : ((totalDays - 250) / totalDays * 100).toFixed(1)
+  const dz = [{type:'slider',xAxisIndex:0,start:SHOW,end:100,height:22,bottom:4,handleSize:8,
     borderColor:'var(--c-input-bg)',
     backgroundColor:'var(--c-card-bg)',
     fillerColor:'rgba(96,165,250,0.15)',
@@ -184,13 +252,13 @@ function drawCharts(kd){
     axisTick:{show:false}}
   const tt = {trigger:'axis',axisPointer:{type:'cross'}}
 
+  // 实例复用：已存在则 setOption(notMerge) 更新，避免每次 dispose+init 卡顿
   function make(id, opt){
     const el = document.getElementById(id)
     if(!el) return null
-    if(el._echart) el._echart.dispose()
-    const c = echarts.init(el)
-    el._echart = c
-    c.setOption(opt)
+    let c = el._echart
+    if(!c){ c = echarts.init(el); el._echart = c }
+    c.setOption(opt, { notMerge: true })
     return c
   }
 
@@ -246,26 +314,40 @@ function drawCharts(kd){
     ]
   })
   calcPriceChange(kd)
-  // crosshair 交互：hover K 线时更新动态行情数据
+  // crosshair 交互：hover K 线时更新动态行情数据（含成交额/换手）
   if(c1){
     c1.on('mousemove', p=>{
       if(p.dataIndex!=null){
         const o = ohlc[p.dataIndex]
-        hoverInfo.value = { date: dates[p.dataIndex], open: o[0], close: o[1], low: o[2], high: o[3], volume: vols[p.dataIndex], prevClose: p.dataIndex>0 ? ohlc[p.dataIndex-1][1] : null }
+        hoverInfo.value = { date: dates[p.dataIndex], open: o[0], close: o[1], low: o[2], high: o[3], volume: vols[p.dataIndex], amount: amts[p.dataIndex] ?? null, turnover: trns[p.dataIndex] ?? null, prevClose: p.dataIndex>0 ? ohlc[p.dataIndex-1][1] : null }
       }
     })
     c1.on('mouseout', ()=>{ hoverInfo.value = null })
   }
-  const charts = [c1,c2,c3,c4].filter(Boolean)
+  // 均线图（MA5/10/20/60，与 K 线联动 zoom/十字线）
+  const c6 = make('c6', {
+    tooltip: tt,
+    grid:{left:'8%',right:'3%',top:18,bottom:30},
+    xAxis: { ...xA, axisLabel: { show: true, fontSize: 9, interval: 'auto' } },
+    yAxis:{scale:true,splitLine:gl},
+    dataZoom:dz,
+    series:[
+      {name:'MA5',type:'line',data:ma5,lineStyle:{color:'#ef4444',width:1},symbol:'none',smooth:true},
+      {name:'MA10',type:'line',data:ma10,lineStyle:{color:'#f59e0b',width:1},symbol:'none',smooth:true},
+      {name:'MA20',type:'line',data:ma20,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true},
+      {name:'MA60',type:'line',data:ma60,lineStyle:{color:'#8b5cf6',width:1},symbol:'none',smooth:true},
+    ]
+  })
+  const charts = [c1,c2,c3,c4,c6].filter(Boolean)
   if(charts.length){charts.forEach(c=>c.group='s');echarts.connect('s')}
 }
 
 function drawPeChart(){
   const peEl = document.getElementById('c5')
   if(!peEl || !peData.value.length) return
-  if(peEl._echart) peEl._echart.dispose()
-  const c5 = echarts.init(peEl)
-  peEl._echart = c5
+  // 实例复用
+  let c5 = peEl._echart
+  if(!c5){ c5 = echarts.init(peEl); peEl._echart = c5 }
   const peDates = peData.value.map(d=>d.date)
   const peVals = peData.value.map(d=>d.pe_ttm)
   const pctl = peData.value.map(d=>d.pe_percentile)
@@ -273,7 +355,7 @@ function drawPeChart(){
   c5.setOption({
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     grid:{left:'8%',right:'3%',top:8,bottom:50},
-    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30},splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30,interval:'auto'},splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
     yAxis:[
       {type:'value',name:'PE',splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
@@ -293,12 +375,21 @@ function drawPeChart(){
 }
 
 async function reloadChart(){
+  localStorage.setItem('detail_adj', adj.value)
   try{
     const r = await axios.get(API+'/api/stock/'+code.value+'/kline?days=500&adjust='+adj.value)
     if(r.data.kline) lastKline = r.data
   }catch(e){} finally { if(lastKline){ await nextTick(); drawCharts(lastKline) } }
 }
 
-watch(()=>props.code, v=>{if(v){code.value=v;load()}})
-onMounted(()=>{if(code.value) load()})
+// 窗口 resize 时自适应所有图表
+function resizeAll(){ ['c1','c2','c3','c4','c5','c6'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
+let _resizeHandler = null
+onMounted(() => {
+  _resizeHandler = window.addEventListener ? window.addEventListener('resize', resizeAll) : null
+  if(code.value) load()
+})
+onUnmounted(() => { if (_resizeHandler && window.removeEventListener) window.removeEventListener('resize', resizeAll) })
+
+watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load()}})
 </script>

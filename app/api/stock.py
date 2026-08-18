@@ -88,25 +88,43 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                 "SELECT COUNT(*) FROM signal_history WHERE stock_code=:c AND signal_date!=:d"
             ), {"c": code, "d": str(latest_signal_date)}).scalar() or 0
 
-        # 基本面数据（行业字段从 stock_master 回退，tushare daily_basic 不含行业）
+        # 基本面全字段（daily_basic 全部 + 申万行业 + 公司信息）
         fund_row = db.execute(text("""
-            SELECT COALESCE(sf.industry, sm.industry), sf.pe_ttm, sf.pb_mrq, sf.roe,
-                   sf.revenue_yoy, sf.profit_yoy, sm.industry AS sm_industry
+            SELECT sf.pe_ttm, sf.pe, sf.pb_mrq, sf.ps, sf.ps_ttm, sf.roe,
+                   sf.revenue_yoy, sf.profit_yoy, sf.dv_ratio, sf.dv_ttm,
+                   sf.turnover_rate, sf.volume_ratio, sf.market_cap, sf.circ_mv,
+                   sf.total_shares, sf.float_share, sf.free_share, sf.limit_status,
+                   sf.industry, sm.industry_l1, sm.industry_l2,
+                   sm.reg_capital, sm.employees, sm.main_business
             FROM stock_fundamentals sf
-            LEFT JOIN (SELECT DISTINCT ON (stock_code) stock_code, industry
+            LEFT JOIN (SELECT DISTINCT ON (stock_code) stock_code, industry_l1, industry_l2,
+                              reg_capital, employees, main_business
                        FROM stock_master WHERE stock_type='stock') sm
                    ON sm.stock_code = sf.stock_code
             WHERE sf.stock_code = :c
         """), {"c": code}).fetchone()
         fundamentals = {}
         if fund_row:
+            def F(i):
+                try:
+                    v = fund_row[i]
+                    return float(v) if v is not None else None
+                except (ValueError, TypeError):
+                    return None
+            l1 = fund_row[19] or ""
+            l2 = fund_row[20] or ""
             fundamentals = {
-                "industry": (fund_row[0] or "") if fund_row[0] not in (None, "") else (fund_row[6] or ""),
-                "pe_ttm": float(fund_row[1]) if fund_row[1] else None,
-                "pb_mrq": float(fund_row[2]) if fund_row[2] else None,
-                "roe": float(fund_row[3]) if fund_row[3] else None,
-                "revenue_yoy": float(fund_row[4]) if fund_row[4] else None,
-                "profit_yoy": float(fund_row[5]) if fund_row[5] else None,
+                "industry": (l1 + " > " + l2) if (l1 and l2) else (l1 or l2 or (fund_row[18] or "")),
+                "industry_l1": l1, "industry_l2": l2,
+                "pe_ttm": F(0), "pe": F(1), "pb_mrq": F(2), "ps": F(3), "ps_ttm": F(4),
+                "roe": F(5), "revenue_yoy": F(6), "profit_yoy": F(7),
+                "dv_ratio": F(8), "dv_ttm": F(9), "turnover_rate": F(10),
+                "volume_ratio": F(11), "market_cap": F(12), "circ_mv": F(13),
+                "total_shares": F(14), "float_share": F(15), "free_share": F(16),
+                "limit_status": int(fund_row[17]) if fund_row[17] is not None else None,
+                "reg_capital": float(fund_row[21]) if fund_row[21] else None,
+                "employees": int(fund_row[22]) if fund_row[22] else None,
+                "main_business": (fund_row[23] or "") if fund_row[23] else "",
             }
 
         return {
@@ -218,7 +236,7 @@ def get_stock_kline(
         if stype == 'index':
             # 指数：从 index_daily_quote 获取（无复权概念），days 限制最近 N 个交易日
             result = db.execute(text("""
-                SELECT trade_date, open, high, low, close, volume
+                SELECT trade_date, open, high, low, close, volume, amount, turnover
                 FROM index_daily_quote WHERE index_code=:c
                 ORDER BY trade_date DESC LIMIT :days
             """), {"c": code, "days": days})
@@ -229,7 +247,7 @@ def get_stock_kline(
             col = {"none": "close", "qfq": "close_qfq", "hfq": "close_hfq"}.get(adjust, "close")
             col_param = f"COALESCE({col}, close)"  # col 仅来自白名单 dict，安全
             result = db.execute(text(f"""
-                SELECT trade_date, open, high, low, {col_param} as close, volume
+                SELECT trade_date, open, high, low, {col_param} as close, volume, amount, turnover
                 FROM daily_quote WHERE stock_code=:c
                 ORDER BY trade_date DESC LIMIT :days
             """), {"c": code, "days": days})
@@ -250,6 +268,8 @@ def get_stock_kline(
                 "open": float(r.open), "high": float(r.high),
                 "low": float(r.low), "close": float(r.close),
                 "volume": int(r.volume),
+                "amount": float(r.amount) if getattr(r, 'amount', None) else None,
+                "turnover": float(r.turnover) if getattr(r, 'turnover', None) else None,
                 "boll_mid": round(float(mid.iloc[i]), 2) if not pd.isna(mid.iloc[i]) else None,
                 "boll_upper": round(float(upper.iloc[i]), 2) if not pd.isna(upper.iloc[i]) else None,
                 "boll_lower": round(float(lower.iloc[i]), 2) if not pd.isna(lower.iloc[i]) else None,

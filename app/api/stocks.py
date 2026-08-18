@@ -88,11 +88,12 @@ def list_stocks(
                ELSE
                    (SELECT COUNT(*) FROM daily_quote dq WHERE dq.stock_code=sm.stock_code)
                END as data_rows,
-               sf.pe_ttm, sf.pb_mrq, sf.industry, sf.roe, sf.market_cap
+               sf.pe_ttm, sf.pb_mrq, sf.roe, sf.market_cap,
+               sm.industry_l1, sm.industry_l2
         FROM stock_master sm
         -- LATERAL 取最新一条基本面（避免 stock_fundamentals 多日期行导致笛卡尔爆炸）
         LEFT JOIN LATERAL (
-            SELECT pe_ttm, pb_mrq, industry, roe, market_cap
+            SELECT pe_ttm, pb_mrq, roe, market_cap
             FROM stock_fundamentals f
             WHERE f.stock_code = sm.stock_code
             ORDER BY f.trade_date DESC
@@ -107,6 +108,8 @@ def list_stocks(
         for r in result.fetchall():
             p = float(r.price) if r.price else None
             pp = float(r.prev_close) if r.prev_close else None
+            l1 = r.industry_l1 or ""
+            l2 = r.industry_l2 or ""
             stocks.append({
                 "stock_code": r.stock_code,
                 "stock_name": r.stock_name,
@@ -119,7 +122,9 @@ def list_stocks(
                 "data_rows": r.data_rows,
                 "pe_ttm": float(r.pe_ttm) if r.pe_ttm else None,
                 "pb_mrq": float(r.pb_mrq) if r.pb_mrq else None,
-                "industry": r.industry or "",
+                "industry": (l1 + " > " + l2) if (l1 and l2) else (l1 or l2),
+                "industry_l1": l1,
+                "industry_l2": l2,
                 "roe": float(r.roe) if r.roe else None,
                 "market_cap": float(r.market_cap) if r.market_cap else None,
             })
