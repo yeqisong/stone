@@ -45,6 +45,10 @@
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
         <div style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📈 均线 (MA5/10/20/30/60/120/180)</h4>
+          <div :id="'c6'" style="width:100%;height:180px"></div>
+        </div>
+        <div style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 成交量</h4>
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
@@ -59,10 +63,6 @@
         <div style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
-        </div>
-        <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📈 均线 (MA5/10/20/60)</h4>
-          <div :id="'c6'" style="width:100%;height:180px"></div>
         </div>
       </div>
 
@@ -226,9 +226,9 @@ function drawCharts(kd){
   const trns = kd.kline.map(d=>d.turnover)
   const bmid = kd.kline.map(d=>d.boll_mid), bup = kd.kline.map(d=>d.boll_upper), blo = kd.kline.map(d=>d.boll_lower)
   const rs = kd.kline.map(d=>d.rsi), di = kd.kline.map(d=>d.dif), de = kd.kline.map(d=>d.dea), ba = kd.kline.map(d=>d.macd_bar)
-  // 均线 MA5/10/20/60（前端按 close 计算，首 N-1 点为 null）
+  // 均线 MA5/10/20/30/60/120/180（前端按 close 计算，前 N-1 点为 null）
   const MA = (n) => closes.map((_, i) => { if (i < n - 1) return null; let s = 0; for (let j = 0; j < n; j++) s += closes[i - j]; return +(s / n).toFixed(2); })
-  const ma5 = MA(5), ma10 = MA(10), ma20 = MA(20), ma60 = MA(60)
+  const ma5 = MA(5), ma10 = MA(10), ma20 = MA(20), ma30 = MA(30), ma60 = MA(60), ma120 = MA(120), ma180 = MA(180)
   const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
   const bc = ba.map(v=>v>=0?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
   // 浅灰色网格线（比默认的 --c-border-light 更浅）
@@ -335,7 +335,10 @@ function drawCharts(kd){
       {name:'MA5',type:'line',data:ma5,lineStyle:{color:'#ef4444',width:1},symbol:'none',smooth:true},
       {name:'MA10',type:'line',data:ma10,lineStyle:{color:'#f59e0b',width:1},symbol:'none',smooth:true},
       {name:'MA20',type:'line',data:ma20,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true},
+      {name:'MA30',type:'line',data:ma30,lineStyle:{color:'#10b981',width:1},symbol:'none',smooth:true},
       {name:'MA60',type:'line',data:ma60,lineStyle:{color:'#8b5cf6',width:1},symbol:'none',smooth:true},
+      {name:'MA120',type:'line',data:ma120,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
+      {name:'MA180',type:'line',data:ma180,lineStyle:{color:'#64748b',width:1},symbol:'none',smooth:true},
     ]
   })
   const charts = [c1,c2,c3,c4,c6].filter(Boolean)
@@ -355,9 +358,9 @@ function drawPeChart(){
   c5.setOption({
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     grid:{left:'8%',right:'3%',top:8,bottom:50},
-    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30,interval:'auto'},splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30,interval:'auto'},splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
     yAxis:[
-      {type:'value',name:'PE',splitLine:{lineStyle:{color:'var(--c-border-light)'}}},
+      {type:'value',name:'PE',splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
     ],
     dataZoom:[{type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
