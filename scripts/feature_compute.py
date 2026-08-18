@@ -374,8 +374,9 @@ def _evaluate_kepl_dataframe(df: pd.DataFrame, formula: str, db=None) -> Optiona
     m = re.match(r'^pct_change\(close,\s*(\d+)\)$', f)
     if m:
         n = int(m.group(1))
+        # 除零(前价=0)→inf；且极小价股 N 日涨幅可能远超 NUMERIC(18,6) → clip 到安全范围
         return df.groupby("stock_code", observed=True)["close"].transform(
-            lambda x: x.pct_change(periods=n)
+            lambda x: x.pct_change(periods=n).replace([np.inf, -np.inf], np.nan).clip(-1e8, 1e8)
         )
 
     # ── 布林带: boll_upper/mid/lower(close) ──
@@ -451,8 +452,9 @@ def _builtin_rsi(data: pd.Series, df: pd.DataFrame, period: int) -> pd.Series:
         lambda x: rsi(x, period))
 
 def _builtin_pct_change(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    # 除零→inf；极小价股 N 日涨幅可能远超 NUMERIC(18,6) → clip 到安全范围
     return data.groupby(df["stock_code"], observed=True).transform(
-        lambda x: x.pct_change(periods=n))
+        lambda x: x.pct_change(periods=n).replace([np.inf, -np.inf], np.nan).clip(-1e8, 1e8))
 
 def _builtin_boll_upper(data: pd.Series, df: pd.DataFrame) -> pd.Series:
     return data.groupby(df["stock_code"], observed=True).transform(

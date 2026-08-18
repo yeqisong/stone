@@ -68,7 +68,8 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
                         if len(pes) >= 4:
                             import numpy as np
                             pct = np.sum(np.array(pes) <= pes[-1]) / len(pes) * 100
-                            val = 100 - pct
+                            # np.float64 无法被 psycopg2 绑定（会插成字面量报 schema np 不存在）→ 转 float
+                            val = float(100 - pct)
                     except: pass
                 else:  # amount
                     val = float(r[3]) if len(r) > 3 and r[3] else 0
@@ -805,7 +806,7 @@ def dag_task_model_signal(trade_date=None, **kw):
         # 获取 ACTIVE 模型 + 全局偏好
         ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
         if not ver:
-            write_node_log(log_id=log_id, status='failed', detail='无 ACTIVE 模型')
+            write_node_log(log_id=log_id, status='success', rows=0, detail='无 ACTIVE 模型，跳过')
             db.close()
             return 0
 
@@ -929,7 +930,7 @@ def dag_task_model_health(trade_date=None, **kw):
         db = get_sync_db()
         ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
         if not ver:
-            write_node_log(log_id=log_id, status='failed', detail='无 ACTIVE 模型')
+            write_node_log(log_id=log_id, status='success', rows=0, detail='无 ACTIVE 模型，跳过')
             db.close()
             return 0
 
@@ -2005,6 +2006,7 @@ def dag_task_stock_master(trade_date=None, **kw):
         current_batch=0, total_batches=1, stocks_done=0, stocks_total=0, rows=0, errors=0,
         failed_codes=[], started_at=None, updated_at=None, completed_at=None,
         error_message="", _stop_requested=False,
+        _company_limit=300,  # dag 场景单次补齐 300 只公司信息（避免阻塞流程；完整补齐走补数按钮）
     )
     try:
         bm._run_stock_master(task)

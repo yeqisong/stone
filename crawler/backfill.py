@@ -762,13 +762,15 @@ class BackfillManager:
 
             # 公司信息补充（reg_capital/employees/main_business，stock_company 逐只）
             # 增量：只补缺失字段；分批 200 只 + 进度 + 可取消；配额将尽自动收尾
+            # dag 场景限制单次量（task._company_limit 由调用方控制），避免阻塞主流程
+            comp_limit = getattr(task, "_company_limit", None)
             try:
                 missing = db.execute(_t("""
                     SELECT stock_code FROM stock_master
                     WHERE stock_type='stock' AND status='N'
                       AND (reg_capital IS NULL OR employees IS NULL OR main_business IS NULL)
-                    ORDER BY stock_code LIMIT 2000
-                """)).fetchall()
+                    ORDER BY stock_code LIMIT :cl
+                """), {"cl": comp_limit or 2000}).fetchall()
                 if missing:
                     codes = [r[0] for r in missing]
                     logger.info(f"[stock_master] 补充公司信息（缺失 {len(codes)} 只，分批）")
