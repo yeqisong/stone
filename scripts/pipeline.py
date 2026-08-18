@@ -26,10 +26,11 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
 
     db = get_sync_db()
     try:
-        query_col = {"mcap": "d.close, f.industry, f.market_cap, f.total_shares",
-                     "volume": "d.close, d.volume, f.industry",
-                     "amount": "d.close, d.amount, f.industry",
-                     "pe": "d.close, f.industry, NULL, NULL"}.get(metric, "d.close, f.industry, f.market_cap, f.total_shares")
+        # 行业改用 stock_master 申万行业（l1/l2），此前用 f.industry 基本面行业已全空 → 全部落到"其他"
+        query_col = {"mcap": "d.close, sm.industry_l1, sm.industry_l2, f.market_cap, f.total_shares",
+                     "volume": "d.close, sm.industry_l1, sm.industry_l2, d.volume",
+                     "amount": "d.close, sm.industry_l1, sm.industry_l2, d.amount",
+                     "pe": "d.close, sm.industry_l1, sm.industry_l2, NULL"}.get(metric, "d.close, sm.industry_l1, sm.industry_l2, f.market_cap, f.total_shares")
         rows = db.execute(text(f"""
             SELECT d.stock_code, d.stock_name, {query_col}, d.trade_date
             FROM daily_quote d
@@ -47,21 +48,19 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
             rows20 = db.execute(text("SELECT close FROM daily_quote WHERE stock_code=:c AND trade_date<=:d ORDER BY trade_date DESC LIMIT 20"), {"c": code, "d": trade_date}).fetchall()
             trends[code] = (len(rows20) >= 20 and float(rows20[0][0]) >= sum(float(x[0]) for x in rows20) / len(rows20)) if rows20 else True
 
-        l1_map, l1_names = {}, {'A':'农林牧渔','B':'采矿业','C':'制造业','D':'电力热力','E':'建筑业','F':'批发零售','G':'交通运输','H':'住宿餐饮','I':'信息技术','J':'金融业','K':'房地产业','L':'租赁商务','M':'科研服务','N':'环保水利','O':'居民服务','P':'教育','Q':'卫生','R':'文体娱乐','S':'综合','U':'其他'}
+        l1_map, l1_names = {}, {'U':'其他'}
         for r in rows:
             code, name, price_str = r[0], r[1], float(r[2]) if r[2] else 0
             price = price_str
             try:
                 if metric == 'mcap':
-                    mcap_raw = float(r[4]) if len(r) > 4 and r[4] else None
-                    shares = float(r[5]) if len(r) > 5 and r[5] else None
+                    mcap_raw = float(r[5]) if len(r) > 5 and r[5] else None
+                    shares = float(r[6]) if len(r) > 6 and r[6] else None
                     val = mcap_raw or (shares * price if shares else price * 100000000)
-                    industry = str(r[3]) if len(r) > 3 and r[3] else ''
                 elif metric == 'volume':
-                    val = float(r[3]) if len(r) > 3 and r[3] else 0
-                    industry = str(r[4]) if len(r) > 4 and r[4] else ''
+                    val = float(r[5]) if len(r) > 5 and r[5] else 0
                 elif metric == 'pe':
-                    val = 50; industry = str(r[3]) if len(r) > 3 and r[3] else ''
+                    val = 50
                     try:
                         pe_rows = db.execute(text("SELECT pe_ttm FROM stock_fundamentals_history WHERE stock_code=:c AND report_date>=:start ORDER BY report_date ASC"), {"c": code, "start": f"{int(trade_date[:4])-1}-{trade_date[5:]}"}).fetchall()
                         pes = [float(rr[0]) for rr in pe_rows if rr[0]]
@@ -72,20 +71,24 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
                             val = float(100 - pct)
                     except: pass
                 else:  # amount
-                    val = float(r[3]) if len(r) > 3 and r[3] else 0
-                    industry = str(r[4]) if len(r) > 4 and r[4] else ''
+                    val = float(r[5]) if len(r) > 5 and r[5] else 0
             except:
                 db.rollback()
-                val = 0; industry = ''
+                val = 0
 
             chg = 0
             prev = db.execute(text("SELECT close FROM daily_quote WHERE stock_code=:c AND trade_date<:d ORDER BY trade_date DESC LIMIT 1"), {"c": code, "d": trade_date}).fetchone()
             if prev and prev[0]: chg = (price - float(prev[0])) / float(prev[0]) * 100
 
-            industry = industry or "U00其他"
-            l1 = industry[0]
-            l2 = industry[:3] if len(industry) >= 3 else l1
-            l2_name = industry.split(" ", 1)[-1] if " " in industry else industry
+            # 申万行业：r[3]=一级(r[4]=二级)；无行业归"U 其他"
+            ind_l1 = str(r[3]) if len(r) > 3 and r[3] else ''
+            ind_l2 = str(r[4]) if len(r) > 4 and r[4] else ''
+            if ind_l1:
+                l1 = ind_l1
+                l2 = ind_l2 or (ind_l1 + '—')   # 无二级时一级名兜底
+                l2_name = ind_l2 or ind_l1
+            else:
+                l1 = 'U'; l2 = 'U00'; l2_name = '其他'
 
             l1_map.setdefault(l1, {"l2s": {}, "total_mcap": 0})
             l1_map[l1].setdefault("l2s", {}).setdefault(l2, {"name": l2_name, "stocks": [], "total_mcap": 0})
