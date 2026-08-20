@@ -3,12 +3,7 @@
   <n-spin v-if="loading" style="padding:60px" />
   <div v-if="!loading">
   <!-- Overview Strip (same style as portfolio page) -->
-  <div style="display:flex;gap:10px;justify-content:center;padding:8px 0 12px;flex-wrap:wrap">
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">行情总条数</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{fmt(overview.total_rows)}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">股票数</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{overview.total_stocks}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">最新数据</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{overview.latest_date||'-'}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">漏数据日期</div><div style="font-size:20px;font-weight:700" :style="{color:missingDates.length>0?'#f59e0b':'#888'}">{{missingDates.length}}</div></div>
-  </div>
+  <StatStrip :items="overviewItems" />
 
   <!-- Data Source Health -->
   <div v-if="dataSources.length" style="display:flex;align-items:center;gap:12px;padding:0 0 10px;flex-wrap:wrap">
@@ -39,19 +34,19 @@
     <!-- Left: Data Tables Detail -->
     <div style="flex:1;min-width:280px;display:flex;flex-direction:column">
       <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">📋 数据明细
-        <span v-if="statsTime" style="font-size:9px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
+        <span v-if="statsTime" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
         <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading">{{statsLoading?'':'↻'}}</n-button>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;flex:1">
         <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
           <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
             <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">{{dt.label}}</span>
-            <span v-if="dt.items!=null" style="font-size:9px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
+            <span v-if="dt.items!=null" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:14px;font-weight:700;color:var(--c-text)"><span v-if="dt.detail" style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} · </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
-            <div v-if="dt.start" style="font-size:9px;color:var(--c-text-faint);white-space:nowrap">{{dt.start}} ~ {{dt.end}}</div>
-            <div v-else style="font-size:9px;color:var(--c-text-faint)">暂无数据</div>
+            <div v-if="dt.start" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.start}} ~ {{dt.end}}</div>
+            <div v-else style="font-size:10px;color:var(--c-text-faint)">暂无数据</div>
           </div>
         </div>
       </div>
@@ -77,7 +72,7 @@
             <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td&&d.detail?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="d.td&&d.detail?showCalDetail(d):null">
               <span v-if="d.day!==null" style="font-size:10px;font-weight:500">{{d.day}}</span>
               <div v-if="d.syncing" style="position:absolute;top:0;right:2px;font-size:8px;color:#2080f0">⟳</div>
-              <div v-if="d.td&&d.cp&&!d.syncing" style="font-size:7px;line-height:1.1">
+              <div v-if="d.td&&d.cp&&!d.syncing" style="font-size:8px;line-height:1.1">
                 <div v-if="d.cp.rows>0" style="color:var(--c-text-dim)">{{d.cp.rows}}只</div>
                 <div :style="{color:d.cp.pct>=80?'#10b981':d.cp.pct>=50?'#f59e0b':'#ef4444'}">{{d.cp.pct}}%</div>
               </div>
@@ -208,13 +203,16 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, h } from 'vue'
-import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NRadioGroup, NRadioButton } from 'naive-ui'
+import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NRadioGroup, NRadioButton, useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
+import StatStrip from './StatStrip.vue'
 import { addWsListener } from '../utils/ws'
 import { useNavStore } from '../stores/nav'
 import { bjDateStr } from '../utils/date.js'
 const nav = useNavStore()
+const dialog = useDialog()
+const message = useMessage()
 
 const API = window.location.origin
 const prefMode = ref('balanced')
@@ -257,6 +255,13 @@ const monthLabel = computed(() => {
 })
 
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
+
+const overviewItems = computed(() => [
+  { label: '行情总条数', value: fmt(overview.total_rows) },
+  { label: '股票数', value: overview.total_stocks },
+  { label: '最新数据', value: overview.latest_date || '-' },
+  { label: '漏数据日期', value: missingDates.length, color: missingDates.length > 0 ? '#f59e0b' : undefined },
+])
 
 const calBg = d => {
   if(d.day===null) return 'transparent'
@@ -325,7 +330,7 @@ async function refreshStats() {
   statsLoading.value = true
   try {
     const r = await axios.post(API + '/api/refresh_stats')
-    if (r.data.busy) { alert('任务进行中'); statsLoading.value = false }
+    if (r.data.busy) { dialog.warning({ title: '任务进行中', content: '已有统计任务在进行中，请稍候再试' }); statsLoading.value = false }
   } catch(e) { statsLoading.value = false }
 }
 
@@ -444,11 +449,19 @@ const bfPct = computed(() => {
 
 function openBackfill(type) {
   if (type === 'stock_master') {
-    if (!confirm('将刷新全量股票列表（IPO/退市/名称），确定继续？')) return
-    axios.post(window.location.origin + '/api/data_status/backfill', { type: 'stock_master' }).then(() => {
-      alert('✅ 已启动')
-    }).catch(e => {
-      alert('❌ ' + (e.response?.data?.error || e.message))
+    dialog.warning({
+      title: '刷新股票列表',
+      content: '将刷新全量股票列表（IPO/退市/名称），确定继续？',
+      positiveText: '继续',
+      negativeText: '取消',
+      onPositiveClick: async () => {
+        try {
+          await axios.post(window.location.origin + '/api/data_status/backfill', { type: 'stock_master' })
+          message.success('已启动')
+        } catch (e) {
+          message.error(e.response?.data?.error || e.message)
+        }
+      },
     })
     return
   }
@@ -465,7 +478,7 @@ function cancelBackfill() {
   if (!taskId) return
   axios.post(API + '/api/data_status/backfill/' + taskId + '/cancel').then(r => {
     if (r.data?.ok) {
-      alert(r.data.message || '终止信号已发送')
+      message.success(r.data.message || '终止信号已发送')
       // 等待 WS 推送 cancelled 状态
     }
   }).catch(() => {})

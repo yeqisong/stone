@@ -3,12 +3,7 @@
   <n-spin v-if="loading" style="padding:60px" />
   <template v-else-if="stats">
     <!-- Overview -->
-    <div style="display:flex;gap:10px;justify-content:center;padding:8px 0 12px;flex-wrap:wrap">
-      <div v-for="m in overviews" :key="m.label" style="text-align:center;min-width:66px">
-        <div style="font-size:10px;color:var(--c-text-dim)">{{m.label}}</div>
-        <div style="font-size:18px;font-weight:700" :style="{color:m.color||'var(--c-text)'}">{{m.value}}</div>
-      </div>
-    </div>
+    <StatStrip :items="overviews" />
 
     <!-- Charts Row -->
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
@@ -42,6 +37,7 @@ import { ref, onMounted, nextTick } from 'vue'
 import { NSpin, NDataTable } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
+import StatStrip from './StatStrip.vue'
 
 const API = window.location.origin
 const loading = ref(true)

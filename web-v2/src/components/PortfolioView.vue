@@ -1,10 +1,6 @@
 <template>
 <div>
-  <div class="stats-row" v-if="data.count" style="display:flex;gap:10px;justify-content:center;padding:8px 0 12px;flex-wrap:wrap">
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">持仓</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{data.count}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">市值</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">¥{{fmt(data.total_value)}}</div></div>
-    <div style="text-align:center;min-width:70px"><div style="font-size:11px;color:var(--c-text-dim)">盈亏</div><div style="font-size:20px;font-weight:700" :style="{color:data.total_pnl>=0?'#ef4444':'#10b981'}">¥{{fmt(data.total_pnl)}}</div></div>
-  </div>
+  <StatStrip v-if="data.count" :items="statItems" />
 
   <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin-bottom:6px">+ 新增持仓</n-button>
 
@@ -68,10 +64,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, h, onMounted } from 'vue'
+import { ref, reactive, h, computed, onMounted } from 'vue'
 import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag } from 'naive-ui'
 import axios from 'axios'
 import { useAuthStore } from '../stores/auth'
+import StatStrip from './StatStrip.vue'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
 const message = useMessage()
@@ -83,11 +80,9 @@ const editForm = reactive({code:'', qty:100, cost:0, date:null, note:''})
 const deleteCode = ref('')
 
 function startAdd(){
-  console.log('startAdd called')
   isAdding.value = true
   editForm.code = ''; editForm.qty = 100; editForm.cost = 0; editForm.date = null; editForm.note = ''
   showEdit.value = true
-  console.log('showEdit=', showEdit.value)
 }
 // History
 const showHistoryModal = ref(false)
@@ -112,6 +107,11 @@ async function showHistory(code){
   }catch(e){} finally { historyLoading.value = false }
 }
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
+const statItems = computed(() => [
+  { label: '持仓', value: data.count },
+  { label: '市值', value: '¥' + fmt(data.total_value) },
+  { label: '盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? '#ef4444' : '#10b981' },
+])
 const columns = [
   { title:'代码', key:'stock_code', width:85, render(r){return h('span',{style:{color:'var(--n-color-target)'}},r.stock_code)} },
   { title:'名称', key:'stock_name', width:100 },

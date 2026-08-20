@@ -2,9 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>个股买卖点监测系统</title>
-  <style>body{margin:0;padding:0;background:#101014;font-variant-numeric:tabular-nums}</style>
+  <style>
+    /* 全屏 App：锁定 body 防止触摸手势拖动整个文档（H5 关键） */
+    html, body { position: fixed; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; overscroll-behavior: none; background: #101014; font-variant-numeric: tabular-nums; }
+    #app { height: 100%; }
+  </style>
 </head>
 <body>
   <div id="app"></div>

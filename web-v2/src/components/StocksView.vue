@@ -11,7 +11,7 @@
     <span style="font-size:11px;color:var(--c-text-dim)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
   </n-space>
 
-  <div style="flex:1;min-height:0;overflow:hidden">
+  <div style="flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch">
     <n-data-table :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
   </div>
   <div style="display:flex;justify-content:center;margin-top:10px;flex-shrink:0">
@@ -58,8 +58,8 @@ const ell = (txt, extra = {}) => {
 }
 
 const columns = computed(() => [
-  { title:'代码', key:'stock_code', width:82, render(r){ return h('span', { style:{color:'#2080f0',cursor:'pointer',textDecoration:'underline'}, onClick:()=>emit('show-detail', r.stock_code) }, r.stock_code) } },
-  { title:'名称', key:'stock_name', width:150, render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'#2080f0', cursor:'pointer', onClick:()=>emit('show-detail', r.stock_code) }) } },
+  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){ return h('span', { style:{color:'#2080f0',cursor:'pointer',textDecoration:'underline'}, onClick:()=>emit('show-detail', r.stock_code) }, r.stock_code) } },
+  { title:'名称', key:'stock_name', width:150, fixed:'left', render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'#2080f0', cursor:'pointer', onClick:()=>emit('show-detail', r.stock_code) }) } },
   { title:'交易所', key:'exchange', width:70, render(r){return exName(r.exchange)} },
   { title:'最新价', key:'price', width:105, align:'right', sorter:true, sortOrder: sortField.value==='price'?sortDir.value:false, render(r){
     const color = r.chg_pct!=null ? (r.chg_pct>=0?'#ef4444':'#10b981') : 'var(--c-text)'

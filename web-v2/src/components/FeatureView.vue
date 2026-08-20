@@ -1,5 +1,5 @@
 <template>
-<div style="padding:20px;max-width:1200px;margin:0 auto">
+<div style="padding:16px 8px">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">特征管理（Feature Registry）</div>
     <div style="display:flex;gap:6px">
@@ -214,7 +214,7 @@
 
 <script setup>
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress } from 'naive-ui'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
 import * as echarts from 'echarts'
@@ -222,6 +222,7 @@ import axios from 'axios'
 import { addWsListener } from '../utils/ws'
 
 const API = window.location.origin
+const message = useMessage()
 const loading = ref(false)
 const items = ref([])
 const total = ref(0)
@@ -352,7 +353,7 @@ function openCompute(row) {
 
 async function doCompute() {
   if (!computeTarget.value || !computeDateRange.value || computeDateRange.value.length !== 2) {
-    alert('请选择补数日期范围')
+    message.warning('请选择补数日期范围')
     return
   }
   computeSubmitting.value = true
@@ -382,7 +383,7 @@ async function doCompute() {
       } catch(_) {}
     }
   } catch(e) {
-    alert(e.response?.data?.detail || '提交失败')
+    message.error(e.response?.data?.detail || '提交失败')
   }
   computeSubmitting.value = false
 }
@@ -511,7 +512,7 @@ async function doCreate(status) {
     resetForm()
     loadData()
   } catch (e) {
-    alert(e.response?.data?.detail || '保存失败')
+    message.error(e.response?.data?.detail || '保存失败')
   }
   creating.value = false
 }

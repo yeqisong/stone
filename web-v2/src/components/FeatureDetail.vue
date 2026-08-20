@@ -1,5 +1,5 @@
 <template>
-<div style="padding:16px;max-width:1100px;margin:0 auto">
+<div style="padding:16px 8px">
   <n-spin v-if="loading" style="padding:60px" />
   <template v-else-if="feat">
     <!-- 顶部导航 -->
@@ -165,7 +165,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NSelect, NDataTable, NEmpty, NPagination, NModal, NSpace } from 'naive-ui'
+import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NSelect, NDataTable, NEmpty, NPagination, NModal, NSpace, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 import * as echarts from 'echarts'
@@ -174,6 +174,7 @@ const props = defineProps({ featureId: Number })
 defineEmits(['back', 'edit'])
 
 const API = window.location.origin
+const message = useMessage()
 const loading = ref(true)
 const feat = ref(null)
 const staleDays = ref(0)
@@ -251,7 +252,7 @@ async function saveEdit() {
     showEditModal.value = false
     await loadDetail()
   } catch(e) {
-    alert(e.response?.data?.detail || '保存失败')
+    message.error(e.response?.data?.detail || '保存失败')
   } finally {
     editSaving.value = false
   }

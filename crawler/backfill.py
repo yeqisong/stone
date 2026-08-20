@@ -905,17 +905,8 @@ class BackfillManager:
                 except Exception as e:
                     logger.warning(f"[fund_backfill] baostock 补充失败（ROE 等留待下次补数）: {e}")
 
-            # 行业字段跨表回写 stock_master（有值时更新，避免空覆盖）
-            db.execute(_t("""
-                UPDATE stock_master sm SET industry = sf.industry
-                FROM (
-                    SELECT DISTINCT ON (stock_code) stock_code, industry
-                    FROM stock_fundamentals WHERE industry IS NOT NULL AND industry <> ''
-                    ORDER BY stock_code, trade_date DESC
-                ) sf
-                WHERE sm.stock_code = sf.stock_code AND sm.industry IS DISTINCT FROM sf.industry
-            """))
-            db.commit()
+            # 注：行业数据由 stock_master 维护（申万 industry_l1/l2，见 stock_master 补数），
+            # stock_fundamentals 已无 industry 列，不再做跨表回写
 
             task.stocks_total = upserted
             task.error_message = f"基本面更新 {upserted} 只"

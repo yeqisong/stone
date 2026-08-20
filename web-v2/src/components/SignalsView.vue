@@ -33,10 +33,11 @@
 </div>
 </template>
 <script setup>
-import { ref, reactive, h, onMounted } from 'vue'
+import { ref, reactive, h, computed, onMounted } from 'vue'
 import { NDataTable, NDatePicker, NButton, NButtonGroup, NSpace, NTag, NEmpty, NModal } from 'naive-ui'
 import axios from 'axios'
 import SignalStatsView from './SignalStatsView.vue'
+import { useViewport } from '../utils/viewport'
 import { bjDateStr } from '../utils/date.js'
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
@@ -47,18 +48,26 @@ const showStats = ref(false)
 const showGenModal = ref(false)
 const genLoading = ref(false)
 const activeModel = ref(null)
+const { isNarrow } = useViewport()
 const todayStr = () => bjToday()
-const columns = [
-  { title:'#', key:'index', width:35, render:(_,i)=>i+1 },
-  { title:'代码', key:'stock_code', width:85, render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
-  { title:'名称', key:'stock_name', width:100, render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
-  { title:'现价', width:95, align:'right', render(r){return '¥'+((r.price||0).toFixed(2))} },
-  { title:'方向', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
-  { title:'强度', width:70, render(r){return '★'.repeat(r.strength||0)} },
-  { title:'预测5d', width:70, align:'right', render(r){ const v=r.predict_5d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
-  { title:'预测10d', width:70, align:'right', render(r){ const v=r.predict_10d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
-  { title:'策略', minWidth:140, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
-]
+const columns = computed(() => {
+  // H5 窄屏精简列：预测10d/策略 收起，代码/名称固定左
+  const base = [
+    { title:'#', key:'index', width:35, render:(_,i)=>i+1 },
+    { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
+    { title:'名称', key:'stock_name', width:100, fixed:'left', render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
+    { title:'现价', width:95, align:'right', render(r){return '¥'+((r.price||0).toFixed(2))} },
+    { title:'方向', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
+    { title:'强度', width:70, render(r){return '★'.repeat(r.strength||0)} },
+    { title:'预测5d', width:70, align:'right', render(r){ const v=r.predict_5d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+  ]
+  if (isNarrow.value) return base
+  return [
+    ...base,
+    { title:'预测10d', width:70, align:'right', render(r){ const v=r.predict_10d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+    { title:'策略', minWidth:140, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
+  ]
+})
 async function doGenerate() {
   genLoading.value = true
   try {

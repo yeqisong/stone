@@ -195,10 +195,11 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress } from 'naive-ui'
+import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const API = window.location.origin
+const message = useMessage()
 const props = defineProps({ version: Object })
 
 const rep = computed(() => props.version?.evaluation_report || {})
@@ -291,7 +292,7 @@ async function startScan() {
     })
     scanTask.value = r.data
     if (r.data.task_id) pollScan(r.data.task_id)
-  } catch(e) { alert(e.response?.data?.detail || '启动失败') }
+  } catch(e) { message.error(e.response?.data?.detail || '启动失败') }
   scanRunning.value = false
 }
 
@@ -311,9 +312,9 @@ async function applyScan() {
   if (!scanTask.value?.task_id) return
   try {
     await axios.post(API + `/v1/models/${props.version.version}/strategy-scan/${scanTask.value.task_id}/apply`)
-    alert('最优参数已应用')
+    message.success('最优参数已应用')
     showScanModal.value = false
-  } catch(e) { alert('应用失败') }
+  } catch(e) { message.error('应用失败') }
 }
 
 // ── 归因分析 ──

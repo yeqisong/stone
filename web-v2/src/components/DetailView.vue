@@ -13,12 +13,7 @@
   <n-empty v-else-if="notFound" description="未找到该证券，请检查代码" style="padding:40px" />
   <template v-else-if="detail">
     <!-- Summary Cards - unified stat-row style -->
-    <div style="display:flex;gap:8px;justify-content:center;padding:6px 0 10px;flex-wrap:wrap">
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">{{detail.stock_code}}</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{detail.stock_name}}</div></div>
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">最新价</div><div style="font-size:20px;font-weight:700" :style="{color:priceColor}">¥{{(detail.close||0).toFixed(2)}} <span v-if="priceChg!=null" style="font-size:11px;font-weight:400">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></div></div>
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">数据日期</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{detail.latest_trade_date}}</div></div>
-      <div style="text-align:center;min-width:70px"><div style="font-size:10px;color:var(--c-text-dim)">历史信号</div><div style="font-size:20px;font-weight:700;color:var(--c-text)">{{hcnt}}</div></div>
-    </div>
+    <StatStrip :items="summaryItems" />
 
     <!-- Strategy Signals -->
     <div style="margin-bottom:12px;min-height:50px">
@@ -104,6 +99,7 @@ import { NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDe
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
+import StatStrip from './StatStrip.vue'
 
 const props = defineProps({ code: String })
 const emit = defineEmits(['back'])
@@ -167,6 +163,17 @@ const fundRows = computed(() => {
     { lbl:'注册资本', val: f.reg_capital != null ? Number(f.reg_capital).toFixed(1) + '万元' : '—' },
     { lbl:'员工', val: f.employees != null ? Y(f.employees) : '—' },
     { lbl:'主营', val: f.main_business || '—' },
+  ]
+})
+
+const summaryItems = computed(() => {
+  const d = detail.value
+  if (!d) return []
+  return [
+    { label: d.stock_code, value: d.stock_name },
+    { label: '最新价', value: '¥' + (d.close || 0).toFixed(2) + (priceChg.value != null ? (priceChg.value >= 0 ? '+' : '') + priceChg.value.toFixed(2) + '%' : ''), color: priceChg.value != null ? priceColor.value : undefined },
+    { label: '数据日期', value: d.latest_trade_date },
+    { label: '历史信号', value: hcnt.value },
   ]
 })
 

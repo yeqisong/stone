@@ -233,7 +233,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, h, watch } from 'vue'
 import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch, NDataTable, NSelect } from 'naive-ui'
-import { useDialog } from 'naive-ui'
+import { useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import { useNavStore } from '../stores/nav'
@@ -243,6 +243,7 @@ import ModelLive from './ModelLive.vue'
 const store = useModelStore()
 const nav = useNavStore()
 const dialog = useDialog()
+const message = useMessage()
 const trainingLoading = ref(false)
 const featuresForModel = computed(() => {
   const c = store.selected?.config || {}
@@ -384,7 +385,7 @@ async function doSaveConfig() {
     editMode.value = false
     await store.loadVersions(currentEntity.value)
   } catch(e) {
-    alert(e.response?.data?.detail || '保存失败')
+    message.error(e.response?.data?.detail || '保存失败')
   } finally { creating.value = false }
 }
 
@@ -415,7 +416,7 @@ async function doCreate() {
     await store.loadVersions(currentEntity.value)
     if (store.versions.length) store.selectVersion(store.versions[0].version)
   } catch(e) {
-    alert(e.response?.data?.detail || '创建失败')
+    message.error(e.response?.data?.detail || '创建失败')
   } finally { creating.value = false }
 }
 
@@ -471,14 +472,14 @@ async function dostartTrain() {
     }
     await axios.post(window.location.origin + `/api/v1/models/${store.selectedId}/train`)
     store.selected.status = 'TRAINING'
-  } catch(e) { alert(e.response?.data?.detail || '启动训练失败') }
+  } catch(e) { message.error(e.response?.data?.detail || '启动训练失败') }
 }
 async function approveModel() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`)
     await store.loadVersions(currentEntity.value)
   } catch(e) {
-    alert(e.response?.data?.detail || '审批失败')
+    message.error(e.response?.data?.detail || '审批失败')
   }
 }
 async function rejectModel() {
@@ -486,7 +487,7 @@ async function rejectModel() {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/reject`)
     await store.loadVersions(currentEntity.value)
   } catch(e) {
-    alert(e.response?.data?.detail || '操作失败')
+    message.error(e.response?.data?.detail || '操作失败')
   }
 }
 
@@ -496,8 +497,7 @@ async function handleDeleteClick(v) {
     deleteInfo.value = await store.checkDelete(v.version)
     showDeleteModal.value = true
   } catch(e) {
-    const msg = e.response?.data?.detail || '检查失败'
-    alert(msg)
+    message.error(e.response?.data?.detail || '检查失败')
   }
 }
 async function confirmDelete() {
@@ -510,8 +510,7 @@ async function confirmDelete() {
     deleteTarget.value = null
     deleteInfo.value = null
   } catch(e) {
-    const msg = e.response?.data?.detail || '删除失败'
-    alert(msg)
+    message.error(e.response?.data?.detail || '删除失败')
   } finally { deleting.value = false }
 }
 

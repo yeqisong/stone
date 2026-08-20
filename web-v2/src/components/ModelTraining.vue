@@ -36,13 +36,15 @@
 
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue'
-import { NButton } from 'naive-ui'
+import { NButton, useMessage, useDialog } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
 import { addWsListener, connectWebSocket, wsState } from '../utils/ws'
 
 const props = defineProps({ version: Object })
 const store = useModelStore()
+const message = useMessage()
+const dialog = useDialog()
 
 const currentStep = ref(0)
 const errorDetail = ref('')
@@ -120,18 +122,26 @@ async function refresh() {
   await store.loadVersions()
 }
 
-async function stopTrain() {
-  if (!confirm('确定要停止训练吗？训练数据将丢失，模型恢复为草稿状态。')) return
-  stopping.value = true
-  try {
-    await axios.post(window.location.origin + '/api/dag_terminate', { node: 'model_train' })
-    await axios.post(window.location.origin + `/api/v1/models/${props.version.version}/stop`)
-    await store.loadVersions()
-  } catch(e) {
-    alert(e.response?.data?.detail || '停止失败')
-  } finally {
-    stopping.value = false
-  }
+function stopTrain() {
+  dialog.warning({
+    title: '停止训练',
+    content: '确定要停止训练吗？训练数据将丢失，模型恢复为草稿状态。',
+    positiveText: '停止',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      stopping.value = true
+      try {
+        await axios.post(window.location.origin + '/api/dag_terminate', { node: 'model_train' })
+        await axios.post(window.location.origin + `/api/v1/models/${props.version.version}/stop`)
+        await store.loadVersions()
+        message.success('已停止训练')
+      } catch(e) {
+        message.error(e.response?.data?.detail || '停止失败')
+      } finally {
+        stopping.value = false
+      }
+    },
+  })
 }
 </script>
 

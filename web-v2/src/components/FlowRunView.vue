@@ -58,7 +58,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, markRaw, nextTick } from 'vue'
-import { NButton } from 'naive-ui'
+import { NButton, useMessage } from 'naive-ui'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -70,6 +70,7 @@ import DagNode from './DagNode.vue'
 
 const props = defineProps({ flowId: [Number, String] })
 defineEmits(['back'])
+const message = useMessage()
 const API = window.location.origin
 const customNodeTypes = markRaw({ 'dag-node': DagNode })
 
@@ -130,7 +131,7 @@ async function doExecute() {
     const r = await axios.post(API + `/api/dag/flows/${props.flowId}/execute`, {})
     setTimeout(loadTaskStatus, 1500)
     setTimeout(loadTaskStatus, 4000)
-  } catch(e) { alert(e.response?.data?.detail || '执行失败') }
+  } catch(e) { message.error(e.response?.data?.detail || '执行失败') }
 }
 
 async function goLogs() {

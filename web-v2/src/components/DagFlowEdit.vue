@@ -158,8 +158,7 @@
 
 <script setup>
 import { ref, onMounted, nextTick, h, watch, markRaw, onBeforeUnmount } from 'vue'
-import { NButton, NSelect, NInput, NInputNumber, NDataTable, NTag, NModal, NSpace, NDatePicker, NEmpty, NTimePicker } from 'naive-ui'
-import { useMessage } from 'naive-ui'
+import { NButton, NSelect, NInput, NInputNumber, NDataTable, NTag, NModal, NSpace, NDatePicker, NEmpty, NTimePicker, useMessage, useDialog } from 'naive-ui'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -174,6 +173,7 @@ import DagNode from './DagNode.vue'
 import { addWsListener } from '../utils/ws'
 const nav = useNavStore()
 const message = useMessage()
+const dialog = useDialog()
 const customNodeTypes = markRaw({ 'dag-node': DagNode })
 
 const props = defineProps({ flowId: [Number, String] })
@@ -435,7 +435,7 @@ async function doPublishList(id) { try { await axios.post(API + `/api/dag/flows/
 async function doUnpublishList(id) { try { await axios.post(API + `/api/dag/flows/${id}/unpublish`); loadFlows() } catch(e) {} }
 async function doUnpublish() {
   if (!selectedFlow.value) return; saving.value = true
-  try { await axios.post(API + `/api/dag/flows/${selectedFlow.value}/unpublish`); flowStatus.value = 'draft'; loadFlows() } catch(e) { alert(e.response?.data?.detail || '下线失败') }
+  try { await axios.post(API + `/api/dag/flows/${selectedFlow.value}/unpublish`); flowStatus.value = 'draft'; loadFlows() } catch(e) { message.error(e.response?.data?.detail || '下线失败') }
   saving.value = false
 }
 async function doExecute() {
@@ -482,7 +482,19 @@ onMounted(async () => {
 onBeforeUnmount(() => { if (wsUnwatch.value) wsUnwatch.value() })
 watch(() => props.flowId, (newId) => { if (newId === 'new') { createNew() } else if (newId > 0) { openEdit(newId) } })
 watch(showExecModal, (v) => { if (!v) execResult.value = null })
-function doExitEdit() { if (dirty.value && !confirm('有未保存的修改，确定退出？')) return; editMode.value = false; validation.value = null; emit('back') }
+function doExitEdit() {
+  if (dirty.value) {
+    dialog.warning({
+      title: '未保存的修改',
+      content: '有未保存的修改，确定退出？',
+      positiveText: '退出',
+      negativeText: '取消',
+      onPositiveClick: () => { editMode.value = false; validation.value = null; emit('back') },
+    })
+    return
+  }
+  editMode.value = false; validation.value = null; emit('back')
+}
 async function createNew() { editMode.value = true; flowName.value = ''; flowCron.value = ''; validation.value = null; await loadNodeTypes(); loadingFlow.value = true; nodes.value = []; edges.value = []; nodes.value.push(makeVfNode('cron', 'cron', 100, 80)); buildCron(); dirty.value = false; await nextTick(); fitView({ padding: 0.2, maxZoom: 1 }); loadingFlow.value = false }
 </script>
 

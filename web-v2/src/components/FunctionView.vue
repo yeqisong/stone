@@ -1,5 +1,5 @@
 <template>
-<div style="padding:20px;max-width:1200px;margin:0 auto">
+<div style="padding:16px 8px">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">函数管理（Operator Registry）</div>
     <n-button type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
@@ -216,11 +216,13 @@
 
 <script setup>
 import { ref, computed, onMounted, h, nextTick } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination } from 'naive-ui'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination, useMessage, useDialog } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 
 const API = window.location.origin
+const message = useMessage()
+const dialog = useDialog()
 const loading = ref(false)
 const items = ref([])
 const total = ref(0)
@@ -428,7 +430,7 @@ function openCreate() {
 
 async function doCreate() {
   if (!form.value.name.trim() || !form.value.display_name.trim() || !form.value.source_code.trim()) {
-    alert('函数名、中文名、函数体均为必填')
+    message.warning('函数名、中文名、函数体均为必填')
     return
   }
   creating.value = true
@@ -439,8 +441,9 @@ async function doCreate() {
     }, { headers: authHeaders() })
     showCreate.value = false
     await loadData()
+    message.success('创建成功')
   } catch(e) {
-    alert(e.response?.data?.detail || '创建失败')
+    message.error(e.response?.data?.detail || '创建失败')
   } finally { creating.value = false }
 }
 
@@ -454,8 +457,9 @@ async function doUpdate() {
     }, { headers: authHeaders() })
     showCreate.value = false
     await loadData()
+    message.success(editId.value ? '已保存' : '创建成功')
   } catch(e) {
-    alert(e.response?.data?.detail || '保存失败')
+    message.error(e.response?.data?.detail || (editId.value ? '保存失败' : '创建失败'))
   } finally { creating.value = false }
 }
 
@@ -546,27 +550,35 @@ async function publishFunc() {
     // 先试运行
     const tr = await axios.post(API + '/api/functions/' + editId.value + '/test-run', { test_data: {} }, { headers: authHeaders() })
     if (tr.data.status === 'failed' && tr.data.elapsed_ms > 2000) {
-      alert('函数性能不达标（>2000ms），无法发布')
+      message.warning('函数性能不达标（>2000ms），无法发布')
       return
     }
     // 发布
     await axios.put(API + '/api/functions/' + editId.value, { status: 'published' }, { headers: authHeaders() })
-    alert('发布成功！')
+    message.success('发布成功！')
     showTestRun.value = false
     await loadData()
   } catch(e) {
-    alert(e.response?.data?.detail || '发布失败')
+    message.error(e.response?.data?.detail || '发布失败')
   } finally { publishing.value = false }
 }
 
-async function confirmDel(row) {
-  if (!confirm(`确定删除函数「${row.name}」？`)) return
-  try {
-    await axios.delete(API + '/api/functions/' + row.id, { headers: authHeaders() })
-    await loadData()
-  } catch(e) {
-    alert(e.response?.data?.detail || '删除失败')
-  }
+function confirmDel(row) {
+  dialog.warning({
+    title: '删除函数',
+    content: `确定删除函数「${row.name}」？`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await axios.delete(API + '/api/functions/' + row.id, { headers: authHeaders() })
+        await loadData()
+        message.success('已删除')
+      } catch(e) {
+        message.error(e.response?.data?.detail || '删除失败')
+      }
+    },
+  })
 }
 
 const verCols = [
@@ -597,16 +609,23 @@ async function openVersions(row) {
   } catch(e) { versions.value = [] }
 }
 
-async function doRollback(v) {
-  if (!confirm(`确定回滚到版本 v${v}？当前代码将被覆盖。`)) return
-  try {
-    await axios.post(API + '/api/functions/' + detailItem.value.id + '/rollback/' + v, {}, { headers: authHeaders() })
-    alert('回滚成功，请刷新查看')
-    showVersions.value = false
-    await loadData()
-  } catch(e) {
-    alert(e.response?.data?.detail || '回滚失败')
-  }
+function doRollback(v) {
+  dialog.warning({
+    title: '回滚版本',
+    content: `确定回滚到版本 v${v}？当前代码将被覆盖。`,
+    positiveText: '回滚',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await axios.post(API + '/api/functions/' + detailItem.value.id + '/rollback/' + v, {}, { headers: authHeaders() })
+        message.success('回滚成功，请刷新查看')
+        showVersions.value = false
+        await loadData()
+      } catch(e) {
+        message.error(e.response?.data?.detail || '回滚失败')
+      }
+    },
+  })
 }
 
 onMounted(() => {
