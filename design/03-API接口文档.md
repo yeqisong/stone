@@ -1,6 +1,6 @@
 # 03 — API 接口文档
 
-> K道（Stone）· 文档基准：代码版本 v3.2 · 共 **103 个 HTTP 端点 + 1 个 WebSocket**
+> K道（Stone）· 文档基准：代码版本 v3.2.1 · 共 **105 个 HTTP 端点 + 1 个 WebSocket**（102 router 装饰器 + `/api/login` + `/health` + `/webhook/feishu`，2026-08-22 核对）
 >
 > 认证标记：🔒 = `Depends(get_current_user)` / `optional_auth`（实际同样强制）；无标记 = 无需认证。
 > 路由注册：`app/main.py` L110-123；dag_types/dag_flows 自带 `/api/dag` 前缀；飞书挂 `/webhook/feishu`。
@@ -124,7 +124,7 @@
 | `POST .../{v}/approve` | 审批上线（旧 ACTIVE→ARCHIVED） | 🔒 | 仅 PENDING |
 | `PUT .../{v}/config` | 更新配置（仅 DRAFT） | 🔒 | — |
 | `POST .../{v}/stop` | 停止训练→DRAFT | 🔒 | 仅 TRAINING |
-| `POST .../{v}/train` | 触发训练（TaskManager 跟踪） | 🔒 | DRAFT/REJECTED |
+| `POST .../{v}/train` | 触发训练（TaskManager 跟踪） | 🔒 | DRAFT/REJECTED；训练自动 GPU 优先（cuda，失败回退 CPU） |
 | `POST .../{v}/retrain` | REJECTED 重训→DRAFT | 🔒 | — |
 | `POST .../{v}/reject` | 拒绝→REJECTED | 🔒 | 仅 PENDING |
 | `GET .../{v}/quality-dashboard` | 特征质量仪表盘 | — | 当前占位数据 |

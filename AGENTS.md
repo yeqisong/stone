@@ -129,12 +129,14 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **环境变量**: `.env` + pydantic-settings；`APP_ENV=dev|prod`；TUSHARE_TOKEN 必须配置
 - **前端**: Axios 拦截器自动带 JWT Token；401 排除 /api/login 的 reload；日期一律北京时间；WS 监听器务必清理
 
-## Deployment
+## Deployment（已下线，历史存档）
 
-- **SSH**: `ssh myhuawei`（别名，root@114.116.51.107，已配置 id_rsa）
-- **路径**: `/usr/local/htdoc/stone/`
-- **容器**: docker compose (app + db + redis)
-- **生产域名**: `https://s.pmlab.top`
+> ⚠️ **服务器部署已于 2026-08 拆除**：docker + stone 全部数据已清理，s.pmlab.top 已下线，SSH 别名 `myhuawei` 与 nginx 配置均已移除。**当前仅本地运行**（后端 :8000 + 前端 :3000）。以下为历史流程，仅作参考。
+
+- **SSH**: `ssh myhuawei`（别名，root@114.116.51.107，已配置 id_rsa）【已失效】
+- **路径**: `/usr/local/htdoc/stone/`【已删除】
+- **容器**: docker compose (app + db + redis)【已卸载】
+- **生产域名**: `https://s.pmlab.top`【证书已删，已下线】
 - **HTTPS**: certbot，`nginx/host-nginx.conf`
 - **Nginx**: 宿主机反代 :8000，`Dockerfile` 内置 nginx
 
@@ -146,7 +148,25 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 | `web-v2/dist/` | volume 挂载 → rsync 即可 |
 | `nginx/` | volume 挂载 → 重启 nginx |
 
-### 部署流程
+### 本地运行方式（现行）
+
+```bash
+# 后端
+venv/bin/python -m uvicorn app.main:app --port 8000
+
+# 前端（dev）
+cd web-v2 && npm run dev
+# 或直接（无需 npm 包装）：node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3000
+```
+
+### 版本管理（现行）
+
+```bash
+git add -A && git commit -m "vX.Y: ..."
+git tag vX.Y    # 无远程仓库，本地 tag 即发布
+```
+
+### 部署流程（历史存档，服务器已拆除，勿再执行）
 
 ```bash
 # 0. 本地测试
@@ -179,11 +199,13 @@ ssh myhuawei "docker logs stock-app --tail 20"
 ```
 
 ### 禁止行为
-- ❌ SSH 直接改服务器代码
-- ❌ 未打 tag 部署
+- ❌ SSH 直接改服务器代码（服务器已拆除）
+- ❌ 未打 tag 提交
 - ❌ 未备份数据库就迁移
-- ❌ 覆盖生产 `.env`
+- ❌ 覆盖生产 `.env`（生产已下线）
 
 ## Notes
 
-<!-- 临时记录区 -->
+- **v3.2.1（2026-08-22）**：补数链路修复（index_code VARCHAR(16)/SAVEPOINT 批次隔离/上市日感知续传阈值）+ 特征计算 2000 全量（23 特征 3.98 亿行完成，ATR 自动补 high/low）+ XGBoost 训练 GPU 优先（RTX 5060 cuda，失败回退 CPU）+ 前端 popstate 监听泄漏修复（详见 design/01-04）
+- **数据现状**：daily_quote 1766 万行（2000→今，重复 0）；index_daily_quote 63 万行（2000 起续跑中）；ETF/基本面（ROE 等）补数挂起，用页面补数按钮续跑（tushare 8000 次/天配额预算），勿写临时脚本
+- **夜间补数 cron**：每天 00:05 北京时间触发（需机器开机）
