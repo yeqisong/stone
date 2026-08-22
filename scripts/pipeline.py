@@ -1313,7 +1313,16 @@ def dag_task_feature_compute(trade_date=None, **kw):
         force = (kw.get('_node_force', {}) or {}).get('feature_compute', kw.get('force', False))
         start = "2020-01-01" if force else (dt.today() - timedelta(days=10)).strftime("%Y-%m-%d")
         result = compute_all_features(db, target_entity="stock", start_date=start, end_date=today)
-        msg = f"完成: {result['features']}个特征, {result['rows']}行"
+        # 计算完成后回写特征统计（完整度/总格子/缺失格），与 API 触发的计算路径
+        # 保持一致；否则 features 表诊断列停留在 0，页面完整度显示不准确
+        from app.api.features import _update_feature_stats_after_compute
+        from sqlalchemy import text as _sql
+        fids = db.execute(_sql(
+            "SELECT id FROM features WHERE target_entity='stock' AND status='enabled' ORDER BY id"
+        )).fetchall()
+        for (fid,) in fids:
+            _update_feature_stats_after_compute(fid, force_recompute=True)
+        msg = f"完成: {result['features']}个特征, {result['rows']}行, 统计回写{len(fids)}个"
         if result.get("errors"):
             msg += f", {len(result['errors'])}个失败"
         write_node_log(log_id=log_id, status='success', detail=msg, rows=result.get("rows", 0))
