@@ -104,13 +104,16 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
             "amount=EXCLUDED.amount, turnover=EXCLUDED.turnover, "
             "is_suspended=false"
         )
+        # SAVEPOINT 逐批隔离：单批失败只回滚该批，不毒化事务（前序批次照常提交）
+        db.execute(text("SAVEPOINT sp_bf"))
         try:
             db.execute(text(sql), params)
             total += len(chunk)
+            db.execute(text("RELEASE SAVEPOINT sp_bf"))
         except Exception as e:
             logger.error(f"[writers] batch_upsert_kline 异常 (batch {start}): {e}")
             try:
-                db.rollback()  # 失败批次回滚，避免后续批次 InFailedSqlTransaction
+                db.execute(text("ROLLBACK TO SAVEPOINT sp_bf"))
             except Exception:
                 pass
     db.commit()
@@ -161,11 +164,18 @@ def batch_upsert_index_kline(db, rows: List[IndexKlineRow], batch_size: int = 20
             "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
             "close=EXCLUDED.close, volume=EXCLUDED.volume, amount=EXCLUDED.amount"
         )
+        # SAVEPOINT 逐批隔离：单批失败（如超长 index_code）只跳过该批，不毒化事务
+        db.execute(text("SAVEPOINT sp_bf"))
         try:
             db.execute(text(sql), params)
             total += len(chunk)
+            db.execute(text("RELEASE SAVEPOINT sp_bf"))
         except Exception as e:
             logger.error(f"[writers] batch_upsert_index_kline 异常 (batch {start}): {e}")
+            try:
+                db.execute(text("ROLLBACK TO SAVEPOINT sp_bf"))
+            except Exception:
+                pass
     db.commit()
     return total
 

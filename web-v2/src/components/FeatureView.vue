@@ -621,11 +621,15 @@ onMounted(() => {
   })
 })
 
-onUnmounted(() => {
-  if (computeWsUnwatch) computeWsUnwatch()
-})
-window.addEventListener('popstate', () => {
+function onPopstate() {
+  // 组件可能已卸载（v-if 切换）：非本页时不响应，避免用本页 URL 覆盖地址栏
+  if (nav.tab !== 'e') return
   parseHashParams()
   loadData()
+}
+onUnmounted(() => {
+  if (computeWsUnwatch) computeWsUnwatch()
+  window.removeEventListener('popstate', onPopstate)
 })
+window.addEventListener('popstate', onPopstate)
 </script>

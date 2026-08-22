@@ -238,6 +238,9 @@ def compute_feature(
         needed_cols = sorted(_ohlcv_fields & set(_re.findall(r'\b(close|open|high|low|volume|amount)\b', formula)))
         if not needed_cols:
             needed_cols = ["close"]
+        # 内置 ATR 依赖 high/low（公式字面只写 close，但真实波幅需要最高/最低价）
+        if _re.search(r'\batr\b', formula):
+            needed_cols = sorted(set(needed_cols) | {"high", "low"})
 
         lookback = _extract_lookback(formula)
 
@@ -266,7 +269,7 @@ def compute_feature(
                         margin = max(int(lookback * 2.0), 10)
                         fetch_sd = max(
                             (cs_dt - timedelta(days=margin)).strftime("%Y-%m-%d"),
-                            "2020-01-01"
+                            "2000-01-01"
                         )
 
                     # fetch → compute → filter → write
@@ -302,7 +305,7 @@ def compute_feature(
             margin = max(int(lookback * 2.0), 10)
             fetch_start = max(
                 (sd_dt - timedelta(days=margin)).strftime("%Y-%m-%d"),
-                "2020-01-01"
+                "2000-01-01"
             )
 
         if df is None or df.empty:

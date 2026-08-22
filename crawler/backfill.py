@@ -367,11 +367,12 @@ class BackfillManager:
 
         db = get_sync_db()
         try:
-            # 断点续传：force 全补；否则跳过"当日行数 >= 活跃数 80%"的日期
+            # 断点续传：force 全补；否则跳过"当日行数 >= 当日历史基线 80%"的日期。
+            # 历史年份市场容量远小于当前：基线 = 截至当日已上市(含退市, ipo_date<=当日)的该类型数量；
+            # 若按当前活跃数(≈4171)判定，2000-2015 老日期永远达不到会被反复重拉、纯耗配额。
             active = db.execute(text(
                 "SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type=:t"
             ), {"t": stock_type}).scalar() or 0
-            threshold = max(int(active * 0.8), 500)
             remaining_days = tds
             skipped = 0
             if not task.force:
@@ -380,7 +381,12 @@ class BackfillManager:
                     cnt = db.execute(text(
                         f"SELECT COUNT(*) FROM {table} WHERE trade_date=:d"
                     ), {"d": td}).scalar() or 0
-                    if cnt >= threshold:
+                    listed = db.execute(text(
+                        "SELECT COUNT(*) FROM stock_master WHERE stock_type=:t AND ipo_date <= :d"
+                    ), {"t": stock_type, "d": td}).scalar() or 0
+                    thr = max(int(listed * 0.8), 1)
+                    # 已达当日基线 → 完成；或该类型当日尚无上市标的 → 跳过（防"无数据日"无限重拉）
+                    if cnt >= thr or listed == 0:
                         skipped += 1
                     else:
                         kept.append(td)

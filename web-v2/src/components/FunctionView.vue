@@ -215,7 +215,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
+import { useNavStore } from '../stores/nav'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination, useMessage, useDialog } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
@@ -628,12 +629,17 @@ function doRollback(v) {
   })
 }
 
+const nav = useNavStore()
+function onPopstate() {
+  // 组件可能已卸载（v-if 切换）：非本页时不响应，避免用本页 URL 覆盖地址栏
+  if (nav.tab !== 'f') return
+  parseHashParams()
+  loadData()
+}
 onMounted(() => {
   parseHashParams()
   loadData()
+  window.addEventListener('popstate', onPopstate)
 })
-window.addEventListener('popstate', () => {
-  parseHashParams()
-  loadData()
-})
+onUnmounted(() => window.removeEventListener('popstate', onPopstate))
 </script>

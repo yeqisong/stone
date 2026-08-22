@@ -20,7 +20,8 @@
 </div>
 </template>
 <script setup>
-import { ref, reactive, h, computed, onMounted } from 'vue'
+import { ref, reactive, h, computed, onMounted, onUnmounted } from 'vue'
+import { useNavStore } from '../stores/nav'
 import { NCard, NDataTable, NButton, NButtonGroup, NInput, NPagination, NTag, NSpace, NSpin } from 'naive-ui'
 import axios from 'axios'
 
@@ -105,9 +106,17 @@ function doSearch(){ page.value = 1; load() }
 function goPage(p){ page.value = p; load() }
 function switchCat(c){ cat.value = c; page.value = 1; load() }
 
+const nav = useNavStore()
+function onPopstate() {
+  // 组件可能已卸载（v-if 切换）：非本页时不响应，避免用本页 URL 覆盖地址栏
+  if (nav.tab !== 'l') return
+  parseHash()
+  load()
+}
 onMounted(() => {
   parseHash()
   load()
+  window.addEventListener('popstate', onPopstate)
 })
-window.addEventListener('popstate', () => { parseHash(); load() })
+onUnmounted(() => window.removeEventListener('popstate', onPopstate))
 </script>

@@ -63,8 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_dq_ex_date ON daily_quote (is_ex_date, ex_date_co
 CREATE_INDEX_DAILY_QUOTE = """
 CREATE TABLE IF NOT EXISTS index_daily_quote (
     trade_date DATE NOT NULL,
-    index_code VARCHAR(8) NOT NULL,
-    index_name VARCHAR(20) NOT NULL,
+    index_code VARCHAR(16) NOT NULL,
+    index_name VARCHAR(64) NOT NULL,
     open       NUMERIC(10,2) NOT NULL,
     high       NUMERIC(10,2) NOT NULL,
     low        NUMERIC(10,2) NOT NULL,
@@ -780,6 +780,11 @@ ALL_TABLES = [
 
 def init_db(sync_session) -> None:
     """初始化数据库：建表 + 默认数据。幂等，可重复执行。"""
+    # DDL 锁超时：避免长事务（如特征计算）持锁时启动被无限阻塞；超时后本会话失败可重试
+    try:
+        sync_session.execute(text("SET lock_timeout = '15s'"))
+    except Exception:
+        pass
     for name, sql in ALL_TABLES:
         for stmt in sql.strip().split(";"):
             stmt = stmt.strip()

@@ -1497,6 +1497,23 @@ def dag_task_model_train(trade_date=None, **kw):
         # ── Optuna 超参数搜索 + 逐轮回测 ──
         # ═══════════════════════════════════════
         from xgboost import XGBRegressor
+        import xgboost as _xgb
+
+        # ── GPU 优先：编译含 CUDA 且驱动可用时用 cuda，否则回退 cpu ──
+        def _resolve_train_device():
+            try:
+                _bi = _xgb.build_info()
+                if not (_bi.get('USE_CUDA') or _bi.get('CUDA_VERSION')):
+                    return 'cpu'
+                # 冒烟测试：驱动/显存异常时（如服务器无 GPU 卡）也会在这里暴露
+                _probe = XGBRegressor(device='cuda', n_estimators=2, max_depth=1, n_jobs=1, verbosity=0)
+                _probe.fit(np.random.rand(128, 4), np.random.rand(128))
+                return 'cuda'
+            except Exception as _e:
+                write_node_log(log_id=log_id, detail=f'CUDA 不可用，回退 CPU 训练: {_e}')
+                return 'cpu'
+        TRAIN_DEVICE = _resolve_train_device()
+        update_node_progress(log_id=log_id, rows=3, detail=f'训练设备: {TRAIN_DEVICE}')
 
         # 读取搜索空间（cfg 已在数据加载阶段获取）
         ss = cfg.get('search_space', {})
@@ -1790,7 +1807,8 @@ def dag_task_model_train(trade_date=None, **kw):
                 params = {'learning_rate': lr, 'max_depth': md, 'n_estimators': ne,
                           'subsample': sub, 'colsample_bytree': cs,
                           'reg_alpha': ra, 'reg_lambda': rl,
-                          'n_jobs': -1, 'random_state': 42, 'verbosity': 0}
+                          'n_jobs': -1, 'random_state': 42, 'verbosity': 0,
+                          'device': TRAIN_DEVICE}
                 models = {}
                 # 从 train 集再切 10% 做 early stopping
                 train_n = int(len(X_train) * 0.9)
@@ -1822,7 +1840,8 @@ def dag_task_model_train(trade_date=None, **kw):
             # Optuna 未安装时回退单次训练（XGBoost）
             params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200,
                       'subsample': 0.8, 'colsample_bytree': 0.8,
-                      'n_jobs': -1, 'random_state': 42, 'verbosity': 0}
+                      'n_jobs': -1, 'random_state': 42, 'verbosity': 0,
+                      'device': TRAIN_DEVICE}
             for label, tname, hdays in TARGETS:
                 model = XGBRegressor(**params)
                 model.fit(X_train, df[train_mask][tname])

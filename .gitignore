@@ -54,3 +54,6 @@ docker-compose.override.yml
 *.orig
 *.bak
 node_modules/
+
+# 服务器最终备份（不提交）
+backups_server_final/
