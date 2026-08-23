@@ -352,6 +352,9 @@ def _execute_flow_internal(flow_id: int, body: dict = {}) -> dict:
             try:
                 rid, sorted_names, ctx = eexec.prepare_context(trade_date=etd)
                 logger.info(f"[flow] {ename} 开始执行 {rid}, 节点: {sorted_names}")
+                _t0 = tm._tasks.get(tid)
+                if _t0:
+                    _t0.dag_run_id = rid
 
                 # 在每个节点执行前后更新 TaskManager
                 original_execute = eexec._execute
@@ -487,12 +490,15 @@ def list_task_logs(limit: int = Query(50, le=200), flow_id: int = Query(None)):
     items = []
 
     # 1. 活跃任务优先（TaskManager 内存）
+    mem_run = {}
     for t in sorted(tm._tasks.values(), key=lambda x: x.created_at or "", reverse=True):
         d = t.to_dict()
         seen.add(d["task_id"])
+        if d.get("dag_run_id"):
+            mem_run[d["dag_run_id"]] = d["task_id"]
         items.append(d)
 
-    # 2. 历史任务（dag_run_log 表，排除已在内存中的）
+    # 2. 历史任务（dag_run_log 表，排除已在内存中的；同 run_id 只展示内存任务）
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
@@ -507,7 +513,7 @@ def list_task_logs(limit: int = Query(50, le=200), flow_id: int = Query(None)):
         groups = {}
         for r in rows:
             rid = r[0]
-            if rid in seen:
+            if rid in seen or rid in mem_run:
                 continue
             if rid not in groups:
                 groups[rid] = {

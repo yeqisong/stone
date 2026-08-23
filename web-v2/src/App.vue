@@ -53,9 +53,9 @@
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
           <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => { nav.backFromFeatureDetail(); nav.pendingEditFeatureId = id }" /></div>
-          <div v-if="nav.tab==='g'"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" @show-log="(id) => { nav.flowId = parseInt(id); nav.tab = 'q' }" /></div>
-          <div v-if="nav.tab==='q'"><FlowLogView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
-          <div v-if="nav.tab==='r'"><FlowRunView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
+          <div v-if="nav.tab==='g'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" @show-log="(id) => { nav.flowId = parseInt(id); nav.tab = 'q' }" /></div>
+          <div v-if="nav.tab==='q'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FlowLogView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
+          <div v-if="nav.tab==='r'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FlowRunView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
         </div>
 
         <!-- H5 底部 TabBar：5 核心 + 管理 入口 -->

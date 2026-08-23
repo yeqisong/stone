@@ -1,5 +1,5 @@
 <template>
-<div style="padding:16px;max-width:100%;margin:0 auto;height:calc(100vh - 100px);display:flex;flex-direction:column">
+<div style="padding:16px;max-width:100%;margin:0 auto;flex:1;min-height:0;display:flex;flex-direction:column">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-shrink:0">
     <n-button size="small" quaternary @click="$emit('back')">← 返回</n-button>
     <span style="font-size:17px;font-weight:700;color:var(--c-text)">📋 执行日志</span>

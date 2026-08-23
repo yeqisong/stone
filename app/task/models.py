@@ -43,6 +43,7 @@ class Task:
     task_type: str = "dag_flow"   # dag_flow | backfill | feature_compute
     flow_id: Optional[int] = None
     flow_name: Optional[str] = None
+    dag_run_id: Optional[str] = None  # 关联 dag_run_log 的 run_id（同一流程两次展示去重用）
     status: str = "pending"       # pending → running → completed / failed
     progress_pct: int = 0
     current_detail: str = ""
@@ -58,6 +59,7 @@ class Task:
             "task_type": self.task_type,
             "flow_id": self.flow_id,
             "flow_name": self.flow_name,
+            "dag_run_id": self.dag_run_id,
             "status": self.status,
             "progress_pct": self.progress_pct,
             "current_detail": self.current_detail,
