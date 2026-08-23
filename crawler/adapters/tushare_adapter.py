@@ -290,7 +290,11 @@ class TuShareAdapter(DataSourceAdapter):
                 if df is not None and not df.empty:
                     for _, r in df.iterrows():
                         raw = str(r['ts_code'])
-                        c = raw.split('.')[0].zfill(6)
+                        c = raw.split('.')[0]
+                        # tushare 历史数据偶发 7 位脏代码（如 1618111），非合法标的且超 varchar(6)，跳过
+                        if len(c) != 6:
+                            continue
+                        c = c.zfill(6)
                         if code_set is not None and c not in code_set:
                             continue
                         ex2 = 'SSE' if c.startswith('5') else 'SZSE'

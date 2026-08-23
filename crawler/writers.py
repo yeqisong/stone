@@ -116,6 +116,29 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
                 db.execute(text("ROLLBACK TO SAVEPOINT sp_bf"))
             except Exception:
                 pass
+            # 降级逐行：单行脏数据（如超长代码）跳过，其余照常写入，避免整批丢失
+            for row in chunk:
+                try:
+                    db.execute(text(
+                        "INSERT INTO daily_quote (trade_date,exchange,stock_code,stock_name,"
+                        "open,high,low,close,close_hfq,close_qfq,volume,amount,turnover,is_suspended) "
+                        "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:ch,:cq,:v,:a,:t,false) "
+                        "ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
+                        "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
+                        "close=EXCLUDED.close, "
+                        "close_hfq=CASE WHEN EXCLUDED.close_hfq IS NULL OR EXCLUDED.close_hfq = 0 THEN daily_quote.close_hfq ELSE EXCLUDED.close_hfq END, "
+                        "close_qfq=EXCLUDED.close_qfq, volume=EXCLUDED.volume, "
+                        "amount=EXCLUDED.amount, turnover=EXCLUDED.turnover, "
+                        "is_suspended=false"
+                    ), {
+                        'td': row.trade_date, 'ex': row.exchange, 'sc': row.stock_code,
+                        'sn': row.stock_name, 'o': row.open, 'h': row.high, 'l': row.low,
+                        'c': row.close, 'ch': row.close_hfq, 'cq': row.close,
+                        'v': row.volume, 'a': row.amount, 't': row.turnover,
+                    })
+                    total += 1
+                except Exception as ex:
+                    logger.warning(f"[writers] 跳过坏行 {row.trade_date} {row.stock_code}: {ex}")
     db.commit()
     return total
 
