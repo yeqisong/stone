@@ -257,10 +257,10 @@ const monthLabel = computed(() => {
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
 
 const overviewItems = computed(() => [
-  { label: '行情总条数', value: fmt(overview.total_rows) },
-  { label: '股票数', value: overview.total_stocks },
-  { label: '最新数据', value: overview.latest_date || '-' },
-  { label: '漏数据日期', value: missingDates.length, color: missingDates.length > 0 ? '#f59e0b' : undefined },
+  { label: '行情总条数', value: fmt(overview.value.total_rows) },
+  { label: '股票数', value: overview.value.total_stocks },
+  { label: '最新数据', value: overview.value.latest_date || '-' },
+  { label: '漏数据日期', value: missingDates.value.length, color: missingDates.value.length > 0 ? '#f59e0b' : undefined },
 ])
 
 const calBg = d => {
