@@ -407,8 +407,11 @@ class BackfillManager:
                         "SELECT COUNT(*) FROM stock_master WHERE stock_type=:t AND ipo_date <= :d"
                     ), {"t": stock_type, "d": td}).scalar() or 0
                     thr = max(int(listed * 0.8), 1)
+                    # 个股/指数按 80% 基线判定；ETF 数据源覆盖不全（fund_daily 2012 年起，
+                    # 早期仅部分标的），当日有任一 ETF 行即视为完整，防止永远达不到基线反复重拉
+                    complete = cnt >= thr if stock_type != "etf" else cnt > 0
                     # 已达当日基线 → 完成；该类型当日尚无上市标的 → 跳过；数据源覆盖起点之前无数据 → 跳过
-                    if cnt >= thr or listed == 0 or (etf_data_start and cnt == 0 and str(td) < etf_data_start):
+                    if complete or listed == 0 or (etf_data_start and cnt == 0 and str(td) < etf_data_start):
                         skipped += 1
                     else:
                         kept.append(td)
