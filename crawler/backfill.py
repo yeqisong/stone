@@ -414,6 +414,8 @@ class BackfillManager:
                     return
                 # 配额预算：剩余 < 10 次则收尾（每天约 3 次调用）
                 if adapter.quota.remaining() < 10:
+                    if task.task_type == "etf":
+                        self._supplement_etf_hfq(db, manager, task, task.start_date, task.end_date)
                     task.status = "completed"
                     task.error_message = (f"tushare 配额将尽（剩余 {adapter.quota.remaining()} 次），"
                                           f"已补 {done}/{len(remaining_days)} 天，剩余 {len(remaining_days) - done} 天可明日续跑")
@@ -422,37 +424,9 @@ class BackfillManager:
                 try:
                     rows = fetch_fn([], td_str, td_str)
                     saved = write_fn(db, rows)
-                    # ETF 后复权补充（baostock，分批 200 只 + 进度 + 可取消；不可用则跳过）
-                    if task.task_type == "etf" and saved and manager.supplement_healthy():
-                        try:
-                            sups = manager.get_supplement()
-                            etf_codes = list({r.stock_code for r in rows})
-                            applied = 0
-                            for bi in range(0, len(etf_codes), 200):
-                                if getattr(task, "_stop_requested", False):
-                                    task.status = "cancelled"
-                                    task.error_message = f"已取消（hfq 已补充 {applied} 行，主数据完整）"
-                                    return
-                                b = etf_codes[bi:bi + 200]
-                                hfq_map = sups.fetch_etf_hfq(b, td_str, td_str)
-                                for r in rows:
-                                    k = (r.stock_code, r.trade_date)
-                                    if k in hfq_map:
-                                        db.execute(text(
-                                            "UPDATE daily_quote SET close_hfq=:h WHERE stock_code=:c AND exchange=:e AND trade_date=:d"
-                                        ), {"h": hfq_map[k], "c": r.stock_code, "e": r.exchange, "d": r.trade_date})
-                                        applied += 1
-                                db.commit()
-                                task.error_message = f"ETF hfq 补充 {min(bi+200,len(etf_codes))}/{len(etf_codes)} 行"
-                                task.updated_at = datetime.now().isoformat()
-                                self._update_task_db(task)
-                                self._wake_ws()
-                            if applied:
-                                logger.info(f"[backfill] ETF 复权补充 {td_str}: {applied} 行")
-                        except Exception as ex:
-                            db.rollback()
-                            logger.warning(f"[backfill] ETF 复权补充失败（close_hfq=close）: {ex}")
                 except QuotaExhausted as e:
+                    if task.task_type == "etf":
+                        self._supplement_etf_hfq(db, manager, task, task.start_date, task.end_date)
                     task.status = "completed"
                     task.error_message = (f"tushare 当日配额已用尽，已补 {done}/{len(remaining_days)} 天，"
                                           f"剩余 {len(remaining_days) - done} 天明日续跑")
@@ -467,6 +441,8 @@ class BackfillManager:
                 del rows
                 gc.collect()
 
+            if task.task_type == "etf":
+                self._supplement_etf_hfq(db, manager, task, task.start_date, task.end_date)
             task.status = "completed"
             task.error_message = (f"补数完成 {done} 天（跳过已完成 {skipped} 天），共 {task.rows} 行"
                                   if skipped else f"补数完成 {done} 天，共 {task.rows} 行")
@@ -478,6 +454,56 @@ class BackfillManager:
             try: adapter._logout()
             except Exception: pass
             db.close()
+
+    def _supplement_etf_hfq(self, db, manager, task, start_date, end_date):
+        """任务级 ETF 后复权补充：按代码全区间一次性查询（baostock），而非逐日逐只。
+
+        - 断点：只补 stock_master 中"尚无任何 close_hfq 行"的 ETF，已补过则秒过
+        - 每只 ETF 一次 query_history_k_data_plus 返回整个区间，避免 O(天数×只数) 爆炸
+        - baostock 不可用/失败仅告警：close_hfq 保持 close（回退口径与 kline 一致）
+        """
+        try:
+            if not manager.supplement_healthy():
+                return
+            sups = manager.get_supplement()
+            rows = db.execute(text(
+                "SELECT DISTINCT q.stock_code FROM daily_quote q "
+                "JOIN stock_master s ON s.stock_code=q.stock_code AND s.stock_type='etf' "
+                "WHERE q.trade_date BETWEEN :s AND :e AND q.close_hfq IS NULL"
+            ), {"s": start_date, "e": end_date}).fetchall()
+            codes = [r[0] for r in rows]
+            if not codes:
+                return
+            total = len(codes)
+            logger.info(f"[backfill] ETF 复权补充启动: {total} 只（区间 {start_date}~{end_date}）")
+            for bi in range(0, total, 200):
+                if getattr(task, "_stop_requested", False):
+                    return
+                b = codes[bi:bi + 200]
+                hfq_map = sups.fetch_etf_hfq(b, start_date, end_date)
+                if not hfq_map:
+                    continue
+                # 按 2 万行一批 VALUES 批量更新（200 只 × 25 年 ≈ 120 万行，单条 UPDATE 过大）
+                items = list(hfq_map.items())
+                for ii in range(0, len(items), 20000):
+                    chunk = items[ii:ii + 20000]
+                    vals = ",".join(
+                        f"('{c.replace(chr(39), chr(39)*2)}', '{d}', {v})" for (c, d), v in chunk
+                    )
+                    db.execute(text(
+                        "UPDATE daily_quote q SET close_hfq=v.close_hfq "
+                        f"FROM (VALUES {vals}) AS v(code, date, close_hfq) "
+                        "WHERE q.stock_code=v.code AND q.trade_date=v.date"
+                    ))
+                db.commit()
+                task.error_message = f"ETF 复权补充 {min(bi + 200, total)}/{total} 只"
+                task.updated_at = datetime.now().isoformat()
+                self._update_task_db(task)
+                self._wake_ws()
+            logger.info(f"[backfill] ETF 复权补充完成: {total} 只")
+        except Exception as ex:
+            db.rollback()
+            logger.warning(f"[backfill] ETF 复权补充失败（close_hfq 保持 close）: {ex}")
 
     # ═══════════════════════════════════════════════
     #  基本面 PE 历史回填（fund_history）
