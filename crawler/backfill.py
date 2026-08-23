@@ -377,10 +377,22 @@ class BackfillManager:
             skipped = 0
             if not task.force:
                 kept = []
+                # 一次聚合取区间内各交易日已有行数（ETF 与个股同存 daily_quote，
+                # 必须 JOIN stock_master 过滤类型，否则全表行数远超 ETF 基线导致历史全被跳过）
+                if stock_type == "etf":
+                    rows = db.execute(text(
+                        "SELECT q.trade_date, COUNT(*) FROM daily_quote q "
+                        "JOIN stock_master s ON s.stock_code=q.stock_code AND s.stock_type='etf' "
+                        "WHERE q.trade_date BETWEEN :s AND :e GROUP BY q.trade_date"
+                    ), {"s": task.start_date, "e": task.end_date}).fetchall()
+                else:
+                    rows = db.execute(text(
+                        f"SELECT trade_date, COUNT(*) FROM {table} "
+                        f"WHERE trade_date BETWEEN :s AND :e GROUP BY trade_date"
+                    ), {"s": task.start_date, "e": task.end_date}).fetchall()
+                cnt_map = {str(r[0]): r[1] for r in rows}
                 for td in tds:
-                    cnt = db.execute(text(
-                        f"SELECT COUNT(*) FROM {table} WHERE trade_date=:d"
-                    ), {"d": td}).scalar() or 0
+                    cnt = cnt_map.get(str(td), 0)
                     listed = db.execute(text(
                         "SELECT COUNT(*) FROM stock_master WHERE stock_type=:t AND ipo_date <= :d"
                     ), {"t": stock_type, "d": td}).scalar() or 0
