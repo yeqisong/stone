@@ -391,14 +391,24 @@ class BackfillManager:
                         f"WHERE trade_date BETWEEN :s AND :e GROUP BY trade_date"
                     ), {"s": task.start_date, "e": task.end_date}).fetchall()
                 cnt_map = {str(r[0]): r[1] for r in rows}
+                # tushare fund_daily 场内 ETF 数据统一自 2012 年起（510050 首行 2012-03-07），
+                # 更早日期 tushare/baostock 均无场内基金数据 → 以现有数据起点为界，
+                # 起点之前 cnt==0 的日期直接跳过，防止断点判定缺失导致无限重拉耗配额
+                etf_data_start = None
+                if stock_type == "etf":
+                    r0 = db.execute(text(
+                        "SELECT MIN(q.trade_date) FROM daily_quote q "
+                        "JOIN stock_master s ON s.stock_code=q.stock_code AND s.stock_type='etf'"
+                    )).scalar()
+                    etf_data_start = str(r0) if r0 else None
                 for td in tds:
                     cnt = cnt_map.get(str(td), 0)
                     listed = db.execute(text(
                         "SELECT COUNT(*) FROM stock_master WHERE stock_type=:t AND ipo_date <= :d"
                     ), {"t": stock_type, "d": td}).scalar() or 0
                     thr = max(int(listed * 0.8), 1)
-                    # 已达当日基线 → 完成；或该类型当日尚无上市标的 → 跳过（防"无数据日"无限重拉）
-                    if cnt >= thr or listed == 0:
+                    # 已达当日基线 → 完成；该类型当日尚无上市标的 → 跳过；数据源覆盖起点之前无数据 → 跳过
+                    if cnt >= thr or listed == 0 or (etf_data_start and cnt == 0 and str(td) < etf_data_start):
                         skipped += 1
                     else:
                         kept.append(td)
