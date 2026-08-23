@@ -81,13 +81,14 @@ function onDateChange() {
 }
 
 function colorForChg(chg) {
+  // 固定色相：涨=红、跌=绿；幅度越大颜色越深（±3% 封顶）
   if (chg > 0) {
     const p = Math.min(chg / 3, 1)
-    return `rgb(${Math.round(239-p*80)},${Math.round(68+p*40)},${Math.round(68-p*40)})`
+    return `rgb(235,${Math.round(95 - p * 72)},${Math.round(95 - p * 72)})`
   }
   if (chg < 0) {
-    const p = Math.min(Math.abs(chg)/3, 1)
-    return `rgb(${Math.round(16+p*60)},${Math.round(185-p*60)},${Math.round(129-p*40)})`
+    const p = Math.min(Math.abs(chg) / 3, 1)
+    return `rgb(${Math.round(95 - p * 72)},200,${Math.round(95 - p * 72)})`
   }
   return '#555'
 }
