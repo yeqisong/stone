@@ -211,13 +211,15 @@ def code_to_exchange(code: str) -> str:
     - 6 开头 → SSE（上交所）
     - 0/2/3 开头 → SZSE（深交所）
     - 4/8/9 开头 → BSE（北交所）
+    - 5 开头 → SSE（沪市基金/ETF，如 510050）
+    - 1 开头 → SZSE（深市基金/ETF，如 159915）
     """
     if not code:
         return "SZSE"
     first = code[0]
-    if first == '6':
+    if first == '6' or first == '5':
         return "SSE"
-    elif first in ('0', '2', '3'):
+    elif first in ('0', '1', '2', '3'):
         return "SZSE"
     elif first in ('4', '8', '9'):
         return "BSE"

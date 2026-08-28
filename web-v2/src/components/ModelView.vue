@@ -143,6 +143,15 @@
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">初始资金</span><n-input-number v-model:value="createForm.initial_cash" :min="100000" :step="100000" style="flex:1" size="small" /></div>
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">最大持仓</span><n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" style="flex:1" size="small" /></div>
           </div>
+          <n-divider style="margin:4px 0">ML 买入阈值</n-divider>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">模式</span>
+              <n-select v-model:value="createForm.signal_threshold_mode" size="small" style="flex:1"
+                :options="[{label:'分位数 top N%（自适应）',value:'quantile'},{label:'绝对收益率阈值',value:'absolute'}]" />
+            </div>
+            <div v-if="createForm.signal_threshold_mode==='quantile'" style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">买入top</span><n-input-number v-model:value="createForm.buy_top_pct" :min="0.001" :max="0.50" :step="0.01" :format="v => (v*100).toFixed(0)+'%'" :parse="v => parseFloat(v)/100" style="flex:1" size="small" /></div>
+            <div v-else style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">绝对阈值</span><n-input-number v-model:value="createForm.ml_confidence_threshold" :min="0" :max="0.2" :step="0.001" :format="v => (v*100).toFixed(2)+'%'" :parse="v => parseFloat(v)/100" style="flex:1" size="small" /></div>
+          </div>
           <n-divider style="margin:4px 0">六层交易策略</n-divider>
           <div style="max-height:350px;overflow-y:auto;padding-right:4px">
             <n-collapse>
@@ -298,6 +307,8 @@ const createForm = reactive({
   test_start: '2026-01-01', test_end: null,
   feature_names: [],
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
+  // ML 买入阈值：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
+  signal_threshold_mode: 'quantile', buy_top_pct: 0.05, ml_confidence_threshold: 0.02,
   // 六层策略配置默认值（策略扫描时搜索最优）
   trading_rules: {
     execution: { price_type: 'next_day_open', delay_days: 1, volume_limit: 0.10 },
@@ -364,6 +375,10 @@ function startEditConfig() {
   createForm.slippage = cfg.trading_rules?.cost_model?.slippage_rate ?? 0.001
   createForm.stop_loss_pct = Math.round((cfg.trading_rules?.risk_management?.stop_loss ?? 0.05) * 100)
   createForm.signal_timeout_days = cfg.trading_rules?.risk_management?.max_holding_days ?? 20
+  const sigCfg = cfg.signal || {}
+  createForm.signal_threshold_mode = sigCfg.threshold_mode || 'quantile'
+  createForm.buy_top_pct = sigCfg.buy_top_pct ?? 0.05
+  createForm.ml_confidence_threshold = sigCfg.ml_confidence_threshold ?? 0.02
   showCreate.value = true
 }
 
@@ -380,6 +395,11 @@ async function doSaveConfig() {
       features: createForm.feature_names,
       optuna_trials: createForm.optuna_trials,
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
+      signal: {
+        threshold_mode: createForm.signal_threshold_mode,
+        buy_top_pct: createForm.buy_top_pct,
+        ml_confidence_threshold: createForm.ml_confidence_threshold,
+      },
     })
     showCreate.value = false
     editMode.value = false
@@ -410,6 +430,9 @@ async function doCreate() {
       slippage: createForm.slippage,
       stop_loss_pct: createForm.stop_loss_pct,
       signal_timeout_days: createForm.signal_timeout_days,
+      signal_threshold_mode: createForm.signal_threshold_mode,
+      buy_top_pct: createForm.buy_top_pct,
+      ml_confidence_threshold: createForm.ml_confidence_threshold,
     })
     showCreate.value = false
     createName.value = ''

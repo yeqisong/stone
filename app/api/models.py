@@ -4,11 +4,17 @@ from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
 import json
+import threading
+from datetime import date as _dt, timedelta as _td
 
 from app.db.connection import get_sync_db
 from app.auth.auth import get_current_user
 
 router = APIRouter(tags=["models"])
+
+# 训练终止事件注册表：version → threading.Event（stop/删除 联动训练线程）
+_train_events: dict = {}
+_train_events_lock = threading.Lock()
 
 
 def _safe_fetch_model(db, version: str):
@@ -22,6 +28,17 @@ def _safe_fetch_model(db, version: str):
         return db.execute(text(
             "SELECT status, activated_at, NULL as deleted_at FROM model_versions WHERE version = :v"
         ), {"v": version}).fetchone()
+
+
+def _deep_merge(base: dict, patch: dict) -> dict:
+    """递归合并配置字典：patch 覆盖 base，嵌套字典逐层合并。"""
+    out = dict(base)
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
 
 
 from typing import Optional, List
@@ -55,7 +72,12 @@ class CreateModel(BaseModel):
     # 信号配置
     buy_threshold: float = 0.6
     sell_threshold: float = 0.4
-    ml_confidence_threshold: float = 0.5
+    # ML 买入阈值模式：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
+    signal_threshold_mode: str = "quantile"
+    buy_top_pct: float = 0.05              # quantile 模式：top 5% 触发买入
+    ml_confidence_threshold: float = 0.02  # absolute 模式：预测平均涨幅 > 2% 触发买入
+    # 交易规则（买卖规则描述，前端表单整段提交）
+    trading_rules: Optional[dict] = None
     # 交易成本
     stamp_tax: float = 0.001      # 印花税 0.1%
     commission: float = 0.00025   # 佣金 0.025%
@@ -187,8 +209,11 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
             "signal": {
                 "buy_threshold": body.buy_threshold,
                 "sell_threshold": body.sell_threshold,
+                "threshold_mode": body.signal_threshold_mode,
+                "buy_top_pct": body.buy_top_pct,
                 "ml_confidence_threshold": body.ml_confidence_threshold,
             },
+            "trading_rules": body.trading_rules or {},
             "risk": {
                 "stop_loss_pct": body.stop_loss_pct,
                 "signal_timeout_days": body.signal_timeout_days,
@@ -252,8 +277,8 @@ def get_model_diagnosis(version: str):
         # 2. 盈亏比
         win_loss_ratio = win_rate / (1 - win_rate) if win_rate and win_rate < 1 else 0
 
-        # 3. 基准对比（简化：vs 沪深300 同期）
-        benchmark_return = 0.0  # 需从实际基准数据获取，当前未实现
+        # 3. 基准对比（vs 沪深300 同期，训练时已算并存入 evaluation_report）
+        benchmark_return = float(eval_data.get("benchmark_return", 0) or 0)
         vs_benchmark = annual - benchmark_return
 
         # 4. 集中度（Top3 盈利占比）
@@ -375,13 +400,12 @@ def delete_model(version: str, mode: str = Query("soft"), user: str = Depends(ge
                 "UPDATE model_versions SET deleted_at = CURRENT_TIMESTAMP WHERE version = :v"
             ), {"v": version})
             db.commit()
-            # 如果正在训练中，终止 DAG 节点
+            # 如果正在训练中，通过事件终止训练线程（A4，替代无效的 dag.terminate）
             if r[0] == 'TRAINING':
-                try:
-                    from scripts.dag import dag
-                    dag.terminate('model_train')
-                except Exception:
-                    pass
+                with _train_events_lock:
+                    ev = _train_events.pop(version, None)
+                if ev:
+                    ev.set()
             return {"ok": True, "version": version, "mode": "soft"}
 
         # mode == "hard" — 物理删除
@@ -398,11 +422,16 @@ def delete_model(version: str, mode: str = Query("soft"), user: str = Depends(ge
         comparisons = db.execute(text(
             "SELECT COUNT(*) FROM version_comparisons WHERE version_a = :v OR version_b = :v"
         ), {"v": version}).scalar() or 0
+        backtests = db.execute(text(
+            "SELECT COUNT(*) FROM backtest_records WHERE version = :v"
+        ), {"v": version}).scalar() or 0
 
-        if activated or signals > 0 or trials > 0 or health > 0 or comparisons > 0:
+        if activated or signals > 0 or trials > 0 or health > 0 or comparisons > 0 or backtests > 0:
             raise HTTPException(400, "该模型有关联数据，不能物理删除，请使用逻辑删除（mode=soft）")
 
         # 按 FK 依赖顺序删除
+        db.execute(text("DELETE FROM backtest_trades WHERE version = :v"), {"v": version})
+        db.execute(text("DELETE FROM backtest_records WHERE version = :v"), {"v": version})
         db.execute(text("DELETE FROM version_comparisons WHERE version_a = :v OR version_b = :v"), {"v": version})
         db.execute(text("DELETE FROM model_health WHERE version = :v"), {"v": version})
         db.execute(text("DELETE FROM training_trials WHERE version = :v"), {"v": version})
@@ -428,20 +457,30 @@ def check_model_features(version: str, force: bool = Query(False)):
         if not r:
             raise HTTPException(404, "版本不存在")
         cfg = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else {})
-        
-        # 有缓存且非强制 → 直接返回
+        feature_names = cfg.get("feature_names") or cfg.get("features") or []
+
+        # 有缓存且非强制 → 校验特征集未变 + 特征数据未更新，才复用缓存（C2）
         cached = cfg.get("_feature_check")
         if cached and not force:
-            db.close()
-            return cached
-
-        feature_names = cfg.get("feature_names") or cfg.get("features") or []
+            try:
+                fns = feature_names[:3] or ['boll']
+                latest = db.execute(text(
+                    "SELECT MAX(trade_date) FROM feature_values WHERE feature_name = ANY(:fns)"
+                ), {"fns": fns}).scalar()
+                latest_str = str(latest)[:10] if latest else ''
+                if cached.get('cached_features') == feature_names and latest_str and \
+                        latest_str <= (cached.get('cached_data_date') or '9999-12-31'):
+                    db.close()
+                    return cached
+            except Exception:
+                pass
 
         if not feature_names:
             return {"ready": False, "warnings": ["模型未配置特征"], "features": [], "phases": None}
 
-        # A 股过滤条件（排除 ETF/指数/科创板等非主板A股）
-        a_stock_filter = "stock_code NOT LIKE '15%' AND stock_code NOT LIKE '5%' AND stock_code NOT LIKE '0%' AND stock_code NOT LIKE '3%' AND stock_code NOT LIKE '68%'"
+        # A 股过滤条件：仅排除 ETF（15/5 开头），与训练口径一致
+        # （训练 build_feature_wide_table entity='stock' 用 exchange IN (SSE,SZSE)，含 0/3/68 开头）
+        a_stock_filter = "stock_code NOT LIKE '15%' AND stock_code NOT LIKE '5%'"
 
         # 取前 3 个样本特征算日期范围（用于三点切分）
         all_dates = set()
@@ -512,8 +551,10 @@ def check_model_features(version: str, force: bool = Query(False)):
                     all_ready = False
             features_info.append(info)
 
-        # 缓存结果到 config._feature_check
-        result = {"ready": all_ready, "warnings": warnings, "features": features_info, "phases": phases}
+        # 缓存结果到 config._feature_check（带特征集与数据日期，供过期校验）
+        result = {"ready": all_ready, "warnings": warnings, "features": features_info, "phases": phases,
+                  "cached_features": feature_names,
+                  "cached_data_date": str(max(all_dates)) if all_dates else ''}
         cfg["_feature_check"] = result
         db.execute(text("UPDATE model_versions SET config=:cfg WHERE version=:v"),
                    {"cfg": json.dumps(cfg), "v": version})
@@ -560,18 +601,20 @@ def approve_model(version: str, user: str = Depends(get_current_user)):
 
 @router.put("/v1/models/{version}/config")
 def update_model_config(version: str, body: dict, user: str = Depends(get_current_user)):
-    """更新 DRAFT 状态模型的四层配置。"""
+    """更新 DRAFT 状态模型配置（deep-merge：未提交字段保留，不再整体覆盖）。"""
     db = get_sync_db()
     try:
-        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
         if not r:
             raise HTTPException(404, "版本不存在")
         if r[0] != 'DRAFT':
             raise HTTPException(400, f"只有 DRAFT 状态可编辑，当前为 {r[0]}")
-        cfg = dict(body)
-        name = cfg.pop('model_name', None)
+        old_cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
+        name = body.get('model_name')
+        patch = {k: v for k, v in body.items() if k != 'model_name'}
+        merged = _deep_merge(old_cfg, patch)
         db.execute(text("UPDATE model_versions SET config=:cfg WHERE version=:v"),
-                   {"v": version, "cfg": json.dumps(cfg)})
+                   {"v": version, "cfg": json.dumps(merged)})
         if name:
             db.execute(text("UPDATE model_versions SET model_name=:n WHERE version=:v"),
                        {"v": version, "n": name})
@@ -588,7 +631,11 @@ def update_model_config(version: str, body: dict, user: str = Depends(get_curren
 
 @router.post("/v1/models/{version}/stop")
 def stop_training(version: str, user: str = Depends(get_current_user)):
-    """强制停止训练，模型回到 DRAFT。"""
+    """强制停止训练，模型回到 DRAFT。
+
+    通过 _train_events 触发训练线程的终止事件（A4），再回写状态；
+    training 线程内的 DB 状态检查作为第二重保险。
+    """
     db = get_sync_db()
     try:
         r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
@@ -596,6 +643,11 @@ def stop_training(version: str, user: str = Depends(get_current_user)):
             raise HTTPException(404, "版本不存在")
         if r[0] != 'TRAINING':
             raise HTTPException(400, f"只有 TRAINING 状态可停止，当前为 {r[0]}")
+        # 先唤醒训练线程（若正在运行）
+        with _train_events_lock:
+            ev = _train_events.pop(version, None)
+        if ev:
+            ev.set()
         db.execute(text("UPDATE model_versions SET status='DRAFT', best_params=NULL, evaluation_report=NULL, sharpe=NULL, win_rate=NULL, max_drawdown=NULL, annual_return=NULL WHERE version=:v"), {"v": version})
         db.commit()
         return {"ok": True, "version": version, "status": "DRAFT"}
@@ -610,9 +662,13 @@ def stop_training(version: str, user: str = Depends(get_current_user)):
 
 @router.post("/v1/models/{version}/train")
 def train_model(version: str, user: str = Depends(get_current_user)):
-    """触发模型训练（通过 TaskManager 管理进度）。"""
+    """触发模型训练（通过 TaskManager 管理进度）。
+
+    C1: 训练线程创建真实 dag_run_log（node_name='model_train'）并注入
+    _node_log_ids，训练函数内部 update_node_progress 的进度即可经 WS 广播
+    到前端；同时注入 _stop_event 供停止/删除联动（A4）。
+    """
     from app.task import TaskManager
-    import threading
 
     tm = TaskManager()
     nodes = [
@@ -639,16 +695,24 @@ def train_model(version: str, user: str = Depends(get_current_user)):
     finally:
         db.close()
 
-    def _bg(tid, ver):
-        from datetime import datetime as _dt
+    stop_event = threading.Event()
+    with _train_events_lock:
+        _train_events[version] = stop_event
+
+    def _bg(tid, ver, ev):
+        from datetime import date as _dt
         from app.task import TaskManager as _TM
-        from scripts.pipeline import dag_task_model_train as _train
+        from scripts.pipeline import dag_task_model_train as _train, write_node_log as _write_log
         tm2 = _TM()
         tm2.start_task(tid)
+        log_id = None
         try:
+            # 创建真实 dag_run_log 行：训练函数内 update_node_progress 才能被 WS 广播
+            log_id = _write_log(trade_date=str(_dt.today()), node_name='model_train',
+                                status='pending', run_id=tid[:20])
             tm2.update_node(tid, "train_load_data", status="running")
-            # 训练函数内部有自己的进度，这里先传版本参数
-            _train(trade_date="", version=ver)
+            _train(trade_date="", version=ver,
+                   _node_log_ids={'model_train': log_id}, _stop_event=ev)
             tm2.update_node(tid, "train_load_data", status="success")
             tm2.update_node(tid, "train_feature_eng", status="success")
             tm2.update_node(tid, "train_optuna", status="success")
@@ -657,8 +721,11 @@ def train_model(version: str, user: str = Depends(get_current_user)):
         except Exception as e:
             tm2.update_node(tid, "train_optuna", status="failed", error=str(e)[:200])
             tm2.fail_task(tid, str(e)[:200])
+        finally:
+            with _train_events_lock:
+                _train_events.pop(ver, None)
 
-    thread = threading.Thread(target=_bg, args=(task.task_id, version), daemon=True)
+    thread = threading.Thread(target=_bg, args=(task.task_id, version, stop_event), daemon=True)
     thread.start()
     return {"ok": True, "task_id": task.task_id, "version": version, "status": "training started"}
 
@@ -774,7 +841,7 @@ def start_strategy_scan(version: str, body: StrategyScanRequest, user: str = Dep
             }
 
         thread = _threading.Thread(target=_run_scan, args=(
-            task_id, version, combos, body.val_start, body.val_end, body.hold_days
+            task_id, version, combos, body.val_start, body.val_end or str(_dt.today()), body.hold_days
         ), daemon=True)
         thread.start()
 
@@ -813,7 +880,7 @@ def apply_scan_result(version: str, task_id: str, user: str = Depends(get_curren
     try:
         db.execute(text("""
             UPDATE model_versions SET trading_rules = :tr, strategy_scan_results = :sr,
-                stage = 'strategy_optimized', updated_at = CURRENT_TIMESTAMP
+                stage = 'strategy_optimized'
             WHERE version = :v
         """), {"v": version, "tr": json.dumps(best), "sr": json.dumps(t['results'])})
         db.commit()
@@ -824,43 +891,51 @@ def apply_scan_result(version: str, task_id: str, user: str = Depends(get_curren
 
 
 def _run_scan(task_id, version, combos, val_start, val_end, hold_days):
-    """后台执行策略扫描。"""
-    from scripts.pipeline import run_attribution, build_feature_wide_table
+    """后台执行策略扫描（预测一次，各参数组合复用同一预测列）。"""
+    from scripts.pipeline import build_feature_wide_table, predict_for_version, _simple_backtest
     from app.db.connection import get_sync_db
     from loguru import logger as _log
-    import pandas as pd, numpy as np
 
     try:
         db = get_sync_db()
         # 加载特征
-        r = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
-                       {"v": version}).fetchone()
-        if not r:
+        row = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
+                         {"v": version}).fetchone()
+        if not row:
             db.close(); return
-        feature_names = r[0] if isinstance(r[0], list) else (json.loads(r[0]) if r[0] else [])
-        cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
+        feature_names = row[0] if isinstance(row[0], list) else (json.loads(row[0]) if row[0] else [])
+        cfg = row[1] if isinstance(row[1], dict) else (json.loads(row[1]) if row[1] else {})
         if not feature_names:
             feature_names = cfg.get('feature_names', [])
 
         df = build_feature_wide_table(db, feature_names, val_start, val_end, 'stock')
-        db.close()
         if df.empty:
-            with _scan_lock: _scan_tasks[task_id]['status'] = 'failed'
+            db.close()
+            with _scan_lock: _scan_tasks[task_id].update({'status': 'failed', 'error': '验证集无数据'})
+            return
+
+        # 真模型预测一次（horizon 由 hold_days 映射），参数组合只换执行规则
+        horizon = 5 if hold_days <= 5 else (20 if hold_days > 10 else 10)
+        pred, err = predict_for_version(db, version, df, val_start, val_end, horizon)
+        db.close()
+        if pred is None:
+            _log.warning(f"[scan] {version} 预测不可用: {err}")
+            with _scan_lock: _scan_tasks[task_id].update({'status': 'failed', 'error': err})
             return
 
         results = []
         best_sharpe = -999
         best_params = None
-        total = len(combos)
 
         for i, (sl, tp, tr) in enumerate(combos):
-            bt = _backtest_scan(df, feature_names, val_start, val_end, hold_days, sl, tp, tr)
-            r = {'stop_loss': sl, 'take_profit': tp, 'trailing_retracement': tr,
-                 'sharpe': bt.get('sharpe', 0), 'max_dd': bt.get('max_dd', 0),
-                 'win_rate': bt.get('win_rate', 0), 'total_return': bt.get('total_return', 0)}
-            results.append(r)
-            if r['sharpe'] > best_sharpe:
-                best_sharpe = r['sharpe']; best_params = r
+            bt = _simple_backtest(df, pred, val_start, val_end, hold_days, sl, tp, trailing=tr)
+            item = {'stop_loss': sl, 'take_profit': tp, 'trailing_retracement': tr,
+                    'sharpe': bt.get('sharpe', 0), 'max_dd': bt.get('max_dd', 0),
+                    'win_rate': bt.get('win_rate', 0), 'total_return': bt.get('total_return', 0),
+                    'total_trades': bt.get('total_trades', 0), 'total_cost': bt.get('total_cost', 0)}
+            results.append(item)
+            if item['sharpe'] > best_sharpe:
+                best_sharpe = item['sharpe']; best_params = item
 
             with _scan_lock:
                 _scan_tasks[task_id].update({'completed': i+1, 'results': results,
@@ -871,13 +946,7 @@ def _run_scan(task_id, version, combos, val_start, val_end, hold_days):
                 'best_sharpe': best_sharpe, 'best_params': best_params})
     except Exception as e:
         _log.error(f"[scan] 失败: {e}")
-        with _scan_lock: _scan_tasks[task_id]['status'] = 'failed'
-
-
-def _backtest_scan(df, feature_names, val_start, val_end, hold_days, sl, tp, tr):
-    """策略扫描回测 — 调用 pipeline._simple_backtest。"""
-    from scripts.pipeline import _simple_backtest
-    return _simple_backtest(df, feature_names, val_start, val_end, hold_days, sl, tp)
+        with _scan_lock: _scan_tasks[task_id].update({'status': 'failed', 'error': str(e)[:200]})
 
 
 @router.post("/v1/models/{version}/attribution")
@@ -895,14 +964,22 @@ def get_attribution(version: str, body: dict = {}, user: str = Depends(get_curre
             feature_names = cfg.get('feature_names', [])
 
         val_start = body.get('val_start', '2022-01-01')
-        val_end = body.get('val_end', '2023-12-31')
+        val_end = body.get('val_end') or str(_dt.today())  # 空 end → 今天（mask 过滤用，不能留空）
 
-        df = build_feature_wide_table(db, feature_names, val_start, val_end, 'stock')
+        # 宽表终点向后扩 45 自然日：ideal 基线"未来 hold_days 实际涨幅"需要窗外价格
+        try:
+            wide_end = (_dt.fromisoformat(val_end) + _td(days=45)).isoformat()
+        except Exception:
+            wide_end = val_end
+        df = build_feature_wide_table(db, feature_names, val_start, wide_end, 'stock')
         db.close()
         if df.empty:
             return {"error": "验证集无数据，请先执行特征计算"}
 
-        result = run_attribution(db, version, df, feature_names, val_start, val_end)
+        result = run_attribution(db, version, df, val_start, val_end,
+                                 stop_loss=float(body.get('stop_loss', 0.08)),
+                                 take_profit=float(body.get('take_profit', 0.15)),
+                                 hold_days=int(body.get('hold_days', 10)))
         return result
     except HTTPException:
         raise

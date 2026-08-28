@@ -635,6 +635,15 @@ def get_feature_data(
             "SELECT COALESCE(actual_row_count, 0) FROM features WHERE id = :id"
         ), {"id": feature_id}).scalar() or 0
 
+        # 按实体过滤时，总数必须按该股票实时统计（actual_row_count 是全市场缓存数，
+        # 例如 bias_5 全市场 1739 万行 vs 单只股票仅 6 千行，直接复用会误导分页）
+        if code and entity != "global":
+            total = db.execute(text(
+                "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn AND stock_code = :code"
+            ), {"fn": feature_name, "code": code}).scalar() or 0
+        else:
+            total = cached_total
+
         if entity == "global":
             sql = """
                 SELECT '' as stock_code, trade_date, value
@@ -662,7 +671,6 @@ def get_feature_data(
             """
 
         try:
-            total = cached_total
             rows = db.execute(text(sql), base_params).fetchall()
 
             items = []

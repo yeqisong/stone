@@ -57,3 +57,6 @@ node_modules/
 
 # 服务器最终备份（不提交）
 backups_server_final/
+
+# 运行时数据（模型pkl/备份/进度，勿入库）
+data/

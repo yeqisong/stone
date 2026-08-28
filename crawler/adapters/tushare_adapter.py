@@ -322,47 +322,55 @@ class TuShareAdapter(DataSourceAdapter):
         if trade_date:
             tds = [__import__('datetime').date.fromisoformat(trade_date)]
         else:
-            # 取最近交易日（从本地日历倒查，周一自动回退上周五）
+            # 取最近交易日（本地日历倒查，倒序=最新优先）；
+            # 当日数据可能未生成（盘中/补数场景），需逐日回退到有数据的交易日
             tds = self._trade_days((_dt2.today() - timedelta(days=10)).isoformat(),
                                    _dt2.today().isoformat())
         if not tds:
             return results
-        td = tds[0].strftime("%Y%m%d")
         code_set = set(codes) if codes else None
-        try:
-            self.quota.consume()
-            df = self._pro.daily_basic(trade_date=td,
-                fields='ts_code,trade_date,total_mv,circ_mv,total_share,float_share,free_share,pe_ttm,pe,pb,ps,ps_ttm,dv_ratio,dv_ttm,turnover_rate,volume_ratio,limit_status')
-            if df is None or df.empty:
-                return results
-            for _, r in df.iterrows():
-                raw_code = str(r['ts_code'])
-                code = raw_code.split('.')[0].zfill(6)
-                if code_set is not None and code not in code_set:
+        for td_candidate in tds[:3]:
+            td = td_candidate.strftime("%Y%m%d")
+            try:
+                self.quota.consume()
+                df = self._pro.daily_basic(trade_date=td,
+                    fields='ts_code,trade_date,total_mv,circ_mv,total_share,float_share,free_share,pe_ttm,pe,pb,ps,ps_ttm,dv_ratio,dv_ttm,turnover_rate,volume_ratio,limit_status')
+                if df is None or df.empty:
+                    logger.info(f"[tushare] fundamentals {td} 无数据，回退前一交易日")
                     continue
-                results.append(FundamentalRow(
-                    stock_code=code, stock_name='',
-                    trade_date=str(r.get('trade_date','')),
-                    pe_ttm=float(r['pe_ttm']) if pd.notna(r.get('pe_ttm')) else None,
-                    pe=float(r['pe']) if pd.notna(r.get('pe')) else None,
-                    pb_mrq=float(r['pb']) if pd.notna(r.get('pb')) else None,
-                    ps=float(r['ps']) if pd.notna(r.get('ps')) else None,
-                    ps_ttm=float(r['ps_ttm']) if pd.notna(r.get('ps_ttm')) else None,
-                    dv_ratio=float(r['dv_ratio']) if pd.notna(r.get('dv_ratio')) else None,
-                    dv_ttm=float(r['dv_ttm']) if pd.notna(r.get('dv_ttm')) else None,
-                    turnover_rate=float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None,
-                    volume_ratio=float(r['volume_ratio']) if pd.notna(r.get('volume_ratio')) else None,
-                    total_shares=int(r['total_share'] * 10000) if pd.notna(r.get('total_share')) else None,
-                    float_share=int(r['float_share'] * 10000) if pd.notna(r.get('float_share')) else None,
-                    free_share=int(r['free_share'] * 10000) if pd.notna(r.get('free_share')) else None,
-                    market_cap=int(r['total_mv'] * 10000) if pd.notna(r.get('total_mv')) else None,
-                    circ_mv=int(r['circ_mv'] * 10000) if pd.notna(r.get('circ_mv')) else None,
-                    limit_status=int(r['limit_status']) if pd.notna(r.get('limit_status')) else None,
-                ))
-        except QuotaExhausted:
-            raise
-        except Exception as e:
-            logger.warning(f"[tushare] fundamentals {td} 失败: {e}")
+                break
+            except QuotaExhausted:
+                raise
+            except Exception as e:
+                logger.warning(f"[tushare] fundamentals {td} 失败: {e}")
+                continue
+        else:
+            return results
+
+        for _, r in df.iterrows():
+            raw_code = str(r['ts_code'])
+            code = raw_code.split('.')[0].zfill(6)
+            if code_set is not None and code not in code_set:
+                continue
+            results.append(FundamentalRow(
+                stock_code=code, stock_name='',
+                trade_date=str(r.get('trade_date','')),
+                pe_ttm=float(r['pe_ttm']) if pd.notna(r.get('pe_ttm')) else None,
+                pe=float(r['pe']) if pd.notna(r.get('pe')) else None,
+                pb_mrq=float(r['pb']) if pd.notna(r.get('pb')) else None,
+                ps=float(r['ps']) if pd.notna(r.get('ps')) else None,
+                ps_ttm=float(r['ps_ttm']) if pd.notna(r.get('ps_ttm')) else None,
+                dv_ratio=float(r['dv_ratio']) if pd.notna(r.get('dv_ratio')) else None,
+                dv_ttm=float(r['dv_ttm']) if pd.notna(r.get('dv_ttm')) else None,
+                turnover_rate=float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None,
+                volume_ratio=float(r['volume_ratio']) if pd.notna(r.get('volume_ratio')) else None,
+                total_shares=int(r['total_share'] * 10000) if pd.notna(r.get('total_share')) else None,
+                float_share=int(r['float_share'] * 10000) if pd.notna(r.get('float_share')) else None,
+                free_share=int(r['free_share'] * 10000) if pd.notna(r.get('free_share')) else None,
+                market_cap=int(r['total_mv'] * 10000) if pd.notna(r.get('total_mv')) else None,
+                circ_mv=int(r['circ_mv'] * 10000) if pd.notna(r.get('circ_mv')) else None,
+                limit_status=int(r['limit_status']) if pd.notna(r.get('limit_status')) else None,
+            ))
         return results
 
     def fetch_top_list(self, trade_date: str) -> List[dict]:

@@ -19,29 +19,23 @@ BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:3000")
 def test_login_page_renders(page):
     """未登录时显示登录页面。"""
     page.goto(BASE_URL)
-    # 登录表单应可见
-    page.wait_for_selector("text=登录", timeout=5000)
-    assert "登录" in page.title() or page.locator("text=登录").is_visible()
+    # 登录表单应可见（按钮文字为「登 录」）
+    page.wait_for_selector("text=登 录", timeout=5000)
+    assert page.locator("input[type='password']").is_visible()
 
 
 def test_login_wrong_password(page):
     """错误密码应提示。"""
     page.goto(BASE_URL)
-    # 输入错误密码
-    username_input = page.locator("input[type='text']").first
-    password_input = page.locator("input[type='password']").first
-    if username_input.is_visible():
-        username_input.fill("admin")
-    if password_input.is_visible():
-        password_input.fill("wrong_password")
+    page.wait_for_selector("input", timeout=5000)
+    # 用户名 input 无 type 属性，按顺序取前两个 input
+    page.locator("input").nth(0).fill("admin")
+    page.locator("input").nth(1).fill("wrong_password")
     # 点击登录按钮
-    login_btn = page.locator("button:has-text('登录')").first
-    if login_btn.is_visible():
-        login_btn.click()
-    # 应显示错误提示
-    page.wait_for_timeout(1000)
-    # 仍在登录页或出现错误提示
-    assert "登录" in page.title() or page.locator("text=错误").is_visible() or page.locator("text=登录").is_visible()
+    page.locator("button:has-text('登 录')").first.click()
+    # 应显示错误提示（401 用户名或密码错误 / 429 限流频繁）
+    page.wait_for_timeout(1500)
+    assert page.locator("div:has-text('错误'), div:has-text('频繁')").first.is_visible()
 
 
 # ── 持仓页 ──

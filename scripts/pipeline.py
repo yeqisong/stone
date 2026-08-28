@@ -7,7 +7,7 @@ DAG 流水线 —— 有向无环图任务调度。
   python3 scripts/pipeline.py 2026-06-08        全量执行
   python3 scripts/pipeline.py 2026-06-08 kline  只触发 kline 链路
 """
-import sys, os
+import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
@@ -128,25 +128,25 @@ def generate_stats(*args, **kwargs):
     def q(query):
         try: return db.execute(text(query)).scalar()
         except: db.rollback(); return -1
-    # 一次 GROUP BY 同时拿到上交所和深交所行数
+    # 一次 GROUP BY 同时拿到上交所和深交所行数（剔除 15/5 开头 ETF 行，ETF 单列统计）
     dq_counts = {}
     try:
-        rows = db.execute(text("SELECT exchange, COUNT(*) FROM daily_quote GROUP BY exchange")).fetchall()
+        rows = db.execute(text("SELECT exchange, COUNT(*) FROM daily_quote WHERE NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5') GROUP BY exchange")).fetchall()
         for r in rows: dq_counts[r[0]] = r[1]
     except: db.rollback()
 
     tables = [
         ('上交所A股', lambda: (dq_counts.get('SSE', 0), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'")),
-         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")),
+         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')")),
         ('深交所A股', lambda: (dq_counts.get('SZSE', 0), q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'")),
-         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")),
+         ("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')", "SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')")),
         ('指数日K线', lambda: (q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"), q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")),
          ("SELECT MIN(trade_date)::text FROM index_daily_quote", "SELECT MAX(trade_date)::text FROM index_daily_quote")),
         ('ETF日K线', None,
          ("SELECT MIN(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'",
           "SELECT MAX(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")),  # 下面单独处理 rows
-        ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals")),
-         ("SELECT MIN(updated_at)::text FROM stock_fundamentals", "SELECT MAX(updated_at)::text FROM stock_fundamentals")),
+        ('基本面', lambda: (q("SELECT COUNT(*) FROM stock_fundamentals_history"), q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals_history")),
+         ("SELECT MIN(report_date)::text FROM stock_fundamentals_history", "SELECT MAX(report_date)::text FROM stock_fundamentals_history")),  # 历史口径（快照表无日期跨度，updated_at 最小值只是停更快照残留）
         ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history")),
          ("SELECT MIN(signal_date)::text FROM signal_history", "SELECT MAX(signal_date)::text FROM signal_history")),
         ('交易日历', lambda: (q("SELECT COUNT(*) FROM trade_calendar"), None),
@@ -186,6 +186,7 @@ def generate_stats(*args, **kwargs):
     sig_sell = q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0
     for s in stats:
         if s['label'] == '交易信号': s['detail'] = f'买{sig_buy} 卖{sig_sell}'
+        if s['label'] in ('上交所A股', '深交所A股'): s['detail'] = '不含ETF'
 
     # 写入 data_stats_cache（API 从此表读取，避免每次实时 COUNT）
     db.execute(text("INSERT INTO data_stats_cache (stats_json, computed_at) VALUES (:json, CURRENT_TIMESTAMP)"),
@@ -525,35 +526,27 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
     if not feature_names:
         return pd.DataFrame()
 
-    # 1. 批量拉取 feature_values
-    rows = db.execute(text("""
-        SELECT stock_code, trade_date, feature_name, value
-        FROM feature_values
-        WHERE feature_name = ANY(:names)
-          AND trade_date BETWEEN :sd AND :ed
-        ORDER BY stock_code, trade_date
-    """), {"names": feature_names, "sd": start_date, "ed": end_date}).fetchall()
+    # 容错：空 end_date 解释为今天（前端/接口层可能传空）
+    if not end_date:
+        from datetime import date as _date
+        end_date = str(_date.today())
 
-    if not rows:
+    # 列名白名单（防注入 + 非法标识符），特征名来自 features 表
+    safe_names = [fn for fn in feature_names if re.fullmatch(r'[A-Za-z0-9_]+', fn)]
+    if not safe_names:
         return pd.DataFrame()
 
-    df_fv = pd.DataFrame(rows, columns=['stock_code', 'trade_date', 'feature_name', 'value'])
-    df_fv['trade_date'] = pd.to_datetime(df_fv['trade_date'])
-
-    # 2. PIVOT: 长格式 → 宽表
-    df_wide = df_fv.pivot_table(
-        index=['stock_code', 'trade_date'],
-        columns='feature_name',
-        values='value',
-        aggfunc='first'
-    ).reset_index()
-
-    # 补齐缺失的特征列
-    for fn in feature_names:
-        if fn not in df_wide.columns:
-            df_wide[fn] = None
-
-    # 3. JOIN daily_quote 获取 close/volume
+    # SQL 端 PIVOT（FILTER 聚合）：长格式逐行拉取在 23 特征 × 多年时高达数千万行，
+    # 仅 fetchall + pandas 副本即可吃满数十 GB 内存；FILTER 聚合由 PostgreSQL 完成
+    # 长转宽，只返回 ~360 万行 × (2+N) 列的结果集（约 1-2GB），内存降低一个数量级
+    selects = ",\n".join(
+        f"MAX(value) FILTER (WHERE feature_name = '{fn}') AS \"{fn}\"" for fn in safe_names)
+    pivoted = f"""
+        SELECT stock_code, trade_date, {selects}
+        FROM feature_values
+        WHERE feature_name = ANY(:names) AND trade_date BETWEEN :sd AND :ed
+        GROUP BY stock_code, trade_date
+    """
     table = 'daily_quote'
     code_col = 'stock_code'
     ent_filter = "AND exchange IN ('SSE','SZSE')"
@@ -563,94 +556,155 @@ def build_feature_wide_table(db, feature_names: list, start_date: str, end_date:
         ent_filter = ''
     elif entity == 'etf':
         ent_filter = "AND (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"
-
-    quotes = db.execute(text(f"""
+    quotes = f"""
         SELECT {code_col} as stock_code, trade_date, close_hfq as close, volume
         FROM {table}
         WHERE trade_date BETWEEN :sd AND :ed {ent_filter}
-        ORDER BY stock_code, trade_date
-    """), {"sd": start_date, "ed": end_date}).fetchall()
+    """
+    sql = f"""
+        SELECT f.stock_code, to_char(f.trade_date, 'YYYY-MM-DD') AS trade_date,
+               {", ".join(f'f."{fn}"' for fn in safe_names)},
+               q.close, q.volume
+        FROM ({pivoted}) f
+        LEFT JOIN ({quotes}) q
+          ON q.stock_code = f.stock_code AND q.trade_date = f.trade_date
+    """
+    df = pd.DataFrame(db.execute(text(sql), {
+        "names": safe_names, "sd": start_date, "ed": end_date,
+    }).fetchall(), columns=['stock_code', 'trade_date'] + safe_names + ['close', 'volume'])
 
-    df_q = pd.DataFrame(quotes, columns=['stock_code', 'trade_date', 'close', 'volume'])
-    df_q['trade_date'] = pd.to_datetime(df_q['trade_date']).dt.strftime('%Y-%m-%d')
+    # 补齐缺失的特征列
+    for fn in feature_names:
+        if fn not in df.columns:
+            df[fn] = None
 
-    # Convert both to string for safe merge
-    df_wide['trade_date'] = pd.to_datetime(df_wide['trade_date']).dt.strftime('%Y-%m-%d')
-
-    # 4. LEFT JOIN 行情
-    df_merged = df_wide.merge(df_q, on=['stock_code', 'trade_date'], how='left')
-
-    # 按日期排序
-    df_merged = df_merged.sort_values(['trade_date', 'stock_code']).reset_index(drop=True)
-
-    return df_merged
+    # 按日期排序（与旧实现一致）
+    return df.sort_values(['trade_date', 'stock_code']).reset_index(drop=True)
 
 
 # ── 归因分析引擎（v2.7 — 基准锚定法）──
 
-def _simple_backtest(df, feature_names, val_start, val_end, hold_days, stop_loss, take_profit):
-    """模块级简化回测（供 run_attribution 和 strategy-scan 共用）。"""
-    import numpy as np
-    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
-    if not val_mask.any(): return {'sharpe': 0, 'max_dd': 0, 'win_rate': 0, 'total_return': 0}
-    vdf = df[val_mask].copy()
+def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
+                     stop_loss=0.08, take_profit=0.15, trailing=0.0, max_pos=5,
+                     seed=None, ideal=False, compound=True):
+    """统一回测引擎 v2（供 run_attribution 和 strategy-scan 共用）。
 
-    if feature_names:
-        X = vdf[feature_names].fillna(0).values
-        y_pred = np.mean(X, axis=1) if X.shape[1] > 0 else np.zeros(len(vdf))
+    选股依据三选一（互斥）：
+      - pred: 与 df 行索引对齐的预测 Series（真模型打分由外部传入，引擎不做特征均值）
+      - ideal=True: 完美预知，每日买未来 hold_days 实际涨幅最高且为正者（理论上限）
+      - seed: 固定种子随机选股（随机基线，可复现）
+    执行约束（A 股）：涨停(≥9.8%/19.8%)不买、跌停不卖、T+1（卖出检查只针对隔夜仓，
+    当日买入的仓位次日才进入检查）；trailing>0 时按持仓期峰值回撤触发卖出；
+    止损/止盈按触发价成交（忽略跳空）。
+    成本：佣金 0.00025（双边）、印花税 0.001（卖出）、滑点 0.001（买卖各半摊入成交价）。
+    compound=False 时按初始资金定额仓位（不复利）——ideal 基线用它，避免完美预知
+    逐日复利爆炸出天文数字污染 Brinson 分解。
+    """
+    import numpy as np
+    import pandas as pd
+    empty = {'sharpe': 0, 'max_dd': 0, 'win_rate': 0, 'total_return': 0,
+             'total_trades': 0, 'total_cost': 0}
+    # 稳定排序：groupby shift（理想基线前瞻价 / 涨跌停前收盘）依赖组内日期升序
+    df = df.sort_values(['trade_date', 'stock_code'], kind='stable').copy()
+    df['close'] = df['close'].astype(float)  # SQL NUMERIC 为 Decimal，除法会抛 DivisionUndefined
+    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
+    if not val_mask.any():
+        return empty
+    vdf = df[val_mask].copy()
+    vdf['trade_date'] = pd.to_datetime(vdf['trade_date'])  # 持仓期计算需要日期相减
+
+    # ── 选股得分 ──
+    if ideal:
+        # 未来 hold_days 个交易行实际涨幅：在全表上 groupby shift，验证区间尾部也能取到窗外价格
+        gfull = df.groupby('stock_code')['close']
+        fwd = gfull.shift(-hold_days) / df['close'] - 1
+        vdf['_score'] = fwd[val_mask]
+    elif pred is not None:
+        if not isinstance(pred, pd.Series):
+            raise ValueError('pred 必须是与 df 行索引对齐的 pd.Series')
+        vdf['_score'] = pred.loc[vdf.index].astype(float)
     else:
-        y_pred = np.zeros(len(vdf))
+        rng = np.random.default_rng(seed if seed is not None else 42)
+        vdf['_score'] = 0.0
+
+    # ── 涨跌停标记：对前收盘的涨跌幅（close 为后复权价，除权日略有近似）──
+    prev_close = vdf.groupby('stock_code')['close'].shift(1)
+    pct = vdf['close'] / prev_close - 1
+    is_20 = vdf['stock_code'].astype(str).str.startswith(('30', '68'))  # 创业板/科创板 20cm
+    lim = pd.Series(np.where(is_20, 0.198, 0.098), index=vdf.index)
+    vdf['_limit_up'] = pct >= lim       # 区间首日 pct 为 NaN → False，允许交易
+    vdf['_limit_down'] = pct <= -lim
 
     dates_unique = sorted(vdf['trade_date'].unique())
     equity = 1_000_000; cash = 1_000_000
     holdings = []; equity_curve = [equity]
     trade_count = win_count = 0
-    max_pos = 5; comm = 0.00025; st_tax = 0.001; slip = 0.001
+    cost_total = 0.0
+    comm = 0.00025; st_tax = 0.001; slip = 0.001
 
     for d in dates_unique:
         day = vdf[vdf['trade_date'] == d]
         if day.empty: continue
+
+        # ── 卖出检查（先卖后买；只检查隔夜仓 → T+1 天然成立）──
         surviving = []
         for h in holdings:
             hday = day[day['stock_code'] == h['code']]
             if hday.empty: surviving.append(h); continue
             cur_p = float(hday['close'].iloc[0])
-            sell_p = cur_p; should_sell = False
-            if cur_p <= h['buy_price'] * (1 - stop_loss): sell_p = h['buy_price'] * (1 - stop_loss); should_sell = True
-            elif cur_p >= h['buy_price'] * (1 + take_profit): sell_p = h['buy_price'] * (1 + take_profit); should_sell = True
-            elif (d - h['buy_date']).days >= hold_days: should_sell = True
-            if should_sell:
-                gross = h['shares'] * sell_p; cost = gross * (comm + st_tax) + max(gross * slip, 0)
-                cash += max(gross - cost, 0); trade_count += 1
-                if sell_p > h['buy_price']: win_count += 1
-            else: surviving.append(h)
+            h['peak'] = max(h.get('peak', h['buy_price']), cur_p)
+            sell_p = None
+            if cur_p <= h['buy_price'] * (1 - stop_loss):
+                sell_p = h['buy_price'] * (1 - stop_loss)       # 止损按触发价成交
+            elif cur_p >= h['buy_price'] * (1 + take_profit):
+                sell_p = h['buy_price'] * (1 + take_profit)     # 止盈按触发价成交
+            elif trailing > 0 and cur_p <= h['peak'] * (1 - trailing):
+                sell_p = cur_p                                  # 峰值回撤卖出
+            elif (d - h['buy_date']).days >= hold_days:
+                sell_p = cur_p
+            if sell_p is None or bool(hday['_limit_down'].iloc[0]):
+                surviving.append(h); continue                   # 跌停不可卖
+            gross = h['shares'] * sell_p
+            cost = gross * (comm + st_tax) + max(gross * slip, 0)
+            cost_total += cost
+            cash += max(gross - cost, 0); trade_count += 1
+            if sell_p > h['buy_price']: win_count += 1
         holdings = surviving
+
+        # ── 买入：候选剔除已持/涨停，按得分取 top slots ──
         held = {h['code'] for h in holdings}
-        candidates = day[~day['stock_code'].isin(held) & (day['close'] > 0)]
-        if candidates.empty: continue
+        candidates = day[~day['stock_code'].isin(held) & (day['close'] > 0) & (~day['_limit_up'])]
         slots = max_pos - len(holdings)
-        if slots <= 0: continue
-        # 预测 > min_pred_return(默认0) 才买，用排序选 top
-        min_ret = 0.0
-        filtered = candidates.copy()
-        if len(y_pred) > 0:
-            pred_vals = y_pred[:len(candidates)]
-            filtered = candidates[pred_vals > min_ret]
-        top_idx = np.argsort(y_pred[:len(filtered)])[-min(slots, len(filtered)):][::-1] if len(filtered) > 0 and len(y_pred) > 0 else []
-        bought = 0
-        for idx in top_idx:
-            if bought >= slots: break
-            r = candidates.iloc[min(idx, len(candidates)-1)]
-            price = float(r['close']) * (1 + slip/2)
-            shares = int((equity/max_pos)//price//100)*100
+        picks = []
+        if slots > 0 and not candidates.empty:
+            if pred is None and not ideal:
+                n = min(slots, len(candidates))
+                picks = list(rng.choice(candidates.index.to_numpy(), size=n, replace=False))
+            else:
+                scored = candidates[candidates['_score'].notna() & (candidates['_score'] > 0)]
+                if not scored.empty:
+                    picks = list(scored['_score'].sort_values(ascending=False).index[:slots])
+        for ci in picks:
+            r = candidates.loc[ci]
+            price = float(r['close']) * (1 + slip / 2)
+            size_base = equity if compound else 1_000_000  # 非复利模式按初始资金定额仓位
+            shares = int((size_base / max_pos) // price // 100) * 100
             if shares < 100: continue
             gross2 = shares * price
-            if gross2 + gross2*comm > cash: continue
-            cash -= gross2 + gross2*comm
-            holdings.append({'code': r['stock_code'], 'buy_price': price, 'buy_date': d, 'shares': shares})
-            bought += 1
-        pos_val = sum(h['shares'] * float(day[day['stock_code']==h['code']]['close'].iloc[0]) if not day[day['stock_code']==h['code']].empty else 0 for h in holdings)
-        equity = cash + pos_val; equity_curve.append(equity)
+            if gross2 + gross2 * comm > cash: continue
+            cash -= gross2 + gross2 * comm
+            cost_total += gross2 * comm
+            holdings.append({'code': r['stock_code'], 'buy_price': price,
+                             'buy_date': d, 'shares': shares, 'peak': price})
+
+        # ── 收盘估值（无候选/无空位也要记账，保证净值曲线逐日连续）──
+        pos_val = 0.0
+        for h in holdings:
+            hday = day[day['stock_code'] == h['code']]
+            if not hday.empty:
+                pos_val += h['shares'] * float(hday['close'].iloc[0])
+        equity = cash + pos_val
+        equity_curve.append(equity)
 
     eq = np.array(equity_curve); rets = eq[1:]/eq[:-1] - 1 if len(eq) > 1 else np.array([0])
     sharpe = float(np.mean(rets)/np.std(rets)*np.sqrt(252)) if np.std(rets) > 0 else 0
@@ -658,69 +712,110 @@ def _simple_backtest(df, feature_names, val_start, val_end, hold_days, stop_loss
     peak = np.maximum.accumulate(eq); dd = np.min((eq-peak)/peak) if len(eq) > 1 else 0
     return {'sharpe': round(sharpe,4), 'max_dd': round(float(dd),4),
             'win_rate': round(win_count/max(trade_count,1),4),
-            'total_return': round(float(total_ret),4), 'total_trades': trade_count}
+            'total_return': round(float(total_ret),4), 'total_trades': trade_count,
+            'total_cost': round(cost_total, 2)}
 
 
-def run_attribution(db, version: str, df, feature_names: list, val_start: str, val_end: str,
+def predict_for_version(db, version: str, df, val_start: str, val_end: str, horizon: int = 10):
+    """加载 xgb_{horizon}d 模型并对验证区间逐行预测（归因/扫描共用的唯一预测入口）。
+
+    模型含训练期派生特征（bias_5_20 / idx_ret_20d）而宽表没有时现场派生对齐；
+    idx_ret_20d 查询起点向前扩 90 自然日，保证 pct_change(20) 有预热。
+    Returns: (pred Series|None, err|None)，pred 与 df 验证区间行索引对齐。
+    """
+    import pickle as _pkl, os as _os
+    import pandas as _pd
+    from datetime import date as _d, timedelta as _td
+    from sqlalchemy import text as _text
+
+    model_path = f"data/models/{version}/xgb_{horizon}d.pkl"
+    if not _os.path.exists(model_path):
+        return None, f'模型文件不存在: {model_path}'
+    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
+    if not val_mask.any():
+        return None, '验证集无数据'
+    val_df = df[val_mask].copy()
+    pred_index = val_df.index
+    try:
+        with open(model_path, 'rb') as f:
+            model = _pkl.load(f)
+        mf = list(getattr(model, 'feature_names_in_', []))
+        if not mf:
+            return None, '模型缺少 feature_names_in_，请重新训练'
+        # 特征对齐：模型含训练时派生的特征，宽表没有则现场派生（与 dag_task_model_train 一致）
+        if 'bias_5_20' in mf and 'bias_5_20' not in val_df.columns \
+                and 'ma_5' in val_df.columns and 'ma_20' in val_df.columns:
+            # SQL NUMERIC 为 Decimal，0/0 会抛 DivisionUndefined，先转 float
+            val_df['bias_5_20'] = val_df['ma_5'].astype(float) / val_df['ma_20'].astype(float) - 1
+        if 'idx_ret_20d' in mf and 'idx_ret_20d' not in val_df.columns:
+            _s = (_d.fromisoformat(str(val_start)[:10]) - _td(days=90)).isoformat()
+            idx_rows = db.execute(_text(
+                "SELECT trade_date, close FROM index_daily_quote WHERE index_code='000300' "
+                "AND trade_date BETWEEN :ds AND :ed ORDER BY trade_date"
+            ), {"ds": _s, "ed": val_end}).fetchall()
+            if idx_rows:
+                idx_df = _pd.DataFrame(idx_rows, columns=['trade_date', 'idx_close'])
+                idx_df['trade_date'] = idx_df['trade_date'].astype(str)
+                idx_df['idx_close'] = idx_df['idx_close'].astype(float)
+                idx_df['idx_ret_20d'] = idx_df['idx_close'].pct_change(20)
+                # 左连接保持行序；索引被 merge 重置，预测后按 pred_index 回填
+                val_df = val_df.reset_index(drop=True).merge(
+                    idx_df[['trade_date', 'idx_ret_20d']], on='trade_date', how='left')
+                val_df['idx_ret_20d'] = val_df['idx_ret_20d'].fillna(0).astype(float)
+        cols = [c for c in mf if c in val_df.columns]
+        if len(cols) != len(mf):
+            missing = [c for c in mf if c not in val_df.columns]
+            return None, f'宽表缺少模型特征: {missing[:5]}'
+        y = model.predict(val_df[cols].fillna(0).values)
+        return _pd.Series(y, index=pred_index), None
+    except Exception:
+        import traceback as _tb
+        return None, f'预测失败: {_tb.format_exc()[-300:]}'
+
+
+def run_attribution(db, version: str, df, val_start: str, val_end: str,
                     initial_cash: float = 1_000_000, max_pos: int = 5,
                     stop_loss: float = 0.08, take_profit: float = 0.15, hold_days: int = 10):
-    """三基线归因分析。
+    """三基线归因分析（评估器 v2）。
+
+    ideal:  完美预知基线（每日买未来 hold_days 实际涨幅最高者，无止损止盈）— 策略上限
+    random: 固定种子随机基线（与 real 同一止损止盈参数）— 无信息下限
+    real:   真模型预测基线（xgb_{horizon}d，horizon 由 hold_days 映射）
+    合理形态应为 ideal > real ≈/> random；real 长期低于 random 说明模型负贡献。
 
     Returns:
         {
-            'ideal': {sharpe, total_return, max_dd, win_rate, ...},
-            'random': {sharpe, ...},
-            'real': {sharpe, ...},
+            'ideal'/'random'/'real': {sharpe, total_return, max_dd, win_rate},
+            'benchmark_return': 沪深300 同期收益,
             'matrix': 'execution_loss'|'beta_amplifier'|'dual_driver'|'double_misjudge',
             'brinson': {model_contribution, strategy_contribution, interaction}
         }
     """
-    import numpy as np
-    from datetime import date as _date
-
-    val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
-    if not val_mask.any():
-        return {'error': '验证集无数据'}
-
-    val_df = df[val_mask].copy()
-    dates = val_df['trade_date'].values
-    codes = val_df['stock_code'].values
-    close = val_df['close'].values
-    volume = val_df['volume'].values
-    X = val_df[feature_names].values if feature_names else np.zeros((len(val_df), 1))
-
-    # 1. 检查模型是否存在
-    import pickle as _pkl, os as _os
-    model_path = f"data/models/{version}/xgb_10d.pkl"
-    model = None
-    y_pred = None
-    if _os.path.exists(model_path):
-        try:
-            with open(model_path, 'rb') as f:
-                model = _pkl.load(f)
-            y_pred = model.predict(X) if len(X) > 0 else None
-        except Exception:
-            pass
-
-    if y_pred is None or model is None:
+    horizon = 5 if hold_days <= 5 else (20 if hold_days > 10 else 10)
+    pred, err = predict_for_version(db, version, df, val_start, val_end, horizon)
+    if pred is None:
+        logger.warning(f"[attribution] {version} 预测不可用: {err}")
+        zero = {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0}
         return {
-            'ideal': {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0},
-            'random': {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0},
-            'real': {'sharpe': 0, 'total_return': 0, 'win_rate': 0, 'max_dd': 0},
+            'ideal': dict(zero), 'random': dict(zero), 'real': dict(zero),
             'benchmark_return': 0, 'matrix': 'double_misjudge',
             'brinson': {'model_contribution': 0, 'strategy_contribution': 0, 'interaction': 0},
-            'error': f'模型文件不存在或损坏: {model_path}，请先完成模型训练'
+            'error': err,
         }
 
-    # 2. 使用简化回测（避免嵌套函数作用域问题）
-    ideal = _simple_backtest(df, feature_names, val_start, val_end, hold_days, 0.99, 99.0)
-    random = _simple_backtest(df, [], val_start, val_end, hold_days, stop_loss, take_profit)
-    real = _simple_backtest(df, feature_names, val_start, val_end, hold_days, stop_loss, take_profit)
+    # 三基线回测（同一引擎同一约束，仅选股依据不同）
+    real = _simple_backtest(df, pred, val_start, val_end, hold_days,
+                            stop_loss, take_profit, max_pos=max_pos)
+    ideal = _simple_backtest(df, None, val_start, val_end, hold_days,
+                             0.99, 99.0, max_pos=max_pos, ideal=True, compound=False)
+    random = _simple_backtest(df, None, val_start, val_end, hold_days,
+                              stop_loss, take_profit, max_pos=max_pos, seed=42)
 
     # 4. 基准收益（沪深300 同期）
     benchmark_return = 0
     try:
-        bm = db.execute(text(
+        from sqlalchemy import text as _text
+        bm = db.execute(_text(
             "SELECT close FROM index_daily_quote WHERE index_code='000300' AND trade_date BETWEEN :s AND :e ORDER BY trade_date"
         ), {"s": val_start, "e": val_end}).fetchall()
         if len(bm) >= 2:
@@ -763,6 +858,7 @@ def run_attribution(db, version: str, df, feature_names: list, val_start: str, v
 
 def _get_preference_thresholds(db) -> dict:
     """读取全局偏好设置，返回信号生成阈值字典。"""
+    from sqlalchemy import text
     pref = db.execute(text(
         "SELECT params FROM strategy_config WHERE strategy_name='global_preference'"
     )).scalar()
@@ -798,6 +894,8 @@ def dag_task_model_signal(trade_date=None, **kw):
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     import json as _json
+    import numpy as np
+    import pandas as pd
 
     td = trade_date or str(_date.today())
     rid = _rid(kw)
@@ -806,8 +904,11 @@ def dag_task_model_signal(trade_date=None, **kw):
 
     try:
         db = get_sync_db()
-        # 获取 ACTIVE 模型 + 全局偏好
-        ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
+        # 获取 ACTIVE 模型 + 全局偏好（多实体并存时取最近激活者，避免无 ORDER BY 的不确定行）
+        ver = db.execute(text(
+            "SELECT version FROM model_versions WHERE status='ACTIVE' "
+            "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
+        )).scalar()
         if not ver:
             write_node_log(log_id=log_id, status='success', rows=0, detail='无 ACTIVE 模型，跳过')
             db.close()
@@ -827,6 +928,7 @@ def dag_task_model_signal(trade_date=None, **kw):
         model_cfg = db.execute(text("SELECT best_params FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
         use_predict = False
         xgb_models = {}
+        ml_threshold = 0.5
         try:
             if model_cfg:
                 bp = _json.loads(model_cfg) if isinstance(model_cfg, str) else model_cfg
@@ -837,8 +939,21 @@ def dag_task_model_signal(trade_date=None, **kw):
                         if _os.path.exists(path):
                             with open(path, 'rb') as f:
                                 xgb_models[label] = _pkl.load(f)
-                use_predict = len(xgb_models) == 3
-                write_node_log(log_id=log_id, status='running', detail=f"预测模式 (R²avg={bp.get('5d',{}).get('r2','?'):.3f})" if use_predict else f"规则模式 (偏好:{pref_mode})")
+                # A3: 有 ≥2 个周期模型即启用 ML 预测（原 ==3 全齐才启用过严）
+                use_predict = len(xgb_models) >= 2
+                cfg_obj = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
+                cfg_parsed = _json.loads(cfg_obj) if isinstance(cfg_obj, str) else (cfg_obj or {})
+                sig_cfg = cfg_parsed.get('signal', {})
+                # 买入阈值模式：quantile=当日预测分布分位数（默认，自适应模型能力）；absolute=绝对预测收益率
+                ml_mode = sig_cfg.get('threshold_mode', 'quantile')
+                _mt = sig_cfg.get('ml_confidence_threshold')
+                ml_threshold = _mt if _mt is not None else 0.5  # 不能 or 0.5：0.0 是合法配置（全量买入）
+                buy_top_pct = sig_cfg.get('buy_top_pct', 0.05)  # quantile 模式：预测 top 5% 触发买入
+                r2_avg = float(np.mean([bp[l].get('r2', 0) for l in xgb_models])) if xgb_models else 0
+                mode_desc = (f"预测top{buy_top_pct:.0%}" if ml_mode == 'quantile' else f"绝对阈值{ml_threshold:.2%}")
+                write_node_log(log_id=log_id, status='running',
+                               detail=f"预测模式 ({len(xgb_models)}模型 R²avg={r2_avg:.3f}, {mode_desc})" if use_predict
+                               else f"规则模式 (偏好:{pref_mode})")
         except Exception as e:
             logger.warning(f"[model_signal] 预测模型加载失败: {e}，回退规则模式")
 
@@ -861,6 +976,19 @@ def dag_task_model_signal(trade_date=None, **kw):
             write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
             db.close(); return 0
 
+        # 派生特征与训练端保持一致（bias_5_20/vol_ratio_3d/idx_ret_20d）：
+        # 训练模型 feature_names_in_ 含这些列，信号侧缺列会导致 ML 预测逐股回退规则模式
+        if 'ma_5' in df_today.columns and 'ma_20' in df_today.columns:
+            df_today['bias_5_20'] = df_today['ma_5'] / df_today['ma_20'] - 1
+        if 'vol_ratio' in df_today.columns:
+            df_today['vol_ratio_3d'] = df_today.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())
+        idx_rows = db.execute(text(
+            "SELECT close FROM index_daily_quote WHERE index_code='000300' AND trade_date <= :d ORDER BY trade_date DESC LIMIT 21"
+        ), {"d": today_str}).fetchall()
+        if len(idx_rows) >= 21:
+            closes = [float(x[0]) for x in reversed(idx_rows)]
+            df_today['idx_ret_20d'] = closes[-1] / closes[0] - 1
+
         # 准备 stock_name
         codes = df_today['stock_code'].unique().tolist()
         names_map = {}
@@ -870,46 +998,120 @@ def dag_task_model_signal(trade_date=None, **kw):
             names_map = {r[0]: r[1] for r in nr}
 
         rows = []
+        # 模型特征 = config 特征 + 派生特征（bias_5_20/vol_ratio_3d/idx_ret_20d）
+        extra_cols = [c for c in ('bias_5_20', 'vol_ratio_3d', 'idx_ret_20d') if c in df_today.columns]
         for _, r in df_today.iterrows():
             d = {'stock_code': r['stock_code'], 'stock_name': names_map.get(r['stock_code'], '')}
-            for fn in feature_names:
-                d[fn] = float(r[fn]) if fn in r and pd.notna(r[fn]) else 0
+            for fn in feature_names + extra_cols:
+                # 缺失/NaN 特征传 NaN（XGBoost 原生缺失分支），不要用 0 伪装观测值
+                d[fn] = float(r[fn]) if fn in r and pd.notna(r[fn]) else float('nan')
             d['close'] = float(r.get('close', 0)) if pd.notna(r.get('close', 0)) else 0
             rows.append(type('Row', (), d)())
 
         # 先删旧信号再插新
         db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
 
-        # 评分信号生成（规则模式）
+        # 评分信号生成（ML 预测优先，规则评分兜底）
         buy_count = 0
-        for r in rows:
-            code = r.stock_code
-            name = r.stock_name
-            price = r.close
-            if not price or price == 0:
-                continue
-            # 规则评分
+        ml_fallback = 0
+
+        def _rule_score(row):
+            """规则评分（ML 回退 / 无模型时使用）。"""
             score = 0
             reasons = []
-            pct_b = getattr(r, 'boll_pct_b', 0) or 0
-            rsi_val = getattr(r, 'rsi_14', 50) or 50
-            dif = getattr(r, 'macd_dif', 0) or 0
-            hist = getattr(r, 'macd_hist', 0) or 0
-
+            pct_b = getattr(row, 'boll_pct_b', 0) or 0
+            rsi_val = getattr(row, 'rsi_14', 50) or 50
+            dif = getattr(row, 'macd_dif', 0) or 0
+            hist = getattr(row, 'macd_hist', 0) or 0
             if pct_b < t['boll_lower']: score += 1; reasons.append('BOLL超卖')
             if rsi_val < t['rsi_oversold']: score += 1; reasons.append('RSI超卖')
             if dif > hist: score += 1; reasons.append('MACD正柱')
+            return score, reasons
 
-            direction = 'buy' if score >= t['buy_score_min'] else ''
-            if direction:
-                db.execute(text("""
-                    INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference)
-                    VALUES (:d,:c,:n,:dir,:s,:p,'model_signal',:r,true,:v,:sn,:pref)
-                """), {"d": td, "c": code, "n": name, "dir": direction, "s": score, "p": price, "r": ';'.join(reasons), "v": ver, "sn": model_snapshot, "pref": pref_mode})
-                buy_count += 1
+        def _insert_buy(row, strength, reason):
+            db.execute(text("""
+                INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference)
+                VALUES (:d,:c,:n,'buy',:s,:p,'model_signal',:r,true,:v,:sn,:pref)
+            """), {"d": td, "c": row.stock_code, "n": row.stock_name, "s": strength, "p": row.close,
+                   "r": reason, "v": ver, "sn": model_snapshot, "pref": pref_mode})
+
+        if use_predict and xgb_models:
+            # 第一遍：全量预测，得到当日预测分布（阈值模式需要完整分布才能取分位数）
+            preds_map = {}      # stock_code -> 预测收益率均值
+            fallback_rows = []  # 预测失败（特征缺失/模型异常）→ 回退规则评分
+            for r in rows:
+                if not r.close or r.close == 0:
+                    continue
+                try:
+                    preds = []
+                    for label in sorted(xgb_models.keys()):
+                        mdl = xgb_models[label]
+                        mf = list(getattr(mdl, 'feature_names_in_', []))
+                        if not mf:
+                            mf = [f for f in feature_names if hasattr(r, f)]
+                        vec = []
+                        for fn in mf:
+                            v = getattr(r, fn, None)
+                            if v is None:
+                                raise ValueError(f'缺少特征 {fn}')
+                            vec.append(float(v))
+                        preds.append(float(mdl.predict(np.array([vec]))[0]))
+                    preds_map[r.stock_code] = float(np.mean(preds))
+                except Exception:
+                    ml_fallback += 1
+                    fallback_rows.append(r)
+
+            # 阈值：quantile=当日预测 top N%（精确截断，模型无区分度时比例依然固定）；absolute=绝对预测收益率
+            if preds_map:
+                codes = np.array(list(preds_map.keys()))
+                vals = np.array(list(preds_map.values()))
+                if ml_mode == 'quantile':
+                    # top-K 截断而非分位值比较：预测值离散/并列时 `>= thr` 会放大买入比例（实测 5%→34%）
+                    k = max(int(len(vals) * min(max(buy_top_pct, 0.001), 1.0)), 1)
+                    order = np.argsort(vals)[::-1][:k]
+                    buy_codes = set(codes[order])
+                    thr = float(vals[order[-1]])
+                else:
+                    top_pct = None
+                    buy_codes = set(codes[vals >= float(ml_threshold)])
+                    thr = float(ml_threshold)
+                logger.info(f"[model_signal] 买入阈值({ml_mode})={thr:.4f} 预测分布: p50={np.median(vals):.4f} max={vals.max():.4f}")
+
+                for r in rows:
+                    if r.stock_code not in buy_codes:
+                        continue
+                    p = preds_map[r.stock_code]
+                    # 当日分布分位（并列均分：严格小于 + 一半并列），0-1
+                    rank = float((vals < p).mean() + 0.5 * (vals == p).mean())
+                    # 强度：分位映射 0-3（与规则评分同量纲），SMALLINT 取整
+                    strength = min(max(round(rank * 3), 0), 3)
+                    reason = (f'ML预测{p*100:.2f}%(top{buy_top_pct*100:.0f}%档)'
+                              if ml_mode == 'quantile' else f'ML预测{p*100:.2f}%(≥阈值{thr*100:.2f}%)')
+                    _insert_buy(r, strength, reason)
+                    buy_count += 1
+
+            # 预测失败回退规则评分
+            for r in fallback_rows:
+                score, reasons = _rule_score(r)
+                if score >= t['buy_score_min']:
+                    _insert_buy(r, score, ';'.join(reasons) or '规则评分')
+                    buy_count += 1
+        else:
+            # 规则评分
+            for r in rows:
+                if not r.close or r.close == 0:
+                    continue
+                score, reasons = _rule_score(r)
+                if score >= t['buy_score_min']:
+                    _insert_buy(r, score, ';'.join(reasons))
+                    buy_count += 1
 
         db.commit()
-        write_node_log(log_id=log_id, status='success', rows=buy_count, detail=f'{buy_count} 买入 {len(rows)} 扫描')
+        if ml_fallback:
+            logger.warning(f"[model_signal] {ml_fallback}/{len(rows)} 只股票 ML 预测失败回退规则模式")
+        mode_tag = 'ML' if (use_predict and xgb_models) else '规则'
+        write_node_log(log_id=log_id, status='success', rows=buy_count,
+                       detail=f'{mode_tag}模式 {buy_count} 买入 {len(rows)} 扫描')
         db.close()
         return buy_count
     except Exception as e:
@@ -931,7 +1133,11 @@ def dag_task_model_health(trade_date=None, **kw):
 
     try:
         db = get_sync_db()
-        ver = db.execute(text("SELECT version FROM model_versions WHERE status='ACTIVE' LIMIT 1")).scalar()
+        # 多实体并存时取最近激活的 ACTIVE（与 model_signal 同口径）
+        ver = db.execute(text(
+            "SELECT version FROM model_versions WHERE status='ACTIVE' "
+            "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
+        )).scalar()
         if not ver:
             write_node_log(log_id=log_id, status='success', rows=0, detail='无 ACTIVE 模型，跳过')
             db.close()
@@ -1335,8 +1541,12 @@ def dag_task_feature_compute(trade_date=None, **kw):
 
 
 
-def dag_task_model_train(trade_date=None, **kw):
-    """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。"""
+def dag_task_model_train(trade_date=None, version=None, **kw):
+    """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。
+
+    version 参数优先（页面训练路径显式传入）；无 version 时回退 DAG 流程路径
+    （取最新 DRAFT，无则自动创建 v1.0）。
+    """
     from datetime import date as _date, timedelta as _td
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -1353,20 +1563,51 @@ def dag_task_model_train(trade_date=None, **kw):
 
     try:
         db = get_sync_db()
-        ver = db.execute(text("SELECT version FROM model_versions WHERE status='DRAFT' ORDER BY created_at DESC LIMIT 1")).scalar()
+        ver = version or kw.get('version')
         if not ver:
-            ver = "v1.0"
-            db.execute(text("INSERT INTO model_versions (version, model_name, status, config) VALUES (:v, :n, 'DRAFT', :cfg) ON CONFLICT DO NOTHING"),
-                       {"v": ver, "n": "自动训练模型", "cfg": _json.dumps({
-                           "features": ["boll","macd","rsi","atr","ma","volume"],
-                           "ml_enabled": False, "model_type": "xgboost",
-                           "train_start": "2021-01-01", "train_end": "2025-12-31",
-                           "test_start": "2026-01-01", "test_end": None,
-                           "risk": {"stop_loss_pct": 8, "signal_timeout_days": 20},
-                       })})
-            db.commit()
+            # DAG 流程路径：取最新 DRAFT；没有则自动创建 v1.0
+            ver = db.execute(text("SELECT version FROM model_versions WHERE status='DRAFT' ORDER BY created_at DESC LIMIT 1")).scalar()
+            if not ver:
+                ver = "v1.0"
+                db.execute(text("INSERT INTO model_versions (version, model_name, status, config) VALUES (:v, :n, 'DRAFT', :cfg) ON CONFLICT DO NOTHING"),
+                           {"v": ver, "n": "自动训练模型", "cfg": _json.dumps({
+                               "features": ["boll","macd","rsi","atr","ma","volume"],
+                               "ml_enabled": False, "model_type": "xgboost",
+                               "train_start": "2021-01-01", "train_end": "2025-12-31",
+                               "test_start": "2026-01-01", "test_end": None,
+                               "risk": {"stop_loss_pct": 8, "signal_timeout_days": 20},
+                           })})
+                db.commit()
+        else:
+            # 页面训练路径：校验版本存在且状态允许训练（TRAINING=API 已置位；DRAFT=DAG 直调）
+            cur = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
+            if not cur:
+                write_node_log(log_id=log_id, status='failed', detail=f'版本 {ver} 不存在')
+                db.close(); return 0
+            if cur[0] not in ('TRAINING', 'DRAFT'):
+                write_node_log(log_id=log_id, status='failed', detail=f'版本 {ver} 状态为 {cur[0]}，不允许训练')
+                db.close(); return 0
         db.execute(text("UPDATE model_versions SET status='TRAINING', trained_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": ver})
         db.commit()
+
+        # 终止信号：页面训练注入 threading.Event，DAG 流程由 dag.py 注入
+        _stop_event = kw.get('_stop_event')
+
+        def _aborted():
+            return _stop_event is not None and _stop_event.is_set()
+
+        def _abort(reason):
+            """终止收尾：模型回 DRAFT，清空训练产物。"""
+            try:
+                db.execute(text(
+                    "UPDATE model_versions SET status='DRAFT', best_params=NULL, evaluation_report=NULL, "
+                    "sharpe=NULL, win_rate=NULL, max_drawdown=NULL, annual_return=NULL WHERE version=:v"
+                ), {"v": ver})
+                db.commit()
+            except Exception:
+                try: db.rollback()
+                except Exception: pass
+            write_node_log(log_id=log_id, status='failed', detail=reason)
 
         # ── 1. 加载数据（v2.6: 从 feature_values 宽表读取，替代旧 indicator JOIN）──
         update_node_progress(log_id=log_id, rows=0, detail='加载特征宽表…')
@@ -1427,9 +1668,10 @@ def dag_task_model_train(trade_date=None, **kw):
         if idx_rows:
             idx_df = pd.DataFrame(idx_rows, columns=['trade_date','idx_close'])
             idx_df['trade_date'] = idx_df['trade_date'].astype(str)
+            idx_df['idx_close'] = idx_df['idx_close'].astype(float)  # SQL NUMERIC 为 Decimal，需转 float
             idx_df['idx_ret_20d'] = idx_df['idx_close'].pct_change(20)
             df = df.merge(idx_df[['trade_date','idx_ret_20d']], on='trade_date', how='left')
-            df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0)
+            df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0).astype(float)
             FEATURES.append('idx_ret_20d')
 
         # 只保留有效特征列 + close/volume
@@ -1437,46 +1679,68 @@ def dag_task_model_train(trade_date=None, **kw):
         df = df.dropna(subset=valid_features)
 
         # ── 3. 标签：forward N 日收益 ──
-        # 从 daily_quote 批量查每只股票 N 日后的 close_hfq
+        # 批量查询样本区间（+60 自然日缓冲）内全部日线，内存中按股票分组计算，
+        # 替代原先逐行 N+1 查询（A2 优化）
         logger.info("[train] 计算 Triple Barrier 标签…")
         # 参数：止盈 +10%，止损 -5%，时间屏障 = 周期天数
         TAKE_PROFIT = 0.10
         STOP_LOSS = -0.05
-        labels_10, labels_20 = [], []
+        LABEL_DAYS = [5, 10, 20]  # 与 TARGETS 保持一致（A3: 新增 5d 周期）
+        _s_min = str(df['trade_date'].min())[:10]
+        _s_max = str(df['trade_date'].max())[:10]
+        _buf_end = (_date.fromisoformat(_s_max) + _td(days=60)).isoformat()
+        codes = df['stock_code'].unique().tolist()
+        fwd_rows = db.execute(text(
+            "SELECT stock_code, trade_date, close_hfq FROM daily_quote "
+            "WHERE stock_code = ANY(:c) AND trade_date > :s AND trade_date <= :e "
+            "ORDER BY stock_code, trade_date"
+        ), {"c": codes, "s": _s_min, "e": _buf_end}).fetchall()
+        _fwd_by_code = {}
+        _fwd_dates = {}
+        for c, d, cl in fwd_rows:
+            if cl is None:
+                continue
+            _fwd_by_code.setdefault(c, []).append(float(cl))
+            _fwd_dates.setdefault(c, []).append(str(d)[:10])
+
+        import bisect as _bisect
+        labels = {days: [] for days in LABEL_DAYS}
         for _, row in df.iterrows():
             price_today = float(row['close'])
             code = row['stock_code']
             tdate = str(row['trade_date'])[:10]
-            for days, lst in [(10, labels_10), (20, labels_20)]:
-                # 查询未来的每日收盘价
-                fwd_rows = db.execute(text(
-                    "SELECT trade_date, close_hfq FROM daily_quote "
-                    "WHERE stock_code=:c AND trade_date > :d ORDER BY trade_date ASC LIMIT :n"
-                ), {"c": code, "d": tdate, "n": days + 5}).fetchall()
-                if not fwd_rows or price_today <= 0:
-                    lst.append(None)
+            arr = _fwd_by_code.get(code)
+            for days in LABEL_DAYS:
+                if not arr or price_today <= 0:
+                    labels[days].append(None)
+                    continue
+                pos = _bisect.bisect_right(_fwd_dates.get(code, []), tdate)
+                fwd_win = arr[pos:pos + days + 5]  # 原 LIMIT days+5 语义
+                if not fwd_win:
+                    labels[days].append(None)
                     continue
                 label = None
-                for fr in fwd_rows:
-                    ret = float(fr[1]) / price_today - 1
+                for fr in fwd_win:
+                    ret = fr / price_today - 1
                     if ret >= TAKE_PROFIT:
                         label = TAKE_PROFIT  # 触及止盈
                         break
                     elif ret <= STOP_LOSS:
                         label = STOP_LOSS   # 触及止损
                         break
-                if label is None and len(fwd_rows) >= days:
+                if label is None and len(fwd_win) >= days:
                     # 未触及任何屏障，按时间到期价算
-                    label = float(fwd_rows[min(days-1, len(fwd_rows)-1)][1]) / price_today - 1
-                lst.append(label)
+                    label = fwd_win[min(days - 1, len(fwd_win) - 1)] / price_today - 1
+                labels[days].append(label)
 
-        df['target_10d'] = labels_10; df['target_20d'] = labels_20
-        df = df.dropna(subset=['target_10d', 'target_20d'])
+        for days, col in [(5, 'target_5d'), (10, 'target_10d'), (20, 'target_20d')]:
+            df[col] = labels[days]
+        df = df.dropna(subset=['target_5d', 'target_10d', 'target_20d'])
 
         # M2-5: winsorize 标签（1%~99%缩尾）
         try:
             from scipy.stats.mstats import winsorize
-            for col in ['target_10d','target_20d']:
+            for col in ['target_5d', 'target_10d', 'target_20d']:
                 df[col] = winsorize(df[col].values, limits=(0.01, 0.01))
         except ImportError:
             pass
@@ -1560,6 +1824,8 @@ def dag_task_model_train(trade_date=None, **kw):
             comm_val = commission if commission is not None else 0.00025
             st_val = stamp_tax if stamp_tax is not None else 0.001
             slip_val = slippage if slippage is not None else 0.001
+            # 宽表日期为字符串，统一转 datetime（持仓期计算需要日期相减）
+            dates = pd.to_datetime(dates)
             val_df = pd.DataFrame({
                 'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true,
                 'price': close_prices, 'volume': volumes
@@ -1744,7 +2010,7 @@ def dag_task_model_train(trade_date=None, **kw):
                         'buy_date': d,
                         'shares': shares,
                         'trade_id': trade_id,
-                        'signal_source': str(hdays) + 'd',
+                        'signal_source': str(hold_days) + 'd',
                     })
 
                 # ── 3. 记录当日权益 ──
@@ -1779,8 +2045,8 @@ def dag_task_model_train(trade_date=None, **kw):
             return {
                 'sharpe': round(sharpe, 4), 'win_rate': round(win_rate, 4),
                 'max_dd': round(max_dd, 4), 'total_return': round(total_return, 4),
-                'total_trades': trade_count, 'equity_curve': [round(e, 2) for e in equity_curve[-50:]],
-                'trades': trade_log[-20:]  # 最近20笔交易明细
+                'total_trades': trade_count, 'equity_curve': [round(e, 2) for e in equity_curve],
+                'trades': trade_log
             }
 
         best_models = {}
@@ -1791,16 +2057,15 @@ def dag_task_model_train(trade_date=None, **kw):
         val_codes = df[val_mask]['stock_code'].values
         val_close = df[val_mask]['close'].values
         val_volume = df[val_mask]['volume'].values
-        TARGETS = [('10d','target_10d',10), ('20d','target_20d',20)]
+        TARGETS = [('5d','target_5d',5), ('10d','target_10d',10), ('20d','target_20d',20)]
 
         try:
             import optuna
             from optuna.samplers import TPESampler
             def objective(trial):
                 nonlocal best_models, best_params_store, best_score
-                # 检查终止信号
-                stop_event = kw.get('_stop_event')
-                if stop_event and stop_event.is_set():
+                # 检查终止信号（A4: 页面 stop / DAG terminate）
+                if _aborted():
                     raise optuna.TrialPruned("用户终止训练")
                 # 检查模型是否被删除
                 r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
@@ -1832,7 +2097,7 @@ def dag_task_model_train(trade_date=None, **kw):
                     r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
                     models[label] = {'model': model, 'r2': r2}
                     total_r2 += r2
-                avg_r2 = total_r2 / 3
+                avg_r2 = total_r2 / len(TARGETS)
                 trial_records.append({'trial': len(trial_records)+1, 'params': params, 'r2': round(avg_r2, 4)})
                 update_node_progress(log_id=log_id, rows=len(trial_records), detail=f'Optuna实验:{len(trial_records)}/{n_trials} r²={avg_r2:.4f}')
                 if avg_r2 > best_score:
@@ -1845,6 +2110,12 @@ def dag_task_model_train(trade_date=None, **kw):
                 return avg_r2
             study = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+        except optuna.exceptions.TrialPruned:
+            # 全部 trial 被终止（用户停止 / 模型状态变更）→ 回 DRAFT 收尾
+            try: db.close()
+            except Exception: pass
+            _abort('训练已终止')
+            return 0
         except ImportError:
             # Optuna 未安装时回退单次训练（XGBoost）
             params = {'learning_rate': 0.05, 'max_depth': 5, 'n_estimators': 200,
@@ -1859,28 +2130,57 @@ def dag_task_model_train(trade_date=None, **kw):
                 best_params_store[label] = {'params': params, 'r2': r2}
             update_node_progress(log_id=log_id, rows=1, detail='训练完成(无Optuna)')
 
-        # ── 最终评估：测试集（Optuna从未见过的数据）──
-        update_node_progress(log_id=log_id, rows=4, detail='测试集评估…')
+        # Optuna 全部 trial 因剪枝/异常未产出模型 → 收尾
+        if not best_models:
+            try: db.close()
+            except Exception: pass
+            _abort('训练未产生有效模型（所有 trial 失败或已终止）')
+            return 0
+
+        # ── 最终评估：val + test 集回测（val 用于过拟合对比，test 为最终成绩）──
+        update_node_progress(log_id=log_id, rows=4, detail='回测评估 (val+test)…')
         test_dates = df[test_mask]['trade_date'].values
         test_codes = df[test_mask]['stock_code'].values
         test_close = df[test_mask]['close'].values
         test_volume = df[test_mask]['volume'].values
         test_idx_ret = df[test_mask]['idx_ret_20d'].values
-        test_results = {}
-        for label, tname, hdays in TARGETS:
-            if label in best_models:
-                y_pred = best_models[label].predict(df[test_mask][FEATURES])
-                bt = _backtest(df[test_mask][tname].values, y_pred, test_dates, test_codes, test_close, test_volume,
-                               hdays, bt_ver=ver, bt_label=label,
-                               stop_loss=stop_loss, take_profit=stop_loss*2,
-                               commission=commission, stamp_tax=stamp_tax, slippage=slippage)
-                test_results[label] = bt
+
+        def _run_backtests(mask):
+            """对给定切分跑全部周期的回测，附带 test R²。"""
+            res = {}
+            dates = df[mask]['trade_date'].values
+            codes = df[mask]['stock_code'].values
+            closes = df[mask]['close'].values
+            vols = df[mask]['volume'].values
+            for label, tname, hdays in TARGETS:
+                if label in best_models:
+                    y_pred = best_models[label].predict(df[mask][FEATURES])
+                    bt = _backtest(df[mask][tname].values, y_pred, dates, codes, closes, vols,
+                                   hdays, bt_ver=ver, bt_label=label,
+                                   stop_loss=stop_loss, take_profit=stop_loss*2,
+                                   commission=commission, stamp_tax=stamp_tax, slippage=slippage)
+                    bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
+                    res[label] = bt
+            return res
+
+        if _aborted():
+            try: db.close()
+            except Exception: pass
+            _abort('训练已终止')
+            return 0
+        val_results = _run_backtests(val_mask)
+        if _aborted():
+            try: db.close()
+            except Exception: pass
+            _abort('训练已终止')
+            return 0
+        test_results = _run_backtests(test_mask)
 
         # ── 存储最优模型文件 ──
         update_node_progress(log_id=log_id, rows=5, detail='存储最优模型')
         model_dir = f"data/models/{ver}"
         _os.makedirs(model_dir, exist_ok=True)
-        for label in ['10d','20d']:
+        for label, tname, hdays in TARGETS:
             if label in best_models:
                 path = f"{model_dir}/xgb_{label}.pkl"
                 with open(path, 'wb') as f:
@@ -1888,29 +2188,35 @@ def dag_task_model_train(trade_date=None, **kw):
                 best_params_store[label]['model_path'] = path
 
         # ── 汇总回测指标并写入 DB ──
-        # 合并 3 个周期的交易明细
+        # 合并全部周期的交易明细（BUY + SELL 分录）
         all_trades = []
-        for label in ['10d','20d']:
+        for label in test_results:
             for t in test_results.get(label, {}).get('trades', []):
                 t['horizon'] = label
                 all_trades.append(t)
-        # 去重：同股票同买入日只保留一笔（不同周期可能重复买入）
-        # trade_log 分录键为 date/code（仅 BUY 记录），按 (code, date) 去重并倒序排序
-        all_trades = [t for t in all_trades if t.get('action') == 'BUY']
+        # 去重：同股票同买入日只保留一笔（不同周期可能重复买入），SELL 分录保留
+        # 后续质量指标依赖 SELL 的真实逐笔盈亏，不能丢弃
+        buy_trades = [t for t in all_trades if t.get('action') == 'BUY']
+        sell_trades = [t for t in all_trades if t.get('action') == 'SELL']
         seen = set()
         deduped = []
-        for t in all_trades:
+        for t in buy_trades:
             key = (t['code'], t['date'])
             if key not in seen:
                 seen.add(key)
                 deduped.append(t)
-        all_trades = deduped
+        all_trades = deduped + sell_trades
         all_trades.sort(key=lambda t: t['date'], reverse=True)
 
-        # 过拟合检测：对比 val R² 和 test sharpe（val上高R² + test上低sharpe = 过拟合）
-        val_r2s = [best_params_store.get(l,{}).get('r2',0) for l in ['10d','20d']]
-        test_sharpes = [test_results.get(l,{}).get('sharpe',0) for l in ['10d','20d']]
+        # 过拟合检测：val R² / test R² + val/test 回测 sharpe 双对比
+        _labels = [l for l in ['5d', '10d', '20d'] if l in test_results]
+        val_r2s = [best_params_store.get(l, {}).get('r2', 0) for l in _labels]
+        test_r2s = [test_results.get(l, {}).get('r2', 0) for l in _labels]
+        val_sharpes = [val_results.get(l, {}).get('sharpe', 0) for l in _labels]
+        test_sharpes = [test_results.get(l, {}).get('sharpe', 0) for l in _labels]
         val_r2_avg = float(np.mean(val_r2s)) if val_r2s else 0
+        test_r2_avg = float(np.mean(test_r2s)) if test_r2s else 0
+        val_sharpe_avg = float(np.mean(val_sharpes)) if val_sharpes else 0
         test_sharpe_avg = float(np.mean(test_sharpes)) if test_sharpes else 0
         overfit_warning = val_r2_avg > 0.3 and test_sharpe_avg < 0.5  # 高R²低实盘 = 过拟合信号
 
@@ -1926,18 +2232,17 @@ def dag_task_model_train(trade_date=None, **kw):
         except Exception:
             pass
 
-        # 质量指标：trade_log 无逐笔盈亏，改用验证/测试集汇总指标
-        all_pnls = []
-        all_pnl_pcts = []
-        wins = [p for p in all_pnls if p > 0]
-        losses = [abs(p) for p in all_pnls if p < 0]
+        # 质量指标：用 SELL 分录的真实逐笔盈亏（BUY 无 pnl）
+        sell_pnls = [t.get('pnl', 0) for t in all_trades if t.get('action') == 'SELL' and t.get('pnl') is not None]
+        wins = [p for p in sell_pnls if p > 0]
+        losses = [abs(p) for p in sell_pnls if p < 0]
         profit_factor = sum(wins) / sum(losses) if losses else (999 if wins else 0)
         avg_win = float(np.mean(wins)) if wins else 0
         avg_loss = float(np.mean(losses)) if losses else 0
-        max_dd_avg = float(np.mean([test_results.get(l,{}).get('max_dd',0) for l in ['10d','20d']]))
+        max_dd_avg = float(np.mean([test_results.get(l, {}).get('max_dd', 0) for l in _labels]))
 
-        # 集中度分析：前 3 笔最大盈利占总收益的比例（无逐笔盈亏 → 0）
-        sorted_pnls = sorted([t['pnl'] for t in all_trades if t.get('pnl', 0) > 0], reverse=True)
+        # 集中度分析：SELL 真实盈利前 3 笔占总盈利比例
+        sorted_pnls = sorted([t['pnl'] for t in all_trades if t.get('action') == 'SELL' and t.get('pnl', 0) > 0], reverse=True)
         total_profit = sum(sorted_pnls)
         top3_pct = sum(sorted_pnls[:3]) / total_profit * 100 if total_profit > 0 else 0
 
@@ -1946,21 +2251,75 @@ def dag_task_model_train(trade_date=None, **kw):
             'trades': all_trades,
             'trade_count': len(all_trades),
             'top3_concentration': round(top3_pct, 1),
-            'val_sharpe': round(val_r2_avg, 4),
+            'val_r2': round(val_r2_avg, 4),
+            'test_r2': round(test_r2_avg, 4),
+            'val_sharpe': round(val_sharpe_avg, 4),
             'test_sharpe': round(test_sharpe_avg, 4),
-            'overfit_gap': round(val_r2_avg - test_sharpe_avg, 4),
+            'overfit_gap': round(val_sharpe_avg - test_sharpe_avg, 4),
             'profit_factor': round(profit_factor, 2),
             'avg_win': round(avg_win, 2),
             'avg_loss': round(avg_loss, 2),
             'benchmark_return': round(benchmark_return, 4),
-            'sharpe_10d':  test_results.get('10d',{}).get('sharpe',0),
-            'sharpe_20d':  test_results.get('20d',{}).get('sharpe',0),
-            'win_rate_10d':test_results.get('10d',{}).get('win_rate',0),
-            'win_rate_20d':test_results.get('20d',{}).get('win_rate',0),
+            'sharpe_5d':  test_results.get('5d', {}).get('sharpe', 0),
+            'sharpe_10d': test_results.get('10d', {}).get('sharpe', 0),
+            'sharpe_20d': test_results.get('20d', {}).get('sharpe', 0),
+            'win_rate_5d': test_results.get('5d', {}).get('win_rate', 0),
+            'win_rate_10d': test_results.get('10d', {}).get('win_rate', 0),
+            'win_rate_20d': test_results.get('20d', {}).get('win_rate', 0),
         }
-        avg_sharpe = float(np.mean([bt_summary['sharpe_10d'], bt_summary['sharpe_20d']]))
-        avg_win = float(np.mean([bt_summary['win_rate_10d'], bt_summary['win_rate_20d']]))
+        avg_sharpe = float(np.mean([test_results[l]['sharpe'] for l in _labels])) if _labels else 0
+        avg_win = float(np.mean([test_results[l]['win_rate'] for l in _labels])) if _labels else 0
         best_params = best_params_store
+
+        # 年化：test 回测区间总收益 → 252 交易日年化，各周期平均（替代原拍脑袋估算）
+        def _annualize(bt):
+            days = len(bt.get('equity_curve', []))
+            if days >= 2 and bt.get('total_return', -1) > -1:
+                return (1 + bt['total_return']) ** (252 / days) - 1
+            return 0
+        annual_return = float(np.mean([_annualize(test_results[l]) for l in _labels])) if _labels else 0
+
+        # B3: 回测结果落库（幂等：先删该版本旧记录）
+        win_trades = len([t for t in all_trades if t.get('action') == 'SELL' and (t.get('pnl') or 0) > 0])
+        test_start = str(test_dates[0])[:10] if len(test_dates) > 0 else None
+        test_end = str(test_dates[-1])[:10] if len(test_dates) > 0 else None
+        avg_total_return = float(np.mean([test_results[l]['total_return'] for l in _labels])) if _labels else 0
+        final_equity = round(initial_cash * (1 + avg_total_return), 2)
+        db.execute(text("DELETE FROM backtest_records WHERE version=:v"), {"v": ver})
+        db.execute(text("DELETE FROM backtest_trades WHERE version=:v"), {"v": ver})
+        db.execute(text("""
+            INSERT INTO backtest_records (version, start_date, end_date, initial_cash, final_equity,
+                sharpe_ratio, win_rate, max_drawdown, annual_return, total_trades, winning_trades, detail)
+            VALUES (:v,:s,:e,:ic,:fe,:sh,:wr,:md,:ar,:tt,:wt,:dt)
+        """), {
+            "v": ver, "s": test_start, "e": test_end,
+            "ic": initial_cash, "fe": final_equity,
+            "sh": round(test_sharpe_avg, 4), "wr": round(avg_win, 4),
+            "md": round(abs(max_dd_avg), 4), "ar": round(annual_return, 4),
+            "tt": len(all_trades), "wt": win_trades,
+            "dt": _json.dumps({"labels": list(test_results.keys()),
+                               "label_detail": {l: {"sharpe": test_results[l].get('sharpe', 0),
+                                                    "win_rate": test_results[l].get('win_rate', 0),
+                                                    "total_return": test_results[l].get('total_return', 0),
+                                                    "max_dd": test_results[l].get('max_dd', 0)}
+                                                for l in _labels},
+                               "benchmark_return": round(benchmark_return, 4),
+                               "equity_tail": test_results.get('10d', {}).get('equity_curve', [])}),
+        })
+        for t in all_trades:
+            is_buy = t.get('action') == 'BUY'
+            db.execute(text("""
+                INSERT INTO backtest_trades (version, stock_code, trade_date, direction, price, shares,
+                    cost, profit_loss, equity_before, equity_after, reason)
+                VALUES (:v,:c,:d,:dir,:p,:sh,:cost,:pnl,:eb,:ea,:rs)
+            """), {
+                "v": ver, "c": t.get('code', ''), "d": t.get('date'),
+                "dir": t.get('action', 'BUY'), "p": t.get('price', 0), "sh": t.get('shares', 0),
+                "cost": t.get('amount', 0) if is_buy else t.get('commission_tax', 0),
+                "pnl": None if is_buy else t.get('pnl'),
+                "eb": t.get('cash_before', 0), "ea": t.get('market_value', 0),
+                "rs": (t.get('signal_reason') if is_buy else t.get('reason')) or '',
+            })
 
         db.execute(text("UPDATE model_versions SET status='PENDING', best_params=:bp, evaluation_report=:rep, sharpe=:sh, win_rate=:wr, max_drawdown=:md, annual_return=:ar WHERE version=:v"), {
             "v": ver,
@@ -1969,7 +2328,7 @@ def dag_task_model_train(trade_date=None, **kw):
             "sh": round(avg_sharpe, 4),
             "wr": round(avg_win, 4),
             "md": round(abs(max_dd_avg), 4),
-            "ar": round(avg_sharpe * 0.15, 4),
+            "ar": round(annual_return, 4),
         })
         db.commit(); db.close()
         write_node_log(log_id=log_id, status='success', detail=f'训练完成: sharpe={avg_sharpe:.3f} win={avg_win:.1%} trials={len(trial_records)}')
@@ -1988,37 +2347,6 @@ def dag_task_model_train(trade_date=None, **kw):
         try: db.close()
         except: pass
         raise
-
-def _get_preference_thresholds(db) -> dict:
-    """读取全局偏好设置，返回信号生成阈值字典。"""
-    pref = db.execute(text(
-        "SELECT params FROM strategy_config WHERE strategy_name='global_preference'"
-    )).scalar()
-    import json
-    try:
-        mode = json.loads(pref).get('mode', 'balanced') if pref else 'balanced'
-    except Exception:
-        mode = 'balanced'
-
-    thresholds = {
-        'left': {
-            'buy_score_min': 1, 'boll_lower': 0.25, 'rsi_oversold': 40,
-            'sell_boll_upper': 0.75, 'sell_rsi_overbought': 60,
-            'stop_loss_pct': 0.10, 'signal_timeout_days': 30,
-        },
-        'balanced': {
-            'buy_score_min': 2, 'boll_lower': 0.20, 'rsi_oversold': 35,
-            'sell_boll_upper': 0.80, 'sell_rsi_overbought': 65,
-            'stop_loss_pct': 0.08, 'signal_timeout_days': 20,
-        },
-        'right': {
-            'buy_score_min': 3, 'boll_lower': 0.15, 'rsi_oversold': 30,
-            'sell_boll_upper': 0.85, 'sell_rsi_overbought': 70,
-            'stop_loss_pct': 0.05, 'signal_timeout_days': 10,
-        },
-    }
-    return thresholds.get(mode, thresholds['balanced']), mode
-
 
 # ═══════════════════════════════════════════════
 #  stock_master 更新

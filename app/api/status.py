@@ -51,18 +51,20 @@ def get_data_status(
         overview = {}
         result = db.execute(text("SELECT MAX(trade_date) FROM daily_quote"))
         overview["latest_date"] = str(r) if (r := result.scalar()) else None
+        # 精确行数：一条 GROUP BY 同时拿总条数与各交易所行数（daily_quote 单表含个股+ETF）
+        ex_rows = {}
         try:
-            result = db.execute(text("SELECT reltuples::bigint FROM pg_class WHERE relname='daily_quote'"))
-            overview["total_rows"] = result.scalar() or 0
+            for row in db.execute(text("SELECT exchange, COUNT(*) FROM daily_quote GROUP BY exchange")).fetchall():
+                ex_rows[row[0]] = row[1]
         except Exception:
-            result = db.execute(text("SELECT COUNT(*) FROM daily_quote"))
-            overview["total_rows"] = result.scalar() or 0
+            db.rollback()
+        overview["total_rows"] = sum(ex_rows.values()) if ex_rows else 0
 
         exchanges = {}
         for ex in ("SSE", "SZSE", "BSE"):
             r = db.execute(text("SELECT trade_date FROM daily_quote WHERE exchange=:ex ORDER BY trade_date DESC LIMIT 1"), {"ex": ex})
             row = r.fetchone()
-            exchanges[ex] = {"latest_date": str(row[0]) if row else None, "rows": 0}
+            exchanges[ex] = {"latest_date": str(row[0]) if row else None, "rows": ex_rows.get(ex, 0)}
         result = db.execute(text("SELECT exchange, COUNT(*) FROM stock_master WHERE status='N' AND stock_type='stock' GROUP BY exchange"))
         ex_stocks = {r[0]: r[1] for r in result.fetchall()}
         overview["total_stocks"] = sum(ex_stocks.values())
@@ -165,13 +167,13 @@ def get_data_status(
                 try: return db.execute(text(query)).scalar()
                 except: db.rollback(); return -1
             data_tables = [
-                {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE'")},
-                {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE'"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE'")},
+                {'label':'上交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"),'detail':'不含ETF'},
+                {'label':'深交所A股','rows':q("SELECT COUNT(*) FROM daily_quote WHERE exchange='SZSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"),'items':q("SELECT COUNT(*) FROM stock_master WHERE exchange='SZSE' AND status='N' AND stock_type='stock'"),'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE exchange='SZSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"),'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE exchange='SZSE' AND NOT (LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5')"),'detail':'不含ETF'},
                 {'label':'指数日K线','rows':q("SELECT COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname='index_daily_quote'),0)"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='index'")},
                 {'label':'ETF日K线','rows':q("SELECT COUNT(*) FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"),'items':q("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf'"),
                  'start':q("SELECT MIN(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'"),
                  'end':q("SELECT MAX(trade_date)::text FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")},
-                {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals"),'start':q("SELECT MIN(updated_at)::text FROM stock_fundamentals"),'end':q("SELECT MAX(updated_at)::text FROM stock_fundamentals")},
+                {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals_history"),'start':q("SELECT MIN(report_date)::text FROM stock_fundamentals_history"),'end':q("SELECT MAX(report_date)::text FROM stock_fundamentals_history")},
                 {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
                 {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
             ]

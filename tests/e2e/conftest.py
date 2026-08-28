@@ -13,3 +13,12 @@ def browser_context_args(browser_context_args):
         "viewport": {"width": 1280, "height": 800},
         "locale": "zh-CN",
     }
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args):
+    """支持 PLAYWRIGHT_EXECUTABLE 指定浏览器可执行文件（WSL 环境 playwright 装不上新版 chromium 时用）。"""
+    exe = os.environ.get("PLAYWRIGHT_EXECUTABLE")
+    if not exe:
+        return browser_type_launch_args
+    return {**browser_type_launch_args, "executable_path": exe, "args": ["--no-sandbox"]}

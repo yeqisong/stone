@@ -549,11 +549,28 @@ class BackfillManager:
 
         db = get_sync_db()
         try:
-            # 断点续传：当日 history 行数 >= 活跃数 80% 视为已完成
-            active = db.execute(text(
-                "SELECT COUNT(*) FROM stock_master WHERE status='N' AND stock_type='stock'"
-            )).scalar() or 0
-            threshold = max(int(active * 0.8), 500)
+            # 断点续传：当日 history 行数 >= 当日已上市股票数 80% 视为已完成。
+            # 基线必须按"当日上市数"逐日取（与 _run_kline_backfill 同模式）：
+            # 若用当前活跃数(~5200)，2000-2015 老日期(仅数百至数千行)永远达不到
+            # 80% 阈值，force=False 重复触发会整段重拉、纯耗配额。
+            # 一次聚合取 ipo_date 分布，Python 累计得到每日基线，避免逐日 COUNT。
+            ipo_rows = db.execute(text(
+                "SELECT ipo_date, COUNT(*) FROM stock_master "
+                "WHERE stock_type='stock' AND ipo_date IS NOT NULL "
+                "GROUP BY ipo_date ORDER BY ipo_date"
+            )).fetchall()
+            import bisect
+            ipo_dates = [str(r[0]) for r in ipo_rows]
+            ipo_cum = []
+            acc = 0
+            for r in ipo_rows:
+                acc += r[1] or 0
+                ipo_cum.append(acc)
+
+            def baseline_of(td_str: str) -> int:
+                i = bisect.bisect_right(ipo_dates, td_str)
+                return ipo_cum[i - 1] if i > 0 else 0
+
             remaining = tds
             skipped = 0
             if not task.force:
@@ -562,7 +579,8 @@ class BackfillManager:
                     cnt = db.execute(text(
                         "SELECT COUNT(*) FROM stock_fundamentals_history WHERE report_date=:d"
                     ), {"d": td}).scalar() or 0
-                    if cnt >= threshold:
+                    thr = max(int(baseline_of(str(td)) * 0.8), 1)
+                    if cnt >= thr:
                         skipped += 1
                     else:
                         kept.append(td)

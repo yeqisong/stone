@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="fv-up" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f87171"/>
+      <stop offset="1" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="fv-down" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#15151b"/>
+  <g transform="translate(4,5.4)">
+    <line x1="4.4" y1="8.6" x2="4.4" y2="17.6" stroke="url(#fv-down)" stroke-width="1.1" stroke-linecap="round"/>
+    <rect x="2.6" y="10.8" width="3.6" height="4.6" rx="0.9" fill="url(#fv-down)"/>
+    <line x1="12" y1="3.2" x2="12" y2="18" stroke="url(#fv-up)" stroke-width="1.1" stroke-linecap="round"/>
+    <rect x="10.2" y="5.2" width="3.6" height="9.6" rx="0.9" fill="url(#fv-up)"/>
+    <line x1="19.6" y1="7" x2="19.6" y2="16.4" stroke="url(#fv-up)" stroke-width="1.1" stroke-linecap="round"/>
+    <rect x="17.8" y="9.2" width="3.6" height="4.6" rx="0.9" fill="url(#fv-up)"/>
+    <circle cx="12.3" cy="4.4" r="1.05" fill="#ffc53d" stroke="rgba(255,255,255,.85)" stroke-width="0.6"/>
+  </g>
+</svg>

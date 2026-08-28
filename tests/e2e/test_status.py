@@ -9,16 +9,48 @@
 """
 import pytest
 import os
+import re
 
 BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:3000")
 STATUS_URL = f"{BASE_URL}/#/status"
 
+_TOKEN = {"v": None}
+
+
+def _read_login_password() -> str:
+    """从 .env 读取 LOGIN_PASSWORD（测试环境密码）。"""
+    try:
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env")
+        with open(env_path) as f:
+            m = re.search(r"^LOGIN_PASSWORD=(.+?)\s*$", f.read(), re.M)
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+    return "admin123"
+
+
+def _obtain_token(page) -> str:
+    """真实登录拿 token（session 级缓存，避免 60s 5 次登录限流）；失败回退假 token。"""
+    if _TOKEN["v"] is None:
+        _TOKEN["v"] = page.evaluate("""async (pw) => {
+            try {
+                const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({username:'admin', password: pw})});
+                if (!r.ok) return null;
+                const d = await r.json();
+                return d.token || null;
+            } catch(e) { return null; }
+        }""", _read_login_password()) or "test-token"
+    return _TOKEN["v"]
+
 
 @pytest.fixture(autouse=True)
 def login_and_navigate(page):
-    """每个测试前：设置 auth token → reload 让 Pinia 重读 → 导航到状态页。"""
+    """每个测试前：真实登录 token → reload 让 Pinia 重读 → 导航到状态页。"""
     page.goto(BASE_URL)
-    page.evaluate("() => { localStorage.setItem('token', 'test-token'); localStorage.setItem('username', 'test'); }")
+    token = _obtain_token(page)
+    page.evaluate("(t) => { localStorage.setItem('token', t); localStorage.setItem('username', 'admin'); }", token)
     page.goto(STATUS_URL)
     page.reload()  # 强制刷新让 Vue/Pinia 重新初始化，读取 localStorage 中的 token
     page.wait_for_timeout(3000)
@@ -54,13 +86,13 @@ class TestStructureRendering:
         assert page.locator("text=≥80%").is_visible()
 
     def test_recent_logs_section(self, page):
-        """最近记录区存在。"""
-        assert page.locator("text=最近记录").is_visible(timeout=5000)
+        """补数日志入口存在。"""
+        assert page.locator("button:has-text('日志')").first.is_visible(timeout=5000)
 
     def test_dag_view_renders(self, page):
-        """DagView 流程图子组件渲染（SVG 画布存在）。"""
-        page.wait_for_timeout(2000)
-        # DagView 内部应有 SVG 元素
+        """DAG 流程编辑页 VueFlow 画布渲染（SVG 存在）。"""
+        page.goto(f"{BASE_URL}/#/dag-flows/1")
+        page.wait_for_timeout(3000)
         svg = page.locator("svg").first
         assert svg.is_visible()
 
@@ -227,19 +259,13 @@ class TestApiAndWsIntegration:
             assert "任务" in alert_msg
             return
 
-        # 3. 等待 WS dag_status 推送 → DagView 节点状态变化（可能 pending→running）
+        # 3. 等待统计任务执行（可能触发 busy 弹窗已在步骤 2 处理）
         page.wait_for_timeout(5000)
 
-        # DagView 的 SVG 应持续可见
-        svg = page.locator("svg").first
-        assert svg.is_visible()
+        # 页面主体应保持渲染（数据明细 + 日历）
+        assert page.locator("text=数据明细").is_visible()
 
-        # 4. 检查最近记录区是否更新（WS dag_log 推送 → 应出现 stats 节点的日志条目）
-        page.wait_for_timeout(3000)
-        log_area = page.locator("text=最近记录").first
-        assert log_area.is_visible()
-
-        # 5. 等待任务完成（stats 节点通常很快，最多等 30s）
+        # 4. 等待任务完成（stats 节点通常很快，最多等 30s）
         try:
             # 等待按钮恢复（↻ 文字重新出现表示 loading 结束）
             page.wait_for_selector("button:has-text('↻')", timeout=30000)
@@ -249,8 +275,8 @@ class TestApiAndWsIntegration:
             # 超时也可能是因为 WS 消息还没把 has_running 设为 false
             pass
 
-        # 6. 最终 DagView 应仍在渲染
-        assert page.locator("svg").first.is_visible()
+        # 5. 最终页面应仍在渲染
+        assert page.locator("text=数据明细").is_visible()
 
 
 # ═══════════════════════════════════════════

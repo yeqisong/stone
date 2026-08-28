@@ -14,7 +14,7 @@
         <!-- 顶栏 -->
         <div class="app-header">
           <div class="app-header-left">
-            <span class="brand">K道</span>
+            <span class="brand"><LogoFull :height="19" /></span>
             <span class="header-date" id="header-date"></span>
           </div>
           <div class="app-header-right">
@@ -97,6 +97,7 @@ import { useAuthStore } from './stores/auth'
 import { useNavStore } from './stores/nav'
 import { useThemeStore } from './stores/theme'
 import { useViewport } from './utils/viewport'
+import LogoFull from './components/LogoFull.vue'
 
 import { connectWebSocket, wsState } from './utils/ws'
 
@@ -209,7 +210,7 @@ if (!showLogin.value) {
 .app-root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .app-header { display: flex; align-items: center; justify-content: space-between; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border); padding: 8px 20px; }
 .app-header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.brand { font-size: 18px; font-weight: 700; color: var(--c-text); }
+.brand { font-size: 18px; font-weight: 700; color: var(--c-text); display: flex; align-items: center; gap: 6px; }
 .header-date { font-size: 11px; color: var(--c-text-dimmer); white-space: nowrap; }
 .app-header-right { display: flex; align-items: center; gap: 12px; }
 .user-chip { font-size: 12px; color: var(--c-text-dim); cursor: pointer; white-space: nowrap; }

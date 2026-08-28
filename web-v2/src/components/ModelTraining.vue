@@ -131,7 +131,7 @@ function stopTrain() {
     onPositiveClick: async () => {
       stopping.value = true
       try {
-        await axios.post(window.location.origin + '/api/dag_terminate', { node: 'model_train' })
+        // 页面训练走 TaskManager（非 DAG 流程），dag_terminate 无效，只调 stop 接口
         await axios.post(window.location.origin + `/api/v1/models/${props.version.version}/stop`)
         await store.loadVersions()
         message.success('已停止训练')
