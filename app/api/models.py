@@ -76,6 +76,10 @@ class CreateModel(BaseModel):
     signal_threshold_mode: str = "quantile"
     buy_top_pct: float = 0.05              # quantile 模式：top 5% 触发买入
     ml_confidence_threshold: float = 0.02  # absolute 模式：预测平均涨幅 > 2% 触发买入
+    # 标签与标准化（v3.5 方法论）：excess=N日超额收益（相对沪深300）；cs_rank=特征逐日截面排名
+    # 旧模型 config 无这两个键时训练端按 absolute/none 兼容处理
+    label_mode: str = "excess"
+    feature_norm: str = "cs_rank"
     # 交易规则（买卖规则描述，前端表单整段提交）
     trading_rules: Optional[dict] = None
     # 交易成本
@@ -139,7 +143,8 @@ def get_model(version: str):
         r = db.execute(text("""
             SELECT version, model_name, status, config, best_params,
                    evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
-                   created_at, trained_at, activated_at, archived_at
+                   created_at, trained_at, activated_at, archived_at,
+                   strategy_scan_results, perm_test
             FROM model_versions WHERE version = :v
         """), {"v": version}).fetchone()
         if not r:
@@ -157,6 +162,8 @@ def get_model(version: str):
             "trained_at": str(r[11]) if r[11] else None,
             "activated_at": str(r[12]) if r[12] else None,
             "archived_at": str(r[13]) if r[13] else None,
+            "strategy_scan_results": r[14] if isinstance(r[14], (dict, list)) else (json.loads(r[14]) if r[14] else None),
+            "perm_test": r[15] if isinstance(r[15], (dict, list)) else (json.loads(r[15]) if r[15] else None),
         }
     finally:
         db.close()
@@ -214,6 +221,8 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
                 "ml_confidence_threshold": body.ml_confidence_threshold,
             },
             "trading_rules": body.trading_rules or {},
+            "label_mode": body.label_mode,
+            "feature_norm": body.feature_norm,
             "risk": {
                 "stop_loss_pct": body.stop_loss_pct,
                 "signal_timeout_days": body.signal_timeout_days,
@@ -985,3 +994,104 @@ def get_attribution(version: str, body: dict = {}, user: str = Depends(get_curre
         raise
     except Exception as e:
         db.close(); raise HTTPException(500, str(e)[:200])
+
+
+# ── 置换检验（评估器 v2 仪表：打乱预测构造噪声分布）──
+
+_perm_tasks: dict = {}
+_perm_lock = _threading.Lock()
+
+
+class PermutationBody(BaseModel):
+    n_perms: int = 20
+    val_start: str = ""
+    val_end: str = ""
+    hold_days: int = 10
+    stop_loss: float = 0.05
+    take_profit: float = 0.15
+
+
+def _run_perm(task_id, version, body):
+    from scripts.pipeline import build_feature_wide_table, predict_for_version, run_permutation_test
+    from app.db.connection import get_sync_db
+    from loguru import logger as _log
+    try:
+        db = get_sync_db()
+        row = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
+                         {"v": version}).fetchone()
+        if not row:
+            db.close(); return
+        feature_names = row[0] if isinstance(row[0], list) else (json.loads(row[0]) if row[0] else [])
+        cfg = row[1] if isinstance(row[1], dict) else (json.loads(row[1]) if row[1] else {})
+        if not feature_names:
+            feature_names = cfg.get('feature_names', [])
+        df = build_feature_wide_table(db, feature_names, body['val_start'], body['val_end'], 'stock')
+        if df.empty:
+            db.close()
+            with _perm_lock: _perm_tasks[task_id].update({'status': 'failed', 'error': '验证集无数据'})
+            return
+        horizon = 5 if body['hold_days'] <= 5 else (20 if body['hold_days'] > 10 else 10)
+        pred, err = predict_for_version(db, version, df, body['val_start'], body['val_end'], horizon)
+        db.close()
+        if pred is None:
+            with _perm_lock: _perm_tasks[task_id].update({'status': 'failed', 'error': err})
+            return
+        result = run_permutation_test(df, pred, body['val_start'], body['val_end'], body['hold_days'],
+                                      body['stop_loss'], body['take_profit'], n_perms=body['n_perms'])
+        result = {**result, 'params': body}  # 留档带窗口/参数，前端展示用
+        # 留档（每次运行覆盖，历史在日志里）
+        db = get_sync_db()
+        db.execute(text("UPDATE model_versions SET perm_test=:p WHERE version=:v"),
+                   {"p": json.dumps(result), "v": version})
+        db.commit(); db.close()
+        with _perm_lock:
+            _perm_tasks[task_id].update({'status': 'completed', 'result': result})
+    except Exception as e:
+        _log.error(f"[perm] {version} 置换检验失败: {e}")
+        with _perm_lock: _perm_tasks[task_id].update({'status': 'failed', 'error': str(e)[:300]})
+
+
+@router.post("/v1/models/{version}/permutation")
+def start_permutation(version: str, body: PermutationBody, user: str = Depends(get_current_user)):
+    """启动置换检验。判据：真预测 sharpe 显著高于打乱后的噪声分布。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        db.close()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        val_end = body.val_end or str(_dt.today())
+        val_start = body.val_start or f"{_dt.today().year}-01-01"
+        task_id = f"perm-{_uuid.uuid4().hex[:6]}"
+        b = {'n_perms': body.n_perms, 'val_start': val_start, 'val_end': val_end,
+             'hold_days': body.hold_days, 'stop_loss': body.stop_loss, 'take_profit': body.take_profit}
+        with _perm_lock:
+            _perm_tasks[task_id] = {'task_id': task_id, 'version': version, 'status': 'running',
+                                    'params': b, 'started_at': _time.time()}
+        thread = _threading.Thread(target=_run_perm, args=(task_id, version, b), daemon=True)
+        thread.start()
+        return {"ok": True, "task_id": task_id, "status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if not db.closed: db.close()
+        raise HTTPException(500, str(e))
+
+
+@router.get("/v1/models/{version}/permutation")
+def get_permutation(version: str, task_id: str = Query(None), user: str = Depends(get_current_user)):
+    """置换检验结果：带 task_id 轮询任务，否则返回最近一次留档。"""
+    if task_id:
+        with _perm_lock:
+            t = _perm_tasks.get(task_id)
+            if not t or t['version'] != version:
+                raise HTTPException(404, "任务不存在")
+            return dict(t)
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT perm_test FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        db.close()
+        pt = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else None)
+        return {"version": version, "perm_test": pt}
+    except Exception as e:
+        db.close(); raise HTTPException(500, str(e))

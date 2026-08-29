@@ -390,6 +390,102 @@ def ic_board(horizon: int = Query(10, ge=1, le=250), user: str = Depends(get_cur
         raise HTTPException(500, str(e))
 
 
+@router.get("/ic/correlation")
+def ic_correlation(horizon: int = Query(10, ge=1, le=250),
+                   val_start: str = Query(''), val_end: str = Query(''),
+                   threshold: float = Query(0.7, ge=0.3, le=0.95),
+                   max_sections: int = Query(120, ge=20, le=365),
+                   user: str = Depends(get_current_user)):
+    """因子相关性矩阵 + 贪心去冗推荐。
+
+    相关性口径：各因子逐日截面排名（cs_rank）后对全区间做 pooled Pearson——
+    每个截面都是均匀分布 marginal 时，等价于"逐日截面 Spearman 的时间平均"。
+    为控制 DB 开销均匀抽样 ≤max_sections 个截面（对 0.7 量级的阈值判断绰绰有余）。
+    """
+    import re as _re
+    import numpy as _np
+    import pandas as pd
+    from datetime import date as _d, timedelta as _td
+    from sqlalchemy import text
+    from scripts.pipeline import cs_rank_features
+    from scripts.factor_ic import greedy_dedup
+
+    db = get_sync_db()
+    try:
+        feats = [r[0] for r in db.execute(text(
+            "SELECT feature_name FROM features WHERE status='enabled' AND target_entity='stock' "
+            "ORDER BY feature_name")).fetchall()]
+        if len(feats) < 2:
+            raise HTTPException(400, "可用 stock 因子不足 2 个")
+        val_end = val_end or str(_d.today())
+        if not val_start:
+            val_start = (_d.fromisoformat(val_end) - _td(days=3 * 365)).isoformat()
+
+        # 均匀抽样截面日期（以任一因子的日期序列为准，因子间日期对齐）
+        all_dates = [str(r[0])[:10] for r in db.execute(text(
+            "SELECT DISTINCT trade_date FROM feature_values WHERE feature_name=:f "
+            "AND trade_date BETWEEN :sd AND :ed ORDER BY trade_date"),
+            {"f": feats[0], "sd": val_start, "ed": val_end}).fetchall()]
+        if len(all_dates) < 20:
+            raise HTTPException(400, f"区间内截面不足（{len(all_dates)} 天），请扩大区间")
+        step = max(1, len(all_dates) // max_sections)
+        sample_dates = all_dates[::step]
+
+        # 轻量透视：仅特征值，无行情 JOIN
+        safe_names = [_re.sub(r'[^0-9a-zA-Z_]', '', f) for f in feats]
+        if safe_names != feats:
+            raise HTTPException(400, "特征名含非法字符")
+        selects = ",\n               ".join(
+            f"MAX(value) FILTER (WHERE feature_name = '{fn}') AS \"{fn}\"" for fn in feats)
+        rows = db.execute(text(f"""
+            SELECT trade_date, stock_code, {selects}
+            FROM feature_values
+            WHERE feature_name = ANY(:names) AND trade_date = ANY(CAST(:dates AS date[]))
+            GROUP BY stock_code, trade_date
+        """), {"names": feats, "dates": sample_dates}).fetchall()
+        db.close()
+        df = pd.DataFrame(rows, columns=['trade_date', 'stock_code'] + feats)
+        for c in feats:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+
+        # 截面排名 → pooled Pearson = 平均逐日 Spearman
+        df = cs_rank_features(df, feats)
+        corr_df = df[feats].corr()
+        corr = {}
+        for i, a in enumerate(feats):
+            for j, b in enumerate(feats):
+                v = corr_df.iloc[i, j]
+                corr[(a, b)] = float(v) if pd.notna(v) else 0.0
+
+        # 最新一次 ICIR（指定 horizon）
+        ic_rows = db.execute(text("""
+            SELECT DISTINCT ON (feature_name) feature_name, rank_ic_ir, traffic
+            FROM factor_ic_stats WHERE horizon = :h
+            ORDER BY feature_name, created_at DESC
+        """), {"h": horizon}).fetchall()
+        icir = {r[0]: float(r[1]) if r[1] is not None else None for r in ic_rows}
+        traffic = {r[0]: r[2] for r in ic_rows}
+
+        cand_icir = {f: (icir.get(f) or 0) for f in feats}
+        selected, skipped = greedy_dedup(corr, cand_icir, threshold=threshold)
+
+        return {
+            "val_start": val_start, "val_end": val_end, "horizon": horizon,
+            "threshold": threshold, "sections": len(sample_dates),
+            "factors": feats,
+            "matrix": [[round(corr[(a, b)], 3) for b in feats] for a in feats],
+            "icir": {f: (round(cand_icir[f], 3) if icir.get(f) is not None else None) for f in feats},
+            "traffic": traffic,
+            "recommended": selected,
+            "skipped": skipped,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
 
 @router.get("/{feature_id}")
 def get_feature(feature_id: int):

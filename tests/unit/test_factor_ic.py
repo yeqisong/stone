@@ -74,3 +74,33 @@ class TestTrafficLight:
 
     def test_constants_match_doc(self):
         assert IC_GREEN == {'abs_rank_ic': 0.02, 'abs_icir': 0.30, 'same_sign': 0.55}
+
+
+class TestGreedyDedup:
+    """贪心去冗推荐（因子聚类选择）。"""
+
+    def test_redundant_skipped_in_icir_order(self):
+        from scripts.factor_ic import greedy_dedup
+        # pct_20d 与 dif 高度相关（同一动量簇），dif ICIR 略低 → 被跳过
+        corr = {('pct_20d', 'dif'): 0.92, ('dif', 'pct_20d'): 0.92,
+                ('pct_20d', 'atr_14'): 0.10, ('atr_14', 'pct_20d'): 0.10,
+                ('dif', 'atr_14'): 0.05, ('atr_14', 'dif'): 0.05}
+        icir = {'pct_20d': -0.431, 'dif': -0.423, 'atr_14': -0.234}
+        selected, skipped = greedy_dedup(corr, icir)
+        assert selected == ['pct_20d', 'atr_14']
+        assert skipped == [{'factor': 'dif', 'with': 'pct_20d', 'rho': 0.92,
+                            'reason': '与 pct_20d 相关 0.92 > 0.7'}]
+
+    def test_low_icir_not_selected_even_if_uncorrelated(self):
+        from scripts.factor_ic import greedy_dedup
+        selected, skipped = greedy_dedup({('a', 'b'): 0.0, ('b', 'a'): 0.0},
+                                         {'a': -0.4, 'b': -0.05})
+        assert selected == ['a']
+        assert skipped[0]['reason'].startswith('|ICIR|')
+
+    def test_negative_corr_counts_as_redundant(self):
+        """相关取绝对值：反向共动的因子同样是冗余。"""
+        from scripts.factor_ic import greedy_dedup
+        corr = {('a', 'b'): -0.85, ('b', 'a'): -0.85}
+        selected, skipped = greedy_dedup(corr, {'a': 0.4, 'b': 0.3})
+        assert selected == ['a'] and skipped[0]['with'] == 'a'

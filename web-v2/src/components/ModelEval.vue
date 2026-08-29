@@ -145,34 +145,86 @@
       <div v-if="scanTask" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
         {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `✅ 完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
       </div>
+      <div v-if="scanBest" style="margin-top:8px;font-size:11px;color:var(--c-text)">
+        📌 已应用最优：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
+        trailing{{((scanBest.trailing_retracement||0)*100).toFixed(0)}}% —
+        sharpe <b style="color:#10b981">{{scanBest.sharpe?.toFixed(2)}}</b> ·
+        收益 <b>{{(scanBest.total_return*100).toFixed(1)}}%</b> ·
+        胜率 {{((scanBest.win_rate||0)*100).toFixed(0)}}% · {{scanBest.total_trades}} 笔 · 成本 {{((scanBest.total_cost||0)/10000).toFixed(1)}} 万
+      </div>
     </div>
 
     <!-- 归因分析 -->
-    <div v-if="attribution" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
+    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">📊 归因分析（基准锚定法）</div>
         <n-button size="tiny" @click="loadAttribution" :loading="attrLoading">🔄 重新分析</n-button>
       </div>
-      <div v-if="attribution.matrix" style="display:flex;gap:8px;flex-wrap:wrap">
+      <div v-if="attrLoading && !attribution" style="font-size:11px;color:var(--c-text-dim);padding:6px 0">分析中（宽表 + 三基线回测，约 1 分钟）…</div>
+      <div v-if="attribution?.matrix" style="display:flex;gap:8px;flex-wrap:wrap">
         <div v-for="m in attrCards" :key="m.label" style="flex:1;min-width:90px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
           <div style="font-size:9px;color:var(--c-text-faint)">{{ m.label }}</div>
           <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{ m.value }}</div>
           <div style="font-size:9px;color:var(--c-text-faint)">夏普 {{ m.sharpe }}</div>
         </div>
       </div>
-      <div v-if="attribution.brinson" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
+      <div v-if="attribution?.brinson" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
         选股贡献 {{ (attribution.brinson.model_contribution*100).toFixed(1) }}% | 策略贡献 {{ (attribution.brinson.strategy_contribution*100).toFixed(1) }}%
         <span style="margin-left:8px;font-weight:600" :style="{color:attrMatrixColor}">{{ attrMatrixLabel }}</span>
       </div>
+      <div v-if="attrVerdict" style="margin-top:8px;font-size:11px;font-weight:600" :style="{color:attrVerdict.color}">
+        {{ attrVerdict.text }}<span style="font-weight:400;color:var(--c-text-faint)">（基准沪深300 同期 {{((attribution.benchmark_return||0)*100).toFixed(1)}}%）</span>
+      </div>
+    </div>
+
+    <!-- 置换检验 -->
+    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🎲 置换检验（真预测 vs 打乱噪声分布）</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <n-select v-model:value="permN" size="tiny" style="width:84px"
+            :options="[10,20,50].map(n=>({label:n+' 次',value:n}))" />
+          <n-button size="tiny" @click="startPerm" :loading="permRunning">运行</n-button>
+        </div>
+      </div>
+      <div v-if="permTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
+        检验中（宽表 + 预测 + {{permTask.params?.n_perms || permN}} 次打乱回测，约 5-10 分钟）…
+      </div>
+      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px">❌ {{permTask.error}}</div>
+      <template v-if="permTest">
+        <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:permVerdict?.color}">{{permVerdict?.label}}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+          <div style="flex:1;min-width:110px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">真预测 sharpe</div>
+            <div style="font-size:15px;font-weight:700;color:#10b981">{{permTest.real?.sharpe?.toFixed(2)}}</div>
+            <div style="font-size:9px;color:var(--c-text-faint)">收益 {{((permTest.real?.total_return||0)*100).toFixed(1)}}%</div>
+          </div>
+          <div style="flex:1;min-width:110px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">打乱噪声（{{permTest.n}} 次）</div>
+            <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{permTest.perm?.mean?.toFixed(2)}} ± {{permTest.perm?.std?.toFixed(2)}}</div>
+            <div style="font-size:9px;color:var(--c-text-faint)">p5={{permTest.perm?.p5?.toFixed(2)}} p95={{permTest.perm?.p95?.toFixed(2)}}</div>
+          </div>
+          <div style="flex:1;min-width:110px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">z / 分位</div>
+            <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{permTest.z}} / {{(permTest.pct*100).toFixed(0)}}%</div>
+            <div style="font-size:9px;color:var(--c-text-faint)">随机基线 {{permTest.random?.sharpe?.toFixed(2)}}</div>
+          </div>
+        </div>
+        <div style="margin-top:6px;font-size:10px;color:var(--c-text-faint);line-height:1.7">
+          窗口 {{permTest.params?.val_start}} ~ {{permTest.params?.val_end}} · sl {{permTest.params?.stop_loss}} / tp {{permTest.params?.take_profit}} · hold {{permTest.params?.hold_days}}d。
+          打乱预测必须测不出超额——若噪声也能"赚钱"说明引擎在给噪声送分；真预测进入噪声分布前 5% 才算显著。
+        </div>
+      </template>
+      <n-empty v-else-if="!permRunning" description="未运行——点击「运行」生成噪声分布对照" size="small" style="padding:12px" />
     </div>
 
     <!-- 策略扫描弹窗 -->
     <n-modal v-model:show="showScanModal" preset="card" title="策略参数扫描" style="width:500px;max-width:92vw">
       <n-space vertical>
         <div style="font-size:11px;color:var(--c-text-dim)">选择参数候选值，系统将遍历所有组合在验证集上回测。</div>
-        <div style="font-size:11px;font-weight:600">止盈阈值</div>
-        <n-checkbox-group v-model:value="scanStopLoss"><n-space><n-checkbox v-for="v in [0.03,0.05,0.08,0.10]" :key="v" :value="v" :label="(v*100)+'%'" /></n-space></n-checkbox-group>
         <div style="font-size:11px;font-weight:600">止损阈值</div>
+        <n-checkbox-group v-model:value="scanStopLoss"><n-space><n-checkbox v-for="v in [0.03,0.05,0.08,0.10]" :key="v" :value="v" :label="(v*100)+'%'" /></n-space></n-checkbox-group>
+        <div style="font-size:11px;font-weight:600">止盈阈值</div>
         <n-checkbox-group v-model:value="scanTakeProfit"><n-space><n-checkbox v-for="v in [0.05,0.08,0.10,0.15,0.20]" :key="v" :value="v" :label="(v*100)+'%'" /></n-space></n-checkbox-group>
         <div v-if="scanTask?.status==='running'" style="margin-top:8px">
           <n-progress type="line" :percentage="Math.round(scanTask.completed/scanTask.total_combos*100)" />
@@ -194,8 +246,8 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress, useMessage } from 'naive-ui'
+import { computed, ref, onMounted } from 'vue'
+import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress, NSelect, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const API = window.location.origin
@@ -286,9 +338,9 @@ async function startScan() {
   if (!props.version?.version) return
   scanRunning.value = true; scanTask.value = null
   try {
-    const r = await axios.post(API + `/v1/models/${props.version.version}/strategy-scan`, {
+    const r = await axios.post(API + `/api/v1/models/${props.version.version}/strategy-scan`, {
       param_grid: { stop_loss: scanStopLoss.value, take_profit: scanTakeProfit.value, trailing_retracement: [0.05] },
-      val_start: cfgValStart, val_end: cfgValEnd
+      val_start: cfgValStart.value, val_end: cfgValEnd.value
     })
     scanTask.value = r.data
     if (r.data.task_id) pollScan(r.data.task_id)
@@ -299,7 +351,7 @@ async function startScan() {
 function pollScan(taskId) {
   scanPollTimer = setInterval(async () => {
     try {
-      const r = await axios.get(API + `/v1/models/${props.version.version}/strategy-scan/${taskId}`)
+      const r = await axios.get(API + `/api/v1/models/${props.version.version}/strategy-scan/${taskId}`)
       scanTask.value = r.data
       if (r.data.status === 'completed' || r.data.status === 'failed') {
         clearInterval(scanPollTimer); scanPollTimer = null
@@ -311,7 +363,7 @@ function pollScan(taskId) {
 async function applyScan() {
   if (!scanTask.value?.task_id) return
   try {
-    await axios.post(API + `/v1/models/${props.version.version}/strategy-scan/${scanTask.value.task_id}/apply`)
+    await axios.post(API + `/api/v1/models/${props.version.version}/strategy-scan/${scanTask.value.task_id}/apply`)
     message.success('最优参数已应用')
     showScanModal.value = false
   } catch(e) { message.error('应用失败') }
@@ -325,8 +377,8 @@ async function loadAttribution() {
   if (!props.version?.version) return
   attrLoading.value = true
   try {
-    const r = await axios.post(API + `/v1/models/${props.version.version}/attribution`, {
-      val_start: cfgValStart, val_end: cfgValEnd
+    const r = await axios.post(API + `/api/v1/models/${props.version.version}/attribution`, {
+      val_start: cfgValStart.value, val_end: cfgValEnd.value
     })
     attribution.value = r.data
   } catch(e) {} finally { attrLoading.value = false }
@@ -350,8 +402,74 @@ const attrMatrixColor = computed(() => {
   return {dual_driver:'#10b981',execution_loss:'#f59e0b',beta_amplifier:'#f59e0b',double_misjudge:'#ef4444'}[m] || 'var(--c-text)'
 })
 
-const cfgValStart = computed(() => props.version?.config?.val_strategy_range?.start || '2022-01-01')
-const cfgValEnd = computed(() => props.version?.config?.val_strategy_range?.end || '2023-12-31')
+const attrVerdict = computed(() => {
+  const a = attribution.value
+  if (!a?.real || !a?.random) return null
+  const rs = a.real.sharpe || 0, rd = a.random.sharpe || 0
+  return rs > rd
+    ? { text: `✅ real 优于 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）`, color: '#10b981' }
+    : { text: `🔴 real 不及 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）——模型为负贡献`, color: '#ef4444' }
+})
+
+const cfgValStart = computed(() => props.version?.config?.val_strategy_range?.start || `${new Date().getFullYear()}-01-01`)
+const cfgValEnd = computed(() => props.version?.config?.val_strategy_range?.end || new Date().toISOString().slice(0, 10))
+
+// ── 训练后体检：详情自取（scan 落库结果 + 置换检验留档）──
+const evalDetail = ref(null)
+async function loadEvalDetail() {
+  try {
+    const r = await axios.get(API + `/api/v1/models/${props.version.version}`)
+    evalDetail.value = r.data
+  } catch (e) { console.error(e) }
+}
+onMounted(() => { loadEvalDetail(); loadAttribution() })
+
+const scanResults = computed(() => evalDetail.value?.strategy_scan_results || null)
+const scanBest = computed(() => {
+  const list = scanResults.value
+  if (!Array.isArray(list) || !list.length) return null
+  return list.reduce((a, b) => ((b.sharpe || 0) > (a.sharpe || 0) ? b : a))
+})
+
+// ── 置换检验 ──
+const permTest = computed(() => evalDetail.value?.perm_test || null)
+const permRunning = ref(false)
+const permTask = ref(null)
+const permN = ref(20)
+let permPollTimer = null
+
+async function startPerm() {
+  if (!props.version?.version) return
+  permRunning.value = true; permTask.value = null
+  try {
+    const r = await axios.post(API + `/api/v1/models/${props.version.version}/permutation`, {
+      n_perms: permN.value, val_start: cfgValStart.value, val_end: cfgValEnd.value,
+      stop_loss: 0.05, take_profit: 0.15,
+    })
+    permTask.value = r.data
+    permPollTimer = setInterval(async () => {
+      try {
+        const tr = await axios.get(API + `/api/v1/models/${props.version.version}/permutation`, { params: { task_id: r.data.task_id } })
+        permTask.value = tr.data
+        if (tr.data.status === 'completed' || tr.data.status === 'failed') {
+          clearInterval(permPollTimer); permPollTimer = null; permRunning.value = false
+          if (tr.data.status === 'completed') { message.success('置换检验完成'); loadEvalDetail() }
+        }
+      } catch (e) { clearInterval(permPollTimer); permPollTimer = null; permRunning.value = false }
+    }, 5000)
+  } catch (e) {
+    message.error(e.response?.data?.detail || '启动失败'); permRunning.value = false
+  }
+}
+
+const permVerdict = computed(() => {
+  const v = permTest.value?.verdict
+  return {
+    strong: { label: '✅ 显著（进入噪声分布前 5%）', color: '#10b981' },
+    above_mean: { label: '🟡 高于噪声均值（未达显著）', color: '#f59e0b' },
+    noise: { label: '🔴 与噪声无异（无 alpha）', color: '#ef4444' },
+  }[v] || null
+})
 
 const trades = computed(() => rep.value.trades || [])
 const tradePage = ref(1)

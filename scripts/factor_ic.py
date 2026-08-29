@@ -19,6 +19,35 @@ from sqlalchemy import text
 
 # 红绿灯阈值（前端同款展示，改动需两处同步）
 IC_GREEN = {'abs_rank_ic': 0.02, 'abs_icir': 0.30, 'same_sign': 0.55}
+# 去冗推荐参数
+DEDUP_THRESHOLD = 0.7   # 与已选因子 |截面相关| 超过则视为冗余
+ICIR_FLOOR = 0.10       # |ICIR| 低于此值视为证据不足，不推荐入选
+
+
+def greedy_dedup(corr, icir, threshold: float = DEDUP_THRESHOLD, icir_floor: float = ICIR_FLOOR):
+    """贪心去冗推荐：按 |ICIR| 降序选因子，与已选因子 |ρ|>threshold 的跳过。
+
+    corr: {(a, b): rho} 对称字典；icir: {factor: icir}（来自最新一次 factor_ic_stats）。
+    |ICIR| < icir_floor 的因子即使不冗余也不推荐（证据不足）。
+    Returns: (selected: [factor], skipped: [{'factor', 'with', 'rho', 'reason'}])
+    """
+    order = sorted(icir, key=lambda k: abs(icir[k] or 0), reverse=True)
+    selected, skipped = [], []
+    for f in order:
+        best_rho, best_with = 0.0, None
+        for s in selected:
+            rho = abs(corr.get((f, s), corr.get((s, f), 0)) or 0)
+            if rho > best_rho:
+                best_rho, best_with = rho, s
+        if best_rho > threshold:
+            skipped.append({'factor': f, 'with': best_with, 'rho': round(best_rho, 3),
+                            'reason': f'与 {best_with} 相关 {best_rho:.2f} > {threshold}'})
+        elif abs(icir[f] or 0) < icir_floor:
+            skipped.append({'factor': f, 'with': None, 'rho': None,
+                            'reason': f'|ICIR| {abs(icir[f] or 0):.2f} < {icir_floor}，证据不足'})
+        else:
+            selected.append(f)
+    return selected, skipped
 
 
 def traffic_light(rank_ic: float, icir: float, same_sign: float) -> str:

@@ -4,6 +4,7 @@
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">特征管理（Feature Registry）</div>
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openDepGraph">🔗 依赖图</n-button>
+      <n-button size="small" quaternary @click="showDedup = true">🧭 去冗推荐</n-button>
       <n-button type="primary" size="small" @click="openCreate">+ 新增特征</n-button>
     </div>
   </div>
@@ -210,12 +211,54 @@
   <n-modal v-model:show="showDepGraph" preset="card" title="🔗 特征依赖关系图" style="width:96vw;max-width:96vw;height:90vh" :mask-closable="true">
     <div ref="depGraphContainer" style="width:100%;height:calc(90vh - 120px)"></div>
   </n-modal>
+
+  <!-- 去冗推荐弹窗 -->
+  <n-modal v-model:show="showDedup" preset="card" title="🧭 因子去冗推荐" style="width:860px;max-width:94vw" :mask-closable="true">
+    <n-space vertical>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <n-select v-model:value="dedupHorizon" :options="[1,5,10,20].map(h=>({label:h+'日前瞻',value:h}))" size="small" style="width:110px" />
+        <span style="font-size:11px;color:var(--c-text-dim)">近 3 年 · ≤120 个抽样截面 · 相关 > 0.7 视为冗余 · |ICIR| ≥ 0.10 才推荐</span>
+        <div style="flex:1" />
+        <n-button size="small" type="primary" :loading="dedupLoading" @click="loadDedup">计算</n-button>
+      </div>
+      <n-spin v-if="dedupLoading" style="padding:24px" />
+      <template v-if="dedup">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:380px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">截面相关矩阵（逐日 Spearman 的时间平均）</div>
+            <div ref="dedupHeatmap" style="width:100%;height:420px"></div>
+          </div>
+          <div style="flex:1;min-width:300px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">
+              ✅ 推荐入选（{{ dedup.recommended.length }} 个，按 |ICIR| 贪心）
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">
+              <n-tag v-for="f in dedup.recommended" :key="f" size="small" :bordered="false"
+                :type="dedup.traffic[f]==='green'?'success':dedup.traffic[f]==='yellow'?'warning':'default'">
+                {{ dedup.traffic[f]==='green'?'🟢':dedup.traffic[f]==='yellow'?'🟡':'' }}{{ f }}
+              </n-tag>
+            </div>
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">⏭ 跳过（{{ dedup.skipped.length }} 个）</div>
+            <n-data-table :columns="dedupSkipCols" :data="dedup.skipped" size="tiny" :max-height="240" />
+            <n-button size="small" type="primary" style="margin-top:12px" :loading="dedupApplying"
+              @click="applyRecommended">✅ 推荐组设为入选</n-button>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-top:8px;line-height:1.7">
+              口径：相关性 = 因子逐日截面排名（cs_rank）后的 pooled Pearson，等价于逐日截面 Spearman
+              的时间平均，回答"两个因子是否在挑同一批股票"；贪心按 |ICIR| 降序，与已选因子相关
+              超阈值即跳过，同簇保留 ICIR 最高者。入选决策仍由你确认，批量按钮只改推荐组成员。
+            </div>
+          </div>
+        </div>
+      </template>
+      <n-empty v-else-if="!dedupLoading" description="点击「计算」生成相关矩阵与推荐组合" style="padding:30px" />
+    </n-space>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
-import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress, useMessage } from 'naive-ui'
+import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress, NEmpty, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
 import * as echarts from 'echarts'
@@ -254,6 +297,80 @@ async function loadIcBoard() {
 
 const trafficDot = { green:'🟢', yellow:'🟡', red:'🔴' }
 const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'success' }, excluded:{ label:'已剔除', type:'error' } }
+
+// ── 去冗推荐 ──
+const showDedup = ref(false)
+const dedupHorizon = ref(10)
+const dedupLoading = ref(false)
+const dedup = ref(null)
+const dedupApplying = ref(false)
+const dedupHeatmap = ref(null)
+let dedupHeatInst = null
+
+async function loadDedup() {
+  dedupLoading.value = true
+  try {
+    const r = await axios.get(API + '/api/features/ic/correlation', { params: { horizon: dedupHorizon.value } })
+    dedup.value = r.data
+    setTimeout(() => renderDedupHeatmap(), 50)
+  } catch (e) {
+    message.error(e.response?.data?.detail || '计算失败')
+  } finally {
+    dedupLoading.value = false
+  }
+}
+
+function renderDedupHeatmap() {
+  if (!dedupHeatmap.value || !dedup.value) return
+  dedupHeatInst?.dispose()
+  dedupHeatInst = echarts.init(dedupHeatmap.value)
+  const { factors, matrix } = dedup.value
+  const data = []
+  for (let i = 0; i < factors.length; i++)
+    for (let j = 0; j < factors.length; j++)
+      data.push([j, i, matrix[i][j]])
+  dedupHeatInst.setOption({
+    tooltip: { formatter: p => `${factors[p.data[1]]} × ${factors[p.data[0]]}<br/>ρ = ${p.data[2]}` },
+    grid: { left: 90, right: 10, top: 4, bottom: 70 },
+    xAxis: { type: 'category', data: factors, axisLabel: { fontSize: 8, rotate: 60 } },
+    yAxis: { type: 'category', data: factors, axisLabel: { fontSize: 8 } },
+    visualMap: { min: -1, max: 1, calculable: true, orient: 'horizontal', left: 'center', bottom: 0,
+                 inRange: { color: ['#2080f0', '#ffffff', '#ef4444'] }, textStyle: { fontSize: 9 } },
+    series: [{ type: 'heatmap', data, label: { show: factors.length <= 15, fontSize: 8, formatter: p => p.data[2].toFixed(2) } }],
+  })
+}
+
+const dedupSkipCols = [
+  { title: '因子', key: 'factor', width: 100 },
+  { title: '原因', key: 'reason', ellipsis: { tooltip: true } },
+]
+
+async function applyRecommended() {
+  const names = dedup.value?.recommended || []
+  if (!names.length) return
+  dedupApplying.value = true
+  try {
+    // 用 board 数据拿到 feature_id（board 已含全部 enabled stock 因子）
+    const br = await axios.get(API + '/api/features/ic/board', { params: { horizon: dedupHorizon.value } })
+    const idMap = {}
+    for (const b of (br.data.board || [])) idMap[b.feature_name] = b.feature_id
+    let ok = 0
+    for (const f of names) {
+      if (idMap[f] == null) continue
+      try {
+        await axios.put(API + `/api/features/${idMap[f]}/ic-status`, { status: 'included' }, { headers: authHeaders() })
+        ok++
+      } catch (e) { console.error(f, e) }
+    }
+    message.success(`已将 ${ok} 个推荐因子设为入选`)
+    await loadIcBoard()
+    loadData()
+  } catch (e) {
+    message.error('批量设置失败')
+  } finally {
+    dedupApplying.value = false
+  }
+}
 
 const showCreate = ref(false)
 const editId = ref(null)

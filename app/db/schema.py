@@ -1122,6 +1122,7 @@ def init_db(sync_session) -> None:
         ('trading_rules', 'JSONB'),
         ('strategy_scan_results', 'JSONB'),
         ('test_performance', 'JSONB'),
+        ('perm_test', 'JSONB'),  # 置换检验留档（v3.5：real vs 打乱分布 vs random）
     ]:
         try:
             sync_session.execute(text(f"ALTER TABLE model_versions ADD COLUMN IF NOT EXISTS {col} {col_type}"))

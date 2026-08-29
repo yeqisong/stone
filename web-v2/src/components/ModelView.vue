@@ -131,6 +131,16 @@
           <n-input v-model:value="createName" placeholder="模型名称" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
           <n-date-picker v-model:formatted-value="createForm.train_start" type="date" value-format="yyyy-MM-dd" placeholder="数据起点" />
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">标签</span>
+              <n-select v-model:value="createForm.label_mode" size="small" style="flex:1"
+                :options="[{label:'超额收益（推荐）',value:'excess'},{label:'绝对收益（旧）',value:'absolute'}]" />
+            </div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">标准化</span>
+              <n-select v-model:value="createForm.feature_norm" size="small" style="flex:1"
+                :options="[{label:'截面排名（推荐）',value:'cs_rank'},{label:'原始值（旧）',value:'none'}]" />
+            </div>
+          </div>
           <n-divider style="margin:4px 0">特征配置</n-divider>
           <n-space>
             <n-tag v-for="f in featureOptions" :key="f.key"
@@ -310,6 +320,8 @@ const createForm = reactive({
   test_start: '2026-01-01', test_end: null,
   feature_names: [],
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
+  // v3.5 方法论：excess=超额收益标签（相对沪深300）；cs_rank=特征逐日截面排名
+  label_mode: 'excess', feature_norm: 'cs_rank',
   // ML 买入阈值：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
   signal_threshold_mode: 'quantile', buy_top_pct: 0.05, ml_confidence_threshold: 0.02,
   // 六层策略配置默认值（策略扫描时搜索最优）
@@ -398,6 +410,9 @@ function startEditConfig() {
   createForm.signal_threshold_mode = sigCfg.threshold_mode || 'quantile'
   createForm.buy_top_pct = sigCfg.buy_top_pct ?? 0.05
   createForm.ml_confidence_threshold = sigCfg.ml_confidence_threshold ?? 0.02
+  // v3.5：旧模型 config 无此二键 → 回退旧口径，保证编辑保存不改变语义
+  createForm.label_mode = cfg.label_mode || 'absolute'
+  createForm.feature_norm = cfg.feature_norm || 'none'
   showCreate.value = true
 }
 
@@ -413,6 +428,8 @@ async function doSaveConfig() {
       feature_names: createForm.feature_names,
       features: createForm.feature_names,
       optuna_trials: createForm.optuna_trials,
+      label_mode: createForm.label_mode,
+      feature_norm: createForm.feature_norm,
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
       signal: {
         threshold_mode: createForm.signal_threshold_mode,
@@ -452,6 +469,8 @@ async function doCreate() {
       signal_threshold_mode: createForm.signal_threshold_mode,
       buy_top_pct: createForm.buy_top_pct,
       ml_confidence_threshold: createForm.ml_confidence_threshold,
+      label_mode: createForm.label_mode,
+      feature_norm: createForm.feature_norm,
     })
     showCreate.value = false
     createName.value = ''

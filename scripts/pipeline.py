@@ -724,6 +724,7 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
     Returns: (pred Series|None, err|None)，pred 与 df 验证区间行索引对齐。
     """
     import pickle as _pkl, os as _os
+    import json as _json
     import pandas as _pd
     from datetime import date as _d, timedelta as _td
     from sqlalchemy import text as _text
@@ -731,6 +732,10 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
     model_path = f"data/models/{version}/xgb_{horizon}d.pkl"
     if not _os.path.exists(model_path):
         return None, f'模型文件不存在: {model_path}'
+    # 模型训练时的特征标准化方式（cs_rank → 推理端必须做同样变换）
+    _cfg_row = db.execute(_text("SELECT config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+    _cfg = (_json.loads(_cfg_row[0]) if isinstance(_cfg_row[0], str) else (_cfg_row[0] or {})) if _cfg_row else {}
+    feature_norm = _cfg.get('feature_norm', 'none')
     val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
     if not val_mask.any():
         return None, '验证集无数据'
@@ -766,6 +771,9 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
         if len(cols) != len(mf):
             missing = [c for c in mf if c not in val_df.columns]
             return None, f'宽表缺少模型特征: {missing[:5]}'
+        # 推理端特征标准化：与训练端同配置（cs_rank 逐日截面排名，idx_ret_20d 等常数列归 0.5）
+        if feature_norm == 'cs_rank':
+            val_df = cs_rank_features(val_df, mf)
         y = model.predict(val_df[cols].fillna(0).values)
         return _pd.Series(y, index=pred_index), None
     except Exception:
@@ -856,6 +864,47 @@ def run_attribution(db, version: str, df, val_start: str, val_end: str,
 
 
 
+def run_permutation_test(df, pred, val_start: str, val_end: str, hold_days: int,
+                         stop_loss: float = 0.08, take_profit: float = 0.15,
+                         n_perms: int = 20, seed: int = 7, random_seed: int = 42):
+    """置换检验（评估器 v2 的配套仪表）：打乱预测值 n 次构造无信息噪声分布。
+
+    判据：真预测 sharpe 应显著高于打乱分布——打乱后的预测引擎测不出超额，
+    否则说明引擎在给噪声送分；同时报告 random 基线作第二参照。
+    Returns: {
+      'real': {...}, 'perm': {'mean','std','min','max','p5','p95','ret_mean'},
+      'random': {...}, 'n': n_perms, 'z': float, 'pct': 真预测分位,
+      'verdict': 'strong'(≥p95) | 'above_mean'(z>0) | 'noise'(其余)
+    }
+    """
+    import numpy as np
+    import pandas as pd
+    real = _simple_backtest(df, pred, val_start, val_end, hold_days, stop_loss, take_profit)
+    rng = np.random.default_rng(seed)
+    vals = pred.values.copy()
+    sharpes, rets = [], []
+    for _ in range(n_perms):
+        rng.shuffle(vals)
+        bt = _simple_backtest(df, pd.Series(vals, index=pred.index),
+                              val_start, val_end, hold_days, stop_loss, take_profit)
+        sharpes.append(bt['sharpe']); rets.append(bt['total_return'])
+    rnd = _simple_backtest(df, None, val_start, val_end, hold_days, stop_loss, take_profit, seed=random_seed)
+    pm, ps = float(np.mean(sharpes)), float(np.std(sharpes))
+    z = (real['sharpe'] - pm) / ps if ps > 1e-9 else 0.0
+    pct = float(np.mean([s < real['sharpe'] for s in sharpes]))
+    verdict = 'strong' if pct >= 0.95 else ('above_mean' if z > 0 else 'noise')
+    return {
+        'real': real,
+        'perm': {'mean': round(pm, 4), 'std': round(ps, 4),
+                 'min': round(min(sharpes), 4), 'max': round(max(sharpes), 4),
+                 'p5': round(float(np.percentile(sharpes, 5)), 4),
+                 'p95': round(float(np.percentile(sharpes, 95)), 4),
+                 'ret_mean': round(float(np.mean(rets)), 4)},
+        'random': rnd, 'n': n_perms,
+        'z': round(z, 3), 'pct': round(pct, 3), 'verdict': verdict,
+    }
+
+
 def _get_preference_thresholds(db) -> dict:
     """读取全局偏好设置，返回信号生成阈值字典。"""
     from sqlalchemy import text
@@ -886,6 +935,21 @@ def _get_preference_thresholds(db) -> dict:
         },
     }
     return thresholds.get(mode, thresholds['balanced']), mode
+
+
+def cs_rank_features(df, cols):
+    """逐日截面排名 pct 标准化（v3.5 方法论）：每个交易日把特征变成截面分位 0~1。
+
+    消除市场整体水平漂移（beta/牛熊），让模型只学"当日谁比谁强"；NaN 保留为 NaN
+    （pandas rank 自动跳过），与推理端单日截面行为一致；同日同值的常数列得到同一分位
+    （rank/count 语义，三并列=2/3），信息量归零——正是 idx_ret_20d 这类市场列想要的。
+    原地更新并返回 df。
+    """
+    import pandas as pd
+    cols = [c for c in cols if c in df.columns]
+    if cols:
+        df[cols] = df.groupby('trade_date')[cols].rank(pct=True)
+    return df
 
 
 def dag_task_model_signal(trade_date=None, **kw):
@@ -988,6 +1052,13 @@ def dag_task_model_signal(trade_date=None, **kw):
         if len(idx_rows) >= 21:
             closes = [float(x[0]) for x in reversed(idx_rows)]
             df_today['idx_ret_20d'] = closes[-1] / closes[0] - 1
+
+        # 特征标准化（与训练端一致）：模型配置 feature_norm=cs_rank 时逐列当日截面排名
+        if model_cfg_obj.get('feature_norm') == 'cs_rank':
+            norm_cols = list(dict.fromkeys(
+                list(feature_names) + [c for c in ('bias_5_20', 'vol_ratio_3d', 'idx_ret_20d')
+                                        if c in df_today.columns]))
+            df_today = cs_rank_features(df_today, norm_cols)
 
         # 准备 stock_name
         codes = df_today['stock_code'].unique().tolist()
@@ -1541,6 +1612,25 @@ def dag_task_feature_compute(trade_date=None, **kw):
 
 
 
+def index_forward_return(idx_dates, idx_close, tdate, days):
+    """指数从 tdate 起 N 个交易日后的收益（超额标签的基准腿）。
+
+    tdate 不在指数日历中且存在前一交易日时回退前一交易日；日历前日期/窗口不足/价格非法返回 None。
+    """
+    import bisect as _b
+    pos = _b.bisect_left(idx_dates, tdate)
+    if pos >= len(idx_dates):
+        return None
+    if idx_dates[pos] != tdate:
+        if pos == 0:
+            return None
+        pos -= 1
+    j = pos + days
+    if j >= len(idx_close) or idx_close[pos] <= 0:
+        return None
+    return idx_close[j] / idx_close[pos] - 1
+
+
 def dag_task_model_train(trade_date=None, version=None, **kw):
     """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。
 
@@ -1674,6 +1764,13 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0).astype(float)
             FEATURES.append('idx_ret_20d')
 
+        # 特征标准化（v3.5 可配置）：cs_rank=逐日截面排名 pct——在 dropna 之前做，
+        # 与推理端一致（对每个特征的现有值排名，NaN 不参与排名）
+        feature_norm = cfg.get('feature_norm', 'none')
+        if feature_norm == 'cs_rank':
+            df = cs_rank_features(df, FEATURES)
+            logger.info(f"[train] 特征已逐日截面排名标准化（{len(FEATURES)} 列）")
+
         # 只保留有效特征列 + close/volume
         valid_features = [f for f in FEATURES if f in df.columns]
         df = df.dropna(subset=valid_features)
@@ -1681,8 +1778,11 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         # ── 3. 标签：forward N 日收益 ──
         # 批量查询样本区间（+60 自然日缓冲）内全部日线，内存中按股票分组计算，
         # 替代原先逐行 N+1 查询（A2 优化）
-        logger.info("[train] 计算 Triple Barrier 标签…")
-        # 参数：止盈 +10%，止损 -5%，时间屏障 = 周期天数
+        label_mode = cfg.get('label_mode', 'absolute')
+        logger.info(f"[train] 计算标签（label_mode={label_mode}）…")
+        # absolute（旧口径，默认）: Triple Barrier，止盈 +10%，止损 -5%，时间屏障 = 周期天数
+        # excess（v3.5）: N 日到期收益 − 沪深300 同期收益（超额），不做屏障——
+        #   模型直接学"相对大盘强弱"，与信号层的截面选择机制对齐
         TAKE_PROFIT = 0.10
         STOP_LOSS = -0.05
         LABEL_DAYS = [5, 10, 20]  # 与 TARGETS 保持一致（A3: 新增 5d 周期）
@@ -1690,6 +1790,18 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         _s_max = str(df['trade_date'].max())[:10]
         _buf_end = (_date.fromisoformat(_s_max) + _td(days=60)).isoformat()
         codes = df['stock_code'].unique().tolist()
+
+        # 超额模式：沪深300 前瞻 N 日收益（指数自身交易日序列，tdate 缺失时回退前一交易日）
+        _idx_fwd = None
+        if label_mode == 'excess':
+            _idx_rows = db.execute(text(
+                "SELECT trade_date, close FROM index_daily_quote WHERE index_code='000300' "
+                "AND trade_date BETWEEN :s AND :e ORDER BY trade_date"
+            ), {"s": _s_min, "e": _buf_end}).fetchall()
+            _idx_dates = [str(r[0])[:10] for r in _idx_rows]
+            _idx_close = [float(r[1]) for r in _idx_rows]
+            _idx_fwd = lambda tdate, days: index_forward_return(_idx_dates, _idx_close, tdate, days)
+
         fwd_rows = db.execute(text(
             "SELECT stock_code, trade_date, close_hfq FROM daily_quote "
             "WHERE stock_code = ANY(:c) AND trade_date > :s AND trade_date <= :e "
@@ -1718,6 +1830,17 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 fwd_win = arr[pos:pos + days + 5]  # 原 LIMIT days+5 语义
                 if not fwd_win:
                     labels[days].append(None)
+                    continue
+                if label_mode == 'excess':
+                    # 超额模式：N 日到期收益 − 沪深300 同期收益，不做屏障
+                    if len(fwd_win) < days:
+                        labels[days].append(None)
+                        continue
+                    ir = _idx_fwd(tdate, days) if _idx_fwd else None
+                    if ir is None:
+                        labels[days].append(None)
+                        continue
+                    labels[days].append(fwd_win[days - 1] / price_today - 1 - ir)
                     continue
                 label = None
                 for fr in fwd_win:
