@@ -149,3 +149,38 @@ class TestMisc:
         df = _mk_df({'A': [10.0] * 5})
         bt = _simple_backtest(df, None, '2030-01-01', '2030-12-31', hold_days=5)
         assert bt['total_trades'] == 0 and bt['total_return'] == 0 and bt['total_cost'] == 0
+
+
+class TestLimitFlags:
+    """涨跌停标记共享函数（评估器/训练回测/信号层三处共用）。"""
+
+    def test_limit_pct_by_board(self):
+        from scripts.pipeline import limit_pct
+        assert limit_pct('600000') == 0.098   # 沪主板
+        assert limit_pct('000001') == 0.098   # 深主板
+        assert limit_pct('300750') == 0.198   # 创业板
+        assert limit_pct('688981') == 0.198   # 科创板
+
+    def test_flags_detect_limit_up_down(self):
+        from scripts.pipeline import limit_flags
+        df = pd.DataFrame({
+            'stock_code': ['600000', '600000', '600000', '300750', '300750'],
+            'close': [10.0, 11.0, 11.0, 20.0, 24.0],   # 沪股 +10% 涨停；创业板 +20% 涨停
+        })
+        up, down = limit_flags(df)
+        assert bool(up.iloc[1]) is True    # 沪股 +10% ≥ 9.8%
+        assert bool(up.iloc[2]) is False
+        assert bool(up.iloc[4]) is True    # 创业板 +20% ≥ 19.8%
+        assert not down.any()
+
+    def test_first_day_no_prev_close_allows_trade(self):
+        from scripts.pipeline import limit_flags
+        df = pd.DataFrame({'stock_code': ['600000'], 'close': [10.0]})
+        up, down = limit_flags(df)
+        assert not up.any() and not down.any()
+
+    def test_limit_down_detected(self):
+        from scripts.pipeline import limit_flags
+        df = pd.DataFrame({'stock_code': ['600000', '600000'], 'close': [10.0, 9.0]})
+        up, down = limit_flags(df)
+        assert bool(down.iloc[1]) is True and not up.any()

@@ -13,8 +13,9 @@ router = APIRouter(tags=["signals"])
 def get_buy_signals(
     signal_date: str = Query(None, description="日期 YYYY-MM-DD，默认最近交易日"),
     top_n: int = Query(20, ge=1, le=100),
+    include_stale: bool = Query(False, description="true=包含旧版本的模型信号（默认只显示 ACTIVE 模型）"),
 ):
-    """获取指定日期的买点扫描结果（仅融合信号）。"""
+    """获取指定日期的买点扫描结果（仅融合信号）。默认过滤旧版本的 model_signal。"""
     db = get_sync_db()
     try:
         if signal_date is None:
@@ -22,7 +23,19 @@ def get_buy_signals(
             max_date = result.scalar()
             signal_date = str(max_date) if max_date else str(date.today())
 
-        result = db.execute(text("""
+        params = {"d": signal_date, "n": top_n}
+        model_filter = ""
+        if not include_stale:
+            # 只显示当前 ACTIVE 模型的信号，其他策略不受影响
+            active_ver = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='ACTIVE' "
+                "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
+            )).scalar()
+            if active_ver:
+                model_filter = "AND (strategy_name != 'model_signal' OR model_version = :av)"
+                params["av"] = active_ver
+
+        result = db.execute(text(f"""
             SELECT stock_code, stock_name, direction, strength,
                    reason, price, suggested_action,
                    source_strategies, preference,
@@ -31,9 +44,10 @@ def get_buy_signals(
             WHERE signal_date = :d
               AND direction = 'buy'
               AND combined_signal = true
+              {model_filter}
             ORDER BY COALESCE(predict_score, 0) DESC, strength DESC
             LIMIT :n
-        """), {"d": signal_date, "n": top_n})
+        """), params)
         rows = result.fetchall()
 
         signals = []

@@ -228,6 +228,9 @@ def write_node_log(trade_date: str = '', node_name: str = '', status: str = 'suc
             where = "WHERE id = :lid"
             params = {"lid": log_id}
         else:
+            if not trade_date or not node_name:
+                # 无 DAG 上下文（函数直调）：没有可精确匹配的 running 行，空串绑 DATE 列会报错
+                db.close(); return
             where = "WHERE trade_date=:d AND node_name=:n AND run_id=:rid AND status='running'"
             params = {"d": trade_date, "n": node_name, "rid": run_id}
 
@@ -627,13 +630,8 @@ def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
         rng = np.random.default_rng(seed if seed is not None else 42)
         vdf['_score'] = 0.0
 
-    # ── 涨跌停标记：对前收盘的涨跌幅（close 为后复权价，除权日略有近似）──
-    prev_close = vdf.groupby('stock_code')['close'].shift(1)
-    pct = vdf['close'] / prev_close - 1
-    is_20 = vdf['stock_code'].astype(str).str.startswith(('30', '68'))  # 创业板/科创板 20cm
-    lim = pd.Series(np.where(is_20, 0.198, 0.098), index=vdf.index)
-    vdf['_limit_up'] = pct >= lim       # 区间首日 pct 为 NaN → False，允许交易
-    vdf['_limit_down'] = pct <= -lim
+    # ── 涨跌停标记（共享 limit_flags：对前收盘的涨跌幅，close 为后复权价）──
+    vdf['_limit_up'], vdf['_limit_down'] = limit_flags(vdf)
 
     dates_unique = sorted(vdf['trade_date'].unique())
     equity = 1_000_000; cash = 1_000_000
@@ -952,6 +950,257 @@ def cs_rank_features(df, cols):
     return df
 
 
+def limit_pct(stock_code) -> float:
+    """涨跌停幅度：创业板(30)/科创板(68) 20%，其余主板 10%（北交所不在股票池）。"""
+    return 0.198 if str(stock_code).startswith(('30', '68')) else 0.098
+
+
+def limit_flags(df):
+    """面板涨跌停标记（纯函数）：需 stock_code+close 列，组内按日期升序。
+
+    Returns: (limit_up, limit_down) 布尔 Series；首日无前收盘为 NaN → False（允许交易）。
+    close 为后复权价，除权日幅度略有近似。
+    """
+    import pandas as pd
+    prev = df.groupby('stock_code')['close'].shift(1)
+    pct = df['close'] / prev - 1
+    lim = df['stock_code'].map(limit_pct)
+    return pct >= lim, pct <= -lim
+
+
+def paper_day_step(cash, positions, signals, closes, cfg, td, limit_down=None):
+    """纸面组合单日步进（纯函数，影子运行的核心）。
+
+    cash: 现金；positions: {code: {'shares','buy_price','cost_basis','buy_date'(str),
+          'peak','signal_id','stock_name'}}；signals: [{'stock_code','strength','signal_id',
+          'stock_name'}]（当日模型买入信号，涨停股已被调用方剔除）；
+    closes: {code: 当日收盘}；limit_down: 跌停不可卖的代码集合；
+    cfg: {'max_positions','stop_loss','take_profit','trailing','hold_days','comm','st_tax','slip'}
+    Returns: (cash, kept_positions, trades, equity)
+    """
+    from datetime import date as _d
+    limit_down = limit_down or set()
+    trades = []
+    kept = {}
+
+    # 1. 持仓：更新峰值 + 卖出检查（先卖后买；买入当日不查 → T+1）
+    for code, p in positions.items():
+        cur = closes.get(code)
+        if cur is None:
+            kept[code] = p
+            continue
+        p['peak'] = max(p.get('peak') or p['buy_price'], cur)
+        if td == str(p['buy_date'])[:10] or code in limit_down:
+            kept[code] = p
+            continue
+        exit_p = None
+        reason = None
+        if cur <= p['buy_price'] * (1 - cfg['stop_loss']):
+            exit_p = p['buy_price'] * (1 - cfg['stop_loss']); reason = 'stop_loss'
+        elif cur >= p['buy_price'] * (1 + cfg['take_profit']):
+            exit_p = p['buy_price'] * (1 + cfg['take_profit']); reason = 'take_profit'
+        elif cfg.get('trailing', 0) > 0 and cur <= p['peak'] * (1 - cfg['trailing']):
+            exit_p = cur; reason = 'trailing'
+        elif (_d.fromisoformat(td) - _d.fromisoformat(str(p['buy_date'])[:10])).days >= cfg['hold_days']:
+            exit_p = cur; reason = 'hold_expire'
+        if exit_p is None:
+            kept[code] = p
+            continue
+        gross = p['shares'] * exit_p
+        cost = gross * (cfg['comm'] + cfg['st_tax']) + gross * cfg['slip']
+        cash += gross - cost
+        trades.append({'action': 'SELL', 'stock_code': code, 'stock_name': p.get('stock_name', ''),
+                       'price': round(exit_p, 4), 'shares': p['shares'], 'amount': round(gross, 2),
+                       'commission': round(cost, 2), 'pnl': round((gross - cost) - p['cost_basis'], 2),
+                       'reason': reason, 'signal_id': p.get('signal_id')})
+    positions = kept
+
+    # 2. 买入：按信号强度取空位数量，等额预算 + 整手 + 现金约束
+    equity = cash + sum(p['shares'] * closes.get(c, p['buy_price']) for c, p in positions.items())
+    slots = cfg['max_positions'] - len(positions)
+    cands = sorted((s for s in signals if s['stock_code'] not in positions and closes.get(s['stock_code'])),
+                   key=lambda s: s.get('strength', 0), reverse=True)
+    for s in cands:
+        if slots <= 0:
+            break
+        code = s['stock_code']
+        price = closes[code] * (1 + cfg['slip'] / 2)
+        shares = int((equity / cfg['max_positions']) // price // 100) * 100
+        if shares < 100:
+            continue
+        gross = shares * price
+        fee = gross * cfg['comm']
+        if gross + fee > cash:
+            continue
+        cash -= gross + fee
+        slots -= 1
+        positions[code] = {'shares': shares, 'buy_price': price, 'cost_basis': gross + fee,
+                           'buy_date': td, 'peak': price, 'signal_id': s.get('signal_id'),
+                           'stock_name': s.get('stock_name', '')}
+        trades.append({'action': 'BUY', 'stock_code': code, 'stock_name': s.get('stock_name', ''),
+                       'price': round(price, 4), 'shares': shares, 'amount': round(gross + fee, 2),
+                       'commission': round(fee, 2), 'pnl': None, 'reason': 'signal',
+                       'signal_id': s.get('signal_id')})
+
+    equity = cash + sum(p['shares'] * closes.get(c, p['buy_price']) for c, p in positions.items())
+    return cash, positions, trades, equity
+
+
+def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
+    """paper_portfolio 节点 — 纸面组合（影子运行）。
+
+    跟随 ACTIVE 模型的 signal_history 逐日模拟成交（T+1/涨跌停/止损止盈/trailing/
+    到期/仓位约束与实盘规则同源），落 paper_positions/paper_trades。
+    start_date 提供时从该日回放信号历史建仓（净值从现金起步）；未提供则只步进当日。
+    当日已有 EOD 记录时幂等跳过。
+    """
+    from datetime import date as _d, timedelta as _td
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    import json as _json
+
+    td = str(trade_date or _d.today())[:10]
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('paper_portfolio')
+    if log_id:
+        write_node_log(log_id=log_id, status='running', detail='纸面组合步进…')
+
+    try:
+        db = get_sync_db()
+        # ACTIVE 模型 + 纸面配置（首次自动从模型配置初始化）
+        ver = db.execute(text(
+            "SELECT version FROM model_versions WHERE status='ACTIVE' "
+            "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1")).scalar()
+        if not ver:
+            if log_id: write_node_log(log_id=log_id, status='success', rows=0, detail='无 ACTIVE 模型，跳过')
+            db.close(); return 0
+        meta_row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
+        if meta_row:
+            meta = _json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
+        else:
+            mcfg = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
+            c = _json.loads(mcfg) if isinstance(mcfg, str) else (mcfg or {})
+            risk = (c.get('trading_rules', {}) or {}).get('risk_management', {}) or {}
+            meta = {'initial_cash': c.get('initial_cash', 1_000_000),
+                    'max_positions': c.get('max_positions', 5),
+                    'stop_loss': risk.get('stop_loss', 0.05),
+                    'take_profit': risk.get('take_profit', 0.10),
+                    'trailing': risk.get('trailing_retracement', 0.05),
+                    'hold_days': risk.get('max_holding_days', 20),
+                    'model_version': ver, 'started': td}
+            db.execute(text("""
+                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                VALUES ('paper_portfolio', '纸面组合（影子运行）', true, :p)
+                ON CONFLICT (strategy_name) DO NOTHING
+            """), {"p": _json.dumps(meta)})
+            db.commit()
+        cfg = {'max_positions': meta['max_positions'], 'stop_loss': meta['stop_loss'],
+               'take_profit': meta['take_profit'], 'trailing': meta.get('trailing', 0),
+               'hold_days': meta['hold_days'], 'comm': 0.00025, 'st_tax': 0.001, 'slip': 0.001}
+
+        # 幂等：当日已有 EOD → 跳过
+        done = db.execute(text(
+            "SELECT COUNT(*) FROM paper_trades WHERE trade_date=:d AND action='EOD'"), {"d": td}).scalar()
+        if done:
+            if log_id: write_node_log(log_id=log_id, status='success', rows=0, detail=f'{td} 已步进过，跳过')
+            db.close(); return 0
+
+        # 回放：组合为空且给了 start_date → 从信号历史逐日重建
+        pos_count = db.execute(text("SELECT COUNT(*) FROM paper_positions")).scalar()
+        trade_days = []
+        if start_date and pos_count == 0:
+            trade_days = [str(r[0])[:10] for r in db.execute(text(
+                "SELECT DISTINCT trade_date FROM index_daily_quote WHERE index_code='000300' "
+                "AND trade_date >= :s AND trade_date <= :d ORDER BY trade_date"),
+                {"s": start_date, "d": td}).fetchall()]
+        else:
+            trade_days = [td]
+
+        cash = float(meta['initial_cash'])
+        pos_rows = db.execute(text("SELECT * FROM paper_positions")).fetchall()
+        positions = {r.stock_code: {'shares': r.shares, 'buy_price': float(r.buy_price),
+                                    'cost_basis': float(r.cost_basis), 'buy_date': str(r.buy_date)[:10],
+                                    'peak': float(r.peak) if r.peak else None, 'signal_id': r.signal_id,
+                                    'stock_name': r.stock_name or ''} for r in pos_rows}
+        # 已有持仓时，起始现金 = 上次 EOD 现金
+        last_eod = db.execute(text(
+            "SELECT cash FROM paper_trades WHERE action='EOD' ORDER BY trade_date DESC LIMIT 1")).scalar()
+        if last_eod is not None and pos_count:
+            cash = float(last_eod)
+
+        for day in trade_days:
+            sigs = [{'stock_code': r[0], 'strength': int(r[1] or 0), 'signal_id': r[2],
+                     'stock_name': r[3] or ''} for r in db.execute(text(
+                "SELECT stock_code, strength, id, stock_name FROM signal_history "
+                "WHERE signal_date=:d AND strategy_name='model_signal' AND direction='buy' "
+                "AND model_version=:v"), {"d": day, "v": ver}).fetchall()]
+            need = set([s['stock_code'] for s in sigs]) | set(positions)
+            if not need:
+                # 空仓且无信号：仅记录 EOD（净值不变），保留逐日净值曲线
+                eq = cash
+                db.execute(text("""
+                    INSERT INTO paper_trades (trade_date, action, cash, equity, model_version, detail)
+                    VALUES (:d, 'EOD', :c, :e, :v, :dt)
+                """), {"d": day, "c": round(cash, 2), "e": round(eq, 2), "v": ver,
+                       "dt": _json.dumps({'positions': 0})})
+                continue
+            closes = {r[0]: float(r[1]) for r in db.execute(text(
+                "SELECT stock_code, close_hfq FROM daily_quote WHERE trade_date=:d "
+                "AND close_hfq IS NOT NULL AND close_hfq > 0 AND stock_code = ANY(:c)"),
+                {"d": day, "c": list(need)}).fetchall()}
+            prev_c = {r[0]: float(r[1]) for r in db.execute(text(
+                "SELECT stock_code, close_hfq FROM daily_quote WHERE trade_date=:p "
+                "AND close_hfq IS NOT NULL AND stock_code = ANY(:c)"),
+                {"p": db.execute(text("SELECT MAX(trade_date) FROM daily_quote WHERE trade_date < :d"),
+                                {"d": day}).scalar(), "c": list(need)}).fetchall()}
+            limit_down = {c for c in need if c in closes and prev_c.get(c, 0) > 0
+                          and closes[c] / prev_c[c] - 1 <= -limit_pct(c)}
+            # 信号中的涨停股剔除（重复保险：信号层已滤）
+            signals = [s for s in sigs if s['stock_code'] in closes
+                       and not (prev_c.get(s['stock_code'], 0) > 0
+                                and closes[s['stock_code']] / prev_c[s['stock_code']] - 1 >= limit_pct(s['stock_code']))]
+            cash, positions, trades, equity = paper_day_step(cash, positions, signals, closes, cfg, day, limit_down)
+            bm = db.execute(text(
+                "SELECT close FROM index_daily_quote WHERE index_code='000300' AND trade_date=:d"),
+                {"d": day}).scalar()
+            for t in trades:
+                db.execute(text("""
+                    INSERT INTO paper_trades (trade_date, action, stock_code, stock_name, price, shares,
+                        amount, commission, pnl, cash, equity, reason, signal_id, model_version)
+                    VALUES (:d, :action, :stock_code, :stock_name, :price, :shares,
+                        :amount, :commission, :pnl, :ca, :e, :reason, :signal_id, :v)
+                """), {"d": day, **t, 'ca': round(cash, 2), 'e': round(equity, 2), 'v': ver})
+                if t['action'] == 'SELL':
+                    db.execute(text("DELETE FROM paper_positions WHERE stock_code=:c"), {"c": t['stock_code']})
+            for code, p in positions.items():
+                db.execute(text("""
+                    INSERT INTO paper_positions (stock_code, stock_name, shares, buy_price, cost_basis,
+                        buy_date, peak, signal_id, model_version, updated_at)
+                    VALUES (:stock_code, :stock_name, :shares, :buy_price, :cost_basis,
+                        :bd, :peak, :signal_id, :v, CURRENT_TIMESTAMP)
+                    ON CONFLICT (stock_code) DO UPDATE SET stock_name=:stock_name, shares=:shares,
+                        buy_price=:buy_price, cost_basis=:cost_basis, buy_date=:bd, peak=:peak,
+                        signal_id=:signal_id, model_version=:v, updated_at=CURRENT_TIMESTAMP
+                """), {"stock_code": code, **p, 'bd': str(p['buy_date'])[:10], 'v': ver})
+            db.execute(text("""
+                INSERT INTO paper_trades (trade_date, action, cash, equity, model_version, detail)
+                VALUES (:d, 'EOD', :c, :e, :v, :dt)
+            """), {"d": day, "c": round(cash, 2), "e": round(equity, 2), "v": ver,
+                   "dt": _json.dumps({'positions': len(positions),
+                                      'benchmark_close': float(bm) if bm else None})})
+        db.commit()
+        n_tr = db.execute(text("SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL')")).scalar()
+        db.close()
+        if log_id:
+            write_node_log(log_id=log_id, status='success', rows=len(trade_days),
+                           detail=f'纸面组合 {len(trade_days)} 日步进，累计 {n_tr} 笔模拟成交')
+        return len(trade_days)
+    except Exception as e:
+        if log_id:
+            write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
+        raise
+
+
 def dag_task_model_signal(trade_date=None, **kw):
     """模型信号生成：读 ACTIVE 模型 + 全局偏好 → 评分 → 写入 signal_history。"""
     from datetime import date as _date, timedelta
@@ -1060,6 +1309,26 @@ def dag_task_model_signal(trade_date=None, **kw):
                                         if c in df_today.columns]))
             df_today = cs_rank_features(df_today, norm_cols)
 
+        # ── 执行约束：涨停股不可买，不产生买入信号 ──
+        # trading_rules.signal_filter.allow_limit_up=true 可豁免（默认 false）
+        allow_limit_up = (model_cfg_obj.get('trading_rules', {}) or {}) \
+            .get('signal_filter', {}).get('allow_limit_up', False)
+        limit_up_set = set()
+        if not allow_limit_up:
+            prev_td = db.execute(text(
+                "SELECT MAX(trade_date) FROM daily_quote WHERE trade_date < :d"), {"d": today_str}).scalar()
+            if prev_td:
+                ex = "AND exchange IN ('SSE','SZSE')"
+                cur_c = {r[0]: float(r[1]) for r in db.execute(text(
+                    f"SELECT stock_code, close_hfq FROM daily_quote WHERE trade_date=:d "
+                    f"AND close_hfq IS NOT NULL {ex}"), {"d": today_str}).fetchall()}
+                prv_c = {r[0]: float(r[1]) for r in db.execute(text(
+                    f"SELECT stock_code, close_hfq FROM daily_quote WHERE trade_date=:d "
+                    f"AND close_hfq IS NOT NULL {ex}"), {"d": str(prev_td)[:10]}).fetchall()}
+                limit_up_set = {c for c, cl in cur_c.items()
+                                if prv_c.get(c, 0) > 0 and cl / prv_c[c] - 1 >= limit_pct(c)}
+                logger.info(f"[model_signal] {today_str} 涨停股 {len(limit_up_set)} 只（买入信号将被拦截）")
+
         # 准备 stock_name
         codes = df_today['stock_code'].unique().tolist()
         names_map = {}
@@ -1085,6 +1354,7 @@ def dag_task_model_signal(trade_date=None, **kw):
         # 评分信号生成（ML 预测优先，规则评分兜底）
         buy_count = 0
         ml_fallback = 0
+        limit_skipped = 0  # 涨停拦截的买入信号数
 
         def _rule_score(row):
             """规则评分（ML 回退 / 无模型时使用）。"""
@@ -1151,6 +1421,9 @@ def dag_task_model_signal(trade_date=None, **kw):
                 for r in rows:
                     if r.stock_code not in buy_codes:
                         continue
+                    if r.stock_code in limit_up_set:
+                        limit_skipped += 1
+                        continue
                     p = preds_map[r.stock_code]
                     # 当日分布分位（并列均分：严格小于 + 一半并列），0-1
                     rank = float((vals < p).mean() + 0.5 * (vals == p).mean())
@@ -1163,6 +1436,9 @@ def dag_task_model_signal(trade_date=None, **kw):
 
             # 预测失败回退规则评分
             for r in fallback_rows:
+                if r.stock_code in limit_up_set:
+                    limit_skipped += 1
+                    continue
                 score, reasons = _rule_score(r)
                 if score >= t['buy_score_min']:
                     _insert_buy(r, score, ';'.join(reasons) or '规则评分')
@@ -1170,6 +1446,9 @@ def dag_task_model_signal(trade_date=None, **kw):
         else:
             # 规则评分
             for r in rows:
+                if r.stock_code in limit_up_set:
+                    limit_skipped += 1
+                    continue
                 if not r.close or r.close == 0:
                     continue
                 score, reasons = _rule_score(r)
@@ -1181,13 +1460,258 @@ def dag_task_model_signal(trade_date=None, **kw):
         if ml_fallback:
             logger.warning(f"[model_signal] {ml_fallback}/{len(rows)} 只股票 ML 预测失败回退规则模式")
         mode_tag = 'ML' if (use_predict and xgb_models) else '规则'
+        limit_desc = f' 涨停拦截{limit_skipped}' if limit_skipped else ''
         write_node_log(log_id=log_id, status='success', rows=buy_count,
-                       detail=f'{mode_tag}模式 {buy_count} 买入 {len(rows)} 扫描')
+                       detail=f'{mode_tag}模式 {buy_count} 买入 {len(rows)} 扫描{limit_desc}')
         db.close()
+        # 影子运行：信号落库后纸面组合自动步进（幂等；失败不影响信号本身）
+        try:
+            dag_task_paper_portfolio(trade_date=td)
+        except Exception as _pe:
+            logger.warning(f"[paper] 影子运行失败（不影响信号）: {_pe}")
         return buy_count
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise
+
+
+def ic_rolling_stats(dates, rank_ics, window: int = 20):
+    """IC 序列滚动统计（纯函数）：取最近 window 个已成熟截面的均值与 ICIR。"""
+    import numpy as np
+    pairs = [(d, v) for d, v in zip(dates, rank_ics) if v is not None][-window:]
+    if len(pairs) < 5:
+        return {'dates': [d for d, _ in pairs], 'rank_ic': [v for _, v in pairs],
+                'rolling_mean': None, 'rolling_icir': None, 'n': len(pairs)}
+    vals = np.array([v for _, v in pairs], dtype=float)
+    mean = float(vals.mean())
+    std = float(vals.std())
+    return {'dates': [d for d, _ in pairs], 'rank_ic': [round(v, 6) for v in vals],
+            'rolling_mean': round(mean, 6),
+            'rolling_icir': round(mean / std, 4) if std > 1e-9 else None,
+            'n': len(pairs)}
+
+
+def ic_health_status(rolling_mean):
+    """IC 健康判级（纯函数）：>0.005 HEALTHY，0~0.005 CAUTION，<0 DEGRADED。"""
+    if rolling_mean is None:
+        return None
+    if rolling_mean > 0.005:
+        return 'HEALTHY'
+    if rolling_mean >= 0:
+        return 'CAUTION'
+    return 'DEGRADED'
+
+
+_SEVERITY = {'HEALTHY': 0, 'CAUTION': 1, 'WARNING': 2, 'CRITICAL': 3}
+
+
+def _send_feishu_alert(text: str):
+    """出站飞书自定义机器人告警（FEISHU_ALERT_WEBHOOK 未配置则跳过，只记日志）。"""
+    try:
+        from app.config import settings
+        import requests as _rq
+        if not settings.FEISHU_ALERT_WEBHOOK:
+            logger.info(f"[alert] 未配置 FEISHU_ALERT_WEBHOOK，仅记录: {text}")
+            return False
+        r = _rq.post(settings.FEISHU_ALERT_WEBHOOK,
+                     json={'msg_type': 'text', 'content': {'text': text}}, timeout=5)
+        return r.status_code == 200
+    except Exception as e:
+        logger.warning(f"[alert] 飞书告警发送失败: {e}")
+        return False
+
+
+def compute_model_ic_health(db, version: str, horizon: int = 10, window: int = 60):
+    """计算 ACTIVE 模型近窗滚动 RankIC（IC 衰减监控的数据源）。
+
+    对最近 window 个"已成熟"截面（交易日 t 的前瞻收益已实现，即 t ≤ 今天−horizon）
+    逐日计算模型预测与实现收益的截面 RankIC；特征标准化按模型 config 同训练端。
+    Returns: ic_rolling_stats 的 dict + {'horizon', 'model'}
+    """
+    from datetime import date as _d, timedelta as _td
+    from sqlalchemy import text
+    import numpy as np
+    import pandas as pd
+
+    today = str(_d.today())
+    window_start = (_d.today() - _td(days=window * 2 + 40)).isoformat()  # 交易日≈日历日×0.7，留缓冲
+    cfg_row = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
+                         {"v": version}).fetchone()
+    feature_names = cfg_row[0] if isinstance(cfg_row[0], list) else (json.loads(cfg_row[0]) if cfg_row[0] else [])
+    cfg = cfg_row[1] if isinstance(cfg_row[1], dict) else (json.loads(cfg_row[1]) if cfg_row[1] else {})
+    if not feature_names:
+        feature_names = cfg.get('feature_names', [])
+    if not feature_names:
+        raise ValueError('模型未配置 feature_names')
+
+    wide = build_feature_wide_table(db, feature_names, window_start, today, 'stock')
+    if wide.empty:
+        raise ValueError('窗口内无特征数据')
+    pred, err = predict_for_version(db, version, wide, window_start, today, horizon)
+    if pred is None:
+        raise ValueError(f'预测失败: {err}')
+
+    # 前瞻收益（同股票按交易日 shift horizon 行）
+    buf_end = (_d.fromisoformat(today) + _td(days=horizon * 2 + 10)).isoformat()
+    qrows = db.execute(text(
+        "SELECT stock_code, trade_date, close_hfq FROM daily_quote "
+        "WHERE trade_date BETWEEN :s AND :e AND close_hfq IS NOT NULL AND close_hfq > 0 "
+        "AND exchange IN ('SSE','SZSE') ORDER BY stock_code, trade_date"
+    ), {"s": window_start, "e": buf_end}).fetchall()
+    qdf = pd.DataFrame(qrows, columns=['stock_code', 'trade_date', 'close'])
+    qdf['close'] = pd.to_numeric(qdf['close'], errors='coerce')
+    # shift(-horizon) 取未来第 N 行（SQL LEAD 语义）；正 shift 是过去收益，会造出虚假高 IC
+    qdf['fret'] = qdf.groupby('stock_code')['close'].shift(-horizon) / qdf['close'] - 1
+    qdf['trade_date'] = qdf['trade_date'].astype(str)
+    fret_map = {(r.stock_code, r.trade_date): r.fret for r in qdf[['stock_code', 'trade_date', 'fret']].itertuples()}
+
+    w = wide[['trade_date', 'stock_code']].copy()
+    w['pred'] = pred.loc[wide.index].values
+    w['fret'] = [fret_map.get((c, str(d)[:10])) for c, d in zip(w['stock_code'], w['trade_date'])]
+    w = w.dropna(subset=['pred', 'fret'])
+
+    def _pair(g):
+        if len(g) < 30:
+            return None
+        return g['pred'].rank().corr(g['fret'].rank())
+    ics = w.groupby('trade_date').apply(_pair).dropna()
+
+    stats = ic_rolling_stats([str(d)[:10] for d in ics.index], ics.values, window=window)
+    stats.update({'horizon': horizon, 'model': version})
+    return stats
+
+
+def split_windows(dates, n_windows: int):
+    """把升序交易日序列等分成 n_windows 个连续不重叠窗口（纯函数）。
+
+    Returns: [(start, end), ...] 字符串日期；窗口数不足 n_windows 时按实际切。
+    """
+    dates = sorted(str(d)[:10] for d in dates)
+    if not dates:
+        return []
+    n = min(n_windows, len(dates))
+    size = len(dates) // n
+    out = []
+    for i in range(n):
+        chunk = dates[i * size: (i + 1) * size] if i < n - 1 else dates[i * size:]
+        if chunk:
+            out.append((chunk[0], chunk[-1]))
+    return out
+
+
+def promotion_gate(windows, min_win_windows: int = 2):
+    """晋升门槛（纯函数）：新模型 vs 基线的多窗口判定。
+
+    规则（v3.6）：≥ min_win_windows 个窗口新模型 sharpe 优于基线，且窗口 RankIC 均值
+    不低于基线（"IC 不退化"）。无基线时返回 NO_BASELINE。
+    """
+    if not windows:
+        return 'NO_BASELINE', '无基线模型可比'
+    wins = sum(1 for w in windows if (w['new'] or {}).get('sharpe', 0) > (w['baseline'] or {}).get('sharpe', 0))
+    import numpy as _np
+    ic_new = _np.mean([w['new']['rank_ic'] for w in windows if (w['new'] or {}).get('rank_ic') is not None] or [0])
+    ic_base = _np.mean([w['baseline']['rank_ic'] for w in windows if (w['baseline'] or {}).get('rank_ic') is not None] or [0])
+    if wins >= min_win_windows and ic_new >= ic_base:
+        return 'PASS', f'{wins}/{len(windows)} 窗口 sharpe 胜出，RankIC {ic_new:.4f} ≥ 基线 {ic_base:.4f}'
+    return 'FAIL', (f'{wins}/{len(windows)} 窗口 sharpe 胜出（需 ≥{min_win_windows}），'
+                    f'RankIC {ic_new:.4f} vs 基线 {ic_base:.4f}')
+
+
+def run_walk_forward(db, version: str, baseline_version=None, val_start: str = '', val_end: str = '',
+                     n_windows: int = 4, hold_days: int = 10,
+                     stop_loss: float = 0.05, take_profit: float = 0.15):
+    """滚动多窗口稳定性检验（walk-forward 评估协议，晋升门槛的数据源）。
+
+    将 [val_start, val_end] 等分成 n_windows 个连续不重叠窗口，每个窗口独立计算
+    新模型（及可选基线模型）的：扣成本回测（_simple_backtest 同一引擎）+ 窗口
+    RankIC（已成熟截面）。宽表全区间只建一次。
+    """
+    from datetime import date as _d, timedelta as _td
+    from sqlalchemy import text
+    import json
+    import numpy as np
+    import pandas as pd
+
+    val_end = val_end or str(_d.today())
+    if not val_start:
+        val_start = (_d.fromisoformat(val_end) - _td(days=365)).isoformat()
+
+    cfg_row = db.execute(text("SELECT feature_list, config FROM model_versions WHERE version=:v"),
+                         {"v": version}).fetchone()
+    feature_names = cfg_row[0] if isinstance(cfg_row[0], list) else (json.loads(cfg_row[0]) if cfg_row[0] else [])
+    cfg = cfg_row[1] if isinstance(cfg_row[1], dict) else (json.loads(cfg_row[1]) if cfg_row[1] else {})
+    if not feature_names:
+        feature_names = cfg.get('feature_names', [])
+    if not feature_names:
+        raise ValueError('模型未配置 feature_names')
+
+    df = build_feature_wide_table(db, feature_names, val_start, val_end, 'stock')
+    if df.empty:
+        raise ValueError('区间内无特征数据')
+
+    # 全区间前瞻收益一次算好（各窗口复用；shift(-horizon)=未来第 N 个交易日）
+    buf_end = (_d.fromisoformat(val_end) + _td(days=horizon_to_days(hold_days) * 2 + 10)).isoformat()
+    qrows = db.execute(text(
+        "SELECT stock_code, trade_date, close_hfq FROM daily_quote "
+        "WHERE trade_date BETWEEN :s AND :e AND close_hfq IS NOT NULL AND close_hfq > 0 "
+        "AND exchange IN ('SSE','SZSE') ORDER BY stock_code, trade_date"
+    ), {"s": val_start, "e": buf_end}).fetchall()
+    qdf = pd.DataFrame(qrows, columns=['stock_code', 'trade_date', 'close'])
+    qdf['close'] = pd.to_numeric(qdf['close'], errors='coerce')
+    h = horizon_to_days(hold_days)
+    qdf['fret'] = qdf.groupby('stock_code')['close'].shift(-h) / qdf['close'] - 1
+    qdf['trade_date'] = qdf['trade_date'].astype(str)
+    fret_map = {(r.stock_code, r.trade_date): r.fret
+                for r in qdf[['stock_code', 'trade_date', 'fret']].itertuples()}
+
+    def _window_metrics(ver, w_start, w_end):
+        pred, err = predict_for_version(db, ver, df, w_start, w_end, h)
+        if pred is None:
+            return None
+        w = df[(df['trade_date'] >= w_start) & (df['trade_date'] <= w_end)][['stock_code', 'trade_date']].copy()
+        w['pred'] = pred.loc[w.index].values
+        w['fret'] = [fret_map.get((c, str(d)[:10])) for c, d in zip(w['stock_code'], w['trade_date'])]
+        v = w.dropna(subset=['pred', 'fret'])
+        rank_ic = None
+        if len(v) >= 100:
+            def _pair(g):
+                return g['pred'].rank().corr(g['fret'].rank()) if len(g) >= 30 else None
+            ics = v.groupby('trade_date').apply(_pair).dropna()
+            if len(ics):
+                rank_ic = round(float(ics.mean()), 4)
+        bt = _simple_backtest(df, pred, w_start, w_end, hold_days, stop_loss, take_profit)
+        return {'sharpe': bt['sharpe'], 'total_return': bt['total_return'],
+                'win_rate': bt['win_rate'], 'total_trades': bt['total_trades'], 'rank_ic': rank_ic}
+
+    windows = split_windows(df['trade_date'].unique(), n_windows)
+    if len(windows) < 2:
+        raise ValueError(f'区间内可切窗口不足（{len(windows)} 个），请扩大区间')
+
+    out_windows = []
+    for w_start, w_end in windows:
+        entry = {'start': w_start, 'end': w_end,
+                 'new': _window_metrics(version, w_start, w_end),
+                 'baseline': _window_metrics(baseline_version, w_start, w_end) if baseline_version else None}
+        out_windows.append(entry)
+
+    verdict, reason = promotion_gate(out_windows if baseline_version else [])
+    new_vals = [w['new'] for w in out_windows if w['new']]
+    result = {
+        'version': version, 'baseline': baseline_version,
+        'val_start': val_start, 'val_end': val_end,
+        'hold_days': hold_days, 'stop_loss': stop_loss, 'take_profit': take_profit,
+        'windows': out_windows,
+        'new_mean_sharpe': round(float(np.mean([x['sharpe'] for x in new_vals])), 4) if new_vals else None,
+        'new_mean_rank_ic': round(float(np.mean([x['rank_ic'] for x in new_vals if x['rank_ic'] is not None])), 4)
+                            if any(x['rank_ic'] is not None for x in new_vals) else None,
+        'verdict': verdict, 'reason': reason,
+    }
+    return result
+
+
+def horizon_to_days(hold_days: int) -> int:
+    """持仓天数 → 模型周期映射（5/10/20）。"""
+    return 5 if hold_days <= 5 else (20 if hold_days > 10 else 10)
 
 
 def dag_task_model_health(trade_date=None, **kw):
@@ -1279,22 +1803,56 @@ def dag_task_model_health(trade_date=None, **kw):
         elif win_rate < 0.5:
             health = 'CAUTION'
 
+        # ── 4. IC 衰减监控（v3.6）：近窗滚动 RankIC，判级劣于胜率评估则升级 ──
+        ic_stats = None
+        try:
+            ic_stats = compute_model_ic_health(db, ver, horizon=10, window=20)
+            ic_status = ic_health_status(ic_stats.get('rolling_mean'))
+            detail_ic = {
+                'rolling_mean': ic_stats.get('rolling_mean'),
+                'rolling_icir': ic_stats.get('rolling_icir'),
+                'n': ic_stats.get('n'), 'horizon': ic_stats.get('horizon'),
+                'recent': list(zip(ic_stats['dates'][-5:], ic_stats['rank_ic'][-5:])),
+            }
+            ic_sev = _SEVERITY.get(ic_status, 0)
+            if _SEVERITY.get(health, 0) < ic_sev:
+                health = 'WARNING' if ic_status == 'DEGRADED' else ic_status
+        except Exception as e:
+            logger.warning(f"[model_health] IC 健康计算失败（不影响主流程）: {e}")
+            ic_status, detail_ic = None, {'error': str(e)[:200]}
+
+        prev_status = db.execute(text(
+            "SELECT health_status FROM model_health WHERE version=:v AND check_date < :d "
+            "ORDER BY check_date DESC LIMIT 1"), {"v": ver, "d": td}).scalar()
+
         db.execute(text("""
-            INSERT INTO model_health (version, check_date, health_status, live_win_rate, signal_count, avg_forward_5d, detail)
-            VALUES (:v, :d, :h, :wr, :sc, :af, :dt)
+            INSERT INTO model_health (version, check_date, health_status, live_win_rate, signal_count,
+                avg_forward_5d, rank_ic, rank_icir, detail)
+            VALUES (:v, :d, :h, :wr, :sc, :af, :ric, :rir, :dt)
             ON CONFLICT (version, check_date) DO UPDATE SET
                 health_status=EXCLUDED.health_status, live_win_rate=EXCLUDED.live_win_rate,
-                signal_count=EXCLUDED.signal_count, avg_forward_5d=EXCLUDED.avg_forward_5d, detail=EXCLUDED.detail
+                signal_count=EXCLUDED.signal_count, avg_forward_5d=EXCLUDED.avg_forward_5d,
+                rank_ic=EXCLUDED.rank_ic, rank_icir=EXCLUDED.rank_icir, detail=EXCLUDED.detail
         """), {
             "v": ver, "d": td, "h": health, "wr": round(win_rate, 4),
             "sc": total, "af": round(float(avg_f5), 4) if avg_f5 else 0,
-            "dt": _json.dumps({"closed": closed, "wins": wins, "forward_5d_avg": float(avg_f5) if avg_f5 else 0}),
+            "ric": ic_stats.get('rolling_mean') if ic_stats else None,
+            "rir": ic_stats.get('rolling_icir') if ic_stats else None,
+            "dt": _json.dumps({"closed": closed, "wins": wins, "forward_5d_avg": float(avg_f5) if avg_f5 else 0,
+                               "ic": detail_ic, "ic_status": ic_status}),
         })
+
+        # IC 转入 DEGRADED 时告警（飞书 webhook 配置后生效；升级沿 _SEVERITY 比较）
+        if ic_status == 'DEGRADED' and _SEVERITY.get(prev_status or '', 0) < _SEVERITY.get(health, 0):
+            _send_feishu_alert(
+                f"[stone] 模型 {ver} IC 衰减告警：近20截面 RankIC 均值 "
+                f"{ic_stats.get('rolling_mean'):.4f} < 0，健康度 {health}。建议检查因子有效性或回退上一版模型。")
 
         db.commit()
         db.close()
+        ic_desc = f" RankIC均值{ic_stats['rolling_mean']:.4f}({ic_status})" if ic_stats else " IC不可用"
         write_node_log(log_id=log_id, status='success', rows=total,
-                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号 {closed}了结')
+                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号{ic_desc}')
         return total
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -1764,6 +2322,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             df['idx_ret_20d'] = df['idx_ret_20d'].fillna(0).astype(float)
             FEATURES.append('idx_ret_20d')
 
+        # 涨跌停标记（训练内回测的执行约束；在 dropna 前计算，避免缺口行误判前收盘）
+        df['_limit_up'], df['_limit_down'] = limit_flags(df)
+
         # 特征标准化（v3.5 可配置）：cs_rank=逐日截面排名 pct——在 dropna 之前做，
         # 与推理端一致（对每个特征的现有值排名，NaN 不参与排名）
         feature_norm = cfg.get('feature_norm', 'none')
@@ -1926,8 +2487,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
 
         def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days,
                        bt_ver='', bt_label='', stop_loss=None, take_profit=None,
-                       commission=None, stamp_tax=None, slippage=None):
-            """回测引擎：资金约束 + 流动性约束 + 整数手约束。
+                       commission=None, stamp_tax=None, slippage=None,
+                       limit_up=None, limit_down=None):
+            """回测引擎：资金约束 + 流动性约束 + 整数手约束 + 涨跌停约束。
 
             Args:
                 y_true: 实际未来收益率 (hold_days 天后)
@@ -1941,6 +2503,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 stop_loss: 止损阈值（默认取配置值）
                 take_profit: 止盈阈值（默认取配置值 × 2）
                 commission/stamp_tax/slippage: 成本参数（默认取配置值）
+                limit_up/limit_down: 涨停/跌停布尔数组（与 dates 对齐；涨停不买、跌停不卖）
             """
             sl_val = stop_loss if stop_loss is not None else 0.08
             tp_val = take_profit if take_profit is not None else 0.15
@@ -1951,7 +2514,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             dates = pd.to_datetime(dates)
             val_df = pd.DataFrame({
                 'date': dates, 'code': codes, 'pred': y_pred, 'true': y_true,
-                'price': close_prices, 'volume': volumes
+                'price': close_prices, 'volume': volumes,
+                'limit_up': limit_up if limit_up is not None else False,
+                'limit_down': limit_down if limit_down is not None else False,
             })
             sorted_dates = sorted(val_df['date'].unique())
 
@@ -1962,6 +2527,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             trade_count = 0
             win_count = 0
             trade_log = []  # M6-18: 记录每笔交易明细
+            limit_up_blocked = 0   # 涨停拦截的买入候选数
+            limit_down_blocked = 0 # 跌停拦截的卖出数
 
             for di, d in enumerate(sorted_dates):
                 # ── 1. 平仓：到期或止损 ──
@@ -1988,6 +2555,11 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                     # 到期平仓
                     if hold_dur >= hold_days:
                         should_sell = True
+
+                    # 跌停不可卖：被迫继续持有（T+1 由"先卖后买、只查隔夜仓"天然保证）
+                    if should_sell and bool(day_data['limit_down'].iloc[0]):
+                        should_sell = False
+                        limit_down_blocked += 1
 
                     if should_sell:
                         gross = h['shares'] * sell_price
@@ -2049,6 +2621,10 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 # 排除已持仓
                 held_codes = {h['code'] for h in holdings}
                 day = day[~day['code'].isin(held_codes)]
+                # 涨停不可买：候选剔除并计数（执行约束，方向性虚高的主要来源）
+                lu_mask = day['limit_up'].astype(bool)
+                limit_up_blocked += int(lu_mask.sum())
+                day = day[~lu_mask]
                 if len(day) == 0:
                     # 更新权益（持仓市值 + 现金）
                     equity = cash + sum(h['shares'] * float(
@@ -2155,6 +2731,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                         win_count += 1
 
             total_return = (cash / initial_cash - 1) if initial_cash > 0 else 0
+            if limit_up_blocked or limit_down_blocked:
+                logger.info(f"[backtest] {bt_ver}/{bt_label} 执行约束拦截: 涨停买入x{limit_up_blocked} 跌停卖出x{limit_down_blocked}")
             # 日收益率序列
             eq_arr = np.array(equity_curve)
             daily_rets = eq_arr[1:] / eq_arr[:-1] - 1 if len(eq_arr) > 1 else np.array([0])
@@ -2275,13 +2853,16 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             codes = df[mask]['stock_code'].values
             closes = df[mask]['close'].values
             vols = df[mask]['volume'].values
+            lups = df[mask]['_limit_up'].values
+            ldowns = df[mask]['_limit_down'].values
             for label, tname, hdays in TARGETS:
                 if label in best_models:
                     y_pred = best_models[label].predict(df[mask][FEATURES])
                     bt = _backtest(df[mask][tname].values, y_pred, dates, codes, closes, vols,
                                    hdays, bt_ver=ver, bt_label=label,
                                    stop_loss=stop_loss, take_profit=stop_loss*2,
-                                   commission=commission, stamp_tax=stamp_tax, slippage=slippage)
+                                   commission=commission, stamp_tax=stamp_tax, slippage=slippage,
+                                   limit_up=lups, limit_down=ldowns)
                     bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
                     res[label] = bt
             return res
@@ -2556,4 +3137,5 @@ NODE_FN_MAP = {
     'feature_backfill':  dag_task_feature_backfill,
     'entity_stats':      dag_task_entity_stats,
     'factor_ic':         dag_task_factor_ic,
+    'paper_portfolio':   dag_task_paper_portfolio,
 }

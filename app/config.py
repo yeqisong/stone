@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
     FEISHU_VERIFY_TOKEN: str = ""
+    # 出站告警自定义机器人 webhook（可选；配置后模型 IC 衰减 DEGRADED 时推送）
+    FEISHU_ALERT_WEBHOOK: str = ""
 
     # ── DeepSeek ──
     DEEPSEEK_API_KEY: str = ""

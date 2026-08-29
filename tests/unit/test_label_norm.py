@@ -70,3 +70,140 @@ class TestIndexForwardReturn:
     def test_date_before_calendar_returns_none(self):
         dates, closes = self._mk_idx()
         assert index_forward_return(dates, closes, '2026-01-01', 5) is None
+
+
+class TestIcHealth:
+    """IC 衰减监控纯函数（model_health 记 IC）。"""
+
+    def test_rolling_stats(self):
+        from scripts.pipeline import ic_rolling_stats
+        dates = [f'2026-01-{d:02d}' for d in range(1, 31)]
+        ics = [0.03 + 0.001 * i for i in range(30)]
+        s = ic_rolling_stats(dates, ics, window=20)
+        assert s['n'] == 20 and len(s['dates']) == 20
+        assert s['rolling_mean'] == pytest.approx(sum(ics[10:]) / 20, abs=1e-6)
+        assert s['rolling_icir'] > 5  # 单调递增序列 ICIR 极高
+
+    def test_rolling_stats_insufficient(self):
+        from scripts.pipeline import ic_rolling_stats
+        s = ic_rolling_stats(['2026-01-01'], [0.02], window=20)
+        assert s['n'] == 1 and s['rolling_mean'] is None
+
+    def test_health_status_thresholds(self):
+        from scripts.pipeline import ic_health_status
+        assert ic_health_status(0.02) == 'HEALTHY'
+        assert ic_health_status(0.003) == 'CAUTION'
+        assert ic_health_status(-0.001) == 'DEGRADED'
+        assert ic_health_status(None) is None
+
+
+class TestWalkForward:
+    """walk-forward 窗口切分 + 晋升门槛纯函数。"""
+
+    def test_split_windows_equal_chunks(self):
+        from scripts.pipeline import split_windows
+        dates = [f'2026-0{i}-01' for i in range(1, 9)]  # 8 个点
+        ws = split_windows(dates, 4)
+        assert len(ws) == 4
+        assert ws[0] == ('2026-01-01', '2026-02-01')
+        assert ws[3] == ('2026-07-01', '2026-08-01')
+        # 连续不重叠
+        for (s1, e1), (s2, e2) in zip(ws, ws[1:]):
+            assert s2 > e1
+
+    def test_split_windows_more_windows_than_dates(self):
+        from scripts.pipeline import split_windows
+        ws = split_windows(['2026-01-01', '2026-01-02'], 4)
+        assert len(ws) == 2
+
+    def test_promotion_gate_pass(self):
+        from scripts.pipeline import promotion_gate
+        windows = [
+            {'new': {'sharpe': 1.2, 'rank_ic': 0.10}, 'baseline': {'sharpe': 0.5, 'rank_ic': 0.05}},
+            {'new': {'sharpe': 0.8, 'rank_ic': 0.08}, 'baseline': {'sharpe': 0.6, 'rank_ic': 0.06}},
+            {'new': {'sharpe': 0.3, 'rank_ic': 0.02}, 'baseline': {'sharpe': 0.7, 'rank_ic': 0.04}},
+        ]
+        v, _ = promotion_gate(windows, min_win_windows=2)
+        assert v == 'PASS'   # 2/3 胜出 + IC 0.0667 ≥ 0.05
+
+    def test_promotion_gate_fail_on_ic_degrade(self):
+        from scripts.pipeline import promotion_gate
+        windows = [
+            {'new': {'sharpe': 1.2, 'rank_ic': 0.01}, 'baseline': {'sharpe': 0.5, 'rank_ic': 0.05}},
+            {'new': {'sharpe': 0.9, 'rank_ic': 0.01}, 'baseline': {'sharpe': 0.6, 'rank_ic': 0.05}},
+        ]
+        v, _ = promotion_gate(windows)   # 2/2 胜出但 IC 退化
+        assert v == 'FAIL'
+
+    def test_promotion_gate_no_baseline(self):
+        from scripts.pipeline import promotion_gate
+        v, _ = promotion_gate([])
+        assert v == 'NO_BASELINE'
+
+
+class TestPaperDayStep:
+    """纸面组合单日步进纯函数（影子运行核心）。"""
+
+    def _cfg(self):
+        return {'max_positions': 2, 'stop_loss': 0.05, 'take_profit': 0.10,
+                'trailing': 0.05, 'hold_days': 10, 'comm': 0.00025, 'st_tax': 0.001, 'slip': 0.001}
+
+    def _pos(self, code='A', shares=10000, buy=10.0, buy_date='2026-01-05', peak=None):
+        return {code: {'shares': shares, 'buy_price': buy, 'cost_basis': shares * buy,
+                       'buy_date': buy_date, 'peak': peak or buy, 'signal_id': 1, 'stock_name': code}}
+
+    def test_buy_and_t1(self):
+        """空仓买入 → 买入当日不触发卖出检查（T+1）。"""
+        from scripts.pipeline import paper_day_step
+        cash, pos, trades, eq = paper_day_step(
+            1_000_000, {}, [{'stock_code': 'A', 'strength': 3}],
+            {'A': 10.0}, self._cfg(), '2026-01-05')
+        assert len(trades) == 1 and trades[0]['action'] == 'BUY'
+        assert pos['A']['shares'] == 49900  # 预算 50万 ÷ 10.005 → 49900 股
+        # 次日暴跌超止损：因买入日=td 的 T+1 已过 → 正常止损
+        cash2, pos2, tr2, _ = paper_day_step(cash, pos, [], {'A': 9.0}, self._cfg(), '2026-01-06')
+        assert tr2[0]['action'] == 'SELL' and tr2[0]['reason'] == 'stop_loss'
+        assert 'A' not in pos2
+
+    def test_stop_loss_at_trigger_price(self):
+        from scripts.pipeline import paper_day_step
+        pos = self._pos(buy=10.0)
+        cash, kept, trades, _ = paper_day_step(500_000, pos, [], {'A': 8.0}, self._cfg(), '2026-01-20')
+        assert trades[0]['reason'] == 'stop_loss'
+        assert trades[0]['price'] == pytest.approx(10.0 * 0.95)  # 按触发价成交
+
+    def test_take_profit_and_trailing(self):
+        from scripts.pipeline import paper_day_step
+        # 止盈
+        _, _, tr1, _ = paper_day_step(500_000, self._pos(buy=10.0), [], {'A': 11.5}, self._cfg(), '2026-01-20')
+        assert tr1[0]['reason'] == 'take_profit'
+        # trailing：峰值 10.4 回撤到 9.86（−5.2% > 5%，且未触止盈/止损）
+        pos = self._pos(buy=10.0, peak=10.4)
+        _, _, tr2, _ = paper_day_step(500_000, pos, [], {'A': 9.86}, self._cfg(), '2026-01-20')
+        assert tr2[0]['reason'] == 'trailing'
+
+    def test_limit_down_blocks_sell(self):
+        from scripts.pipeline import paper_day_step
+        _, kept, trades, _ = paper_day_step(500_000, self._pos(buy=10.0), [],
+                                            {'A': 8.0}, self._cfg(), '2026-01-20', limit_down={'A'})
+        assert not trades and 'A' in kept  # 跌停被迫持有
+
+    def test_hold_expire(self):
+        from scripts.pipeline import paper_day_step
+        pos = self._pos(buy=10.0, buy_date='2026-01-01')
+        _, _, trades, _ = paper_day_step(500_000, pos, [], {'A': 10.5}, self._cfg(), '2026-01-15')
+        assert trades[0]['reason'] == 'hold_expire'
+
+    def test_max_positions_and_strength_order(self):
+        from scripts.pipeline import paper_day_step
+        sigs = [{'stock_code': c, 'strength': s} for c, s in [('A', 1), ('B', 3), ('C', 2)]]
+        _, pos, trades, _ = paper_day_step(1_000_000, {}, sigs, {'A': 10, 'B': 10, 'C': 10},
+                                           self._cfg(), '2026-01-05')
+        assert set(pos) == {'B', 'C'}  # max_positions=2，按强度取 B、C
+        assert len([t for t in trades if t['action'] == 'BUY']) == 2
+
+    def test_no_close_keeps_position(self):
+        """停牌（无收盘价）持仓保留。"""
+        from scripts.pipeline import paper_day_step
+        _, kept, trades, _ = paper_day_step(500_000, self._pos(), [], {}, self._cfg(), '2026-01-20')
+        assert 'A' in kept and not trades

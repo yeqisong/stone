@@ -341,6 +341,8 @@ CREATE TABLE IF NOT EXISTS model_health (
     signal_count  INTEGER DEFAULT 0,
     avg_forward_5d DECIMAL(8,4),
     max_drawdown  DECIMAL(5,4),
+    rank_ic       DECIMAL(8,4),   -- ACTIVE 模型近窗滚动 RankIC 均值（IC 衰减监控，v3.6）
+    rank_icir     DECIMAL(8,4),   -- 滚动 ICIR
     detail       JSONB DEFAULT '{}',
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (version, check_date)
@@ -759,6 +761,46 @@ CREATE TABLE IF NOT EXISTS factor_ic_stats (
 CREATE INDEX IF NOT EXISTS idx_fic_name ON factor_ic_stats (feature_name, horizon, created_at DESC);
 """
 
+# ── 纸面组合（影子运行，v3.6）：跟随 ACTIVE 模型信号逐日模拟成交，与实盘互不干扰 ──
+
+CREATE_PAPER_POSITIONS = """
+CREATE TABLE IF NOT EXISTS paper_positions (
+    stock_code    VARCHAR(6) PRIMARY KEY,
+    stock_name    VARCHAR(32),
+    shares        INTEGER NOT NULL,
+    buy_price     DECIMAL(10,4) NOT NULL,
+    cost_basis    DECIMAL(14,2) NOT NULL,
+    buy_date      DATE NOT NULL,
+    peak          DECIMAL(10,4),
+    signal_id     INTEGER,
+    model_version VARCHAR(20),
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_PAPER_TRADES = """
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id           BIGSERIAL PRIMARY KEY,
+    trade_date   DATE NOT NULL,
+    action       VARCHAR(10) NOT NULL,  -- BUY / SELL / EOD（收盘估值）
+    stock_code   VARCHAR(6),
+    stock_name   VARCHAR(32),
+    price        DECIMAL(10,4),
+    shares       INTEGER,
+    amount       DECIMAL(14,2),
+    commission   DECIMAL(12,2),
+    pnl          DECIMAL(14,2),
+    cash         DECIMAL(14,2),
+    equity       DECIMAL(14,2),
+    reason       VARCHAR(30),           -- signal/stop_loss/take_profit/trailing/hold_expire
+    signal_id    INTEGER,
+    model_version VARCHAR(20),
+    detail       JSONB DEFAULT '{}',
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ppt_date ON paper_trades (trade_date, action);
+"""
+
 # ── 顺序很重要（满足外键/依赖）──
 
 ALL_TABLES = [
@@ -789,6 +831,8 @@ ALL_TABLES = [
     ("model_health", CREATE_MODEL_HEALTH),
     ("features", CREATE_FEATURES),
     ("factor_ic_stats", CREATE_FACTOR_IC_STATS),
+    ("paper_positions", CREATE_PAPER_POSITIONS),
+    ("paper_trades", CREATE_PAPER_TRADES),
     ("backtest_records", CREATE_BACKTEST_RECORDS),
     ("backtest_trades", CREATE_BACKTEST_TRADES),
     ("download_history", CREATE_DOWNLOAD_HISTORY),
@@ -943,6 +987,11 @@ def init_db(sync_session) -> None:
         sync_session.execute(text("""
             INSERT INTO dag_config (node_name, deps, label, sort_order)
             VALUES ('factor_ic', 'stats', '因子IC体检', 56)
+            ON CONFLICT (node_name) DO NOTHING
+        """))
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('paper_portfolio', 'model_signal', '纸面组合', 57)
             ON CONFLICT (node_name) DO NOTHING
         """))
         sync_session.execute(text("""
@@ -1115,6 +1164,16 @@ def init_db(sync_session) -> None:
         sync_session.execute(text("ALTER TABLE features ADD COLUMN IF NOT EXISTS actual_row_count BIGINT DEFAULT 0"))
     except Exception:
         sync_session.rollback()
+
+    # 迁移：model_health 记 IC（v3.6——ACTIVE 模型滚动 RankIC 衰减监控）
+    for col, col_type in [
+        ('rank_ic', 'DECIMAL(8,4)'),
+        ('rank_icir', 'DECIMAL(8,4)'),
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE model_health ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
 
     # 迁移：model_versions 新增策略优化字段（v2.7）
     for col, col_type in [

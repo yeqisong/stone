@@ -218,6 +218,55 @@
       <n-empty v-else-if="!permRunning" description="未运行——点击「运行」生成噪声分布对照" size="small" style="padding:12px" />
     </div>
 
+    <!-- Walk-Forward 晋升门槛 -->
+    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🧭 Walk-Forward 多窗口检验（晋升门槛）</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <n-select v-model:value="wfWindows" size="tiny" style="width:92px"
+            :options="[2,3,4,6].map(n=>({label:n+' 窗口',value:n}))" />
+          <n-button size="tiny" @click="startWF" :loading="wfRunning">运行</n-button>
+        </div>
+      </div>
+      <div v-if="wfTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
+        检验中（基线 {{wfTask.params?.baseline_version || '无'}}，{{wfTask.params?.n_windows}} 窗口 × 2 模型评估，约 2-4 分钟）…
+      </div>
+      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px">❌ {{wfTask.error}}</div>
+      <template v-if="wf">
+        <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:wfVerdict?.color}">{{wfVerdict?.label}}</div>
+        <div style="font-size:11px;color:var(--c-text-dim);margin-top:2px">{{wf.reason}}<span v-if="wf.baseline">（基线 {{wf.baseline}}）</span></div>
+        <div style="overflow-x:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead>
+              <tr style="color:var(--c-text-dim);text-align:left">
+                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">窗口</th>
+                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">新模型 sharpe</th>
+                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">RankIC</th>
+                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">基线 sharpe</th>
+                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">RankIC</th>
+                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">胜负</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="w in wf.windows" :key="w.start" style="color:var(--c-text)">
+                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.start.slice(5)}}~{{w.end.slice(5)}}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light);font-weight:600">{{w.new?.sharpe?.toFixed(2) ?? '—'}}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.new?.rank_ic!=null?(w.new.rank_ic>=0?'+':'')+w.new.rank_ic.toFixed(3):'—'}}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.baseline?.sharpe?.toFixed(2) ?? '—'}}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.baseline?.rank_ic!=null?(w.baseline.rank_ic>=0?'+':'')+w.baseline.rank_ic.toFixed(3):'—'}}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)" :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#10b981':'#ef4444'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✅ 胜':'❌ 负'}}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:6px;font-size:10px;color:var(--c-text-faint);line-height:1.7">
+          门槛：≥{{wfWindows}}-2 个窗口 sharpe 胜出且 RankIC 不低于基线（默认 2 窗口）；判定 FAIL 时 PENDING 审批会被拒绝，
+          force 可覆盖。窗口 RankIC 只统计已成熟截面（今日−持有期之前）。审批时自动取最近一次判定。
+        </div>
+      </template>
+      <n-empty v-else-if="!wfRunning" description="未运行——PENDING 审批前需要最近一次判定" size="small" style="padding:12px" />
+    </div>
+
     <!-- 策略扫描弹窗 -->
     <n-modal v-model:show="showScanModal" preset="card" title="策略参数扫描" style="width:500px;max-width:92vw">
       <n-space vertical>
@@ -422,7 +471,7 @@ async function loadEvalDetail() {
     evalDetail.value = r.data
   } catch (e) { console.error(e) }
 }
-onMounted(() => { loadEvalDetail(); loadAttribution() })
+onMounted(() => { loadEvalDetail(); loadAttribution(); loadWF() })
 
 const scanResults = computed(() => evalDetail.value?.strategy_scan_results || null)
 const scanBest = computed(() => {
@@ -468,6 +517,53 @@ const permVerdict = computed(() => {
     strong: { label: '✅ 显著（进入噪声分布前 5%）', color: '#10b981' },
     above_mean: { label: '🟡 高于噪声均值（未达显著）', color: '#f59e0b' },
     noise: { label: '🔴 与噪声无异（无 alpha）', color: '#ef4444' },
+  }[v] || null
+})
+
+// ── Walk-Forward 晋升门槛 ──
+const wf = ref(null)
+const wfRunning = ref(false)
+const wfTask = ref(null)
+const wfWindows = ref(4)
+let wfPollTimer = null
+
+async function loadWF() {
+  try {
+    const r = await axios.get(API + `/api/v1/models/${props.version.version}/walk-forward`)
+    wf.value = r.data.result
+  } catch (e) { console.error(e) }
+}
+
+async function startWF() {
+  if (!props.version?.version) return
+  wfRunning.value = true; wfTask.value = null
+  try {
+    const r = await axios.post(API + `/api/v1/models/${props.version.version}/walk-forward`, {
+      n_windows: wfWindows.value, val_start: cfgValStart.value, val_end: cfgValEnd.value,
+      hold_days: 10, stop_loss: 0.05, take_profit: 0.15,
+    })
+    wfTask.value = r.data
+    wfPollTimer = setInterval(async () => {
+      try {
+        const tr = await axios.get(API + `/api/v1/models/${props.version.version}/walk-forward`, { params: { task_id: r.data.task_id } })
+        wfTask.value = tr.data
+        if (tr.data.status === 'completed' || tr.data.status === 'failed') {
+          clearInterval(wfPollTimer); wfPollTimer = null; wfRunning.value = false
+          if (tr.data.status === 'completed') { message.success('Walk-Forward 检验完成'); loadWF() }
+        }
+      } catch (e) { clearInterval(wfPollTimer); wfPollTimer = null; wfRunning.value = false }
+    }, 5000)
+  } catch (e) {
+    message.error(e.response?.data?.detail || '启动失败'); wfRunning.value = false
+  }
+}
+
+const wfVerdict = computed(() => {
+  const v = wf.value?.verdict
+  return {
+    PASS: { label: '✅ 晋升门槛通过', color: '#10b981' },
+    FAIL: { label: '🔴 晋升门槛未通过', color: '#ef4444' },
+    NO_BASELINE: { label: '⚪ 无基线可比', color: '#6b7280' },
   }[v] || null
 })
 

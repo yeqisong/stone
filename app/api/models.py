@@ -1,7 +1,7 @@
 """模型版本管理 API。"""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import json
 import threading
@@ -136,6 +136,80 @@ def list_models(entity: str = Query("stock")):
 
 
 @router.get("/v1/models/{version}")
+@router.get("/v1/models/paper-portfolio")
+def get_paper_portfolio(user: str = Depends(get_current_user)):
+    """纸面组合（影子运行）：净值曲线 vs 沪深300 + 当前持仓 + 最近模拟成交。"""
+    db = get_sync_db()
+    try:
+        meta_row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
+        meta = json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
+
+        eod = db.execute(text("""
+            SELECT trade_date, equity, cash, detail FROM paper_trades
+            WHERE action='EOD' ORDER BY trade_date
+        """)).fetchall()
+        equity = []
+        base_bm = None
+        initial = float(meta.get('initial_cash', 1_000_000))
+        for d, eq, ca, dt in eod:
+            det = dt if isinstance(dt, dict) else (json.loads(dt) if dt else {})
+            bm = det.get('benchmark_close')
+            if bm and base_bm is None:
+                base_bm = float(bm)
+            equity.append({'date': str(d), 'equity': float(eq), 'cash': float(ca),
+                           'benchmark': round(initial * float(bm) / base_bm, 2) if bm and base_bm else None})
+        last_eq = equity[-1]['equity'] if equity else initial
+
+        positions = []
+        for r in db.execute(text("""
+            SELECT p.stock_code, COALESCE(p.stock_name, sm.stock_name, '') AS sname, p.shares,
+                   p.buy_price, p.cost_basis, p.buy_date, p.peak, p.model_version
+            FROM paper_positions p LEFT JOIN stock_master sm ON sm.stock_code = p.stock_code
+            ORDER BY p.buy_date
+        """)).fetchall():
+            positions.append({'stock_code': r[0], 'stock_name': r[1], 'shares': r[2],
+                              'buy_price': float(r[3]), 'cost_basis': float(r[4]),
+                              'buy_date': str(r[5]), 'peak': float(r[6]) if r[6] else None,
+                              'model_version': r[7]})
+
+        trades = []
+        for r in db.execute(text("""
+            SELECT trade_date, action, stock_code, stock_name, price, shares, amount,
+                   commission, pnl, reason, equity FROM paper_trades
+            WHERE action IN ('BUY','SELL') ORDER BY trade_date DESC, id DESC LIMIT 50
+        """)).fetchall():
+            trades.append({'date': str(r[0]), 'action': r[1], 'stock_code': r[2], 'stock_name': r[3],
+                           'price': float(r[4]) if r[4] is not None else None,
+                           'shares': r[5], 'amount': float(r[6]) if r[6] is not None else None,
+                           'commission': float(r[7]) if r[7] is not None else None,
+                           'pnl': float(r[8]) if r[8] is not None else None,
+                           'reason': r[9], 'equity': float(r[10]) if r[10] is not None else None})
+
+        w = db.execute(text(
+            "SELECT COUNT(*) FILTER (WHERE pnl > 0), COUNT(*) FROM paper_trades WHERE action='SELL'")).fetchone()
+        n_trades = db.execute(text(
+            "SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL')")).scalar()
+        win_rate = (w[0] / w[1]) if w[1] else None
+        last_bm = equity[-1]['benchmark'] if equity and equity[-1]['benchmark'] else None
+        db.close()
+        return {
+            'meta': meta,
+            'stats': {
+                'initial_cash': initial, 'equity': last_eq,
+                'total_return': round(last_eq / initial - 1, 4) if equity else None,
+                'benchmark_return': round(last_bm / initial - 1, 4) if last_bm else None,
+                'days': len(equity),
+                'n_trades': n_trades,
+                'win_rate': round(win_rate, 4) if win_rate is not None else None,
+                'n_positions': len(positions),
+            },
+            'equity': equity, 'positions': positions, 'trades': trades,
+        }
+    finally:
+        db.close()
+
+
 def get_model(version: str):
     """模型版本详情。"""
     db = get_sync_db()
@@ -244,16 +318,20 @@ def get_model_health(version: str):
     db = get_sync_db()
     try:
         r = db.execute(text("""
-            SELECT health_status, live_win_rate, signal_count, avg_forward_5d, detail, check_date
+            SELECT health_status, live_win_rate, signal_count, avg_forward_5d, detail, check_date,
+                   rank_ic, rank_icir
             FROM model_health WHERE version=:v ORDER BY check_date DESC LIMIT 1
         """), {"v": version}).fetchone()
         if not r:
-            return {"health_status": "HEALTHY", "live_win_rate": 0, "signal_count": 0, "avg_forward_5d": 0}
+            return {"health_status": "HEALTHY", "live_win_rate": 0, "signal_count": 0,
+                    "avg_forward_5d": 0, "rank_ic": None, "rank_icir": None}
         return {
             "health_status": r[0], "live_win_rate": float(r[1]) if r[1] else 0,
             "signal_count": r[2] or 0, "avg_forward_5d": float(r[3]) if r[3] else 0,
             "detail": r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else {}),
             "check_date": str(r[5]) if r[5] else None,
+            "rank_ic": float(r[6]) if r[6] is not None else None,
+            "rank_icir": float(r[7]) if r[7] is not None else None,
         }
     finally:
         db.close()
@@ -581,8 +659,11 @@ def check_model_features(version: str, force: bool = Query(False)):
 
 
 @router.post("/v1/models/{version}/approve")
-def approve_model(version: str, user: str = Depends(get_current_user)):
-    """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。"""
+def approve_model(version: str, force: bool = Query(False), user: str = Depends(get_current_user)):
+    """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。
+
+    晋升门槛（v3.6）：最近一次 walk-forward 对比判定为 FAIL 且未传 force=true 时拒绝。
+    """
     db = get_sync_db()
     try:
         r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
@@ -592,6 +673,18 @@ def approve_model(version: str, user: str = Depends(get_current_user)):
             raise HTTPException(400, f"当前状态为 {r[0]}，只有 PENDING 状态可审批")
         cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
         entity = cfg.get("entity", "stock")
+
+        # 晋升门槛：最近一次 walk-forward 对比 FAIL → 拒绝（force=true 可覆盖）
+        cmp_row = db.execute(text("""
+            SELECT report FROM version_comparisons
+            WHERE version_a=:v ORDER BY created_at DESC LIMIT 1
+        """), {"v": version}).fetchone()
+        if cmp_row and not force:
+            report = cmp_row[0] if isinstance(cmp_row[0], dict) else (json.loads(cmp_row[0]) if cmp_row[0] else {})
+            if report.get('verdict') == 'FAIL':
+                raise HTTPException(400, f"晋升门槛未通过：{report.get('reason')}"
+                                         f"（多窗口稳定性不足；如仍要上线请加 force=true）")
+
         # 仅归档同主体的旧 ACTIVE
         db.execute(text(
             "UPDATE model_versions SET status='ARCHIVED', archived_at=CURRENT_TIMESTAMP "
@@ -1093,5 +1186,109 @@ def get_permutation(version: str, task_id: str = Query(None), user: str = Depend
         db.close()
         pt = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else None)
         return {"version": version, "perm_test": pt}
+    except Exception as e:
+        db.close(); raise HTTPException(500, str(e))
+
+
+# ── Walk-Forward 多窗口稳定性检验 + 晋升门槛 ──
+
+_wf_tasks: dict = {}
+_wf_lock = _threading.Lock()
+
+
+class WalkForwardBody(BaseModel):
+    val_start: str = ""
+    val_end: str = ""
+    n_windows: int = Field(default=4, ge=2, le=8)
+    hold_days: int = 10
+    stop_loss: float = 0.05
+    take_profit: float = 0.15
+    baseline_version: Optional[str] = None  # 缺省取当前 ACTIVE（同 entity）
+
+
+def _pick_baseline(db, version: str, entity: str):
+    return db.execute(text(
+        "SELECT version FROM model_versions WHERE status='ACTIVE' "
+        "AND (config->>'entity') = :ent AND version != :v "
+        "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
+    ), {"ent": entity, "v": version}).scalar()
+
+
+def _run_wf(task_id, version, body):
+    from scripts.pipeline import run_walk_forward
+    from app.db.connection import get_sync_db
+    from loguru import logger as _log
+    try:
+        db = get_sync_db()
+        result = run_walk_forward(db, version, body['baseline_version'], body['val_start'],
+                                  body['val_end'], body['n_windows'], body['hold_days'],
+                                  body['stop_loss'], body['take_profit'])
+        db.close()
+        # 落档 version_comparisons：version_a=候选，version_b=基线（无基线时也留档）
+        db = get_sync_db()
+        base = body['baseline_version'] or version
+        sharpe_diff = (result.get('new_mean_sharpe') or 0)
+        db.execute(text("""
+            INSERT INTO version_comparisons (version_a, version_b, sharpe_diff, winrate_diff, drawdown_diff, report)
+            VALUES (:a, :b, :sd, NULL, NULL, :rp)
+        """), {"a": version, "b": base, "sd": sharpe_diff, "rp": json.dumps(result, ensure_ascii=False)})
+        db.commit(); db.close()
+        with _wf_lock:
+            _wf_tasks[task_id].update({'status': 'completed', 'result': result})
+    except Exception as e:
+        _log.error(f"[wf] {version} walk-forward 失败: {e}")
+        with _wf_lock: _wf_tasks[task_id].update({'status': 'failed', 'error': str(e)[:300]})
+
+
+@router.post("/v1/models/{version}/walk-forward")
+def start_walk_forward(version: str, body: WalkForwardBody, user: str = Depends(get_current_user)):
+    """启动 walk-forward 多窗口检验：新模型 vs 当前 ACTIVE 的稳定性对比与晋升判定。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
+        entity = cfg.get('entity', 'stock')
+        db.close()
+        val_end = body.val_end or str(_dt.today())
+        val_start = body.val_start or f"{_dt.today().year - 1}-01-01"
+        baseline = body.baseline_version or _pick_baseline(get_sync_db(), version, entity)
+
+        task_id = f"wf-{_uuid.uuid4().hex[:6]}"
+        b = {'val_start': val_start, 'val_end': val_end, 'n_windows': body.n_windows,
+             'hold_days': body.hold_days, 'stop_loss': body.stop_loss,
+             'take_profit': body.take_profit, 'baseline_version': baseline}
+        with _wf_lock:
+            _wf_tasks[task_id] = {'task_id': task_id, 'version': version, 'status': 'running',
+                                  'params': b, 'started_at': _time.time()}
+        thread = _threading.Thread(target=_run_wf, args=(task_id, version, b), daemon=True)
+        thread.start()
+        return {"ok": True, "task_id": task_id, "baseline_version": baseline, "status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if not db.closed: db.close()
+        raise HTTPException(500, str(e))
+
+
+@router.get("/v1/models/{version}/walk-forward")
+def get_walk_forward(version: str, task_id: str = Query(None), user: str = Depends(get_current_user)):
+    """walk-forward 结果：带 task_id 轮询任务，否则返回最近一次落档对比。"""
+    if task_id:
+        with _wf_lock:
+            t = _wf_tasks.get(task_id)
+            if not t or t['version'] != version:
+                raise HTTPException(404, "任务不存在")
+            return dict(t)
+    db = get_sync_db()
+    try:
+        r = db.execute(text("""
+            SELECT report, created_at FROM version_comparisons
+            WHERE version_a=:v ORDER BY created_at DESC LIMIT 1
+        """), {"v": version}).fetchone()
+        db.close()
+        report = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else None)
+        return {"version": version, "result": report, "created_at": str(r[1]) if r and r[1] else None}
     except Exception as e:
         db.close(); raise HTTPException(500, str(e))

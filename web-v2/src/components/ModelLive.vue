@@ -19,6 +19,12 @@
         <div style="font-size:10px;color:var(--c-text-faint)">Avg Fwd 5D</div>
         <div :style="{fontSize:'20px',fontWeight:700,color:health.avg_forward_5d>=0?'#10b981':'#ef4444'}">{{(health.avg_forward_5d*100).toFixed(2)}}%</div>
       </div>
+      <div v-if="health.rank_ic!=null" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center"
+           title="模型预测与实现收益的逐日截面 RankIC 均值（近 20 个已成熟截面，10 日前瞻）；<0 说明模型选股能力已衰减">
+        <div style="font-size:10px;color:var(--c-text-faint)">滚动 RankIC</div>
+        <div :style="{fontSize:'20px',fontWeight:700,color:health.rank_ic>0.005?'#10b981':health.rank_ic>=0?'#f59e0b':'#ef4444'}">{{health.rank_ic>=0?'+':''}}{{health.rank_ic.toFixed(4)}}</div>
+        <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">ICIR {{health.rank_icir!=null?(health.rank_icir>=0?'+':'')+health.rank_icir.toFixed(2):'—'}}</div>
+      </div>
     </div>
 
     <!-- Signal Detail List -->
@@ -36,17 +42,64 @@
       </div>
       <div v-else style="font-size:11px;color:var(--c-text-faint);text-align:center;padding:10px">暂无信号</div>
     </div>
+
+    <!-- 纸面组合（影子运行） -->
+    <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🧪 纸面组合（影子运行）<span style="font-weight:400;color:var(--c-text-faint);margin-left:8px">跟随 ACTIVE 模型信号每日模拟成交，与实盘互不干扰</span></div>
+        <n-button size="tiny" quaternary @click="loadPaper">🔄</n-button>
+      </div>
+      <div v-if="!paper || !paper.equity.length" style="font-size:11px;color:var(--c-text-faint);text-align:center;padding:14px">
+        暂无影子记录——信号生成时自动建立，或在 DAG 流程中加入 paper_portfolio 节点回放历史信号
+      </div>
+      <template v-else>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">影子收益</div>
+            <div :style="{fontSize:'18px',fontWeight:700,color:(paper.stats.total_return||0)>=0?'#10b981':'#ef4444'}">
+              {{((paper.stats.total_return||0)*100).toFixed(2)}}%</div>
+          </div>
+          <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">同期沪深300</div>
+            <div :style="{fontSize:'18px',fontWeight:700,color:(paper.stats.benchmark_return||0)>=0?'#10b981':'#ef4444'}">
+              {{paper.stats.benchmark_return!=null?((paper.stats.benchmark_return)*100).toFixed(2)+'%':'—'}}</div>
+          </div>
+          <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">模拟卖出胜率</div>
+            <div style="font-size:18px;font-weight:700;color:var(--c-text)">{{paper.stats.win_rate!=null?(paper.stats.win_rate*100).toFixed(0)+'%':'—'}}</div>
+          </div>
+          <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <div style="font-size:9px;color:var(--c-text-faint)">模拟成交 / 持仓</div>
+            <div style="font-size:18px;font-weight:700;color:var(--c-text)">{{paper.stats.n_trades}} / {{paper.stats.n_positions}}</div>
+          </div>
+        </div>
+        <div ref="paperChart" style="width:100%;height:220px"></div>
+        <div v-if="paper.positions.length" style="margin-top:10px">
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">影子持仓（{{paper.positions.length}}）</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            <n-tag v-for="p in paper.positions" :key="p.stock_code" size="small" :bordered="false">
+              {{p.stock_code}} {{p.stock_name}} ×{{p.shares}} @{{p.buy_price?.toFixed(2)}}（{{p.buy_date?.slice(5)}}起）
+            </n-tag>
+          </div>
+        </div>
+      </template>
+    </div>
   </template>
 </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, nextTick } from 'vue'
 import axios from 'axios'
+import * as echarts from 'echarts'
+import { NTag, NButton } from 'naive-ui'
 
 const props = defineProps({ version: Object })
 const health = ref(null)
 const signals = ref([])
+const paper = ref(null)
+const paperChart = ref(null)
+let paperChartInst = null
 
 const healthColor = computed(() => {
   const s = health.value?.health_status
@@ -62,5 +115,35 @@ onMounted(async () => {
     health.value = hr.data
     signals.value = sr.data?.signals || []
   } catch(e) {}
+  loadPaper()
 })
+
+async function loadPaper() {
+  try {
+    const r = await axios.get(window.location.origin + '/api/v1/models/paper-portfolio')
+    paper.value = r.data
+    if (paper.value?.equity?.length) nextTick(() => renderPaper())
+  } catch(e) { console.error(e) }
+}
+
+function renderPaper() {
+  if (!paperChart.value) return
+  paperChartInst?.dispose()
+  paperChartInst = echarts.init(paperChart.value)
+  const eq = paper.value.equity
+  const hasBm = eq.some(x => x.benchmark)
+  paperChartInst.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0, textStyle: { fontSize: 9 }, itemWidth: 12 },
+    grid: { left: 60, right: 14, top: 24, bottom: 22 },
+    xAxis: { type: 'category', data: eq.map(x => x.date), axisLabel: { fontSize: 8, interval: Math.max(1, Math.floor(eq.length / 6)) } },
+    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 8, formatter: v => (v / 10000).toFixed(0) + '万' } },
+    series: [
+      { type: 'line', name: '纸面组合净值', data: eq.map(x => x.equity), showSymbol: false,
+        lineStyle: { width: 2, color: '#10b981' } },
+      ...(hasBm ? [{ type: 'line', name: '沪深300等额', data: eq.map(x => x.benchmark), showSymbol: false,
+        lineStyle: { width: 1.5, type: 'dashed', color: '#9ca3af' } }] : []),
+    ],
+  })
+}
 </script>
