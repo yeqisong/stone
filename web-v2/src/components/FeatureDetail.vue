@@ -119,6 +119,80 @@
         </div>
         <n-empty v-else :description="previewEmptyReason || '暂无数据'" style="padding:20px" />
       </n-tab-pane>
+
+      <n-tab-pane name="ic" tab="IC 体检">
+        <div v-if="feat.target_entity!=='stock'" style="text-align:center;padding:50px;color:var(--c-text-dim)">
+          <div style="font-size:14px;margin-bottom:6px">📡 仅支持个股（stock）实体因子的 IC 检验</div>
+          <div style="font-size:12px">当前实体：{{ entityLabel[feat.target_entity] || feat.target_entity }}</div>
+        </div>
+        <template v-else>
+          <!-- 工具行 -->
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <n-tag :type="trafficTypeMap[icDetail?.traffic]||'default'" size="small" :bordered="false">
+              {{ trafficMap[icDetail?.traffic] || '○ 未检验' }}
+            </n-tag>
+            <n-tag size="small" :bordered="false" :type="icStatusTypeMap[feat.ic_status]">{{ icStatusMap[feat.ic_status] || '候选' }}</n-tag>
+            <n-tag v-if="icDetail?.direction==='-'" size="small" type="warning" :bordered="false">↩ 反向因子（取反使用）</n-tag>
+            <div style="flex:1" />
+            <n-select v-model:value="icHorizon" :options="horizonOptions" size="tiny" style="width:96px" @update:value="loadIcDetail" />
+            <n-button size="tiny" @click="openIcCompute">🧪 重算…</n-button>
+            <n-button v-if="feat.ic_status!=='included'" size="tiny" type="primary" @click="doSetIcStatus('included')">✅ 入选</n-button>
+            <n-button v-if="feat.ic_status!=='excluded'" size="tiny" type="error" quaternary @click="doSetIcStatus('excluded')">🚫 剔除</n-button>
+            <n-button v-if="feat.ic_status==='candidate'||feat.ic_status==='excluded'" size="tiny" quaternary @click="doSetIcStatus('candidate')">↺ 候选</n-button>
+          </div>
+
+          <n-spin v-if="icLoading" size="small" style="padding:24px" />
+          <!-- 指标卡 -->
+          <div v-else-if="icDetail" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+            <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--c-text-faint)">RankIC（{{ icHorizon }}日前瞻）</div>
+              <div :style="{fontSize:'20px',fontWeight:700,color:icDetail.rank_ic_mean>=0?'#10b981':'#f59e0b'}">{{ icDetail.rank_ic_mean>=0?'+':'' }}{{ icDetail.rank_ic_mean?.toFixed(4) }}</div>
+            </div>
+            <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--c-text-faint)">ICIR</div>
+              <div :style="{fontSize:'20px',fontWeight:700,color:Math.abs(icDetail.rank_ic_ir)>=0.3?'#10b981':'#f59e0b'}">{{ icDetail.rank_ic_ir>=0?'+':'' }}{{ icDetail.rank_ic_ir?.toFixed(3) }}</div>
+            </div>
+            <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--c-text-faint)">IC 同号占比</div>
+              <div :style="{fontSize:'20px',fontWeight:700,color:icDetail.ic_win_rate>=0.55?'#10b981':'#f59e0b'}">{{ (icDetail.ic_win_rate*100).toFixed(1) }}%</div>
+            </div>
+            <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--c-text-faint)">t 值 / 样本</div>
+              <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ icDetail.t_stat?.toFixed(1) }}</div>
+              <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">{{ icDetail.sample_days }} 天 × {{ icDetail.avg_names?.toFixed(0) }} 股</div>
+            </div>
+          </div>
+          <n-empty v-else description="暂无检验记录，点右上角「重算」开始" style="padding:30px" />
+
+          <!-- 三图 -->
+          <div v-if="icDetail" style="display:flex;gap:12px;flex-wrap:wrap">
+            <div style="flex:1;min-width:320px">
+              <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">日度 RankIC（柱）× 累计 IC（线）</div>
+              <div ref="icChart" style="width:100%;height:230px"></div>
+            </div>
+            <div style="flex:1;min-width:320px">
+              <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">分层净值（{{ icHorizon }}日前瞻·日均化·未计成本）</div>
+              <div ref="layerChart" style="width:100%;height:230px"></div>
+            </div>
+          </div>
+          <div v-if="icDetail" style="margin-top:10px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">预测衰减（各前瞻期 RankIC，取最近一次检验）</div>
+            <div ref="decayChart" style="width:100%;height:180px"></div>
+          </div>
+
+          <!-- 历次记录 -->
+          <div v-if="icRecords.length" style="margin-top:14px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">历次检验记录（点击行切换图表周期）</div>
+            <n-data-table :columns="icHistoryCols" :data="icRecords" size="tiny" :max-height="200" :row-props="icRowProps" />
+          </div>
+
+          <div style="margin-top:12px;font-size:10px;color:var(--c-text-faint);line-height:1.8">
+            口径：RankIC = 每日截面因子排名 vs 前瞻 N 日收益排名的 Spearman 相关；ICIR = mean(IC)/std(IC)；分层按因子值均分 5 组，
+            净值按"前瞻收益/持有天数"日均化近似累计（未计交易成本，仅观察单调性，不作为回测依据）；
+            红绿灯：|RankIC|≥0.02 且 |ICIR|≥0.30 且 同号占比≥55% → 绿，两项 → 黄，其余 → 红；IC 为负时标注反向因子。
+          </div>
+        </template>
+      </n-tab-pane>
     </n-tabs>
 
   </template>
@@ -160,12 +234,46 @@
       </n-space>
     </template>
   </n-modal>
+  <!-- IC 检验弹窗 -->
+  <n-modal v-if="feat" v-model:show="showIcCompute" preset="card" title="🧪 因子 IC 检验" style="width:460px;max-width:92vw" :mask-closable="false">
+    <n-space vertical>
+      <div style="font-size:12px;color:var(--c-text-dim)">对 <b>{{ feat.feature_name }}</b> 做逐日截面 IC 检验，结果落档 factor_ic_stats（不覆盖入选/剔除决策）。</div>
+      <div style="display:flex;gap:8px">
+        <n-input v-model:value="icForm.val_start" placeholder="开始 YYYY-MM-DD" size="small" />
+        <n-input v-model:value="icForm.val_end" placeholder="结束 YYYY-MM-DD" size="small" />
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-size:11px;color:var(--c-text-dim)">快速区间：</span>
+        <n-button v-for="p in [{label:'近1年',y:1},{label:'近3年',y:3},{label:'近5年',y:5}]" :key="p.label" size="tiny" quaternary @click="applyIcRange(p.y)">{{ p.label }}</n-button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:11px;color:var(--c-text-dim)">前瞻期：</span>
+        <n-checkbox-group v-model:value="icForm.horizons">
+          <n-checkbox v-for="hh in [1,5,10,20]" :key="hh" :value="hh" :label="hh+'日'" />
+        </n-checkbox-group>
+      </div>
+      <div v-if="icTask && icTask.status==='running'" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-text-dim)">
+        <n-spin size="small" /> 检验中（全周期约 40-60 秒，请勿关闭）…
+      </div>
+      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#ef4444">❌ {{ icTask.error }}</div>
+      <div v-if="icTask && icTask.status==='completed'" style="font-size:12px;color:#10b981">
+        ✅ 完成：{{ (icTask.results||[]).filter(r=>!r.error).length }}/{{ icTask.horizons?.length }} 个周期落档
+        <span v-if="(icTask.failed||[]).length" style="color:#f59e0b">；{{ icTask.failed.map(f=>f.horizon+'d:'+f.error).join('；') }}</span>
+      </div>
+    </n-space>
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button @click="showIcCompute=false">关闭</n-button>
+        <n-button type="primary" :loading="icSubmitting" :disabled="icTask?.status==='running'" @click="startIcCompute">开始检验</n-button>
+      </n-space>
+    </template>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NSelect, NDataTable, NEmpty, NPagination, NModal, NSpace, useMessage } from 'naive-ui'
+import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NSelect, NDataTable, NEmpty, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 import * as echarts from 'echarts'
@@ -213,8 +321,201 @@ watch(activeTab, (tab) => {
     if (!previewItems.value.length && !previewLoading.value) {
       loadPreview()
     }
+  } else if (tab === 'ic') {
+    if (!icRecords.value.length && !icLoading.value) loadIcAll()
+    else nextTick(() => renderIcCharts())
   }
 })
+
+// ── IC 体检 ──
+const icHorizon = ref(10)
+const horizonOptions = [1, 5, 10, 20].map(h => ({ label: h + '日前瞻', value: h }))
+const trafficMap = { green: '🟢 达标', yellow: '🟡 边缘', red: '🔴 未达标' }
+const trafficTypeMap = { green: 'success', yellow: 'warning', red: 'error' }
+const icStatusMap = { candidate: '候选', included: '已入选', excluded: '已剔除' }
+const icStatusTypeMap = { candidate: 'default', included: 'success', excluded: 'error' }
+const icRecords = ref([])
+const icDetail = ref(null)
+const icLoading = ref(false)
+const showIcCompute = ref(false)
+const icSubmitting = ref(false)
+const icTask = ref(null)
+const icForm = ref({ val_start: '', val_end: '', horizons: [1, 5, 10, 20] })
+const icChart = ref(null)
+const layerChart = ref(null)
+const decayChart = ref(null)
+let icChartInst = null, layerChartInst = null, decayChartInst = null
+
+function openIcCompute() {
+  // 默认区间：右端=特征最新数据日，左端=3 年前
+  const end = feat.value?.latest_computed_date || new Date().toISOString().slice(0, 10)
+  icForm.value.val_end = end
+  icForm.value.val_start = new Date(new Date(end) - 3 * 365 * 86400000).toISOString().slice(0, 10)
+  icForm.value.horizons = [1, 5, 10, 20]
+  icTask.value = null
+  showIcCompute.value = true
+}
+
+function applyIcRange(years) {
+  icForm.value.val_start = new Date(new Date(icForm.value.val_end) - years * 365 * 86400000).toISOString().slice(0, 10)
+}
+
+async function loadIcAll() {
+  icLoading.value = true
+  try {
+    const r = await axios.get(API + `/api/features/${props.featureId}/ic`)
+    icRecords.value = r.data.records || []
+    // 默认展示：有 10d 记录用 10d，否则第一个有记录的周期
+    const hs = [...new Set(icRecords.value.map(x => x.horizon))]
+    if (hs.length) {
+      icHorizon.value = hs.includes(10) ? 10 : hs[0]
+      await loadIcDetail()
+    } else {
+      icDetail.value = null
+    }
+  } catch (e) {
+    console.error(e)
+  } finally {
+    icLoading.value = false
+  }
+}
+
+async function loadIcDetail() {
+  icLoading.value = true
+  try {
+    const r = await axios.get(API + `/api/features/${props.featureId}/ic`, {
+      params: { detail: true, horizon: icHorizon.value },
+    })
+    icDetail.value = r.data
+    nextTick(() => renderIcCharts())
+  } catch (e) {
+    icDetail.value = null
+  } finally {
+    icLoading.value = false
+  }
+}
+
+function renderIcCharts() {
+  const d = icDetail.value
+  if (!d) return
+  // IC 时序：柱（正负着色）+ 累计线
+  if (icChart.value) {
+    icChartInst?.dispose()
+    icChartInst = echarts.init(icChart.value)
+    const s = d.ic_series || {}
+    icChartInst.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: 50, right: 14, top: 14, bottom: 22 },
+      xAxis: { type: 'category', data: s.dates || [], axisLabel: { fontSize: 8, interval: Math.max(1, Math.floor((s.dates?.length || 1) / 5)) } },
+      yAxis: [{ type: 'value', scale: true, axisLabel: { fontSize: 8 } }, { type: 'value', axisLabel: { fontSize: 8 } }],
+      series: [
+        { type: 'bar', name: 'RankIC', data: (s.rank_ic || []).map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#10b981' : '#ef4444' } })), barWidth: '60%' },
+        { type: 'line', name: '累计IC', data: s.cum_ic || [], yAxisIndex: 1, showSymbol: false, lineStyle: { width: 1.5, color: '#2080f0' } },
+      ],
+    })
+  }
+  // 分层净值 + 多空
+  if (layerChart.value) {
+    layerChartInst?.dispose()
+    layerChartInst = echarts.init(layerChart.value)
+    const q = d.q_returns || {}
+    const colors = ['#ef4444', '#f59e0b', '#9ca3af', '#38bdf8', '#10b981']
+    layerChartInst.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { fontSize: 9 }, itemWidth: 12 },
+      grid: { left: 50, right: 14, top: 24, bottom: 22 },
+      xAxis: { type: 'category', data: q.dates || [], axisLabel: { fontSize: 8, interval: Math.max(1, Math.floor((q.dates?.length || 1) / 5)) } },
+      yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 8 } },
+      series: [
+        ...(q.navs ? Object.keys(q.navs).sort((a, b) => a - b).map((k, i) => ({
+          type: 'line', name: i === 0 ? `Q1最低` : i === Object.keys(q.navs).length - 1 ? `Q${i + 1}最高` : `Q${i + 1}`,
+          data: q.navs[k], showSymbol: false, lineStyle: { width: 1.2, color: colors[i % 5] },
+        })) : []),
+        { type: 'line', name: '多空Q高-Q低', data: q.ls_nav || [], showSymbol: false, lineStyle: { width: 2, type: 'dashed', color: '#a855f7' } },
+      ],
+    })
+  }
+  // 衰减：各 horizon 最近一次 rank_ic
+  if (decayChart.value) {
+    decayChartInst?.dispose()
+    decayChartInst = echarts.init(decayChart.value)
+    const latest = {}
+    for (const rec of icRecords.value) {
+      if (latest[rec.horizon] === undefined) latest[rec.horizon] = rec.rank_ic
+    }
+    const hs = Object.keys(latest).sort((a, b) => a - b)
+    decayChartInst.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: 50, right: 14, top: 14, bottom: 22 },
+      xAxis: { type: 'category', data: hs.map(h => h + '日'), axisLabel: { fontSize: 9 } },
+      yAxis: { type: 'value', axisLabel: { fontSize: 8 } },
+      series: [{
+        type: 'bar', barWidth: '40%',
+        data: hs.map(h => ({ value: latest[h], itemStyle: { color: latest[h] >= 0 ? '#10b981' : '#ef4444' } })),
+        label: { show: true, position: 'top', fontSize: 9, formatter: p => p.value?.toFixed(4) },
+      }],
+    })
+  }
+}
+
+const icHistoryCols = [
+  { title: '前瞻', key: 'horizon', width: 56, render: r => r.horizon + '日' },
+  { title: '区间', key: 'val_start', width: 150, render: r => `${r.val_start} ~ ${r.val_end}` },
+  { title: 'RankIC', key: 'rank_ic', width: 76, render: r => r.rank_ic?.toFixed(4) ?? '—' },
+  { title: 'ICIR', key: 'icir', width: 70, render: r => r.icir?.toFixed(3) ?? '—' },
+  { title: 'IC>0', key: 'win_rate', width: 60, render: r => r.win_rate != null ? (r.win_rate * 100).toFixed(0) + '%' : '—' },
+  { title: 't', key: 't_stat', width: 56, render: r => r.t_stat?.toFixed(1) ?? '—' },
+  { title: '方向', key: 'direction', width: 50 },
+  { title: '样本', key: 'sample_days', width: 56, align: 'right' },
+  { title: '检验时间', key: 'created_at', width: 140, render: r => (r.created_at || '').slice(0, 16) },
+]
+
+function icRowProps(row) {
+  return {
+    style: { cursor: 'pointer', background: row.horizon === icHorizon.value ? 'var(--c-hover-bg, rgba(32,128,240,.06))' : '' },
+    onClick: () => { icHorizon.value = row.horizon; loadIcDetail() },
+  }
+}
+
+async function startIcCompute() {
+  icSubmitting.value = true
+  try {
+    const r = await axios.post(API + `/api/features/${props.featureId}/ic`, {
+      val_start: icForm.value.val_start, val_end: icForm.value.val_end,
+      horizons: icForm.value.horizons,
+    }, { headers: authHeaders() })
+    // 轮询任务
+    const taskId = r.data.task_id
+    const poll = setInterval(async () => {
+      try {
+        const tr = await axios.get(API + `/api/features/${props.featureId}/ic/task/${taskId}`, { headers: authHeaders() })
+        icTask.value = tr.data
+        if (tr.data.status === 'completed' || tr.data.status === 'failed') {
+          clearInterval(poll)
+          if (tr.data.status === 'completed') {
+            message.success('IC 检验完成')
+            await loadIcAll()
+          }
+        }
+      } catch (e) { clearInterval(poll) }
+    }, 3000)
+  } catch (e) {
+    message.error(e.response?.data?.detail || '启动失败')
+  } finally {
+    icSubmitting.value = false
+  }
+}
+
+async function doSetIcStatus(status) {
+  try {
+    await axios.put(API + `/api/features/${props.featureId}/ic-status`, { status }, { headers: authHeaders() })
+    feat.value.ic_status = status
+    message.success('决策已保存：' + (icStatusMap[status] || status))
+  } catch (e) {
+    message.error(e.response?.data?.detail || '保存失败')
+  }
+}
+
 
 // 数据预览
 const previewCode = ref('')

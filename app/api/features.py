@@ -103,6 +103,7 @@ def check_cycle(db, feature_name: str, depends_on: List[str]) -> Optional[List[s
 def list_features(
     entity: Optional[str] = Query(None, description="目标实体筛选: stock/etf/index/global"),
     status: Optional[str] = Query(None, description="状态筛选: draft/enabled/pending_recalc/deprecated/data_anomaly"),
+    ic_status: Optional[str] = Query(None, description="IC 决策筛选: candidate/included/excluded"),
     search: Optional[str] = Query(None, description="模糊搜索特征英文名/中文名"),
     page: int = 1,
     page_size: int = 20,
@@ -119,6 +120,9 @@ def list_features(
         if status and status != "all":
             where.append("status = :st")
             params["st"] = status
+        if ic_status and ic_status != "all":
+            where.append("COALESCE(ic_status,'candidate') = :icst")
+            params["icst"] = ic_status
         if search:
             where.append("(feature_name ILIKE :s OR display_name ILIKE :s)")
             params["s"] = f"%{search}%"
@@ -129,7 +133,7 @@ def list_features(
                    depends_on, feature_group, tags, status,
                    total_effective_cells, missing_cells_total, abnormal_missing_cells,
                    data_completeness, latest_computed_date, data_anomaly_reason,
-                   created_at, updated_at
+                   created_at, updated_at, COALESCE(ic_status,'candidate')
             FROM features WHERE {' AND '.join(where)}
             ORDER BY created_at DESC
             LIMIT :lim OFFSET :off
@@ -162,6 +166,7 @@ def list_features(
                 "data_anomaly_reason": r[15],
                 "created_at": str(r[16])[:19] if r[16] else None,
                 "updated_at": str(r[17])[:19] if r[17] else None,
+                "ic_status": r[18],
             })
         db.close()
         return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -342,6 +347,49 @@ def get_dependency_graph():
         raise HTTPException(500, str(e))
 
 
+# ── 因子 IC 体检（board 必须声明在 /{feature_id} 之前，否则被 int 路径参数吞掉）──
+
+@router.get("/ic/board")
+def ic_board(horizon: int = Query(10, ge=1, le=250), user: str = Depends(get_current_user)):
+    """因子 IC 排行板：每个因子取该 horizon 最近一次检验结果 + 红绿灯 + 决策状态。"""
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (f.feature_name)
+                   f.id, f.feature_name, f.display_name, f.status, f.ic_status,
+                   f.target_entity, s.horizon, s.rank_ic_mean, s.rank_ic_ir, s.ic_win_rate,
+                   s.t_stat, s.direction, s.sample_days, s.avg_names, s.traffic,
+                   s.val_start, s.val_end, s.created_at
+            FROM features f
+            LEFT JOIN factor_ic_stats s
+              ON s.feature_name = f.feature_name AND s.horizon = :h
+            WHERE f.target_entity = 'stock'
+            ORDER BY f.feature_name, s.created_at DESC NULLS LAST
+        """), {"h": horizon}).fetchall()
+        db.close()
+        board = []
+        for r in rows:
+            board.append({
+                'feature_id': r[0], 'feature_name': r[1], 'display_name': r[2],
+                'feature_status': r[3], 'ic_status': r[4] or 'candidate',
+                'horizon': r[6], 'rank_ic': float(r[7]) if r[7] is not None else None,
+                'icir': float(r[8]) if r[8] is not None else None,
+                'win_rate': float(r[9]) if r[9] is not None else None,
+                't_stat': float(r[10]) if r[10] is not None else None,
+                'direction': r[11], 'sample_days': r[12],
+                'avg_names': float(r[13]) if r[13] is not None else None,
+                'traffic': r[14], 'val_start': str(r[15]) if r[15] else None,
+                'val_end': str(r[16]) if r[16] else None,
+                'computed_at': str(r[17]) if r[17] else None,
+            })
+        board.sort(key=lambda x: (abs(x['icir'] or 0)), reverse=True)
+        return {"horizon": horizon, "board": board}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
 
 @router.get("/{feature_id}")
 def get_feature(feature_id: int):
@@ -354,7 +402,7 @@ def get_feature(feature_id: int):
                    depends_on, feature_group, tags, status,
                    total_effective_cells, missing_cells_total, abnormal_missing_cells,
                    data_completeness, latest_computed_date, data_anomaly_reason,
-                   created_at, updated_at
+                   created_at, updated_at, ic_status, ic_decided_at
             FROM features WHERE id = :id
         """), {"id": feature_id}).fetchone()
         if not r:
@@ -396,6 +444,8 @@ def get_feature(feature_id: int):
             "data_anomaly_reason": r[15],
             "created_at": str(r[16])[:19] if r[16] else None,
             "updated_at": str(r[17])[:19] if r[17] else None,
+            "ic_status": r[18] or 'candidate',
+            "ic_decided_at": str(r[19])[:19] if r[19] else None,
         }
     except HTTPException:
         db.close()
@@ -1296,6 +1346,183 @@ def check_stats_integrity(user: str = Depends(get_current_user)):
         db.commit()
         db.close()
         return {"ok": True, "checked": len(rows), "fixed": len(fixed), "names": fixed}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+# ── 因子 IC 检验（任务模式与 compute-range 一致：后台线程 + 轮询）──
+
+from sqlalchemy import text as _ic_text
+
+_ic_tasks: dict = {}
+_ic_lock = _threading.Lock()
+
+
+class IcRequestBody(BaseModel):
+    val_start: str = ""          # 空 → 默认近 3 年
+    val_end: str = ""            # 空 → 今天
+    horizons: List[int] = Field(default=[1, 5, 10, 20])
+    layers: int = Field(default=5, ge=2, le=10)
+
+
+def _run_ic(task_id, feature_id, feature_name, body: dict):
+    from scripts.factor_ic import compute_factor_ic
+    from loguru import logger as _log
+    try:
+        db = get_sync_db()
+        results = compute_factor_ic(db, feature_name, body['val_start'], body['val_end'],
+                                    horizons=body['horizons'], layers=body['layers'])
+        db.close()
+        errs = [r for r in results if 'error' in r]
+        with _ic_lock:
+            _ic_tasks[task_id].update({
+                'status': 'completed', 'completed_at': _time.time(),
+                'results': results, 'failed': errs,
+            })
+    except Exception as e:
+        _log.error(f"[ic] {feature_name} 检验失败: {e}")
+        with _ic_lock:
+            _ic_tasks[task_id].update({'status': 'failed', 'error': str(e)[:300],
+                                       'completed_at': _time.time()})
+
+
+@router.post("/{feature_id}/ic")
+def start_feature_ic(feature_id: int, body: IcRequestBody, user: str = Depends(get_current_user)):
+    """启动单因子 IC 检验（默认近 3 年，1/5/10/20 前瞻）。"""
+    from datetime import timedelta as _td2
+    db = get_sync_db()
+    try:
+        feat = db.execute(_ic_text(
+            "SELECT feature_name, target_entity, status, latest_computed_date FROM features WHERE id=:id"
+        ), {"id": feature_id}).fetchone()
+        db.close()
+        if not feat:
+            raise HTTPException(404, "特征不存在")
+        if feat[1] != 'stock':
+            raise HTTPException(400, f"仅支持 stock 实体因子检验（当前 {feat[1]}）")
+
+        val_end = body.val_end or str(_date.today())[:10]
+        if body.val_start:
+            val_start = body.val_start
+        else:
+            # 区间右端不超过特征实际数据日期，避免大量空尾部截面
+            data_end = str(feat[3])[:10] if feat[3] else val_end
+            eff_end = min(val_end, data_end)
+            val_start = (_date.fromisoformat(eff_end) - _td2(days=3 * 365)).isoformat()
+            val_end = eff_end
+
+        task_id = str(uuid.uuid4())[:8]
+        with _ic_lock:
+            _ic_tasks[task_id] = {
+                'status': 'running', 'feature_id': feature_id, 'feature_name': feat[0],
+                'val_start': val_start, 'val_end': val_end, 'horizons': body.horizons,
+                'started_at': _time.time(),
+            }
+        thread = _threading.Thread(target=_run_ic, args=(
+            task_id, feature_id, feat[0],
+            {'val_start': val_start, 'val_end': val_end,
+             'horizons': body.horizons, 'layers': body.layers},
+        ), daemon=True)
+        thread.start()
+        from app.signal import wake_dag_broadcast
+        wake_dag_broadcast()
+        return {"ok": True, "task_id": task_id, "feature_name": feat[0],
+                "val_start": val_start, "val_end": val_end, "status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close() if not db.closed else None
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{feature_id}/ic/task/{task_id}")
+def get_ic_task(feature_id: int, task_id: str, user: str = Depends(get_current_user)):
+    """IC 检验任务状态轮询。"""
+    with _ic_lock:
+        t = _ic_tasks.get(task_id)
+        if not t or t.get('feature_id') != feature_id:
+            raise HTTPException(404, "任务不存在")
+        return dict(t)
+
+
+@router.get("/{feature_id}/ic")
+def get_feature_ic(feature_id: int, horizon: int = Query(None, ge=1, le=250),
+                   detail: bool = Query(False), user: str = Depends(get_current_user)):
+    """该因子历次 IC 检验记录；detail=true 且指定 horizon 时返回画图数据（ic_series/q_returns）。"""
+    db = get_sync_db()
+    try:
+        name = db.execute(_ic_text("SELECT feature_name FROM features WHERE id=:id"),
+                          {"id": feature_id}).fetchone()
+        if not name:
+            raise HTTPException(404, "特征不存在")
+        fname = name[0]
+        if detail and horizon:
+            row = db.execute(_ic_text("""
+                SELECT * FROM factor_ic_stats
+                WHERE feature_name=:fn AND horizon=:h
+                ORDER BY created_at DESC LIMIT 1
+            """), {"fn": fname, "h": horizon}).fetchone()
+            db.close()
+            if not row:
+                raise HTTPException(404, "无检验记录")
+            cols = row._mapping.keys()
+            d = {k: (str(v) if isinstance(v, _date) else v) for k, v in zip(cols, row)}
+            d['id'] = row[0]
+            # psycopg2 对 JSONB 自动解码为 dict，兼容 str/dict 两种返回
+            d['ic_series'] = json.loads(d['ic_series']) if isinstance(d.get('ic_series'), str) else d.get('ic_series')
+            d['q_returns'] = json.loads(d['q_returns']) if isinstance(d.get('q_returns'), str) else d.get('q_returns')
+            return d
+        rows = db.execute(_ic_text("""
+            SELECT id, horizon, val_start, val_end, sample_days, avg_names,
+                   ic_mean, rank_ic_mean, ic_ir, rank_ic_ir, ic_win_rate, t_stat,
+                   direction, created_at
+            FROM factor_ic_stats WHERE feature_name=:fn
+            ORDER BY horizon, created_at DESC
+        """), {"fn": fname}).fetchall()
+        db.close()
+        out = []
+        for r in rows:
+            out.append({
+                'id': r[0], 'horizon': r[1], 'val_start': str(r[2]), 'val_end': str(r[3]),
+                'sample_days': r[4], 'avg_names': float(r[5]) if r[5] is not None else None,
+                'ic_mean': float(r[6]) if r[6] is not None else None,
+                'rank_ic': float(r[7]) if r[7] is not None else None,
+                'icir': float(r[8]) if r[8] is not None else None,
+                'rank_ic_ir': float(r[9]) if r[9] is not None else None,
+                'win_rate': float(r[10]) if r[10] is not None else None,
+                't_stat': float(r[11]) if r[11] is not None else None,
+                'direction': r[12], 'created_at': str(r[13]),
+            })
+        return {"feature_name": fname, "records": out}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+class IcStatusBody(BaseModel):
+    status: str = Field(..., pattern="^(candidate|included|excluded)$")
+
+
+@router.put("/{feature_id}/ic-status")
+def set_ic_status(feature_id: int, body: IcStatusBody, user: str = Depends(get_current_user)):
+    """用户决策：纳入/剔除/恢复候选（重算 IC 不覆盖本字段）。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(_ic_text("""
+            UPDATE features SET ic_status=:s, ic_decided_at=CURRENT_TIMESTAMP,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=:id RETURNING feature_name, ic_status
+        """), {"s": body.status, "id": feature_id}).fetchone()
+        db.commit()
+        db.close()
+        if not r:
+            raise HTTPException(404, "特征不存在")
+        return {"ok": True, "feature_name": r[0], "ic_status": r[1]}
+    except HTTPException:
+        raise
     except Exception as e:
         db.close()
         raise HTTPException(500, str(e))

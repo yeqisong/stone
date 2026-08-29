@@ -11,6 +11,7 @@
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <n-select v-model:value="filterEntity" :options="entityOptions" size="small" style="width:110px" placeholder="实体" clearable @update:value="loadData" />
     <n-select v-model:value="filterStatus" :options="statusOptions" size="small" style="width:130px" placeholder="状态" clearable @update:value="loadData" />
+    <n-select v-model:value="filterIcStatus" :options="icStatusOptions" size="small" style="width:130px" placeholder="IC 决策" clearable @update:value="loadData" />
     <n-input v-model:value="searchText" size="small" style="width:180px" placeholder="搜索名称" clearable @keyup.enter="loadData" />
     <n-button size="small" @click="loadData">查询</n-button>
   </div>
@@ -230,7 +231,29 @@ const page = ref(1)
 const PAGE_SIZE = 20
 const filterEntity = ref(null)
 const filterStatus = ref(null)
+const filterIcStatus = ref(null)
 const searchText = ref('')
+
+const icStatusOptions = [
+  { label:'全部决策', value:'all' },
+  { label:'已入选', value:'included' },
+  { label:'候选', value:'candidate' },
+  { label:'已剔除', value:'excluded' },
+]
+// IC 排行板数据（horizon=10 最新一次），按 feature_name 合并进列表行
+const icBoardMap = ref({})
+
+async function loadIcBoard() {
+  try {
+    const r = await axios.get(API + '/api/features/ic/board', { params: { horizon: 10 } })
+    const m = {}
+    for (const b of (r.data.board || [])) m[b.feature_name] = b
+    icBoardMap.value = m
+  } catch (e) { console.error(e) }
+}
+
+const trafficDot = { green:'🟢', yellow:'🟡', red:'🔴' }
+const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'success' }, excluded:{ label:'已剔除', type:'error' } }
 
 const showCreate = ref(false)
 const editId = ref(null)
@@ -549,6 +572,21 @@ const columns = [
         [h('div', { style:{width:pct+'%',height:'100%',background:color,borderRadius:'3px'} })])
     ])
   }},
+  { title:'IC 体检', key:'ic', width:150, render(row) {
+    const b = icBoardMap.value[row.feature_name]
+    if (row.target_entity !== 'stock') return h('span', { style:{color:'var(--c-text-faint)',fontSize:'11px'} }, '—')
+    if (!b || b.rank_ic == null) return h('span', { style:{color:'var(--c-text-faint)',fontSize:'11px'} }, '○ 未检验')
+    return h('div', { style:{display:'flex',alignItems:'center',gap:'6px'} }, [
+      h('span', { style:{fontSize:'11px'} }, trafficDot[b.traffic] || '○'),
+      h('span', { style:{fontSize:'11px',color:'var(--c-text)'} }, (b.rank_ic>=0?'+':'') + b.rank_ic.toFixed(4)),
+      h('span', { style:{fontSize:'10px',color:'var(--c-text-dim)'} }, 'IR ' + (b.icir>=0?'+':'') + (b.icir??0).toFixed(2)),
+      b.direction === '-' ? h('span', { style:{fontSize:'10px',color:'#f59e0b'} }, '↩') : null,
+    ])
+  }},
+  { title:'决策', key:'ic_status', width:74, render(row) {
+    const s = icStatusTagMap[row.ic_status || 'candidate']
+    return h(NTag, { type:s.type, size:'tiny', bordered:false }, () => s.label)
+  }},
   { title:'异常缺失', key:'abnormal_missing_cells', width:70, align:'right', render:(row) => (row.abnormal_missing_cells||0).toLocaleString() },
   { title:'最近计算', key:'latest_computed_date', width:90, render:(row) => row.latest_computed_date || '—' },
   { title:'依赖数', key:'depends_on', width:60, align:'center', render:(row) => (row.depends_on?.length || 0) },
@@ -573,6 +611,7 @@ async function loadData() {
     const params = { page: page.value, page_size: PAGE_SIZE }
     if (filterEntity.value && filterEntity.value !== 'all') params.entity = filterEntity.value
     if (filterStatus.value && filterStatus.value !== 'all') params.status = filterStatus.value
+    if (filterIcStatus.value && filterIcStatus.value !== 'all') params.ic_status = filterIcStatus.value
     if (searchText.value) params.search = searchText.value
     const r = await axios.get(API + '/api/features', { params })
     items.value = r.data.items || []
@@ -608,6 +647,7 @@ function parseHashParams() {
 
 onMounted(() => {
   parseHashParams()
+  loadIcBoard()
   loadData().then(() => {
     const editId = nav.pendingEditFeatureId
     if (editId) {

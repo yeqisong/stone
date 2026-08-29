@@ -135,8 +135,11 @@
           <n-space>
             <n-tag v-for="f in featureOptions" :key="f.key"
               :type="createForm.feature_names.includes(f.key)?'info':'default'"
-              style="cursor:pointer" @click="toggleFeature(f.key)" :bordered="false" size="small">{{f.label}}</n-tag>
+              :style="{cursor:'pointer', opacity: f.ic_status==='excluded'?0.55:1,
+                       border: f.ic_status==='excluded' ? '1px dashed #ef4444' : (f.traffic==='green' ? '1px solid #10b981' : (f.traffic==='yellow' ? '1px solid #f59e0b' : 'none'))}"
+              @click="toggleFeature(f.key)" :bordered="false" size="small">{{ f.traffic==='green'?'🟢':f.traffic==='yellow'?'🟡':f.traffic==='red'?'🔴':'' }}{{f.label}}{{ f.direction==='-'?'↩':'' }}</n-tag>
           </n-space>
+          <div style="font-size:10px;color:var(--c-text-faint)">🟢/🟡/🔴 = IC 体检灯（10日前瞻）；↩ = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
           <n-divider style="margin:4px 0">训练参数</n-divider>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">Optuna</span><n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="flex:1" size="small" /></div>
@@ -336,12 +339,28 @@ function switchEntity(e) {
 const featureOptions = ref([])
 async function loadFeatureOptions() {
   try {
-    const r = await axios.get(window.location.origin + '/api/features', {
-      params: { entity: currentEntity.value, status: 'enabled', page_size: 200 }
+    const [fr, br] = await Promise.all([
+      axios.get(window.location.origin + '/api/features', {
+        params: { entity: currentEntity.value, status: 'enabled', page_size: 200 }
+      }),
+      axios.get(window.location.origin + '/api/features/ic/board', { params: { horizon: 10 } }).catch(() => null),
+    ])
+    const boardMap = {}
+    for (const b of (br?.data?.board || [])) boardMap[b.feature_name] = b
+    featureOptions.value = (fr.data.items || []).map(f => {
+      const b = boardMap[f.feature_name] || {}
+      return {
+        key: f.feature_name, label: f.feature_name, display: f.display_name, completeness: f.data_completeness,
+        traffic: b.traffic, direction: b.direction, ic_status: f.ic_status || 'candidate',
+      }
+    }).sort((a, b) => {
+      const order = { included: 0, candidate: 1, excluded: 2 }
+      return (order[a.ic_status] ?? 1) - (order[b.ic_status] ?? 1)
     })
-    featureOptions.value = (r.data.items || []).map(f => ({
-      key: f.feature_name, label: f.feature_name, display: f.display_name, completeness: f.data_completeness
-    }))
+    // 新建模式：预勾选 IC 入选因子（编辑模式以模型已配置为准）
+    if (!editMode.value) {
+      createForm.feature_names = featureOptions.value.filter(f => f.ic_status === 'included').map(f => f.key)
+    }
   } catch(e) { console.error(e) }
 }
 loadFeatureOptions()

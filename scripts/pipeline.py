@@ -2378,6 +2378,46 @@ def dag_task_stock_master(trade_date=None, **kw):
         raise
 
 
+def dag_task_factor_ic(trade_date=None, **kw):
+    """factor_ic 节点 — 已发布 stock 特征批量重算 IC（默认近 3 年，1/5/10/20 前瞻）。
+
+    只刷新 factor_ic_stats 数据，不覆盖 features.ic_status 用户决策。
+    """
+    from datetime import date as _date, timedelta as _td
+    from app.db.connection import get_sync_db
+    from scripts.factor_ic import compute_factor_ic
+
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('factor_ic')
+    write_node_log(log_id=log_id, status='running', detail='批量因子 IC 检验…')
+    try:
+        db = get_sync_db()
+        val_end = str(trade_date or _date.today())[:10]
+        val_start = (_date.fromisoformat(val_end) - _td(days=3 * 365)).isoformat()
+        feats = db.execute(text(
+            "SELECT feature_name FROM features WHERE status='enabled' "
+            "AND target_entity='stock' ORDER BY feature_name"
+        )).fetchall()
+        ok, fail = 0, []
+        for (fn,) in feats:
+            try:
+                compute_factor_ic(db, fn, val_start, val_end)
+                ok += 1
+            except Exception as e:
+                db.rollback()
+                fail.append(f'{fn}: {str(e)[:80]}')
+                logger.warning(f'[factor_ic] {fn} 检验失败: {e}')
+        db.close()
+        detail = f'{ok}/{len(feats)} 个因子完成（{val_start}~{val_end}）'
+        if fail:
+            detail += '；失败: ' + '、'.join(fail[:5])
+        write_node_log(log_id=log_id, status='success', detail=detail)
+        return True
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
+        raise
+
+
 NODE_FN_MAP = {
     'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
     'kline':              dag_task_kline,
@@ -2392,4 +2432,5 @@ NODE_FN_MAP = {
     'feature_compute':    dag_task_feature_compute,
     'feature_backfill':  dag_task_feature_backfill,
     'entity_stats':      dag_task_entity_stats,
+    'factor_ic':         dag_task_factor_ic,
 }

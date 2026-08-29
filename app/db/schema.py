@@ -732,6 +732,33 @@ CREATE TABLE IF NOT EXISTS tushare_quota (
 );
 """
 
+# ── 因子 IC 检验留档（特征页 IC 体检；决策在 features.ic_status，重算不覆盖）──
+
+CREATE_FACTOR_IC_STATS = """
+CREATE TABLE IF NOT EXISTS factor_ic_stats (
+    id            BIGSERIAL PRIMARY KEY,
+    feature_name  VARCHAR(64) NOT NULL,
+    horizon       INT NOT NULL,               -- 前瞻天数 1/5/10/20
+    val_start     DATE NOT NULL,
+    val_end       DATE NOT NULL,
+    sample_days   INT,                        -- 有效截面天数
+    avg_names     REAL,                       -- 平均每日截面股票数
+    ic_mean       DECIMAL(8,4),               -- Pearson IC
+    rank_ic_mean  DECIMAL(8,4),               -- RankIC（主指标）
+    ic_ir         DECIMAL(8,4),
+    rank_ic_ir    DECIMAL(8,4),
+    ic_win_rate   DECIMAL(5,4),               -- IC>0 占比
+    t_stat        DECIMAL(8,4),
+    direction     VARCHAR(4),                 -- '+' 正向 / '-' 反向因子
+    traffic       VARCHAR(8),                 -- green/yellow/red（写入时按阈值计算）
+    ic_series     JSONB,                      -- 日度 IC 序列（画图）
+    q_returns     JSONB,                      -- 分层净值 + 多空（画图）
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (feature_name, horizon, val_start, val_end)
+);
+CREATE INDEX IF NOT EXISTS idx_fic_name ON factor_ic_stats (feature_name, horizon, created_at DESC);
+"""
+
 # ── 顺序很重要（满足外键/依赖）──
 
 ALL_TABLES = [
@@ -761,6 +788,7 @@ ALL_TABLES = [
     ("version_comparisons", CREATE_MODEL_COMPARISONS),
     ("model_health", CREATE_MODEL_HEALTH),
     ("features", CREATE_FEATURES),
+    ("factor_ic_stats", CREATE_FACTOR_IC_STATS),
     ("backtest_records", CREATE_BACKTEST_RECORDS),
     ("backtest_trades", CREATE_BACKTEST_TRADES),
     ("download_history", CREATE_DOWNLOAD_HISTORY),
@@ -892,6 +920,33 @@ def init_db(sync_session) -> None:
             INSERT INTO dag_config (node_name, deps, label, sort_order)
             VALUES ('entity_stats', 'kline', '实体统计', 55)
             ON CONFLICT (node_name) DO NOTHING
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：特征 IC 检验（v3.4）——features 决策列 + dag_config 批量节点
+    try:
+        sync_session.execute(text("ALTER TABLE factor_ic_stats ADD COLUMN IF NOT EXISTS traffic VARCHAR(8)"))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+    for col, col_type in [
+        ('ic_status', "VARCHAR(16) DEFAULT 'candidate'"),  # candidate/included/excluded（用户决策，重算不覆盖）
+        ('ic_decided_at', 'TIMESTAMP'),
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE features ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+    try:
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('factor_ic', 'stats', '因子IC体检', 56)
+            ON CONFLICT (node_name) DO NOTHING
+        """))
+        sync_session.execute(text("""
+            UPDATE features SET ic_status = 'candidate' WHERE ic_status IS NULL
         """))
         sync_session.commit()
     except Exception:
