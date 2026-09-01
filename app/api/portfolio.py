@@ -36,12 +36,10 @@ def get_portfolio():
             p.quantity, p.cost_price,
             p.created_at, p.updated_at, p.notes,
             COALESCE(
-                (SELECT dq.close_hfq FROM daily_quote dq
-                 WHERE dq.stock_code = p.stock_code
-                 ORDER BY dq.trade_date DESC LIMIT 1),
                 (SELECT dq.close FROM daily_quote dq
-                 WHERE dq.stock_code = p.stock_code
-                 ORDER BY dq.trade_date DESC LIMIT 1)
+                 WHERE dq.stock_code = p.stock_code AND dq.close > 0
+                 ORDER BY dq.trade_date DESC LIMIT 1),
+                p.cost_price
             ) AS current_price,
             (SELECT sh.direction FROM signal_history sh
              WHERE sh.stock_code = p.stock_code

@@ -4,6 +4,10 @@ import pandas as pd
 import pytest
 
 from scripts.pipeline import cs_rank_features, index_forward_return
+from strategy.backtest.account import Account
+from strategy.backtest.engine import run_backtest
+from strategy.backtest.models import Position, TradeConfig
+from strategy.strategy import SignalStrategy
 
 
 def _mk_df():
@@ -141,69 +145,112 @@ class TestWalkForward:
         assert v == 'NO_BASELINE'
 
 
-class TestPaperDayStep:
-    """纸面组合单日步进纯函数（影子运行核心）。"""
+class TestPaperKernel:
+    """纸面组合内核（v2 引擎 + 种子账户续跑，dag_task_paper_portfolio 同路径）。
+
+    paper 单日步进 = 引擎单日运行：行情切片（含前一交易日供涨跌停标记）+ 信号强度作分数
+    + same_day_budget 预算口径 + settle_delay=False / downsize_buy=False（旧 paper 口径）。
+    """
 
     def _cfg(self):
-        return {'max_positions': 2, 'stop_loss': 0.05, 'take_profit': 0.10,
-                'trailing': 0.05, 'hold_days': 10, 'comm': 0.00025, 'st_tax': 0.001, 'slip': 0.001}
+        return TradeConfig(initial_cash=1_000_000, max_positions=2, stop_loss=0.05,
+                           take_profit=0.10, trailing=0.05, hold_days=10,
+                           comm=0.00025, st_tax=0.001, slip=0.001, min_cost=0.0,
+                           settle_delay=False, forbid_all_trade_at_limit=False,
+                           downsize_buy=False)
+
+    def _seed(self, cash, pos=None):
+        """从 paper_positions 状态构建种子账户。"""
+        acct = Account(self._cfg())
+        acct.cash = cash
+        for code, p in (pos or {}).items():
+            acct.positions[code] = Position(code=code, shares=p['shares'], buy_price=p['buy_price'],
+                                            buy_date=p['buy_date'], cost_basis=p['cost_basis'],
+                                            peak=p.get('peak') or p['buy_price'])
+        return acct
+
+    def _step(self, acct, rows, scores):
+        """单日步进：rows=[(date, code, close)]（可含前一日），scores 与行对齐。"""
+        df = pd.DataFrame(rows, columns=['trade_date', 'stock_code', 'close'])
+        df = df.sort_values(['trade_date', 'stock_code'], kind='stable').reset_index(drop=True)
+        pred = pd.Series(scores, index=df.index)
+        td = rows[-1][0]
+        return run_backtest(df, pred, SignalStrategy(self._cfg(), same_day_budget=True),
+                            self._cfg(), val_start=td, val_end=td, account=acct)
 
     def _pos(self, code='A', shares=10000, buy=10.0, buy_date='2026-01-05', peak=None):
         return {code: {'shares': shares, 'buy_price': buy, 'cost_basis': shares * buy,
                        'buy_date': buy_date, 'peak': peak or buy, 'signal_id': 1, 'stock_name': code}}
 
     def test_buy_and_t1(self):
-        """空仓买入 → 买入当日不触发卖出检查（T+1）。"""
-        from scripts.pipeline import paper_day_step
-        cash, pos, trades, eq = paper_day_step(
-            1_000_000, {}, [{'stock_code': 'A', 'strength': 3}],
-            {'A': 10.0}, self._cfg(), '2026-01-05')
-        assert len(trades) == 1 and trades[0]['action'] == 'BUY'
-        assert pos['A']['shares'] == 49900  # 预算 50万 ÷ 10.005 → 49900 股
-        # 次日暴跌超止损：因买入日=td 的 T+1 已过 → 正常止损
-        cash2, pos2, tr2, _ = paper_day_step(cash, pos, [], {'A': 9.0}, self._cfg(), '2026-01-06')
-        assert tr2[0]['action'] == 'SELL' and tr2[0]['reason'] == 'stop_loss'
-        assert 'A' not in pos2
+        """空仓买入 → 买入当日不触发卖出检查（T+1）；次日种子续跑正常止损。"""
+        r1 = self._step(self._seed(1_000_000), [('2026-01-05', 'A', 10.0)], [3.0])
+        assert len(r1.trades) == 1 and r1.trades[0]['action'] == 'BUY'
+        assert r1.trades[0]['shares'] == 49900  # 预算 50万 ÷ 10.005 → 49900 股
+        r2 = self._step(r1.final_account, [('2026-01-06', 'A', 9.0)], [float('nan')])
+        assert r2.trades[0]['action'] == 'SELL' and r2.trades[0]['reason'] == 'stop_loss'
+        assert 'A' not in r2.final_account.positions
+
+    def test_resume_equals_full_run(self):
+        """分日种子续跑与整段连续运行终态完全一致（纸面恢复状态正确性）。"""
+        dates = ['2026-01-05', '2026-01-06', '2026-01-07']
+        rows = [('2026-01-05', 'A', 10.0), ('2026-01-06', 'A', 9.4), ('2026-01-07', 'A', 9.8),
+                ('2026-01-05', 'B', 20.0), ('2026-01-06', 'B', 20.1), ('2026-01-07', 'B', 20.2)]
+        score_map = {('2026-01-05', 'A'): 3.0, ('2026-01-05', 'B'): 1.0}
+        # 整段连续运行
+        df = pd.DataFrame(rows, columns=['trade_date', 'stock_code', 'close'])
+        df = df.sort_values(['trade_date', 'stock_code'], kind='stable').reset_index(drop=True)
+        pred = pd.Series([score_map.get((d, c), float('nan')) for d, c in
+                          zip(df['trade_date'], df['stock_code'])], index=df.index)
+        full = run_backtest(df, pred, SignalStrategy(self._cfg(), same_day_budget=True),
+                            self._cfg(), val_start='2026-01-05', val_end='2026-01-07')
+        # 分日种子续跑（单日步进含前一日行供涨跌停标记）
+        acct = self._seed(1_000_000)
+        for i, td in enumerate(dates):
+            day_rows = [r for r in rows if r[0] == td or (i > 0 and r[0] == dates[i - 1])]
+            day_scores = [score_map.get((r[0], r[1]), float('nan')) for r in day_rows]
+            r = self._step(acct, day_rows, day_scores)
+            acct = r.final_account
+        assert abs(acct.cash - full.final_account.cash) < 1e-6
+        assert set(acct.positions) == set(full.final_account.positions)
 
     def test_stop_loss_at_trigger_price(self):
-        from scripts.pipeline import paper_day_step
-        pos = self._pos(buy=10.0)
-        cash, kept, trades, _ = paper_day_step(500_000, pos, [], {'A': 8.0}, self._cfg(), '2026-01-20')
-        assert trades[0]['reason'] == 'stop_loss'
-        assert trades[0]['price'] == pytest.approx(10.0 * 0.95)  # 按触发价成交
+        acct = self._seed(500_000, self._pos(buy=10.0))
+        r = self._step(acct, [('2026-01-20', 'A', 8.0)], [float('nan')])
+        assert r.trades[0]['reason'] == 'stop_loss'
+        assert r.trades[0]['price'] == pytest.approx(10.0 * 0.95)  # 按触发价成交
 
     def test_take_profit_and_trailing(self):
-        from scripts.pipeline import paper_day_step
         # 止盈
-        _, _, tr1, _ = paper_day_step(500_000, self._pos(buy=10.0), [], {'A': 11.5}, self._cfg(), '2026-01-20')
-        assert tr1[0]['reason'] == 'take_profit'
+        r1 = self._step(self._seed(500_000, self._pos(buy=10.0)),
+                        [('2026-01-20', 'A', 11.5)], [float('nan')])
+        assert r1.trades[0]['reason'] == 'take_profit'
         # trailing：峰值 10.4 回撤到 9.86（−5.2% > 5%，且未触止盈/止损）
-        pos = self._pos(buy=10.0, peak=10.4)
-        _, _, tr2, _ = paper_day_step(500_000, pos, [], {'A': 9.86}, self._cfg(), '2026-01-20')
-        assert tr2[0]['reason'] == 'trailing'
+        r2 = self._step(self._seed(500_000, self._pos(buy=10.0, peak=10.4)),
+                        [('2026-01-20', 'A', 9.86)], [float('nan')])
+        assert r2.trades[0]['reason'] == 'trailing'
 
     def test_limit_down_blocks_sell(self):
-        from scripts.pipeline import paper_day_step
-        _, kept, trades, _ = paper_day_step(500_000, self._pos(buy=10.0), [],
-                                            {'A': 8.0}, self._cfg(), '2026-01-20', limit_down={'A'})
-        assert not trades and 'A' in kept  # 跌停被迫持有
+        """跌停不可卖：前一日 10.0 → 当日 8.0（−20%）触发跌停标记。"""
+        acct = self._seed(500_000, self._pos(buy=10.0))
+        r = self._step(acct, [('2026-01-19', 'A', 10.0), ('2026-01-20', 'A', 8.0)],
+                       [float('nan'), float('nan')])
+        assert not r.trades and 'A' in r.final_account.positions  # 跌停被迫持有
 
     def test_hold_expire(self):
-        from scripts.pipeline import paper_day_step
-        pos = self._pos(buy=10.0, buy_date='2026-01-01')
-        _, _, trades, _ = paper_day_step(500_000, pos, [], {'A': 10.5}, self._cfg(), '2026-01-15')
-        assert trades[0]['reason'] == 'hold_expire'
+        acct = self._seed(500_000, self._pos(buy=10.0, buy_date='2026-01-01'))
+        r = self._step(acct, [('2026-01-15', 'A', 10.5)], [float('nan')])
+        assert r.trades[0]['reason'] == 'hold_expire'
 
     def test_max_positions_and_strength_order(self):
-        from scripts.pipeline import paper_day_step
-        sigs = [{'stock_code': c, 'strength': s} for c, s in [('A', 1), ('B', 3), ('C', 2)]]
-        _, pos, trades, _ = paper_day_step(1_000_000, {}, sigs, {'A': 10, 'B': 10, 'C': 10},
-                                           self._cfg(), '2026-01-05')
-        assert set(pos) == {'B', 'C'}  # max_positions=2，按强度取 B、C
-        assert len([t for t in trades if t['action'] == 'BUY']) == 2
+        """max_positions=2，按信号强度取 B(3)、C(2)。"""
+        rows = [('2026-01-05', 'A', 10.0), ('2026-01-05', 'B', 10.0), ('2026-01-05', 'C', 10.0)]
+        r = self._step(self._seed(1_000_000), rows, [1.0, 3.0, 2.0])
+        buys = [t['stock_code'] for t in r.trades if t['action'] == 'BUY']
+        assert set(buys) == {'B', 'C'}
 
     def test_no_close_keeps_position(self):
-        """停牌（无收盘价）持仓保留。"""
-        from scripts.pipeline import paper_day_step
-        _, kept, trades, _ = paper_day_step(500_000, self._pos(), [], {}, self._cfg(), '2026-01-20')
-        assert 'A' in kept and not trades
+        """停牌（无收盘价行）持仓保留、无成交。"""
+        acct = self._seed(500_000, self._pos())
+        r = self._step(acct, [('2026-01-20', 'B', 20.0)], [float('nan')])
+        assert not r.trades and 'A' in r.final_account.positions

@@ -124,7 +124,31 @@ def list_functions(
     page: int = 1,
     page_size: int = 20,
 ):
-    """函数列表（分页+筛选）。"""
+    """函数列表（分页+筛选）。
+
+    category='builtin_kepl' 返回 KEPL 内置算子目录（单一事实源 /api/kepl/functions 同源，
+    只读展示——实现在 feature_compute 向量化 registry，不落 functions 表避免双实现）。
+    """
+    if category == "builtin_kepl":
+        from app.api.kepl import _OPERATOR_DOCS
+        from app.kepl.parser import TIME_SERIES_FUNCTIONS, CROSS_SECTIONAL_FUNCTIONS
+        items = []
+        for n, doc in sorted(_OPERATOR_DOCS.items()):
+            if search and search.lower() not in (n + doc['desc']).lower():
+                continue
+            items.append({
+                "id": f"op-{n}", "name": n,
+                "display_name": f"KEPL {doc['sig']}",
+                "description": f"{doc['desc']}；例：{doc['eg']}",
+                "category": "time_series" if n in TIME_SERIES_FUNCTIONS else "cross_sectional",
+                "status": "published", "version": None, "avg_runtime_ms": None,
+                "is_builtin": True, "created_at": None, "lookback": None,
+                "parameters": [],
+            })
+        total = len(items)
+        return {"items": items[(page-1)*page_size: page*page_size],
+                "total": total, "page": page, "page_size": page_size}
+
     db = get_sync_db()
     try:
         where = ["1=1"]

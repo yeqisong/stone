@@ -51,22 +51,22 @@
     <!-- Walk-Forward 回测明细 -->
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin-bottom:10px">回测明细（各周期）</div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <div class="etbl-scroll">
+        <table class="etbl">
           <thead>
-            <tr style="color:var(--c-text-dim);text-align:left">
-              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">周期</th>
-              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">夏普</th>
-              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">胜率</th>
-              <th style="padding:6px 10px;border-bottom:1px solid var(--c-border)">模型文件</th>
+            <tr>
+              <th>周期</th>
+              <th>夏普</th>
+              <th>胜率</th>
+              <th>模型文件</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(t, i) in trials" :key="i" style="color:var(--c-text)">
-              <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light);font-weight:600">{{t.train}}</td>
-              <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light);color:#ef4444">{{t.sharpe}}</td>
-              <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light)">{{t.signals}}</td>
-              <td style="padding:5px 10px;border-bottom:1px solid var(--c-border-light);font-size:10px">{{t.test}}</td>
+            <tr v-for="(t, i) in trials" :key="i">
+              <td class="strong">{{t.train}}</td>
+              <td class="pos">{{t.sharpe}}</td>
+              <td>{{t.signals}}</td>
+              <td class="file">{{t.test}}</td>
             </tr>
           </tbody>
         </table>
@@ -76,20 +76,20 @@
     <!-- Optuna 试验记录 -->
     <div v-if="optunaTrials.length" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin-bottom:10px">Optuna 最近试验</div>
-      <div style="overflow-x:auto;max-height:240px;overflow-y:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <div class="etbl-scroll" style="max-height:240px">
+        <table class="etbl">
           <thead>
-            <tr style="color:var(--c-text-dim);text-align:left">
-              <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">#</th>
-              <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">夏普</th>
-              <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">参数</th>
+            <tr>
+              <th class="sticky">#</th>
+              <th class="sticky">夏普</th>
+              <th class="sticky">参数</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="t in optunaTrials" :key="t.no" style="color:var(--c-text)">
-              <td style="padding:3px 8px;border-bottom:1px solid var(--c-border-light)">{{t.no}}</td>
-              <td style="padding:3px 8px;border-bottom:1px solid var(--c-border-light);color:#10b981">{{t.sharpe}}</td>
-              <td style="padding:3px 8px;border-bottom:1px solid var(--c-border-light);font-size:10px">{{t.params}}</td>
+            <tr v-for="t in optunaTrials" :key="t.no">
+              <td>{{t.no}}</td>
+              <td class="good">{{t.sharpe}}</td>
+              <td class="file">{{t.params}}</td>
             </tr>
           </tbody>
         </table>
@@ -102,30 +102,30 @@
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">交易明细（共 {{rep.trade_count||trades.length}} 笔）</div>
         <n-button size="tiny" @click="downloadTrades">⬇ 下载CSV</n-button>
       </div>
-      <div style="overflow-x:auto;max-height:400px;overflow-y:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:10px">
+      <div class="etbl-scroll" style="max-height:400px">
+        <table class="etbl">
           <thead>
-            <tr style="color:var(--c-text-dim);text-align:left;position:sticky;top:0;background:var(--c-card-bg)">
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">#</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">股票</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">操作</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">日期</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">价格</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">股数</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">金额</th>
-              <th style="padding:3px 6px;border-bottom:1px solid var(--c-border)">累计盈亏</th>
+            <tr>
+              <th class="sticky">#</th>
+              <th class="sticky">股票</th>
+              <th class="sticky">操作</th>
+              <th class="sticky">日期</th>
+              <th class="sticky">价格</th>
+              <th class="sticky">股数</th>
+              <th class="sticky">金额</th>
+              <th class="sticky">累计盈亏</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(t, i) in pageTrades" :key="i" style="color:var(--c-text)">
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);color:var(--c-text-faint)">{{t.trade_id}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);font-weight:600">{{t.code}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)" :style="{color:t.action==='BUY'?'#ef4444':'#10b981'}">{{t.action==='BUY'?'买入':'卖出'}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{(t.date||'').slice(5)}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.price?.toFixed(2)}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.shares}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light)">{{t.amount?.toFixed(0)}}</td>
-              <td style="padding:2px 6px;border-bottom:1px solid var(--c-border-light);font-weight:600" :style="{color:(t.cumulative_pnl??0)>=0?'#ef4444':'#10b981'}">
+            <tr v-for="(t, i) in pageTrades" :key="i">
+              <td class="faint">{{t.trade_id}}</td>
+              <td class="strong">{{t.code}}</td>
+              <td :style="{color:t.action==='BUY'?'#ef4444':'#10b981',fontWeight:600}">{{t.action==='BUY'?'买入':'卖出'}}</td>
+              <td>{{(t.date||'').slice(5)}}</td>
+              <td>{{t.price?.toFixed(2)}}</td>
+              <td>{{t.shares}}</td>
+              <td>{{t.amount?.toFixed(0)}}</td>
+              <td :style="{color:(t.cumulative_pnl??0)>=0?'#ef4444':'#10b981'}" class="strong">
                 {{(t.cumulative_pnl??0)>=0?'+':''}}{{(t.cumulative_pnl||0).toFixed(0)}}
                 <span v-if="t.action==='SELL' && t.pnl" style="font-size:9px;color:var(--c-text-faint)">({{t.pnl>=0?'+':''}}{{t.pnl.toFixed(0)}})</span>
               </td>
@@ -146,8 +146,8 @@
         {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `✅ 完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
       </div>
       <div v-if="scanBest" style="margin-top:8px;font-size:11px;color:var(--c-text)">
-        📌 已应用最优：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
-        trailing{{((scanBest.trailing_retracement||0)*100).toFixed(0)}}% —
+        📌 已应用最优<template v-if="scanBest.engine">[{{ scanBest.engine }}]</template>：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
+        trailing{{((scanBest.trailing_retracement||0)*100).toFixed(0)}}%<template v-if="scanBest.topk"> / topk{{ scanBest.topk }}·换血{{ scanBest.n_drop }}</template> —
         sharpe <b style="color:#10b981">{{scanBest.sharpe?.toFixed(2)}}</b> ·
         收益 <b>{{(scanBest.total_return*100).toFixed(1)}}%</b> ·
         胜率 {{((scanBest.win_rate||0)*100).toFixed(0)}}% · {{scanBest.total_trades}} 笔 · 成本 {{((scanBest.total_cost||0)/10000).toFixed(1)}} 万
@@ -171,6 +171,19 @@
       <div v-if="attribution?.brinson" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
         选股贡献 {{ (attribution.brinson.model_contribution*100).toFixed(1) }}% | 策略贡献 {{ (attribution.brinson.strategy_contribution*100).toFixed(1) }}%
         <span style="margin-left:8px;font-weight:600" :style="{color:attrMatrixColor}">{{ attrMatrixLabel }}</span>
+      </div>
+      <!-- 绩效指标（M4：Qlib risk_analysis 口径，N=238） -->
+      <div v-if="attribution?.risk?.sum" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;font-size:10px">
+        <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.sum.information_ratio||0)>=0?'#10b981':'#ef4444'}">
+          IR {{ attribution.risk.sum.information_ratio?.toFixed(2) }}</span>
+        <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px">年化 {{ ((attribution.risk.product.annualized_return||0)*100).toFixed(1) }}%</span>
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.annualized_return||0)>=0?'#10b981':'#ef4444'}">
+          超额年化 {{ ((attribution.risk.excess.annualized_return||0)*100).toFixed(1) }}%</span>
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">α {{ (attribution.risk.excess.alpha_annualized*100).toFixed(1) }}%</span>
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">β {{ attribution.risk.excess.beta?.toFixed(2) }}</span>
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.information_ratio||0)>=0?'#10b981':'#ef4444'}">
+          超额IR {{ attribution.risk.excess.information_ratio?.toFixed(2) }}</span>
+        <span v-if="attribution.risk.turnover" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">日均换手 {{ ((attribution.risk.turnover.daily_avg||0)*100).toFixed(1) }}%</span>
       </div>
       <div v-if="attrVerdict" style="margin-top:8px;font-size:11px;font-weight:600" :style="{color:attrVerdict.color}">
         {{ attrVerdict.text }}<span style="font-weight:400;color:var(--c-text-faint)">（基准沪深300 同期 {{((attribution.benchmark_return||0)*100).toFixed(1)}}%）</span>
@@ -235,26 +248,26 @@
       <template v-if="wf">
         <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:wfVerdict?.color}">{{wfVerdict?.label}}</div>
         <div style="font-size:11px;color:var(--c-text-dim);margin-top:2px">{{wf.reason}}<span v-if="wf.baseline">（基线 {{wf.baseline}}）</span></div>
-        <div style="overflow-x:auto;margin-top:8px">
-          <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <div class="etbl-scroll" style="margin-top:8px">
+          <table class="etbl">
             <thead>
-              <tr style="color:var(--c-text-dim);text-align:left">
-                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">窗口</th>
-                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">新模型 sharpe</th>
-                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">RankIC</th>
-                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">基线 sharpe</th>
-                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">RankIC</th>
-                <th style="padding:4px 8px;border-bottom:1px solid var(--c-border)">胜负</th>
+              <tr>
+                <th>窗口</th>
+                <th>新模型 sharpe</th>
+                <th>RankIC</th>
+                <th>基线 sharpe</th>
+                <th>RankIC</th>
+                <th>胜负</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="w in wf.windows" :key="w.start" style="color:var(--c-text)">
-                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.start.slice(5)}}~{{w.end.slice(5)}}</td>
-                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light);font-weight:600">{{w.new?.sharpe?.toFixed(2) ?? '—'}}</td>
-                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.new?.rank_ic!=null?(w.new.rank_ic>=0?'+':'')+w.new.rank_ic.toFixed(3):'—'}}</td>
-                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.baseline?.sharpe?.toFixed(2) ?? '—'}}</td>
-                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)">{{w.baseline?.rank_ic!=null?(w.baseline.rank_ic>=0?'+':'')+w.baseline.rank_ic.toFixed(3):'—'}}</td>
-                <td style="padding:4px 8px;border-bottom:1px solid var(--c-border-light)" :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#10b981':'#ef4444'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✅ 胜':'❌ 负'}}</td>
+              <tr v-for="w in wf.windows" :key="w.start">
+                <td>{{w.start.slice(5)}}~{{w.end.slice(5)}}</td>
+                <td class="strong">{{w.new?.sharpe?.toFixed(2) ?? '—'}}</td>
+                <td>{{w.new?.rank_ic!=null?(w.new.rank_ic>=0?'+':'')+w.new.rank_ic.toFixed(3):'—'}}</td>
+                <td>{{w.baseline?.sharpe?.toFixed(2) ?? '—'}}</td>
+                <td>{{w.baseline?.rank_ic!=null?(w.baseline.rank_ic>=0?'+':'')+w.baseline.rank_ic.toFixed(3):'—'}}</td>
+                <td :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#10b981':'#ef4444'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✅ 胜':'❌ 负'}}</td>
               </tr>
             </tbody>
           </table>
@@ -271,6 +284,17 @@
     <n-modal v-model:show="showScanModal" preset="card" title="策略参数扫描" style="width:500px;max-width:92vw">
       <n-space vertical>
         <div style="font-size:11px;color:var(--c-text-dim)">选择参数候选值，系统将遍历所有组合在验证集上回测。</div>
+        <div style="font-size:11px;font-weight:600">策略引擎</div>
+        <n-select v-model:value="scanEngine" size="small" :options="[
+          { label: 'v1 信号策略（事件驱动退出 + 分数 top 买入）', value: 'v1' },
+          { label: 'v2 TopkDropout（固定 topk 持仓 + 每日换血，Qlib 移植）', value: 'v2' }
+        ]" />
+        <template v-if="scanEngine==='v2'">
+          <div style="font-size:11px;font-weight:600">持仓数 topk</div>
+          <n-checkbox-group v-model:value="scanTopk"><n-space><n-checkbox v-for="v in [3,5,8,10]" :key="v" :value="v" :label="String(v)" /></n-space></n-checkbox-group>
+          <div style="font-size:11px;font-weight:600">每日换血 n_drop</div>
+          <n-checkbox-group v-model:value="scanNDrop"><n-space><n-checkbox v-for="v in [1,2,3]" :key="v" :value="v" :label="String(v)" /></n-space></n-checkbox-group>
+        </template>
         <div style="font-size:11px;font-weight:600">止损阈值</div>
         <n-checkbox-group v-model:value="scanStopLoss"><n-space><n-checkbox v-for="v in [0.03,0.05,0.08,0.10]" :key="v" :value="v" :label="(v*100)+'%'" /></n-space></n-checkbox-group>
         <div style="font-size:11px;font-weight:600">止盈阈值</div>
@@ -279,7 +303,7 @@
           <n-progress type="line" :percentage="Math.round(scanTask.completed/scanTask.total_combos*100)" />
         </div>
         <div v-if="scanTask?.status==='completed' && scanTask.best_so_far" style="margin-top:8px;font-size:11px;color:#10b981">
-          ✅ 最优：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}% 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
+          ✅ 最优[{{ scanTask.best_so_far.engine || 'v1' }}]：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}%<template v-if="scanTask.best_so_far.topk"> topk{{ scanTask.best_so_far.topk }}·换血{{ scanTask.best_so_far.n_drop }}</template> 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
           <n-button size="tiny" type="primary" style="margin-left:8px" @click="applyScan">应用</n-button>
         </div>
       </n-space>
@@ -377,6 +401,9 @@ const modelParams = computed(() => {
 
 // ── 策略扫描 ──
 const showScanModal = ref(false)
+const scanEngine = ref('v1')
+const scanTopk = ref([5])
+const scanNDrop = ref([1])
 const scanStopLoss = ref([0.05, 0.08])
 const scanTakeProfit = ref([0.10, 0.15])
 const scanRunning = ref(false)
@@ -385,10 +412,15 @@ let scanPollTimer = null
 
 async function startScan() {
   if (!props.version?.version) return
+  if (scanEngine.value === 'v2' && !scanTopk.value.length) {
+    message.warning('v2 TopkDropout 至少选择一个 topk'); return
+  }
   scanRunning.value = true; scanTask.value = null
   try {
+    const grid = { stop_loss: scanStopLoss.value, take_profit: scanTakeProfit.value, trailing_retracement: [0.05] }
+    if (scanEngine.value === 'v2') { grid.topk = scanTopk.value; grid.n_drop = scanNDrop.value }
     const r = await axios.post(API + `/api/v1/models/${props.version.version}/strategy-scan`, {
-      param_grid: { stop_loss: scanStopLoss.value, take_profit: scanTakeProfit.value, trailing_retracement: [0.05] },
+      param_grid: grid,
       val_start: cfgValStart.value, val_end: cfgValEnd.value
     })
     scanTask.value = r.data
@@ -595,3 +627,29 @@ const optunaTrials = computed(() => (rep.value.trials || []).slice(-10).reverse(
   params: `lr=${t.params?.learning_rate?.toFixed(3)||'?'} d=${t.params?.max_depth||'?'} n=${t.params?.n_estimators||'?'}`,
 })))
 </script>
+
+<style scoped>
+/* 评估页统一数据表 */
+.etbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+.etbl-scroll { overflow-x: auto; overflow-y: auto; }
+.etbl thead th {
+  padding: 6px 10px; text-align: left; white-space: nowrap;
+  color: var(--c-text-dim); font-size: 11px; font-weight: 600;
+  border-bottom: 1px solid var(--c-border);
+}
+/* 表头吸顶必须设在 th 上（tr 上 Chrome 不跟随背景），背景不透明 + z-index 防止行数据盖过表头 */
+.etbl thead th.sticky {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--c-bg);
+}
+.etbl tbody td {
+  padding: 5px 10px; color: var(--c-text);
+  border-bottom: 1px solid var(--c-border-light);
+}
+.etbl tbody tr:hover td { background: var(--c-card-bg-hover); }
+.etbl td.strong { font-weight: 600; }
+.etbl td.pos { color: #ef4444; font-weight: 600; }
+.etbl td.good { color: #10b981; font-weight: 600; }
+.etbl td.file { font-size: 10px; color: var(--c-text-dim); }
+.etbl td.faint { color: var(--c-text-faint); }
+</style>

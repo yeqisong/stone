@@ -118,6 +118,8 @@ app.include_router(models_router, prefix="/api")
 app.include_router(functions_router, prefix="/api")
 app.include_router(features_router, prefix="/api")
 app.include_router(kepl_router, prefix="/api")
+from app.api.dbexplorer import router as dbex_router
+app.include_router(dbex_router, prefix="/api")
 app.include_router(dag_types_router)  # /api/dag 已含前缀
 app.include_router(dag_flows_router)  # /api/dag 已含前缀
 app.include_router(feishu_router)  # /webhook/feishu 不带 /api 前缀

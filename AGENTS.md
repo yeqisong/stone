@@ -206,6 +206,7 @@ ssh myhuawei "docker logs stock-app --tail 20"
 
 ## Notes
 
+- **v3.7.0（2026-09-01）**：Qlib 移植七里程碑（design/05）——①回测引擎 v2（`strategy/backtest/`：Exchange/Account/engine，涨跌停/T+1/延迟结算/最低佣金/冲击成本/整手/现金约束，与 v1 逐日 0 差异）②TopkDropoutStrategy（合并排序防高卖低买/hold_thresh/n_drop，扫描支持 topk）③纸面组合迁移 v2 内核（删 paper_day_step，173 日回放逐日一致）④绩效报告（report.py：risk_analysis sum/product + IR/α/β/超额/换手，model_health 新列 + 评估页指标条）⑤因子库（KEPL 补 14 算子 + 负字面量，Alpha158 生成器 114 因子入库 2519 万行，IC 绿75/黄20/红19，dedup 精选 41；`scripts/alpha158.py`）⑥DoubleEnsemble 实验（`strategy/models/double_ensemble.py` LightGBM，v12.0 PENDING，WF 3/4 胜但 RankIC 未达标 FAIL）⑦评估入口默认 engine=v2（`_backtest` 兼容层 v1 口径：归因/扫描/WF/置换检验）。附带：算子目录单一事实源 `/api/kepl/functions`（强校验）+ Monaco 补全 + 函数页「系统内置算子」分类 + AI 上下文动态化；`_fetch_ohlcv` 过滤零价停牌行（修因子面板污染）；`predict_for_version` 多周期均值 + NaN 缺失分支（信号统一入口）
 - **v3.2.1（2026-08-22）**：补数链路修复（index_code VARCHAR(16)/SAVEPOINT 批次隔离/上市日感知续传阈值）+ 特征计算 2000 全量（23 特征 3.98 亿行完成，ATR 自动补 high/low）+ XGBoost 训练 GPU 优先（RTX 5060 cuda，失败回退 CPU）+ 前端 popstate 监听泄漏修复（详见 design/01-04）
 - **数据现状**：daily_quote 1766 万行（2000→今，重复 0）；index_daily_quote 63 万行（2000 起续跑中）；ETF/基本面（ROE 等）补数挂起，用页面补数按钮续跑（tushare 8000 次/天配额预算），勿写临时脚本
 - **夜间补数 cron**：每天 00:05 北京时间触发（需机器开机）

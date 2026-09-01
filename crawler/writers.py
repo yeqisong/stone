@@ -47,6 +47,51 @@ def supplement_fundamentals_extra(db, rows: List[FundamentalRow]) -> int:
     return len(vals)
 
 
+def _fill_names_from_master(db, rows: List[KlineRow]) -> None:
+    """空名称行从 stock_master（证券主档）补全名称。
+
+    tushare daily 接口不返回名称，写入端统一补全，避免每日行情持续写空名。
+    """
+    missing = [r for r in rows if not r.stock_name]
+    if not missing:
+        return
+    codes = [(r.stock_code, r.exchange) for r in missing]
+    try:
+        res = db.execute(text("""
+            SELECT DISTINCT ON (stock_code, exchange) stock_code, exchange, stock_name
+            FROM stock_master
+            WHERE (stock_code, exchange) IN (
+                SELECT unnest(:codes), unnest(:exs))
+              AND stock_name <> '' AND stock_name <> stock_code
+        """), {"codes": [c for c, _ in codes], "exs": [e for _, e in codes]}).fetchall()
+    except Exception as e:
+        logger.warning(f"[writers] stock_master 名称补全查询失败: {e}")
+        return
+    name_map = {(r[0], r[1]): r[2] for r in res}
+    for row in missing:
+        row.stock_name = name_map.get((row.stock_code, row.exchange)) or row.stock_name
+
+
+def _fill_index_names(db, rows: List[IndexKlineRow]) -> None:
+    """空名称指数行从 index_daily_quote 已有名称继承（首次回填后即有参照）。"""
+    missing = [r for r in rows if not r.index_name]
+    if not missing:
+        return
+    codes = [r.index_code for r in missing]
+    try:
+        res = db.execute(text("""
+            SELECT DISTINCT ON (index_code) index_code, index_name
+            FROM index_daily_quote
+            WHERE index_code = ANY(:codes) AND index_name <> ''
+        """), {"codes": codes}).fetchall()
+    except Exception as e:
+        logger.warning(f"[writers] index 名称补全查询失败: {e}")
+        return
+    name_map = {r[0]: r[1] for r in res}
+    for row in missing:
+        row.index_name = name_map.get(row.index_code) or row.index_name
+
+
 def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
     """批量 UPSERT 个股/ETF 日K线到 daily_quote 表。
 
@@ -60,6 +105,8 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
     """
     if not rows:
         return 0
+
+    _fill_names_from_master(db, rows)
 
     total = 0
     for start in range(0, len(rows), batch_size):
@@ -97,6 +144,7 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
             "volume,amount,turnover,is_suspended) "
             "VALUES " + ",".join(placeholders) +
             " ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
+            "stock_name=CASE WHEN EXCLUDED.stock_name='' THEN daily_quote.stock_name ELSE EXCLUDED.stock_name END, "
             "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
             "close=EXCLUDED.close, "
             "close_hfq=CASE WHEN EXCLUDED.close_hfq IS NULL OR EXCLUDED.close_hfq = 0 THEN daily_quote.close_hfq ELSE EXCLUDED.close_hfq END, "
@@ -124,6 +172,7 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
                         "open,high,low,close,close_hfq,close_qfq,volume,amount,turnover,is_suspended) "
                         "VALUES (:td,:ex,:sc,:sn,:o,:h,:l,:c,:ch,:cq,:v,:a,:t,false) "
                         "ON CONFLICT (stock_code, exchange, trade_date) DO UPDATE SET "
+                        "stock_name=CASE WHEN EXCLUDED.stock_name='' THEN daily_quote.stock_name ELSE EXCLUDED.stock_name END, "
                         "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
                         "close=EXCLUDED.close, "
                         "close_hfq=CASE WHEN EXCLUDED.close_hfq IS NULL OR EXCLUDED.close_hfq = 0 THEN daily_quote.close_hfq ELSE EXCLUDED.close_hfq END, "
@@ -157,6 +206,8 @@ def batch_upsert_index_kline(db, rows: List[IndexKlineRow], batch_size: int = 20
     if not rows:
         return 0
 
+    _fill_index_names(db, rows)
+
     total = 0
     for start in range(0, len(rows), batch_size):
         chunk = rows[start:start + batch_size]
@@ -184,6 +235,7 @@ def batch_upsert_index_kline(db, rows: List[IndexKlineRow], batch_size: int = 20
             "(trade_date,index_code,index_name,open,high,low,close,volume,amount) "
             "VALUES " + ",".join(placeholders) +
             " ON CONFLICT (trade_date,index_code) DO UPDATE SET "
+            "index_name=CASE WHEN EXCLUDED.index_name='' THEN index_daily_quote.index_name ELSE EXCLUDED.index_name END, "
             "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
             "close=EXCLUDED.close, volume=EXCLUDED.volume, amount=EXCLUDED.amount"
         )
@@ -329,11 +381,11 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
 
 
 def append_fundamentals_history(db, rows: List[FundamentalRow], batch_size: int = 500) -> int:
-    """按交易日追加 PE/PB 到 stock_fundamentals_history（report_date 存交易日）。
+    """按交易日追加 daily_basic 字段到 stock_fundamentals_history（report_date 存交易日）。
 
-    - tushare daily_basic 按日全市场，PE 历史走势数据源（图/分位用）
-    - 幂等：UNIQUE(stock_code, report_date)，同日重复拉取 DO UPDATE
-    - 只写有 PE_ttm/PB 值的行；ROE/营收等季度字段不在日度行填充
+    - tushare daily_basic 按日全市场：PE/PB/换手率/市值/股息率等日度历史（因子化数据源）
+    - 幂等：UNIQUE(stock_code, report_date)，同日重复拉取 DO UPDATE（COALESCE 保护已有值）
+    - 只写有任一日度字段的行；ROE/营收等季度字段不在日度行填充
     """
     vals = []
     for r in rows:
@@ -341,9 +393,11 @@ def append_fundamentals_history(db, rows: List[FundamentalRow], batch_size: int 
         if not td:
             continue
         pe = r.pe_ttm if getattr(r, 'pe_ttm', None) is not None else getattr(r, 'pe', None)
-        if pe is None and r.pb_mrq is None:
+        if (pe is None and r.pb_mrq is None and r.turnover_rate is None
+                and r.circ_mv is None and r.dv_ttm is None):
             continue
-        vals.append((r.stock_code, str(td)[:10], pe, r.pb_mrq))
+        vals.append((r.stock_code, str(td)[:10], pe, r.pb_mrq, r.turnover_rate, r.volume_ratio,
+                     r.circ_mv, r.market_cap, r.dv_ratio, r.dv_ttm, r.ps_ttm))
     if not vals:
         return 0
 
@@ -352,16 +406,26 @@ def append_fundamentals_history(db, rows: List[FundamentalRow], batch_size: int 
         chunk = vals[start:start + batch_size]
         placeholders = []
         params = {}
-        for j, (code, td, pe, pb) in enumerate(chunk):
+        for j, (code, td, pe, pb, tr, vr, cmv, tmv, dvr, dvttm, psttm) in enumerate(chunk):
             idx = start + j
-            placeholders.append(f"(:c{idx},:d{idx},:pe{idx},:pb{idx})")
-            params.update({f'c{idx}': code, f'd{idx}': td, f'pe{idx}': pe, f'pb{idx}': pb})
+            placeholders.append(f"(:c{idx},:d{idx},:pe{idx},:pb{idx},:tr{idx},:vr{idx},:cmv{idx},:tmv{idx},:dvr{idx},:dvttm{idx},:psttm{idx})")
+            params.update({f'c{idx}': code, f'd{idx}': td, f'pe{idx}': pe, f'pb{idx}': pb,
+                           f'tr{idx}': tr, f'vr{idx}': vr, f'cmv{idx}': cmv, f'tmv{idx}': tmv,
+                           f'dvr{idx}': dvr, f'dvttm{idx}': dvttm, f'psttm{idx}': psttm})
         sql = (
-            "INSERT INTO stock_fundamentals_history (stock_code, report_date, pe_ttm, pb_mrq) "
+            "INSERT INTO stock_fundamentals_history "
+            "(stock_code, report_date, pe_ttm, pb_mrq, turnover_rate, volume_ratio, circ_mv, total_mv, dv_ratio, dv_ttm, ps_ttm) "
             "VALUES " + ",".join(placeholders) +
             " ON CONFLICT (stock_code, report_date) DO UPDATE SET "
             "pe_ttm=COALESCE(EXCLUDED.pe_ttm, stock_fundamentals_history.pe_ttm), "
-            "pb_mrq=COALESCE(EXCLUDED.pb_mrq, stock_fundamentals_history.pb_mrq)"
+            "pb_mrq=COALESCE(EXCLUDED.pb_mrq, stock_fundamentals_history.pb_mrq), "
+            "turnover_rate=COALESCE(EXCLUDED.turnover_rate, stock_fundamentals_history.turnover_rate), "
+            "volume_ratio=COALESCE(EXCLUDED.volume_ratio, stock_fundamentals_history.volume_ratio), "
+            "circ_mv=COALESCE(EXCLUDED.circ_mv, stock_fundamentals_history.circ_mv), "
+            "total_mv=COALESCE(EXCLUDED.total_mv, stock_fundamentals_history.total_mv), "
+            "dv_ratio=COALESCE(EXCLUDED.dv_ratio, stock_fundamentals_history.dv_ratio), "
+            "dv_ttm=COALESCE(EXCLUDED.dv_ttm, stock_fundamentals_history.dv_ttm), "
+            "ps_ttm=COALESCE(EXCLUDED.ps_ttm, stock_fundamentals_history.ps_ttm)"
         )
         try:
             db.execute(text(sql), params)

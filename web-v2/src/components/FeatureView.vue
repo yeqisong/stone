@@ -42,7 +42,21 @@
           <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size:11px">🔍 验证</n-button>
         </div>
       </div>
-      <MonacoEditor v-model="form.formula" />
+      <MonacoEditor ref="formulaEditor" v-model="form.formula" :completions="keplCompletions" />
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-dim)">
+        <span>📚 算子速查：输入可自动补全</span>
+        <n-button size="tiny" quaternary @click="showOpsPanel = !showOpsPanel">{{ showOpsPanel ? '收起' : '展开' }}</n-button>
+      </div>
+      <div v-if="showOpsPanel && keplFns" style="max-height:200px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:8px">
+        <div v-for="grp in opGroups" :key="grp.label" style="margin-bottom:6px">
+          <div style="font-size:10px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            <n-tag v-for="op in grp.items" :key="op.name" size="small" :bordered="false"
+                   style="cursor:pointer;font-family:monospace" :title="`${op.desc}　例: ${op.eg}`"
+                   @click="insertOp(op)">{{ op.sig }}</n-tag>
+          </div>
+        </div>
+      </div>
 
       <!-- 依赖预览 -->
       <div v-if="parseDeps.length > 0" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:10px">
@@ -437,13 +451,56 @@ const aiFormulaText = ref('')
 const aiFormulaResult = ref('')
 const aiFormulaLoading = ref(false)
 
-const KEPL_SPEC = `KEPL 语法：
-- 裸字段：close, open, high, low, volume, amount
-- 时间序列函数（参数裸字段）：ma(close,5), ema(close,12), macd(close), rsi(close,14), boll(close), atr(high,low,close,14)
-- 横截面聚合（参数 stock.字段）：avg(stock.close), rank(stock.close, pct=True), std(stock.pe)
-- 运算：+ - * / ( ) > < == & |
-- 条件：if(cond, a, b)
-- 示例：close / ma(close, 5) - 1`
+// ── KEPL 算子目录（/api/kepl/functions 单一事实源）──
+const formulaEditor = ref(null)
+const keplFns = ref(null)
+const showOpsPanel = ref(false)
+
+const opGroups = computed(() => {
+  if (!keplFns.value) return []
+  return [
+    { label: '时序算子', items: keplFns.value.time_series },
+    { label: '截面算子', items: keplFns.value.cross_sectional },
+  ]
+})
+
+function sigToSnippet(sig) {
+  const m = sig.match(/^(\w+)\((.*)\)$/)
+  if (!m) return sig
+  const args = m[2].split(',').map(s => s.trim())
+  return `${m[1]}(${args.map((a, i) => `\${${i + 1}:${a}}`).join(', ')})`
+}
+
+const keplCompletions = computed(() => {
+  if (!keplFns.value) return []
+  const all = [...keplFns.value.time_series, ...keplFns.value.cross_sectional]
+  return all.map(op => ({ label: op.name, insert: sigToSnippet(op.sig), detail: op.desc }))
+})
+
+function insertOp(op) {
+  formulaEditor.value?.insertSnippet(`${op.sig}`)
+}
+
+async function loadKeplFunctions() {
+  try {
+    const r = await axios.get(API + '/api/kepl/functions')
+    keplFns.value = r.data
+  } catch (e) { console.warn('算子目录加载失败', e) }
+}
+onMounted(loadKeplFunctions)
+
+// AI 上下文：语法规则 + 全部内置算子（动态生成，与注册表一致）
+const KEPL_SPEC = computed(() => {
+  const base = `KEPL 语法：
+- 裸字段：close, open, high, low, volume, amount；基本面字段亦可用（pe_ttm/pb_mrq/turnover_rate 等）
+- 算术运算：+ - * /（除零自动置空）；函数参数位支持负数（ref(close, -1)=未来值）
+- 因子惯例：用 (close+1e-12) 做除法归一化防除零
+- 不支持 if/比较/逻辑运算——条件逻辑用自定义 Python 函数`
+  if (!keplFns.value) return base
+  const ts = keplFns.value.time_series.map(o => `- ${o.sig}：${o.desc}；例：${o.eg}`).join('\n')
+  const cs = keplFns.value.cross_sectional.map(o => `- ${o.sig}：${o.desc}；例：${o.eg}`).join('\n')
+  return `${base}\n\n【时序算子（按股滚动计算）】\n${ts}\n\n【截面算子（同交易日全市场）】\n${cs}`
+})
 
 async function callAiFormula() {
   if (!aiFormulaText.value.trim()) return
@@ -455,7 +512,7 @@ async function callAiFormula() {
       `${f.name}(${(f.parameters||[]).map(p=>p.name+(p.default!==undefined?'='+p.default:'')).join(',')}): ${f.description||''}`
     ).join('\n')
 
-    const prompt = `${KEPL_SPEC}\n\n【函数】\n${funcList}\n\n【需求】\n${aiFormulaText.value}\n\n只返回公式。`
+    const prompt = `${KEPL_SPEC.value}\n\n【自定义函数】\n${funcList || '（无）'}\n\n【需求】\n${aiFormulaText.value}\n\n只返回公式。`
     const r = await axios.post(API + '/api/functions/ai-chat', {
       messages: [{ role: 'user', content: prompt }],
     }, { headers: authHeaders() })

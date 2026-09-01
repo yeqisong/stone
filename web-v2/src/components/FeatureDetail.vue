@@ -206,7 +206,22 @@
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
         <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px">🤖 AI 生成</n-button>
       </div>
-      <MonacoEditor v-model="editForm.formula" />
+      <MonacoEditor ref="formulaEditor" v-model="editForm.formula" :completions="keplCompletions" />
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-dim)">
+        <span style="font-weight:600">📚 算子速查</span>
+        <span style="color:var(--c-text-faint)">编辑框内输入可自动补全；点击算子插入光标处</span>
+        <n-button size="tiny" quaternary @click="showOpsPanel = !showOpsPanel">{{ showOpsPanel ? '收起' : '展开' }}</n-button>
+      </div>
+      <div v-if="showOpsPanel && keplFns" style="max-height:220px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px">
+        <div v-for="grp in opGroups" :key="grp.label">
+          <div style="font-size:10px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            <n-tag v-for="op in grp.items" :key="op.name" size="small" :bordered="false"
+                   style="cursor:pointer;font-family:monospace" :title="`${op.desc}　例: ${op.eg}`"
+                   @click="insertOp(op)">{{ op.sig }}</n-tag>
+          </div>
+        </div>
+      </div>
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
@@ -742,16 +757,61 @@ async function loadPreview() {
   }
 }
 
-// KEPL 语法规范摘要（给 AI 的上下文）
-const KEPL_SPEC = `KEPL 语法规则：
-- 裸字段直接引用当前股票：close, open, high, low, volume
-- 时间序列函数（参数必须是裸字段）：ma(close,5), ema(close,12), macd(close), rsi(close,14), boll(close), atr(high,low,close,14)
-- 横截面聚合（参数必须是 stock.字段）：avg(stock.close), rank(stock.close), std(stock.pe), max(stock.high)
-- 算术运算：+ - * / ( )
-- 比较运算：> < >= <= == !=
-- 逻辑运算：& | !
-- 条件表达式：if(condition, true_val, false_val)
-- 示例：close / ma(close, 5) - 1  表示收盘价相对于5日均线的偏离度`
+// ── KEPL 算子目录（/api/kepl/functions 单一事实源：与 parser 注册表强校验）──
+const formulaEditor = ref(null)
+const keplFns = ref(null)
+const showOpsPanel = ref(false)
+
+const opGroups = computed(() => {
+  if (!keplFns.value) return []
+  return [
+    { label: '时序算子', items: keplFns.value.time_series },
+    { label: '截面算子', items: keplFns.value.cross_sectional },
+  ]
+})
+
+// Monaco 补全项：snippet 模板（插入后光标停在第一个参数位逐个 Tab）
+function sigToSnippet(sig) {
+  const m = sig.match(/^(\w+)\((.*)\)$/)
+  if (!m) return sig
+  const args = m[2].split(',').map(s => s.trim())
+  return `${m[1]}(${args.map((a, i) => `\${${i + 1}:${a}}`).join(', ')})`
+}
+
+const keplCompletions = computed(() => {
+  if (!keplFns.value) return []
+  const all = [...keplFns.value.time_series, ...keplFns.value.cross_sectional]
+  return all.map(op => ({ label: op.name, insert: sigToSnippet(op.sig), detail: op.desc }))
+})
+
+function insertOp(op) {
+  formulaEditor.value?.insertSnippet(`${op.sig}`)
+}
+
+async function loadKeplFunctions() {
+  try {
+    const r = await axios.get(API + '/api/kepl/functions')
+    keplFns.value = r.data
+  } catch (e) {
+    console.warn('算子目录加载失败（AI 上下文退化为简版）', e)
+  }
+}
+
+// AI 上下文：语法规则 + 全部内置算子文档（从注册表单一事实源动态生成）
+const KEPL_SPEC = computed(() => {
+  const base = `KEPL 语法规则：
+- 裸字段直接引用：close, open, high, low, volume, amount；基本面字段亦可用（pe_ttm/pb_mrq/ps_ttm/dv_ttm/turnover_rate/volume_ratio/circ_mv/total_mv）
+- 算术运算：+ - * /（除零自动置空）
+- 函数参数位支持负数字面量：ref(close, -1) 表示未来值（前值用正数）
+- 因子惯例：用 (close+1e-12) 做除法归一化防除零，全市场可比
+- 不支持 if/比较/逻辑运算——条件逻辑请用自定义 Python 函数（functions 表）`
+  if (!keplFns.value) return base
+  const ts = keplFns.value.time_series.map(o => `- ${o.sig}：${o.desc}；例：${o.eg}`).join('\n')
+  const cs = keplFns.value.cross_sectional.map(o => `- ${o.sig}：${o.desc}；例：${o.eg}`).join('\n')
+  return `${base}\n\n【时序算子（按股滚动计算）】\n${ts}\n\n【截面算子（同交易日全市场）】\n${cs}`
+})
+
+onMounted(loadKeplFunctions)
 
 async function callAiGenerate() {
   if (!aiRequirement.value.trim()) return
@@ -764,15 +824,15 @@ async function callAiGenerate() {
       `${f.name}(${(f.parameters||[]).map(p=>p.name+(p.default!==undefined?'='+p.default:'')).join(',')}): ${f.description||f.display_name||''}`
     ).join('\n')
 
-    const prompt = `${KEPL_SPEC}
+    const prompt = `${KEPL_SPEC.value}
 
-【可用函数列表】
-${funcList}
+【可用自定义函数列表】
+${funcList || '（无）'}
 
 【用户需求】
 ${aiRequirement.value}
 
-请根据 KEPL 语法和可用函数，生成一个特征计算公式。只返回公式本身，不要解释。`
+请根据 KEPL 语法和可用算子，生成一个特征计算公式。只返回公式本身，不要解释。`
 
     const r = await axios.post(API + '/api/functions/ai-chat', {
       messages: [{ role: 'user', content: prompt }],

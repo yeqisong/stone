@@ -259,9 +259,17 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals_history (
     profit_yoy    NUMERIC(10,2),
     total_shares  BIGINT,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    turnover_rate NUMERIC(10,4),   -- 换手率（daily_basic，v3.7 因子化补列）
+    volume_ratio  NUMERIC(10,4),   -- 量比
+    circ_mv       BIGINT,          -- 流通市值（元）
+    total_mv      BIGINT,          -- 总市值（元）
+    dv_ratio      NUMERIC(10,4),   -- 股息率(%)
+    dv_ttm        NUMERIC(10,4),   -- 股息率 TTM(%)
+    ps_ttm        NUMERIC(10,2),   -- 市销率 TTM
     UNIQUE (stock_code, report_date)
 );
 CREATE INDEX IF NOT EXISTS idx_fh_stock_date ON stock_fundamentals_history (stock_code, report_date);
+CREATE INDEX IF NOT EXISTS idx_fh_date ON stock_fundamentals_history (report_date);
 """
 
 CREATE_TREEMAP_CACHE = """
@@ -983,6 +991,20 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE features ADD COLUMN IF NOT EXISTS {col} {col_type}"))
         except Exception:
             sync_session.rollback()
+
+    # 迁移：model_health 绩效指标列（M4，源自纸面组合 EOD 净值序列 performance_report）
+    for col, col_type in [
+        ('ir', 'DECIMAL(8,4)'),                 # 信息比率（sum 模式，N=238）
+        ('alpha_annualized', 'DECIMAL(8,4)'),   # 年化 alpha（对沪深300 日收益回归）
+        ('beta', 'DECIMAL(8,4)'),
+        ('excess_annualized', 'DECIMAL(8,4)'),  # 超额年化收益
+        ('turnover_daily', 'DECIMAL(8,4)'),     # 日均换手率
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE model_health ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
     try:
         sync_session.execute(text("""
             INSERT INTO dag_config (node_name, deps, label, sort_order)
@@ -1174,6 +1196,25 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE model_health ADD COLUMN IF NOT EXISTS {col} {col_type}"))
         except Exception:
             sync_session.rollback()
+
+    # 迁移：stock_fundamentals_history 补 daily_basic 因子列（v3.7——历史表加列，回填补数任务填充）
+    for col, col_type in [
+        ('turnover_rate', 'NUMERIC(10,4)'),
+        ('volume_ratio', 'NUMERIC(10,4)'),
+        ('circ_mv', 'BIGINT'),
+        ('total_mv', 'BIGINT'),
+        ('dv_ratio', 'NUMERIC(10,4)'),
+        ('dv_ttm', 'NUMERIC(10,4)'),
+        ('ps_ttm', 'NUMERIC(10,2)'),
+    ]:
+        try:
+            sync_session.execute(text(f"ALTER TABLE stock_fundamentals_history ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        except Exception:
+            sync_session.rollback()
+    try:
+        sync_session.execute(text("CREATE INDEX IF NOT EXISTS idx_fh_date ON stock_fundamentals_history (report_date)"))
+    except Exception:
+        sync_session.rollback()
 
     # 迁移：model_versions 新增策略优化字段（v2.7）
     for col, col_type in [

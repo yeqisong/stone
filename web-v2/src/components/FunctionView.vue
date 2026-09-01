@@ -2,7 +2,10 @@
 <div style="padding:16px 8px">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">函数管理（Operator Registry）</div>
-    <n-button type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
+    <div style="display:flex;gap:6px">
+      <n-button size="small" quaternary @click="openFields">📋 字段注册表</n-button>
+      <n-button type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
+    </div>
   </div>
 
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
@@ -212,6 +215,13 @@
     </template>
   </n-modal>
 </div>
+  <!-- 字段注册表弹窗 -->
+  <n-modal v-model:show="showFields" preset="card" title="📋 字段注册表（KEPL 公式可引用的原始字段）" style="width:640px;max-width:92vw" :mask-closable="true">
+    <n-space vertical>
+      <div style="font-size:11px;color:var(--c-text-dim)">公式中直接引用以下字段名；基本面字段来自个股基本面日度历史表（stock_fundamentals_history），缺失日为空值。覆盖率 = 近 35 天非空占比。</div>
+      <n-data-table :columns="fieldCols" :data="fieldRows" size="small" :max-height="420" />
+    </n-space>
+  </n-modal>
 </template>
 
 <script setup>
@@ -222,6 +232,26 @@ import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
 
 const API = window.location.origin
+
+// ── 字段注册表 ──
+const showFields = ref(false)
+const fieldRows = ref([])
+const fieldCols = [
+  { title: '字段名', key: 'name', width: 140, render: r => h('code', { style: 'font-size:12px' }, r.name) },
+  { title: '来源表', key: 'source', width: 220, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.source) },
+  { title: '说明', key: 'desc' },
+  { title: '近月覆盖', key: 'coverage', width: 90, align: 'right', render: r =>
+      r.coverage == null ? '—' : h('span', { style: `color:${r.coverage >= 0.9 ? '#10b981' : r.coverage >= 0.5 ? '#f59e0b' : '#ef4444'}` },
+        (r.coverage * 100).toFixed(0) + '%') },
+]
+
+async function openFields() {
+  showFields.value = true
+  try {
+    const r = await axios.get(API + '/api/features/fields', { headers: { Authorization: 'Bearer ' + (localStorage.getItem('token') || '') } })
+    fieldRows.value = [...r.data.base, ...r.data.fundamentals]
+  } catch (e) { console.error(e) }
+}
 const message = useMessage()
 const dialog = useDialog()
 const loading = ref(false)
@@ -275,12 +305,13 @@ const paramTypeOpts = [
 
 const catOptions = [
   { label:'全部分类', value:'all' },
+  { label:'系统内置算子', value:'builtin_kepl' },
   { label:'时间序列', value:'time_series' },
   { label:'横截面', value:'cross_sectional' },
   { label:'统计函数', value:'statistical' },
   { label:'其他', value:'other' },
 ]
-const catOpts = catOptions.filter(c => c.value !== 'all')
+const catOpts = catOptions.filter(c => c.value !== 'all' && c.value !== 'builtin_kepl')
 const statusOptions = [
   { label:'全部状态', value:'all' },
   { label:'草稿', value:'draft' },
@@ -317,6 +348,12 @@ function rowProps(row) {
   return {
     style: 'cursor:pointer',
     onClick: async () => {
+      // KEPL 内置算子行（op-* 无 DB 记录）：直接展示目录信息，不查详情接口
+      if (String(row.id).startsWith('op-')) {
+        detailItem.value = { ...row, status_text: '内置' }
+        showDetail.value = true
+        return
+      }
       try {
         const r = await axios.get(API + '/api/functions/' + row.id)
         detailItem.value = { ...row, ...r.data }
@@ -364,14 +401,17 @@ async function loadData() {
     items.value = r.data.items.map(i => {
       // 构建用法摘要
       const params = (typeof i.parameters === 'string' ? JSON.parse(i.parameters) : i.parameters) || []
-      const usage = params.length
-        ? `${i.name}(${params.map(p => p.name + (p.default !== undefined ? '=' + p.default : '')).join(', ')})`
-        : `${i.name}()`
+      const isOp = String(i.id).startsWith('op-')
+      const usage = isOp
+        ? i.display_name  // KEPL 内置算子：display_name 即签名
+        : (params.length
+          ? `${i.name}(${params.map(p => p.name + (p.default !== undefined ? '=' + p.default : '')).join(', ')})`
+          : `${i.name}()`)
       return {
         ...i,
         name: (i.is_builtin ? '🔧 ' : '') + i.name,
         usage: usage + (params.length ? ' — ' + params.map(p => p.desc || p.name).join('; ') : ''),
-        status_text: statusMap[i.status] || i.status,
+        status_text: isOp ? '内置' : (statusMap[i.status] || i.status),
         parameters: params,
       }
     })

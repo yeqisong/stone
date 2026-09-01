@@ -574,18 +574,25 @@ class BackfillManager:
             remaining = tds
             skipped = 0
             if not task.force:
+                # 断点判断用新列完整度（turnover_rate 是 daily_basic 的代表列）：
+                # 补列场景下 COUNT(*) 恒 ≥ 基线（PE/PB 行已存在），会错误地全部跳过。
+                # 一次聚合取全区间（逐日 COUNT 在 1700 万行表上无索引会拖死预检查）。
+                cnt_rows = db.execute(text(
+                    "SELECT report_date, COUNT(turnover_rate) FROM stock_fundamentals_history "
+                    "WHERE report_date BETWEEN :s AND :e GROUP BY report_date"
+                ), {"s": str(tds[-1])[:10], "e": str(tds[0])[:10]}).fetchall()  # _trade_days 倒序：[-1]=最早 [0]=最新
+                cnt_map = {str(r[0])[:10]: r[1] for r in cnt_rows}
                 kept = []
                 for td in tds:
-                    cnt = db.execute(text(
-                        "SELECT COUNT(*) FROM stock_fundamentals_history WHERE report_date=:d"
-                    ), {"d": td}).scalar() or 0
-                    thr = max(int(baseline_of(str(td)) * 0.8), 1)
+                    td_str = td.strftime("%Y-%m-%d") if hasattr(td, 'strftime') else str(td)[:10]
+                    cnt = cnt_map.get(td_str, 0)
+                    thr = max(int(baseline_of(td_str) * 0.8), 1)
                     if cnt >= thr:
                         skipped += 1
                     else:
                         kept.append(td)
                 remaining = kept
-
+                logger.info(f"[backfill] fund_history 预检查: 待补 {len(kept)} 天（新列已完整跳过 {skipped} 天）")
             task.total_batches = len(remaining)
             done = 0
             total_rows = 0

@@ -930,8 +930,18 @@ def start_strategy_scan(version: str, body: StrategyScanRequest, user: str = Dep
         stop_losses = param_grid.get('stop_loss', [0.05, 0.08])
         take_profits = param_grid.get('take_profit', [0.10, 0.15])
         trailings = param_grid.get('trailing_retracement', [0.05])
+        # M2：param_grid 含 topk 时用 v2 引擎 + TopkDropoutStrategy 扫描（固定持仓数+每日换血）
+        topks = param_grid.get('topk')
+        n_drops = param_grid.get('n_drop', [1])
 
-        combos = [[sl, tp, tr] for sl in stop_losses for tp in take_profits for tr in trailings]
+        if topks:
+            combos = [{'stop_loss': sl, 'take_profit': tp, 'trailing_retracement': tr,
+                       'topk': k, 'n_drop': nd}
+                      for sl in stop_losses for tp in take_profits for tr in trailings
+                      for k in topks for nd in n_drops]
+        else:
+            combos = [{'stop_loss': sl, 'take_profit': tp, 'trailing_retracement': tr}
+                      for sl in stop_losses for tp in take_profits for tr in trailings]
         task_id = f"scan-{_uuid.uuid4().hex[:6]}"
 
         with _scan_lock:
@@ -994,7 +1004,7 @@ def apply_scan_result(version: str, task_id: str, user: str = Depends(get_curren
 
 def _run_scan(task_id, version, combos, val_start, val_end, hold_days):
     """后台执行策略扫描（预测一次，各参数组合复用同一预测列）。"""
-    from scripts.pipeline import build_feature_wide_table, predict_for_version, _simple_backtest
+    from scripts.pipeline import build_feature_wide_table, predict_for_version, _backtest
     from app.db.connection import get_sync_db
     from loguru import logger as _log
 
@@ -1029,12 +1039,27 @@ def _run_scan(task_id, version, combos, val_start, val_end, hold_days):
         best_sharpe = -999
         best_params = None
 
-        for i, (sl, tp, tr) in enumerate(combos):
-            bt = _simple_backtest(df, pred, val_start, val_end, hold_days, sl, tp, trailing=tr)
-            item = {'stop_loss': sl, 'take_profit': tp, 'trailing_retracement': tr,
-                    'sharpe': bt.get('sharpe', 0), 'max_dd': bt.get('max_dd', 0),
-                    'win_rate': bt.get('win_rate', 0), 'total_return': bt.get('total_return', 0),
-                    'total_trades': bt.get('total_trades', 0), 'total_cost': bt.get('total_cost', 0)}
+        for i, combo in enumerate(combos):
+            sl, tp, tr = combo['stop_loss'], combo['take_profit'], combo['trailing_retracement']
+            if 'topk' in combo:
+                # v2 引擎 + TopkDropoutStrategy（M2）：固定 topk 持仓 + 每日换血 n_drop
+                from strategy.backtest.engine import run_backtest
+                from strategy.backtest.models import TradeConfig
+                from strategy.strategy import TopkDropoutStrategy
+                c = TradeConfig(initial_cash=1_000_000, max_positions=combo['topk'],
+                                stop_loss=sl, take_profit=tp, trailing=tr, hold_days=hold_days)
+                bt = run_backtest(df, pred, TopkDropoutStrategy(c, topk=combo['topk'],
+                                                               n_drop=combo['n_drop']),
+                                  c, val_start, val_end)
+                item = dict(combo, engine='v2', sharpe=bt.sharpe, max_dd=bt.max_dd,
+                            win_rate=bt.win_rate, total_return=bt.total_return,
+                            total_trades=bt.total_trades, total_cost=bt.total_cost)
+            else:
+                # 普通网格（无 topk）：v2 内核 + SignalStrategy（M7 起默认；返回 v1 口径 dict）
+                bt = _backtest(df, pred, val_start, val_end, hold_days, sl, tp, trailing=tr)
+                item = dict(combo, engine='v2', sharpe=bt.get('sharpe', 0), max_dd=bt.get('max_dd', 0),
+                            win_rate=bt.get('win_rate', 0), total_return=bt.get('total_return', 0),
+                            total_trades=bt.get('total_trades', 0), total_cost=bt.get('total_cost', 0))
             results.append(item)
             if item['sharpe'] > best_sharpe:
                 best_sharpe = item['sharpe']; best_params = item

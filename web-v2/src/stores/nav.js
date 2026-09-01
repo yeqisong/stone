@@ -49,7 +49,7 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
   }
@@ -83,6 +83,7 @@ export const useNavStore = defineStore('nav', () => {
       case 'q': target = '/dag-logs/' + (flowId.value || ''); break
       case 'r': target = '/dag-flow-view/' + (flowId.value || ''); break
       case 'u': target = '/stock-fund/' + stockFundType.value; break
+      case 'w': target = '/dbx'; break
       default: target = '/'
     }
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)

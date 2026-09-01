@@ -63,7 +63,9 @@ term: factor ((MUL | DIV) factor)*
        | LPAR expr RPAR
 
 func_call: CNAME LPAR arg_list? RPAR
-arg_list: expr (COMMA expr)*
+arg_list: arg (COMMA arg)*
+?arg: expr
+    | MINUS NUMBER    -> neg_num
 
 PLUS: "+"
 MINUS: "-"
@@ -83,10 +85,14 @@ BOOL.2: "true" | "false"
 """
 
 # ── 系统内置函数注册表 ──
+# 注意：与此处注册的每个算子必须在 scripts/feature_compute.py _BUILTIN_REGISTRY
+# 有实现、且在 app/api/kepl.py _OPERATOR_DOCS 有文档（/kepl/functions 端点强校验）。
 TIME_SERIES_FUNCTIONS = {
-    'ma', 'ema', 'rsi', 'std', 'atr', 'roc', 'bias', 'return_n', 'pct_change',
+    'ma', 'ema', 'rsi', 'std', 'atr', 'pct_change',
     'dif', 'dea', 'macd_hist', 'boll_upper', 'boll_mid', 'boll_lower',
-    'corr', 'boll', 'sma', 'obv'
+    # Alpha158 移植算子（design/05 M5）：滚动窗口时序
+    'ref', 'hhv', 'llv', 'ts_quantile', 'ts_rank', 'slope', 'rsquare', 'resi',
+    'imax', 'imin', 'ts_corr', 'max2', 'min2',
 }
 
 CROSS_SECTIONAL_FUNCTIONS = {
@@ -187,6 +193,10 @@ def _tree_to_ast(node) -> Expr:
                 continue  # skip COMMA
             args.append(_tree_to_ast(child))
         return args
+    elif data == 'neg_num':
+        # 参数位负数字面量：ref(close, -1)（负偏移=未来值，显式语义）
+        num = node.children[-1]
+        return NumLit(-float(num.value))
     elif data == 'factor':
         # factor may appear as explicit node when using named terminals (even with ? prefix).
         # Skip LPAR/RPAR wrapper and return the expression inside.

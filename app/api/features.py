@@ -99,6 +99,47 @@ def check_cycle(db, feature_name: str, depends_on: List[str]) -> Optional[List[s
 
 # ── API 端点 ──
 
+@router.get("/fields")
+def list_fields(user: str = Depends(get_current_user)):
+    """字段注册表：KEPL 公式可引用的原始字段（OHLCV + 基本面日度历史），含近月覆盖率。"""
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        base = [
+            {'name': 'close', 'source': 'daily_quote', 'desc': '收盘价', 'coverage': None},
+            {'name': 'open', 'source': 'daily_quote', 'desc': '开盘价', 'coverage': None},
+            {'name': 'high', 'source': 'daily_quote', 'desc': '最高价', 'coverage': None},
+            {'name': 'low', 'source': 'daily_quote', 'desc': '最低价', 'coverage': None},
+            {'name': 'volume', 'source': 'daily_quote', 'desc': '成交量（股）', 'coverage': None},
+            {'name': 'amount', 'source': 'daily_quote', 'desc': '成交额（元）', 'coverage': None},
+        ]
+        # 基本面注册表字段：近 35 天非空行数 / 总行数 = 覆盖率
+        cov = db.execute(text("""
+            SELECT COUNT(*),
+                   COUNT(pe_ttm), COUNT(pb_mrq), COUNT(ps_ttm), COUNT(dv_ratio), COUNT(dv_ttm),
+                   COUNT(turnover_rate), COUNT(volume_ratio), COUNT(circ_mv), COUNT(total_mv)
+            FROM stock_fundamentals_history WHERE report_date >= CURRENT_DATE - 35
+        """)).fetchone()
+        total = cov[0] or 1
+        fund = [
+            {'name': 'pe_ttm', 'desc': '市盈率 TTM', 'coverage': round(cov[1] / total, 3)},
+            {'name': 'pb_mrq', 'desc': '市净率 MRQ', 'coverage': round(cov[2] / total, 3)},
+            {'name': 'ps_ttm', 'desc': '市销率 TTM', 'coverage': round(cov[3] / total, 3)},
+            {'name': 'dv_ratio', 'desc': '股息率（%）', 'coverage': round(cov[4] / total, 3)},
+            {'name': 'dv_ttm', 'desc': '股息率 TTM（%）', 'coverage': round(cov[5] / total, 3)},
+            {'name': 'turnover_rate', 'desc': '换手率（%）', 'coverage': round(cov[6] / total, 3)},
+            {'name': 'volume_ratio', 'desc': '量比', 'coverage': round(cov[7] / total, 3)},
+            {'name': 'circ_mv', 'desc': '流通市值（元）', 'coverage': round(cov[8] / total, 3)},
+            {'name': 'total_mv', 'desc': '总市值（元）', 'coverage': round(cov[9] / total, 3)},
+        ]
+        db.close()
+        return {'base': base, 'fundamentals': fund}
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, str(e))
+
+
+
 @router.get("")
 def list_features(
     entity: Optional[str] = Query(None, description="目标实体筛选: stock/etf/index/global"),

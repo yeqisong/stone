@@ -52,6 +52,7 @@
           <div v-if="nav.tab==='a'"><ModelView /></div>
           <div v-if="nav.tab==='f'"><FunctionView /></div>
           <div v-if="nav.tab==='e'"><FeatureView /></div>
+          <div v-if="nav.tab==='w'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DbExplorerView /></div>
           <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => { nav.backFromFeatureDetail(); nav.pendingEditFeatureId = id }" /></div>
           <div v-if="nav.tab==='g'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" @show-log="(id) => { nav.flowId = parseInt(id); nav.tab = 'q' }" /></div>
           <div v-if="nav.tab==='q'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FlowLogView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
@@ -120,6 +121,7 @@ import StatusView from './components/StatusView.vue'
 import ModelView from './components/ModelView.vue'
 import FunctionView from './components/FunctionView.vue'
 import FeatureView from './components/FeatureView.vue'
+import DbExplorerView from './components/DbExplorerView.vue'
 import FeatureDetail from './components/FeatureDetail.vue'
 import DagFlowEdit from './components/DagFlowEdit.vue'
 import FlowLogView from './components/FlowLogView.vue'
@@ -144,6 +146,7 @@ const adminTabs = [
   { key: 'f', icon: '🔧', label: '函数' },
   { key: 'e', icon: '🔬', label: '特征' },
   { key: 'g', icon: '🔀', label: 'DAG' },
+  { key: 'w', icon: '🗄', label: '数据' },
 ]
 const isAdminTab = computed(() => adminTabs.some(t => t.key === nav.tab))
 

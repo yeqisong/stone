@@ -23,6 +23,21 @@ from strategy.indicators import sma, ema, rsi, macd, atr, bollinger_bands
 
 # ── SQL 拉取 OHLCV 数据（供共享复用）──
 
+# 字段注册表（v3.7）：基本面日度历史字段 → stock_fundamentals_history（report_date=交易日）。
+# 公式引用这些名字时由 _fetch_ohlcv 自动从源表补充列（仅 stock 实体）；缺失自然为 NaN。
+EXTRA_FIELD_SOURCES = {
+    'pe_ttm': 'stock_fundamentals_history',
+    'pb_mrq': 'stock_fundamentals_history',
+    'ps_ttm': 'stock_fundamentals_history',
+    'dv_ratio': 'stock_fundamentals_history',
+    'dv_ttm': 'stock_fundamentals_history',
+    'turnover_rate': 'stock_fundamentals_history',
+    'volume_ratio': 'stock_fundamentals_history',
+    'circ_mv': 'stock_fundamentals_history',
+    'total_mv': 'stock_fundamentals_history',
+}
+_FIELD_RE = '|'.join(EXTRA_FIELD_SOURCES)
+
 def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str = None,
                  stock_codes: list = None, columns: list = None) -> pd.DataFrame:
     """拉取 daily_quote / index_daily_quote → pandas DataFrame。
@@ -41,6 +56,9 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
         sel_cols = [c for c in columns if c in all_ohlcv]
     else:
         sel_cols = all_ohlcv
+    if not sel_cols:
+        # 公式只引用基本面注册表字段时，仍需 close 锚定主面板行集（交易日×股票）
+        sel_cols = ["close"]
 
     conditions = []
     params = {}
@@ -55,6 +73,8 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
         params["codes"] = stock_codes
     if target_entity == "stock":
         conditions.append(f"{table}.exchange IN ('SSE','SZSE')")
+    # 零价格行（停牌占位）不得进入因子面板：会毒化滚动窗口并把除法归一化炸到 1e12（M5 修复）
+    conditions.append(f"{table}.close > 0")
 
     where = " AND ".join(conditions) if conditions else "1=1"
 
@@ -86,6 +106,24 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
     # stock_code 用 category 类型
     df["stock_code"] = df["stock_code"].astype("category")
 
+    # 基本面字段补充（字段注册表）：stock_fundamentals_history 按区间拉取后左对齐
+    extra_cols = [c for c in (columns or []) if c in EXTRA_FIELD_SOURCES]
+    if extra_cols and target_entity == "stock" and not df.empty:
+        col_str2 = ", ".join(extra_cols)
+        erows = db.execute(text(
+            f"SELECT stock_code, report_date AS trade_date, {col_str2} "
+            f"FROM stock_fundamentals_history WHERE report_date BETWEEN :sd AND :ed"
+        ), {"sd": params.get("sd", "1990-01-01"), "ed": params.get("ed", "2099-12-31")}).fetchall()
+        if erows:
+            emap = {(r[0], str(r[1])[:10]): tuple(float(x) if x is not None else None for x in r[2:])
+                    for r in erows}
+            codes_str = df["stock_code"].astype(str)
+            dates_str = df["trade_date"].dt.strftime("%Y-%m-%d")
+            for j, cname in enumerate(extra_cols):
+                df[cname] = [emap.get((c, d), (None,) * len(extra_cols))[j]
+                             for c, d in zip(codes_str, dates_str)]
+                df[cname] = df[cname].astype("float64")  # circ_mv 十亿级，float32 会丢精度
+
     return df
 
 
@@ -101,7 +139,11 @@ def _batch_insert(db, feature_name: str, df: pd.DataFrame):
     from io import StringIO
 
     insert_df = df[["trade_date", "stock_code", "_value"]].copy()
-    insert_df["_value"] = insert_df["_value"].apply(lambda v: None if pd.isna(v) else v)
+    # 通用防护：inf → NaN；|值| 超过 NUMERIC(18,6) 安全域的视为脏值剔除（M5）
+    v = insert_df["_value"].astype(float)
+    v = v.replace([np.inf, -np.inf], np.nan)
+    insert_df["_value"] = v.where(v.abs() <= 1e9)
+    insert_df["_value"] = insert_df["_value"].apply(lambda x: None if pd.isna(x) else x)
     insert_df = insert_df.dropna(subset=["_value"])
     if insert_df.empty:
         return 0
@@ -192,8 +234,10 @@ def _extract_lookback(formula: str) -> int:
     if m:
         return max(int(m.group(1)), int(m.group(2)))
 
-    # bare field: close, volume, etc. → 无需回看
-    return 0
+    # 兜底：任意复合公式取其中最大数字参数作为回看天数（如 hhv(high,60)/close → 60；
+    # 含 1e-12 防除零字面量时多估几天无害）
+    nums = [int(x) for x in re.findall(r'\d+', f)]
+    return max(nums) if nums else 0
 
 
 # ── 核心计算 ──
@@ -233,9 +277,14 @@ def compute_feature(
     import re as _re
 
     try:
-        # 0. 从公式提取需要的 OHLCV 列
+        # 0. 从公式提取需要的原始字段（OHLCV + 基本面注册表字段）
         _ohlcv_fields = {"close", "open", "high", "low", "volume", "amount"}
-        needed_cols = sorted(_ohlcv_fields & set(_re.findall(r'\b(close|open|high|low|volume|amount)\b', formula)))
+        found = set(_re.findall(
+            r'\b(close|open|high|low|volume|amount|pe_ttm|pb_mrq|ps_ttm|dv_ratio|dv_ttm'
+            r'|turnover_rate|volume_ratio|circ_mv|total_mv)\b', formula))
+        ohlv_cols = sorted(_ohlcv_fields & found)
+        extra_cols = sorted(set(EXTRA_FIELD_SOURCES) & found)
+        needed_cols = ohlv_cols + extra_cols
         if not needed_cols:
             needed_cols = ["close"]
         # 内置 ATR 依赖 high/low（公式字面只写 close，但真实波幅需要最高/最低价）
@@ -487,6 +536,120 @@ def _builtin_atr(data: pd.Series, df: pd.DataFrame, period: int) -> pd.Series:
     return _exec_atr(df, period)
 
 
+def _builtin_std(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).std())
+
+
+def _builtin_max2(data: pd.Series, df: pd.DataFrame, other) -> pd.Series:
+    """max2(a, b)：逐元素取大（KBAR 组 Greater 语义；b 为字段序列或标量）。"""
+    other = other.astype(float) if hasattr(other, 'astype') else float(other)
+    return pd.Series(np.maximum(data.astype(float), other), index=data.index)
+
+
+def _builtin_min2(data: pd.Series, df: pd.DataFrame, other) -> pd.Series:
+    other = other.astype(float) if hasattr(other, 'astype') else float(other)
+    return pd.Series(np.minimum(data.astype(float), other), index=data.index)
+
+
+# ── Alpha158 移植算子（design/05 M5）──
+# 语义对齐 Qlib expr：Ref=滞后（负偏移=未来，显式防 shift 方向 bug）；
+# hhv/llv=窗口最高/最低（min_periods=window，未满窗为 NaN——与 Qlib 全窗语义一致）；
+# imax/imin=窗口内距极值的天数（0=当日即极值，Qlib IdxMax 口径）；回归系按窗口内时间 0..n-1。
+
+def _builtin_ref(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return data.groupby(df["stock_code"], observed=True).shift(int(n))
+
+
+def _builtin_hhv(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).max())
+
+
+def _builtin_llv(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).min())
+
+
+def _builtin_ts_quantile(data: pd.Series, df: pd.DataFrame, n: int, q: float) -> pd.Series:
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).quantile(float(q)))
+
+
+def _builtin_ts_rank(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    """当前值在窗口内的分位（0~1），Qlib Rank 口径。"""
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
+            lambda a: float((a <= a[-1]).mean()), raw=True))
+
+
+def _roll_reg(data: pd.Series, df: pd.DataFrame, n: int, which: str) -> pd.Series:
+    """窗口线性回归（时间轴 0..n-1）：slope 斜率 / rsquare R² / resi 当日残差。"""
+    def _apply(a):
+        t = np.arange(len(a), dtype=float)
+        tm = t.mean()
+        var_t = ((t - tm) ** 2).sum()
+        if var_t < 1e-12:
+            return 0.0
+        ym = a.mean()
+        beta = ((t - tm) * (a - ym)).sum() / var_t
+        if which == 'slope':
+            return beta
+        pred = beta * (t - tm) + ym
+        if which == 'resi':
+            return float(a[-1] - pred[-1])
+        ss_res = float(((a - pred) ** 2).sum())
+        ss_tot = float(((a - ym) ** 2).sum())
+        return 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(_apply, raw=True))
+
+
+def _builtin_slope(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return _roll_reg(data, df, int(n), 'slope')
+
+
+def _builtin_rsquare(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return _roll_reg(data, df, int(n), 'rsquare')
+
+
+def _builtin_resi(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return _roll_reg(data, df, int(n), 'resi')
+
+
+def _builtin_imax(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    """距窗口最高值的天数（0=当日即最高），Qlib IdxMax 口径。"""
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
+            lambda a: float(len(a) - 1 - int(np.argmax(a))), raw=True))
+
+
+def _builtin_imin(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
+    return data.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
+            lambda a: float(len(a) - 1 - int(np.argmin(a))), raw=True))
+
+
+def _builtin_ts_corr(data: pd.Series, df: pd.DataFrame, other, n: int) -> pd.Series:
+    """ts_corr(x, y, n)：两序列滚动相关（x=data 求值结果，y=第二参数序列）。"""
+    other = other.astype(float)
+
+    def _corr(a, b):
+        if len(a) < 2:
+            return np.nan
+        sa, sb = a.std(), b.std()  # 样本标准差（ddof=1）
+        if sa < 1e-12 or sb < 1e-12:
+            return np.nan
+        cov = float(((a - a.mean()) * (b - b.mean())).sum() / (len(a) - 1))
+        return cov / (sa * sb)
+
+    a = data.astype(float)
+    return a.groupby(df["stock_code"], observed=True).transform(
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
+            lambda w: _corr(w, other.loc[w.index]), raw=False))
+
+
 _BUILTIN_REGISTRY = {
     'ma': _builtin_ma,
     'ema': _builtin_ema,
@@ -499,6 +662,21 @@ _BUILTIN_REGISTRY = {
     'dea': _builtin_dea,
     'macd_hist': _builtin_macd_hist,
     'atr': _builtin_atr,
+    # Alpha158 移植算子（M5）
+    'ref': _builtin_ref,
+    'hhv': _builtin_hhv,
+    'llv': _builtin_llv,
+    'ts_quantile': _builtin_ts_quantile,
+    'ts_rank': _builtin_ts_rank,
+    'slope': _builtin_slope,
+    'rsquare': _builtin_rsquare,
+    'resi': _builtin_resi,
+    'imax': _builtin_imax,
+    'imin': _builtin_imin,
+    'ts_corr': _builtin_ts_corr,
+    'std': _builtin_std,
+    'max2': _builtin_max2,
+    'min2': _builtin_min2,
 }
 
 # 自定义函数缓存：{func_name: callable}
@@ -658,8 +836,9 @@ def _execute_ast(df: pd.DataFrame, node, db=None) -> Optional[pd.Series]:
             return left * right if ls else right * left
         elif node.op == '/':
             if rs:
-                return left / right.replace(0, 1e-10)
-            return left / right if right != 0 else left / 1e-10
+                # 分母为 0 → NaN（0 价停牌行防护；1e-10 放大替换会把合法分子炸成 1e10 级）
+                return left / right.replace(0, np.nan)
+            return left / right if right != 0 else left * np.nan
 
     return None
 
