@@ -96,7 +96,7 @@ TIME_SERIES_FUNCTIONS = {
 }
 
 CROSS_SECTIONAL_FUNCTIONS = {
-    'avg', 'sum', 'max', 'min', 'rank', 'quantile', 'zscore'
+    'avg', 'sum', 'max', 'min', 'rank', 'quantile', 'zscore', 'neut'
 }
 
 ALL_FUNCTIONS = TIME_SERIES_FUNCTIONS | CROSS_SECTIONAL_FUNCTIONS

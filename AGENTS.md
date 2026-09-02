@@ -46,14 +46,16 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
 ### 核心模块
 
 - **`app/`** — FastAPI 后端
-  - `app/main.py` — 入口，15 个 router + CORS + 前端静态 + lifespan（init_db→entity_stats→模型恢复→WS→cron）
+  - `app/main.py` — 入口，16 个 router + CORS + 前端静态 + lifespan（init_db→entity_stats→模型恢复→WS→cron）
   - `app/config.py` — 配置管理（Settings）
-  - `app/db/` — 数据库连接（connection.py 双引擎）+ 42 张表 DDL + init_db 幂等迁移（schema.py）
+  - `app/db/` — 数据库连接（connection.py 双引擎）+ 40 张表 DDL + init_db 幂等迁移（schema.py）
   - `app/api/` — REST API 路由：
     - `portfolio.py` / `treemap.py` / `signals.py` / `stock.py` / `stocks.py` — 持仓/树图/信号/详情/列表
+    - `risk.py` — 风控规则与告警查询（/api/risk/*）
     - `status.py` — 数据状态/DAG 触发/WS/系统指标/**tushare_quota**
     - `settings.py` / `models.py` / `functions.py` / `features.py` / `kepl.py` — 配置/模型/函数/特征/KEPL
     - `dag_types.py` / `dag_flows.py` — DAG 节点类型 / 动态流程编排 + 执行
+  - `app/risk.py` — 风控规则引擎（止损/回撤熔断/行业上限；规则存 strategy_config，paper_portfolio 节点每日评估，告警走 WS 推送）
   - `app/auth/` — JWT 认证 + 登录（单用户，环境变量密码）
   - `app/task/` — TaskManager 统一任务机制（并发≤5、同流程互斥、WS 推送）
   - `app/feishu/` — 飞书 Bot webhook（签名校验、对话历史、确认卡片闭环）
@@ -105,15 +107,16 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
              飞书 Bot (DeepSeek AI 对话)
 ```
 
-### 关键数据表（SQL schema in `app/db/schema.py`, 42 张表）
-- **行情**: `trade_calendar`, `stock_master`, `daily_quote`, `index_daily_quote`, `corporate_actions`, `failed_downloads`
+### 关键数据表（SQL schema in `app/db/schema.py`, 40 张表）
+- **行情**: `trade_calendar`, `stock_master`, `daily_quote`, `index_daily_quote`
 - **基本面**: `stock_fundamentals`(PK: code+trade_date), `stock_fundamentals_history`
 - **业务**: `portfolio`, `portfolio_history`, `signal_history`, `stock_treemap_cache`
 - **特征/函数**: `features`, `feature_values`, `functions`, `function_versions`
-- **模型**: `model_versions`, `training_trials`, `model_health`, `version_comparisons`, `backtest_records`, `backtest_trades`, `strategy_scan_tasks`
+- **模型**: `model_versions`, `training_trials`, `model_health`, `version_comparisons`, `backtest_records`, `backtest_trades`
 - **DAG**: `dag_config`, `dag_run_log`, `dag_flows`, `dag_flow_versions`, `backfill_tasks`
 - **统计/系统**: `daily_completeness`, `data_stats_cache`, `entity_stats`, `system_metrics`, `strategy_config`, **`tushare_quota`**
-- **拓展**: `stock_top_list`, `stock_moneyflow`, `stock_hk_hold`, `stock_margin_detail`, `stock_holder_number`（表就绪，采集链路未接入）
+- **风控**: `risk_alerts`（规则引擎告警：止损/回撤熔断/行业上限，WS→Chrome 通知）
+- **拓展**: `stock_moneyflow`（已接入：每日 DAG 节点 + KEPL 字段 + 2010 起历史回补完成）、`stock_top_list` / `stock_margin_detail` / `stock_holder_number`（表就绪，采集链路未接入）、`stock_hk_hold`（北向个股披露 2024-08 停止，数据源失效，保留表结构）
 
 ## Conventions
 
@@ -206,6 +209,7 @@ ssh myhuawei "docker logs stock-app --tail 20"
 
 ## Notes
 
+- **v3.8.0（2026-09-02）**：特征引擎并行化与五步拓展——①alpha158_full 并行引擎（每年宽表单次拉取共享 + fork 多进程各自 engine，全量 1140 因子年 30h→1.5h；进度文件迁仓库根 .a158_full_progress.json）②KEPL `neut(字段)` 截面中性化算子（市值+行业哑变量逐日 OLS 残差）+ 训练/评估/预测 `feature_neut` 钩子（先中性化后 cs_rank）+ ModelView 开关 ③资金流接入（moneyflow DAG 节点 + KEPL 5 字段 + 2010 起历史回补 4047 天全量；tushare 真实列名 *_amount，hk_hold 因北向披露停止撤销）④风控引擎 app/risk.py（止损/回撤熔断/行业上限，risk_alerts 表，WS 推送 type='risk_alert' → Chrome 通知，顶栏铃铛开关；paper 持仓口径必须 close_hfq）⑤feature_values 按年分区（零拷贝 legacy-attach 2017-2027 + 前瞻分区 + DEFAULT；init_db 升级 $-quote 感知切分 + 动态分区确保块；删老年份=DROP PARTITION）⑥数据治理：特征库十年保留（13.1 亿→3.25 亿行重建，value float8，砍 idx_fv_stock_date）、WSL 迁 D:\WSL（vhdx compact 444→335G）、ANALYZE 节点上流程（数据页统计过期防治）、start_local.sh pg_isready 等待 + a158/资金流回补自愈续跑、turnover_rev 按修复引擎重算（373.8 万行）
 - **v3.7.0（2026-09-01）**：Qlib 移植七里程碑（design/05）——①回测引擎 v2（`strategy/backtest/`：Exchange/Account/engine，涨跌停/T+1/延迟结算/最低佣金/冲击成本/整手/现金约束，与 v1 逐日 0 差异）②TopkDropoutStrategy（合并排序防高卖低买/hold_thresh/n_drop，扫描支持 topk）③纸面组合迁移 v2 内核（删 paper_day_step，173 日回放逐日一致）④绩效报告（report.py：risk_analysis sum/product + IR/α/β/超额/换手，model_health 新列 + 评估页指标条）⑤因子库（KEPL 补 14 算子 + 负字面量，Alpha158 生成器 114 因子入库 2519 万行，IC 绿75/黄20/红19，dedup 精选 41；`scripts/alpha158.py`）⑥DoubleEnsemble 实验（`strategy/models/double_ensemble.py` LightGBM，v12.0 PENDING，WF 3/4 胜但 RankIC 未达标 FAIL）⑦评估入口默认 engine=v2（`_backtest` 兼容层 v1 口径：归因/扫描/WF/置换检验）。附带：算子目录单一事实源 `/api/kepl/functions`（强校验）+ Monaco 补全 + 函数页「系统内置算子」分类 + AI 上下文动态化；`_fetch_ohlcv` 过滤零价停牌行（修因子面板污染）；`predict_for_version` 多周期均值 + NaN 缺失分支（信号统一入口）
 - **v3.2.1（2026-08-22）**：补数链路修复（index_code VARCHAR(16)/SAVEPOINT 批次隔离/上市日感知续传阈值）+ 特征计算 2000 全量（23 特征 3.98 亿行完成，ATR 自动补 high/low）+ XGBoost 训练 GPU 优先（RTX 5060 cuda，失败回退 CPU）+ 前端 popstate 监听泄漏修复（详见 design/01-04）
 - **数据现状**：daily_quote 1766 万行（2000→今，重复 0）；index_daily_quote 63 万行（2000 起续跑中）；ETF/基本面（ROE 等）补数挂起，用页面补数按钮续跑（tushare 8000 次/天配额预算），勿写临时脚本

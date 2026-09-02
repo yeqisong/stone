@@ -36,6 +36,16 @@ EXTRA_FIELD_SOURCES = {
     'circ_mv': 'stock_fundamentals_history',
     'total_mv': 'stock_fundamentals_history',
 }
+
+# 拓展表字段注册（step2）：KEPL 可引用的跨表字段 → (来源表, 表内真实列名)
+EXTRA_TABLE_FIELDS = {
+    'stock_moneyflow': {'buy_lg_amt': 'buy_lg_amt', 'sell_lg_amt': 'sell_lg_amt',
+                        'buy_elg_amt': 'buy_elg_amt', 'sell_elg_amt': 'sell_elg_amt',
+                        'net_mf_amt': 'net_mf_amt'},
+    'stock_margin_detail': {'margin_rzye': 'fin_amount', 'margin_rzmre': 'fin_buy_amount',
+                            'margin_total': 'total_amount'},
+}
+_ALL_EXTRA_TABLE_COLS = {alias: tbl for tbl, m in EXTRA_TABLE_FIELDS.items() for alias in m}
 _FIELD_RE = '|'.join(EXTRA_FIELD_SOURCES)
 
 def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str = None,
@@ -123,6 +133,24 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
                 df[cname] = [emap.get((c, d), (None,) * len(extra_cols))[j]
                              for c, d in zip(codes_str, dates_str)]
                 df[cname] = df[cname].astype("float64")  # circ_mv 十亿级，float32 会丢精度
+
+    # 拓展表字段补充（资金流）：整表按日期区间拉取后左对齐（step2）
+    for tbl, fmap in EXTRA_TABLE_FIELDS.items():
+        wanted = [a for a in (columns or []) if a in fmap]
+        if not wanted or target_entity != "stock" or df.empty:
+            continue
+        tbl_cols = ", ".join(fmap[a] for a in wanted)
+        trows = db.execute(text(
+            f"SELECT stock_code, trade_date, {tbl_cols} FROM {tbl} WHERE trade_date BETWEEN :sd AND :ed"
+        ), {"sd": params.get("sd", "1990-01-01"), "ed": params.get("ed", "2099-12-31")}).fetchall()
+        tmap = {(r[0], str(r[1])[:10]): tuple(float(x) if x is not None else None for x in r[2:])
+                for r in trows}
+        codes_str = df["stock_code"].astype(str)
+        dates_str = df["trade_date"].dt.strftime("%Y-%m-%d")
+        for j, alias in enumerate(wanted):
+            df[alias] = [tmap.get((c, d), (None,) * len(wanted))[j]
+                         for c, d in zip(codes_str, dates_str)]
+            df[alias] = df[alias].astype("float64")
 
     return df
 
@@ -235,8 +263,10 @@ def _extract_lookback(formula: str) -> int:
         return max(int(m.group(1)), int(m.group(2)))
 
     # 兜底：任意复合公式取其中最大数字参数作为回看天数（如 hhv(high,60)/close → 60；
-    # 含 1e-12 防除零字面量时多估几天无害）
-    nums = [int(x) for x in re.findall(r'\d+', f)]
+    # 含 1e-12 防除零字面量时多估几天无害）。
+    # 上限 500：单位换算常数（如 circ_mv/100000000 的 1 亿）不是滚动窗口，
+    # 误抓会把拉取起点回推出 date 溢出（psycopg2 "date value out of range"）
+    nums = [int(x) for x in re.findall(r'\d+', f) if int(x) <= 500]
     return max(nums) if nums else 0
 
 
@@ -281,15 +311,19 @@ def compute_feature(
         _ohlcv_fields = {"close", "open", "high", "low", "volume", "amount"}
         found = set(_re.findall(
             r'\b(close|open|high|low|volume|amount|pe_ttm|pb_mrq|ps_ttm|dv_ratio|dv_ttm'
-            r'|turnover_rate|volume_ratio|circ_mv|total_mv)\b', formula))
+            r'|turnover_rate|volume_ratio|circ_mv|total_mv'
+            r'|buy_lg_amt|sell_lg_amt|buy_elg_amt|sell_elg_amt|net_mf_amt|margin_rzye|margin_rzmre|margin_total)\b', formula))
         ohlv_cols = sorted(_ohlcv_fields & found)
-        extra_cols = sorted(set(EXTRA_FIELD_SOURCES) & found)
+        extra_cols = sorted((set(EXTRA_FIELD_SOURCES) | set(_ALL_EXTRA_TABLE_COLS)) & found)
         needed_cols = ohlv_cols + extra_cols
         if not needed_cols:
             needed_cols = ["close"]
         # 内置 ATR 依赖 high/low（公式字面只写 close，但真实波幅需要最高/最低价）
         if _re.search(r'\batr\b', formula):
             needed_cols = sorted(set(needed_cols) | {"high", "low"})
+        # neut 中性化依赖市值列（行业映射由算子内部经 db 查 stock_master）
+        if _re.search(r'\bneut\b', formula):
+            needed_cols = sorted(set(needed_cols) | {"circ_mv"})
 
         lookback = _extract_lookback(formula)
 
@@ -722,7 +756,89 @@ def _load_custom_function(db, func_name: str):
 
 # ── 跨股票函数注册表 ──
 
-_CROSS_SECTIONAL_BUILTIN = {'avg', 'sum', 'max', 'min', 'rank', 'quantile', 'zscore'}
+_CROSS_SECTIONAL_BUILTIN = {'avg', 'sum', 'max', 'min', 'rank', 'quantile', 'zscore', 'neut'}
+
+
+# ── 截面中性化（neut）：对 [1, log1p(circ_mv), 行业哑变量] 逐日回归取残差 ──
+# 去除市值/行业风格暴露，残差即"纯因子"。行业映射来自 stock_master.industry_l1（模块级缓存）。
+_INDUSTRY_CACHE: dict = {}
+
+def _load_industry_map(db) -> dict:
+    if _INDUSTRY_CACHE:
+        return _INDUSTRY_CACHE
+    try:
+        rows = db.execute(text(
+            "SELECT DISTINCT ON (stock_code) stock_code, industry_l1 FROM stock_master "
+            "WHERE industry_l1 IS NOT NULL AND industry_l1 <> '' AND stock_type = 'stock' "
+            "ORDER BY stock_code, (stock_type = 'stock') DESC"
+        )).fetchall()
+        _INDUSTRY_CACHE.update({r[0]: r[1] for r in rows})
+    except Exception:
+        try:
+            db.rollback()   # 查询失败不能毒化 session 后续事务
+        except Exception:
+            pass
+    return _INDUSTRY_CACHE
+
+
+def _neut_cross_sectional(data_series: pd.Series, df: pd.DataFrame, db=None) -> pd.Series:
+    """市值+行业中性化：残差 = 因子值 − 回归拟合值（逐交易日截面 OLS）。
+
+    因子值/circ_mv 缺失的行保持 NaN；行业缺失时退化为纯市值中性化。
+    对齐约定：data_series 与 df 同行序（positional），残差按原行位置回填。"""
+    v = pd.to_numeric(data_series, errors='coerce')
+    if 'circ_mv' in df.columns:
+        mv_vals = pd.to_numeric(df['circ_mv'], errors='coerce').values
+    else:
+        mv_vals = np.full(len(df), np.nan)   # 无市值列 → 全 NaN，退化为仅行业中性/原值
+    base = pd.DataFrame({
+        'dt': df['trade_date'].values,
+        'v': v.values,
+        'mv': np.log1p(mv_vals),
+    })
+    base = base.dropna(subset=['v', 'mv'])
+    if base.empty:
+        return data_series
+    # dropna 保留的 index 标签 = 原始 df 行位置（单调递增），用作残差回填坐标
+    keep_pos = base.index.to_numpy()
+
+    ind_map = _load_industry_map(db)
+    if ind_map:
+        base['ind'] = df['stock_code'].map(ind_map).reindex(keep_pos).values
+        dummies = pd.get_dummies(base['ind'], prefix='i', drop_first=True, dtype=float)
+    else:
+        dummies = pd.DataFrame(index=base.index)
+
+    # 设计矩阵按 base 行序构建；逐日切片做 OLS（日期内全零哑变量列裁剪防共线）
+    X_all = np.column_stack([np.ones(len(base)), base['mv'].values] +
+                            ([dummies.values] if len(dummies.columns) else []))
+    resid_keep = base['v'].values.astype(float).copy()
+    for _, grp in base.groupby('dt', sort=False):
+        labels = grp.index.to_numpy()
+        local = np.searchsorted(keep_pos, labels)
+        X = X_all[local]
+        X = X[:, ~np.all(X == 0, axis=0)]          # 日期内全零哑变量列裁剪（防共线）
+        if X.shape[0] <= X.shape[1] + 10:          # 样本太少不做回归，保留原值
+            continue
+        y = grp['v'].values.astype(float)
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        resid_keep[local] = y - X @ beta
+
+    out = pd.Series(np.nan, index=data_series.index)
+    out.iloc[keep_pos] = resid_keep
+    return out
+
+
+def neutralize_columns(df: pd.DataFrame, cols: list, db=None) -> pd.DataFrame:
+    """宽表多列特征的截面中性化入口（训练/推理预处理，与 KEPL neut 算子同内核）。
+
+    要求 df 已含 circ_mv 列（调用方负责 merge）；原地更新并返回 df。"""
+    for c in cols:
+        if c in df.columns:
+            df[c] = _neut_cross_sectional(df[c], df, db)
+    return df
+
+
 
 # 跨股票内置实现：func(series) → scalar，框架负责 iterate stock + filter
 def _cs_avg(series: pd.Series) -> float:
@@ -787,6 +903,9 @@ def _execute_ast(df: pd.DataFrame, node, db=None) -> Optional[pd.Series]:
                 g = tmp.groupby('dt')['v']
                 std = g.transform('std').replace(0, 1e-10)
                 return (data_series - g.transform('mean')) / std
+            # neut: 市值+行业中性化（残差），需 df 含 circ_mv（needed_cols 检测已保证）
+            if node.name == 'neut':
+                return _neut_cross_sectional(data_series, df, db)
             exclude_self = params[0] if params and isinstance(params[0], bool) else False
             fn = _CROSS_SECTIONAL_IMPL.get(node.name)
             if fn is None:
@@ -825,19 +944,22 @@ def _execute_ast(df: pd.DataFrame, node, db=None) -> Optional[pd.Series]:
         if left is None or right is None:
             return None
 
-        ls = isinstance(left, pd.Series)
         rs = isinstance(right, pd.Series)
 
         if node.op == '+':
-            return left + right if ls else right + left
+            return left + right
         elif node.op == '-':
-            return left - right if ls else right - left
+            # 减法不满足交换律：必须按 AST 顺序（原实现标量在左时算成 right-left，
+            # 形如 100-rsi(close,14) 的公式符号翻转静默入库）
+            return left - right
         elif node.op == '*':
-            return left * right if ls else right * left
+            return left * right
         elif node.op == '/':
             if rs:
                 # 分母为 0 → NaN（0 价停牌行防护；1e-10 放大替换会把合法分子炸成 1e10 级）
                 return left / right.replace(0, np.nan)
+            if isinstance(right, pd.Series):
+                return left / right
             return left / right if right != 0 else left * np.nan
 
     return None

@@ -76,26 +76,6 @@ CREATE TABLE IF NOT EXISTS index_daily_quote (
 );
 """
 
-CREATE_CORPORATE_ACTIONS = """
-CREATE TABLE IF NOT EXISTS corporate_actions (
-    id              SERIAL PRIMARY KEY,
-    stock_code      VARCHAR(6) NOT NULL,
-    stock_name      VARCHAR(30),
-    ex_date         DATE NOT NULL,
-    cash_div        NUMERIC(10,4) DEFAULT 0,
-    bonus_ratio     NUMERIC(10,4) DEFAULT 0,
-    transfer_ratio  NUMERIC(10,4) DEFAULT 0,
-    rights_ratio    NUMERIC(10,4) DEFAULT 0,
-    rights_price    NUMERIC(10,2) DEFAULT 0,
-    source          VARCHAR(20) DEFAULT 'detect',
-    confirmed       BOOLEAN DEFAULT false,
-    confirmed_at    TIMESTAMP,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (stock_code, ex_date)
-);
-CREATE INDEX IF NOT EXISTS idx_ca_ex_date ON corporate_actions (ex_date);
-CREATE INDEX IF NOT EXISTS idx_ca_confirmed ON corporate_actions (confirmed, ex_date);
-"""
 
 CREATE_PORTFOLIO = """
 CREATE TABLE IF NOT EXISTS portfolio (
@@ -180,43 +160,8 @@ CREATE TABLE IF NOT EXISTS strategy_config (
 );
 """
 
-CREATE_STRATEGY_PARAM_LOG = """
-CREATE TABLE IF NOT EXISTS strategy_param_log (
-    id            SERIAL PRIMARY KEY,
-    strategy_name VARCHAR(30) NOT NULL,
-    param_key     VARCHAR(30) NOT NULL,
-    old_value     TEXT,
-    new_value     TEXT,
-    changed_by    VARCHAR(20) DEFAULT 'manual',
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-"""
 
-CREATE_STOCK_INDUSTRY = """
-CREATE TABLE IF NOT EXISTS stock_industry (
-    stock_code         VARCHAR(6) NOT NULL,
-    exchange           VARCHAR(4) NOT NULL,
-    industry_sw        VARCHAR(20),
-    industry_exchange  VARCHAR(20),
-    updated_at         DATE,
-    PRIMARY KEY (stock_code, exchange)
-);
-"""
 
-CREATE_FAILED_DOWNLOADS = """
-CREATE TABLE IF NOT EXISTS failed_downloads (
-    id           SERIAL PRIMARY KEY,
-    exchange     VARCHAR(4) NOT NULL,
-    trade_date   DATE NOT NULL,
-    data_type    VARCHAR(20) NOT NULL,
-    error_msg    TEXT,
-    retry_count  SMALLINT DEFAULT 0,
-    status       VARCHAR(10) DEFAULT 'pending',
-    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    resolved_at  TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_fd_status ON failed_downloads (status, exchange);
-"""
 
 CREATE_STOCK_FUNDAMENTALS = """
 CREATE TABLE IF NOT EXISTS stock_fundamentals (
@@ -402,22 +347,6 @@ CREATE INDEX IF NOT EXISTS idx_bt_version ON backtest_trades (version, trade_dat
 
 # ── 下载历史（v2.0 重构 迭代 3.1）──
 
-CREATE_DOWNLOAD_HISTORY = """
-CREATE TABLE IF NOT EXISTS download_history (
-    id              SERIAL PRIMARY KEY,
-    task_type       VARCHAR(20) NOT NULL,
-    data_source     VARCHAR(20),
-    start_date      DATE,
-    end_date        DATE,
-    status          VARCHAR(10) DEFAULT 'running',
-    rows_downloaded INTEGER DEFAULT 0,
-    elapsed_ms      INTEGER,
-    error_message   TEXT,
-    started_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    finished_at     TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_dh_type_date ON download_history (task_type, started_at DESC);
-"""
 
 # ── 特征值存储（v2.0 重构 迭代 3.2）──
 
@@ -426,13 +355,31 @@ CREATE TABLE IF NOT EXISTS feature_values (
     feature_name    VARCHAR(64) NOT NULL,
     stock_code      VARCHAR(6) NOT NULL,
     trade_date      DATE NOT NULL,
-    value           NUMERIC(18,6),
+    value           FLOAT8,
     calc_status     VARCHAR(10) DEFAULT 'OK',
     PRIMARY KEY (feature_name, stock_code, trade_date)
-);
+) PARTITION BY RANGE (trade_date);
 CREATE INDEX IF NOT EXISTS idx_fv_feature_date ON feature_values (feature_name, trade_date DESC, stock_code);
-CREATE INDEX IF NOT EXISTS idx_fv_stock_date ON feature_values (stock_code, trade_date);
--- 旧单列索引 idx_fv_feature_date 被上面的复合索引替代，可后续 DROP
+-- idx_fv_stock_date 已移除：仅 features.py 单点使用且 PK (feature_name, stock_code, trade_date) 前缀可覆盖；
+-- 3 亿行级下该索引占 ~50G，2026-09 特征库十年保留瘦身时随全表重建移除
+-- 按年 RANGE 分区（step4 磁盘危机根治）：删老年份 = DROP PARTITION 秒删即还磁盘。
+-- 分区确保用 DO 块动态执行：与实库 legacy 分区（2017-2027 零拷贝挂载）重叠的年份静默跳过；
+-- DEFAULT 兜底异常日期。fresh 安装生成 2000-未来2年全分区，与实库增量布局并存。
+DO $$
+DECLARE y INT;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_partitioned_table WHERE partrelid = 'feature_values'::regclass) THEN
+        FOR y IN 2000..(EXTRACT(YEAR FROM CURRENT_DATE)::int + 2) LOOP
+            BEGIN
+                EXECUTE 'CREATE TABLE IF NOT EXISTS feature_values_y' || y ||
+                        ' PARTITION OF feature_values FOR VALUES FROM (''' ||
+                        make_date(y, 1, 1)::text || ''') TO (''' || make_date(y + 1, 1, 1)::text || ''')';
+            EXCEPTION WHEN OTHERS THEN NULL;   -- 与 legacy/既有分区重叠 → 跳过
+            END;
+        END LOOP;
+        EXECUTE 'CREATE TABLE IF NOT EXISTS feature_values_def PARTITION OF feature_values DEFAULT';
+    END IF;
+END $$;
 """
 
 # ── DAG 流程编排（v2.0 重构 迭代 4.1）──
@@ -468,18 +415,6 @@ CREATE TABLE IF NOT EXISTS dag_flow_versions (
 
 # ── 实体元数据（v2.0 重构 迭代 2.5）──
 
-CREATE_ENTITY_META = """
-CREATE TABLE IF NOT EXISTS entity_meta (
-    stock_code      VARCHAR(6) NOT NULL,
-    stock_type      VARCHAR(10) NOT NULL DEFAULT 'stock',
-    ipo_date        DATE,
-    delist_date     DATE,
-    listing_status  VARCHAR(16) DEFAULT 'ACTIVE',
-    total_shares    BIGINT,
-    PRIMARY KEY (stock_code, stock_type)
-);
-CREATE INDEX IF NOT EXISTS idx_em_status ON entity_meta (listing_status);
-"""
 
 # ── 特征管理（v2.0 重构 迭代 2.2）──
 
@@ -639,6 +574,175 @@ ON CONFLICT (strategy_name) DO NOTHING;
 """
 
 # ── 龙虎榜（tushare top_list）──
+# ── 拓展数据接入（step2 扩展：北向整体/大宗/解禁/回购/分红/预告/快报/财务指标/指数成分）──
+
+CREATE_MONEYFLOW_HSGT = """
+CREATE TABLE IF NOT EXISTS moneyflow_hsgt (
+    trade_date  DATE NOT NULL,
+    ggt_ss      FLOAT,     -- 港股通（沪）
+    ggt_sz      FLOAT,     -- 港股通（深）
+    hgt         FLOAT,     -- 沪股通净流入
+    sgt         FLOAT,     -- 深股通净流入
+    north_money FLOAT,     -- 北向合计净流入
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date)
+);
+"""
+
+CREATE_BLOCK_TRADE = """
+CREATE TABLE IF NOT EXISTS block_trade (
+    id          SERIAL PRIMARY KEY,
+    trade_date  DATE NOT NULL,
+    stock_code  VARCHAR(6) NOT NULL,
+    price       FLOAT,
+    vol         FLOAT,     -- 成交数量（万股）
+    amount      FLOAT,     -- 成交金额（万元）
+    buyer       VARCHAR(200),
+    seller      VARCHAR(200),
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bt ON block_trade (trade_date, stock_code, price, vol);
+CREATE INDEX IF NOT EXISTS idx_bt_date ON block_trade (trade_date);
+"""
+
+CREATE_SHARE_FLOAT = """
+CREATE TABLE IF NOT EXISTS stock_share_float (
+    id          SERIAL PRIMARY KEY,
+    stock_code  VARCHAR(6) NOT NULL,
+    ann_date    DATE,
+    float_date  DATE NOT NULL,
+    holder_name VARCHAR(200),
+    shares      FLOAT,     -- 解禁数量（万股）
+    float_ratio FLOAT,     -- 占总股本比例（%）
+    holder_type VARCHAR(30),
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sf ON stock_share_float (stock_code, float_date, holder_name);
+CREATE INDEX IF NOT EXISTS idx_sf_float_date ON stock_share_float (float_date);
+"""
+
+CREATE_REPURCHASE = """
+CREATE TABLE IF NOT EXISTS stock_repurchase (
+    id          SERIAL PRIMARY KEY,
+    stock_code  VARCHAR(6) NOT NULL,
+    ann_date    DATE,
+    end_date    DATE,
+    proc        VARCHAR(30),
+    vol         FLOAT,     -- 回购数量（万股）
+    amount      FLOAT,     -- 回购金额（万元）
+    high_limit  FLOAT,
+    low_limit   FLOAT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rp ON stock_repurchase (stock_code, ann_date, vol, amount);
+CREATE INDEX IF NOT EXISTS idx_rp_code ON stock_repurchase (stock_code, ann_date);
+"""
+
+CREATE_DIVIDEND = """
+CREATE TABLE IF NOT EXISTS stock_dividend (
+    id          SERIAL PRIMARY KEY,
+    stock_code  VARCHAR(6) NOT NULL,
+    end_date    DATE NOT NULL,
+    div_proc    VARCHAR(30) NOT NULL,   -- 分红进程（预案/股东大会通过/实施等）
+    ann_date    DATE,
+    stk_div     FLOAT,     -- 送转股比例
+    cash_div    FLOAT,     -- 每股现金分红（税前）
+    cash_div_tax FLOAT,
+    record_date DATE,      -- 股权登记日
+    ex_date     DATE,      -- 除权除息日
+    pay_date    DATE,      -- 派息日
+    base_share  FLOAT,     -- 分红送转基准股本
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_div ON stock_dividend (stock_code, end_date, div_proc);
+CREATE INDEX IF NOT EXISTS idx_div_ex ON stock_dividend (ex_date);
+"""
+
+CREATE_FORECAST = """
+CREATE TABLE IF NOT EXISTS stock_forecast (
+    id           SERIAL PRIMARY KEY,
+    stock_code   VARCHAR(6) NOT NULL,
+    ann_date     DATE NOT NULL,
+    end_date     DATE NOT NULL,
+    type         VARCHAR(20),      -- 预告类型（预增/预减/扭亏/首亏等）
+    p_change_min FLOAT,
+    p_change_max FLOAT,
+    net_profit_min FLOAT,
+    net_profit_max FLOAT,
+    last_parent_net FLOAT,       -- 上年同期归母净利
+    reason       VARCHAR(300),
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fc ON stock_forecast (stock_code, end_date, ann_date);
+CREATE INDEX IF NOT EXISTS idx_fc_ann ON stock_forecast (ann_date);
+"""
+
+CREATE_EXPRESS = """
+CREATE TABLE IF NOT EXISTS stock_express (
+    id           SERIAL PRIMARY KEY,
+    stock_code   VARCHAR(6) NOT NULL,
+    ann_date     DATE NOT NULL,
+    end_date     DATE NOT NULL,
+    revenue      FLOAT,       -- 营业收入
+    or_yoy       FLOAT,       -- 营收同比
+    netprofit    FLOAT,       -- 归母净利润
+    yoy_net_profit FLOAT,
+    bps          FLOAT,
+    total_assets FLOAT,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ex ON stock_express (stock_code, end_date, ann_date);
+CREATE INDEX IF NOT EXISTS idx_ex_ann ON stock_express (ann_date);
+"""
+
+CREATE_FINA_INDICATOR = """
+CREATE TABLE IF NOT EXISTS fina_indicator (
+    stock_code  VARCHAR(6) NOT NULL,
+    end_date    DATE NOT NULL,
+    ann_date    DATE,
+    -- 盈利能力
+    eps         FLOAT,
+    eps_ttm     FLOAT,
+    bps         FLOAT,
+    roe         FLOAT,     -- 净资产收益率
+    roe_waa     FLOAT,     -- 加权平均 ROE
+    roe_dt      FLOAT,     -- 扣非 ROE
+    roa         FLOAT,
+    grossprofit_margin FLOAT,
+    netprofit_margin   FLOAT,
+    -- 现金流与质量
+    ocf_to_or   FLOAT,     -- 经营现金流/营业收入
+    ocfps       FLOAT,     -- 每股经营现金流
+    profit_dedt FLOAT,     -- 扣非净利润
+    -- 偿债与运营
+    debt_to_assets FLOAT,
+    current_ratio  FLOAT,
+    quick_ratio    FLOAT,
+    invturn        FLOAT,  -- 存货周转率
+    ar_turn        FLOAT,  -- 应收账款周转率
+    assets_turn    FLOAT,  -- 总资产周转率
+    -- 成长性
+    netprofit_yoy  FLOAT,  -- 归母净利同比
+    netprofit_2yoy FLOAT,  -- 归母净利 2 年复合
+    or_yoy         FLOAT,  -- 营收同比
+    or_2yoy        FLOAT,  -- 营收 2 年复合
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, end_date)
+);
+CREATE INDEX IF NOT EXISTS idx_fi_ann ON fina_indicator (ann_date);
+"""
+
+CREATE_INDEX_WEIGHT = """
+CREATE TABLE IF NOT EXISTS index_weight (
+    index_code  VARCHAR(12) NOT NULL,
+    trade_date  DATE NOT NULL,
+    stock_code  VARCHAR(6) NOT NULL,
+    weight      FLOAT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (index_code, trade_date, stock_code)
+);
+"""
+
 CREATE_TOP_LIST = """
 CREATE TABLE IF NOT EXISTS stock_top_list (
     id SERIAL PRIMARY KEY,
@@ -657,6 +761,7 @@ CREATE TABLE IF NOT EXISTS stock_top_list (
 );
 CREATE INDEX IF NOT EXISTS idx_tl_date ON stock_top_list (trade_date);
 CREATE INDEX IF NOT EXISTS idx_tl_code ON stock_top_list (stock_code);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tl_date_code_reason ON stock_top_list (trade_date, stock_code, reason);
 """
 
 # ── 资金流向（tushare moneyflow）──
@@ -665,13 +770,15 @@ CREATE TABLE IF NOT EXISTS stock_moneyflow (
     trade_date DATE NOT NULL,
     stock_code VARCHAR(6) NOT NULL,
     stock_name VARCHAR(30),
-    buy_lg_amt FLOAT,      -- 特大单买入额
-    sell_lg_amt FLOAT,     -- 特大单卖出额
-    buy_md_amt FLOAT,      -- 大单买入额
-    sell_md_amt FLOAT,     -- 大单卖出额
-    buy_sm_amt FLOAT,      -- 中单买入额
-    sell_sm_amt FLOAT,     -- 中单卖出额
-    net_mf_amt FLOAT,      -- 净流入额
+    buy_elg_amt FLOAT,     -- 特大单买入额（tushare elg）
+    sell_elg_amt FLOAT,    -- 特大单卖出额
+    buy_lg_amt FLOAT,      -- 大单买入额（tushare lg）
+    sell_lg_amt FLOAT,     -- 大单卖出额
+    buy_md_amt FLOAT,      -- 中单买入额
+    sell_md_amt FLOAT,     -- 中单卖出额
+    buy_sm_amt FLOAT,      -- 小单买入额
+    sell_sm_amt FLOAT,     -- 小单卖出额
+    net_mf_amt FLOAT,      -- 净流入额（net_mf_amount）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (trade_date, stock_code)
 );
@@ -771,6 +878,22 @@ CREATE INDEX IF NOT EXISTS idx_fic_name ON factor_ic_stats (feature_name, horizo
 
 # ── 纸面组合（影子运行，v3.6）：跟随 ACTIVE 模型信号逐日模拟成交，与实盘互不干扰 ──
 
+
+CREATE_RISK_ALERTS = """
+CREATE TABLE IF NOT EXISTS risk_alerts (
+    id          SERIAL PRIMARY KEY,
+    trade_date  DATE NOT NULL,
+    kind        VARCHAR(20) NOT NULL,       -- stop_loss / drawdown / industry_cap / node_fail
+    level       VARCHAR(10) DEFAULT 'warn', -- warn / critical
+    title       VARCHAR(100) NOT NULL,
+    body        TEXT,
+    ack         BOOLEAN DEFAULT false,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ra_date ON risk_alerts (trade_date);
+CREATE INDEX IF NOT EXISTS idx_ra_ack ON risk_alerts (ack, id);
+"""
+
 CREATE_PAPER_POSITIONS = """
 CREATE TABLE IF NOT EXISTS paper_positions (
     stock_code    VARCHAR(6) PRIMARY KEY,
@@ -817,14 +940,10 @@ ALL_TABLES = [
     ("stock_master", CREATE_STOCK_MASTER),
     ("daily_quote", CREATE_DAILY_QUOTE),
     ("index_daily_quote", CREATE_INDEX_DAILY_QUOTE),
-    ("corporate_actions", CREATE_CORPORATE_ACTIONS),
     ("portfolio", CREATE_PORTFOLIO),
     ("portfolio_history", CREATE_PORTFOLIO_HISTORY),
     ("signal_history", CREATE_SIGNAL_HISTORY),
     ("strategy_config", CREATE_STRATEGY_CONFIG),
-    ("strategy_param_log", CREATE_STRATEGY_PARAM_LOG),
-    ("stock_industry", CREATE_STOCK_INDUSTRY),
-    ("failed_downloads", CREATE_FAILED_DOWNLOADS),
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
@@ -840,11 +959,19 @@ ALL_TABLES = [
     ("features", CREATE_FEATURES),
     ("factor_ic_stats", CREATE_FACTOR_IC_STATS),
     ("paper_positions", CREATE_PAPER_POSITIONS),
+    ("risk_alerts", CREATE_RISK_ALERTS),
+    ("moneyflow_hsgt", CREATE_MONEYFLOW_HSGT),
+    ("block_trade", CREATE_BLOCK_TRADE),
+    ("stock_share_float", CREATE_SHARE_FLOAT),
+    ("stock_repurchase", CREATE_REPURCHASE),
+    ("stock_dividend", CREATE_DIVIDEND),
+    ("stock_forecast", CREATE_FORECAST),
+    ("stock_express", CREATE_EXPRESS),
+    ("fina_indicator", CREATE_FINA_INDICATOR),
+    ("index_weight", CREATE_INDEX_WEIGHT),
     ("paper_trades", CREATE_PAPER_TRADES),
     ("backtest_records", CREATE_BACKTEST_RECORDS),
     ("backtest_trades", CREATE_BACKTEST_TRADES),
-    ("download_history", CREATE_DOWNLOAD_HISTORY),
-    ("entity_meta", CREATE_ENTITY_META),
     ("feature_values", CREATE_FEATURE_VALUES),
     ("dag_flows", CREATE_DAG_FLOWS),
     ("dag_flow_versions", CREATE_DAG_FLOW_VERSIONS),
@@ -858,6 +985,32 @@ ALL_TABLES = [
 ]
 
 
+
+def _split_statements(sql: str) -> list:
+    """按 ';' 切分 SQL，但 $$...$$ dollar-quote 体（plpgsql DO/函数）内部不切。
+
+    无 $-quote 时退化为普通 split(';')，行为与旧版一致。"""
+    if "$$" not in sql:
+        return sql.split(";")
+    stmts, buf, in_dollar = [], [], False
+    i = 0
+    while i < len(sql):
+        if sql.startswith("$$", i):
+            in_dollar = not in_dollar
+            buf.append("$$")
+            i += 2
+            continue
+        if sql[i] == ";" and not in_dollar:
+            stmts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(sql[i])
+        i += 1
+    if buf:
+        stmts.append("".join(buf))
+    return stmts
+
+
 def init_db(sync_session) -> None:
     """初始化数据库：建表 + 默认数据。幂等，可重复执行。"""
     # DDL 锁超时：避免长事务（如特征计算）持锁时启动被无限阻塞；超时后本会话失败可重试
@@ -866,7 +1019,7 @@ def init_db(sync_session) -> None:
     except Exception:
         pass
     for name, sql in ALL_TABLES:
-        for stmt in sql.strip().split(";"):
+        for stmt in _split_statements(sql.strip()):
             stmt = stmt.strip()
             if stmt and not stmt.startswith("--"):
                 try:
@@ -1229,25 +1382,6 @@ def init_db(sync_session) -> None:
         except Exception:
             sync_session.rollback()
 
-    # 迁移：strategy_scan_tasks 表（v2.7）
-    try:
-        sync_session.execute(text("""
-            CREATE TABLE IF NOT EXISTS strategy_scan_tasks (
-                task_id       VARCHAR(16) PRIMARY KEY,
-                version       VARCHAR(16),
-                status        VARCHAR(16) DEFAULT 'pending',
-                total_combos  INTEGER DEFAULT 0,
-                completed     INTEGER DEFAULT 0,
-                best_params   JSONB,
-                best_sharpe   DECIMAL(8,4),
-                results       JSONB,
-                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                finished_at   TIMESTAMP
-            )
-        """))
-        sync_session.commit()
-    except Exception:
-        sync_session.rollback()
 
     try:
         sync_session.execute(text("DELETE FROM dag_config WHERE node_name IN ('indicator_incr','indicator_full')"))

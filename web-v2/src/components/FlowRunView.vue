@@ -2,21 +2,21 @@
 <div style="padding:16px;max-width:100%;flex:1;min-height:0;display:flex;flex-direction:column">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:10px">
-      <n-button size="small" quaternary @click="$emit('back')">← 返回</n-button>
+      <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回</n-button>
       <span style="font-size:17px;font-weight:700;color:var(--c-text)">查看: {{ flowName }}</span>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
-      <span v-if="taskInfo" :style="{fontSize:'12px',color:taskInfo.status==='running'?'#3b82f6':taskInfo.status==='completed'?'#10b981':taskInfo.status==='failed'?'#ef4444':'var(--c-text-dim)'}">
-        {{ taskInfo.status==='running'?'⟳ '+(taskInfo.progress_pct||0)+'%':taskInfo.status==='completed'?'✅ 完成':taskInfo.status==='failed'?'❌ 失败':'空闲' }}
+      <span v-if="taskInfo" :style="{fontSize:'12px',color:taskInfo.status==='running'?'var(--c-info)':taskInfo.status==='completed'?'var(--c-success)':taskInfo.status==='failed'?'var(--c-error)':'var(--c-text-dim)'}">
+        {{ taskInfo.status==='running'?'⟳ '+(taskInfo.progress_pct||0)+'%':taskInfo.status==='completed'?'<AppIcon name="check" :size="13" />  完成':taskInfo.status==='failed'?'<AppIcon name="close" :size="13" />  失败':'空闲' }}
       </span>
-      <n-button v-if="!taskInfo || taskInfo.status!=='running'" size="small" type="primary" @click="doExecute">▶ 执行</n-button>
-      <n-button size="small" @click="goLogs">📋 日志</n-button>
+      <n-button v-if="!taskInfo || taskInfo.status!=='running'" size="tiny" type="primary" @click="doExecute"><AppIcon name="play" :size="13" />  执行</n-button>
+      <n-button size="small" @click="goLogs"><AppIcon name="l" :size="13" />  日志</n-button>
     </div>
   </div>
 
   <div v-if="taskInfo" style="padding:4px 0;margin-bottom:6px;flex-shrink:0">
     <div style="height:4px;background:var(--c-border);border-radius:2px;overflow:hidden">
-      <div :style="{height:'100%',width:(taskInfo.progress_pct||0)+'%',background:taskInfo.status==='failed'?'#ef4444':'#3b82f6',transition:'width 0.3s',borderRadius:'2px'}"></div>
+      <div :style="{height:'100%',width:(taskInfo.progress_pct||0)+'%',background:taskInfo.status==='failed'?'var(--c-error)':'var(--c-info)',transition:'width 0.3s',borderRadius:'2px'}"></div>
     </div>
   </div>
 
@@ -36,19 +36,19 @@
     <div v-if="selectedNode" style="width:260px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span style="font-weight:700;color:var(--c-text)">{{ selectedNode.data?.label || selectedNode.id }}</span>
-        <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="selectedNode=null">✕</span>
+        <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="selectedNode=null"><AppIcon name="close" :size="13" /> </span>
       </div>
       <div v-if="selectedNodeInfo" style="display:flex;flex-direction:column;gap:6px">
         <div style="font-size:10px;color:var(--c-text-dim)">
-          <span :style="{color:selectedNodeInfo.status==='success'?'#10b981':selectedNodeInfo.status==='running'?'#3b82f6':selectedNodeInfo.status==='failed'?'#ef4444':'#94a3b8'}">
-            {{ selectedNodeInfo.status==='success'?'✅':selectedNodeInfo.status==='running'?'⟳':selectedNodeInfo.status==='failed'?'❌':'◻' }} {{ selectedNodeInfo.status }}
+          <span :style="{color:selectedNodeInfo.status==='success'?'var(--c-success)':selectedNodeInfo.status==='running'?'var(--c-info)':selectedNodeInfo.status==='failed'?'var(--c-error)':'var(--c-text-faint)'}">
+            {{ selectedNodeInfo.status==='success'?'<AppIcon name="check" :size="13" /> ':selectedNodeInfo.status==='running'?'⟳':selectedNodeInfo.status==='failed'?'<AppIcon name="close" :size="13" /> ':'' }} {{ selectedNodeInfo.status }}
           </span>
         </div>
-        <div v-if="selectedNodeInfo.started_at" style="font-size:10px;color:var(--c-text-faint)">▶ {{ selectedNodeInfo.started_at }}</div>
-        <div v-if="selectedNodeInfo.finished_at" style="font-size:10px;color:var(--c-text-faint)">🏁 {{ selectedNodeInfo.finished_at }}</div>
-        <div v-if="selectedNodeInfo.rows !== undefined && selectedNodeInfo.rows !== null" style="font-size:10px;color:var(--c-text-dim)">📊 行数: {{ selectedNodeInfo.rows }}</div>
-        <div v-if="selectedNodeInfo.detail" style="font-size:10px;color:var(--c-text-dim)">📝 {{ selectedNodeInfo.detail }}</div>
-        <div v-if="selectedNodeInfo.error" style="font-size:10px;color:#ef4444">❌ {{ selectedNodeInfo.error }}</div>
+        <div v-if="selectedNodeInfo.started_at" style="font-size:10px;color:var(--c-text-faint)"><AppIcon name="play" :size="13" />  {{ selectedNodeInfo.started_at }}</div>
+        <div v-if="selectedNodeInfo.finished_at" style="font-size:10px;color:var(--c-text-faint)"> {{ selectedNodeInfo.finished_at }}</div>
+        <div v-if="selectedNodeInfo.rows !== undefined && selectedNodeInfo.rows !== null" style="font-size:10px;color:var(--c-text-dim)"><AppIcon name="bar-chart-2" :size="13" />  行数: {{ selectedNodeInfo.rows }}</div>
+        <div v-if="selectedNodeInfo.detail" style="font-size:10px;color:var(--c-text-dim)"><AppIcon name="edit" :size="13" />  {{ selectedNodeInfo.detail }}</div>
+        <div v-if="selectedNodeInfo.error" style="font-size:10px;color:#ef4444"><AppIcon name="close" :size="13" />  {{ selectedNodeInfo.error }}</div>
       </div>
       <div v-else style="font-size:11px;color:var(--c-text-faint)">暂无执行数据</div>
     </div>
@@ -57,6 +57,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, onMounted, onUnmounted, computed, markRaw, nextTick } from 'vue'
 import { NButton, useMessage } from 'naive-ui'
 import { VueFlow, useVueFlow } from '@vue-flow/core'

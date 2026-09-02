@@ -1,17 +1,34 @@
 <template>
-  <div ref="container" style="width:100%;height:200px;border:1px solid var(--c-border);border-radius:4px"></div>
+  <div ref="container" :style="`width:100%;height:${height}px;border:1px solid var(--c-border);border-radius:4px`"></div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as monaco from 'monaco-editor'
+import { useThemeStore } from '../stores/theme'
 
 // completions: [{label, insert, detail}] — 提供时启用该算子集的自动补全（KEPL 公式编辑）
-const props = defineProps({ modelValue: String, completions: Array })
+// height: 编辑区高度（默认 200）
+const props = defineProps({ modelValue: String, completions: Array, readonly: Boolean, height: { type: Number, default: 200 } })
 const emit = defineEmits(['update:modelValue'])
 const container = ref(null)
+const theme = useThemeStore()
 let editor = null
 let provider = null
+
+// 深浅主题各定义一套，背景对齐 theme store 卡片色，避免编辑器成为深色孤岛
+monaco.editor.defineTheme('kdao-dark', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [],
+  colors: { 'editor.background': '#141419' },
+})
+monaco.editor.defineTheme('kdao-light', {
+  base: 'vs',
+  inherit: true,
+  rules: [],
+  colors: { 'editor.background': '#f7f8fa' },
+})
 
 onMounted(() => {
   if (!container.value) return
@@ -20,7 +37,8 @@ onMounted(() => {
   editor = monaco.editor.create(container.value, {
     value: props.modelValue || '',
     language: lang,
-    theme: 'vs-dark',
+    theme: theme.isDark ? 'kdao-dark' : 'kdao-light',
+    readOnly: !!props.readonly,
     minimap: { enabled: false },
     lineNumbers: 'on',
     scrollBeyondLastLine: false,
@@ -64,6 +82,14 @@ watch(() => props.modelValue, (v) => {
   if (editor && editor.getValue() !== v) {
     editor.setValue(v || '')
   }
+})
+
+// 主题切换即时跟随
+watch(() => theme.isDark, (d) => {
+  monaco.editor.setTheme(d ? 'kdao-dark' : 'kdao-light')
+})
+watch(() => props.readonly, (ro) => {
+  editor?.updateOptions({ readOnly: !!ro })
 })
 
 onUnmounted(() => {

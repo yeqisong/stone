@@ -506,7 +506,6 @@ def test_run_function(func_id: int, body: dict):
     except Exception as e:
         raise HTTPException(500, f"试运行失败: {str(e)[:200]}")
 
-@router.delete("/{func_id}")
 @router.get("/{func_id}/versions")
 def list_versions(func_id: int):
     """版本历史列表。"""

@@ -9,7 +9,7 @@
   <div v-if="dataSources.length" style="display:flex;align-items:center;gap:12px;padding:0 0 10px;flex-wrap:wrap">
     <span style="font-size:11px;color:var(--c-text-dim)">数据源</span>
     <div v-for="src in dataSources" :key="src.name" style="display:flex;align-items:center;gap:4px;padding:3px 10px;border-radius:12px;font-size:11px" :style="{background: src.name===activeSource ? 'rgba(32,128,240,0.1)' : 'var(--c-card-bg)', border: src.name===activeSource ? '1px solid rgba(32,128,240,0.3)' : '1px solid var(--c-border)'}">
-      <span :style="{color: src.healthy ? '#10b981' : '#ef4444', fontSize:'14px'}">●</span>
+      <span :style="{background: src.healthy ? '#10b981' : '#ef4444', width:'8px', height:'8px', borderRadius:'50%', display:'inline-block', flexShrink:0}"></span>
       <span style="color:var(--c-text)">{{src.name}}</span>
       <span v-if="src.name===activeSource" style="font-size:9px;color:#2080f0;font-weight:600">活跃</span>
       <span v-if="src.name==='baostock'" style="font-size:9px;color:var(--c-text-faint)">补充</span>
@@ -22,8 +22,8 @@
       <div style="width:80px;height:5px;border-radius:3px;background:var(--c-border-light);overflow:hidden">
         <div :style="{width: Math.min(quota.used_pct,100)+'%', height:'100%', background: quotaColor}"></div>
       </div>
-      <span v-if="quota.exhausted" style="color:#ef4444;font-weight:600">⚠ 已用尽</span>
-      <span v-else-if="quota.risk_level==='high'" style="color:#ef4444;font-weight:600">⚠ 高风险</span>
+      <span v-if="quota.exhausted" style="color:#ef4444;font-weight:600"><AppIcon name="alert" :size="13" />  已用尽</span>
+      <span v-else-if="quota.risk_level==='high'" style="color:#ef4444;font-weight:600"><AppIcon name="alert" :size="13" />  高风险</span>
       <span v-else-if="quota.risk_level==='medium'" style="color:#f59e0b">注意</span>
       <span style="color:var(--c-text-faint)">分钟 {{quota.minute_calls}}/{{quota.minute_limit}}</span>
     </div>
@@ -33,9 +33,9 @@
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">
     <!-- Left: Data Tables Detail -->
     <div style="flex:1;min-width:280px;display:flex;flex-direction:column">
-      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">📋 数据明细
+      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="l" :size="13" />  数据明细
         <span v-if="statsTime" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
-        <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading">{{statsLoading?'':'↻'}}</n-button>
+        <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;flex:1">
         <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
@@ -54,11 +54,11 @@
 
     <!-- Right: Calendar + Log -->
     <div style="flex:1;min-width:300px;display:flex;flex-direction:column">
-      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">📅 交易日历</div>
+      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="calendar" :size="13" />  交易日历</div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
-        <n-button size="tiny" @click="prevMonth">◀</n-button>
+        <n-button size="tiny" @click="prevMonth"><AppIcon name="chevron-left" :size="13" /></n-button>
         <span style="font-weight:600;font-size:13px;color:var(--c-text)">{{monthLabel}}</span>
-        <n-button size="tiny" @click="nextMonth">▶</n-button>
+        <n-button size="tiny" @click="nextMonth"><AppIcon name="chevron-right" :size="13" /></n-button>
         <n-button size="tiny" @click="goToday">今天</n-button>
       </div>
 
@@ -81,10 +81,10 @@
         </div>
         <!-- Vertical legend -->
         <div style="display:flex;flex-direction:column;justify-content:center;gap:4px;font-size:9px;color:var(--c-text-faint);white-space:nowrap;padding-left:4px">
-          <span><span style="color:#10b981;font-size:10px">●</span> ≥80%</span>
-          <span><span style="color:#f59e0b;font-size:10px">●</span> 50-80%</span>
-          <span><span style="color:#ef4444;font-size:10px">●</span> &lt;50%</span>
-          <span><span style="color:#475569;font-size:10px">●</span> 非/未来</span>
+          <span><span style="background:#10b981;width:7px;height:7px;border-radius:50%;display:inline-block"></span> ≥80%</span>
+          <span><span style="background:#f59e0b;width:7px;height:7px;border-radius:50%;display:inline-block"></span> 50-80%</span>
+          <span><span style="background:#ef4444;width:7px;height:7px;border-radius:50%;display:inline-block"></span> &lt;50%</span>
+          <span><span style="background:#475569;width:7px;height:7px;border-radius:50%;display:inline-block"></span> 非/未来</span>
         </div>
       </div>
 
@@ -95,10 +95,10 @@
   <!--  服务器监控                                            -->
   <!-- ══════════════════════════════════════════ -->
   <div style="margin-top:14px">
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🖥 服务器监控</div>
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="monitor" :size="13" />  服务器监控</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <div v-for="m in sysMetrics" :key="m.label" style="flex:1;min-width:100px;padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :style="{cursor: m.clickable?'pointer':'default'}" @click="m.clickable && openDbDetail()">
-        <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size:9px">↗</span></div>
+        <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size:9px"></span></div>
         <div style="font-size:16px;font-weight:700;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size:11px;font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
         <div v-if="m.sub" style="font-size:10px;color:var(--c-text-dim)">{{ m.sub }}</div>
         <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
@@ -114,7 +114,7 @@
   <!--  全局交易偏好                                            -->
   <!-- ══════════════════════════════════════════ -->
   <div style="margin-top:14px">
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px">🎯 全局交易偏好</div>
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="target" :size="13" />  全局交易偏好</div>
     <n-radio-group v-model:value="prefMode" @update:value="setPref">
       <n-radio-button value="left" label="左侧" />
       <n-radio-button value="balanced" label="均衡" />
@@ -126,8 +126,8 @@
   <!--  历史补数                                            -->
   <div style="margin-top:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <span style="font-size:14px;font-weight:600;color:var(--c-text)">📥 历史补数</span>
-      <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()">📋 日志</n-button>
+      <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="download" :size="13" />  历史补数</span>
+      <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()"><AppIcon name="l" :size="13" />  日志</n-button>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" :data-bf="btn.type" @click="openBackfill(btn.type)">
@@ -138,7 +138,7 @@
     <!-- Running / recent task progress -->
     <div v-if="bfTask" style="margin-top:4px">
       <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
-        <span style="font-size:16px">{{ bfTask.status==='running'?'●':bfTask.status==='completed'?'✅':bfTask.status==='failed'?'❌':'⏹'}}</span>
+        <span style="font-size:16px">{{ bfTask.status==='running'?'●':bfTask.status==='completed'?'✓':bfTask.status==='failed'?'✕':'⏹'}}</span>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:600;color:var(--c-text)">
             {{ bfTask.task_label }}
@@ -173,7 +173,7 @@
   </div>
 
   <!-- Backfill Log Modal -->
-  <n-modal v-model:show="showBfLogModal" preset="card" title="📋 补数日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadBfLogs">
+  <n-modal v-model:show="showBfLogModal" preset="card" title="补数日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadBfLogs">
     <n-space vertical>
       <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
@@ -184,7 +184,7 @@
   </n-modal>
 
   <!-- DB 表大小弹窗 -->
-  <n-modal v-model:show="showDbDetail" preset="card" title="🗄️ 数据库表大小" style="width:500px;max-width:92vw" :mask-closable="false">
+  <n-modal v-model:show="showDbDetail" preset="card" title="️ 数据库表大小" style="width:500px;max-width:92vw" :mask-closable="false">
     <n-data-table v-if="dbTables.length" :columns="dbTableCols" :data="dbTables" size="small" />
     <n-empty v-else description="加载中..." />
   </n-modal>
@@ -192,7 +192,7 @@
   <!-- Backfill Modal -->
   <BackfillModal :show="bfModalShow" :type="bfModalType" @close="bfModalShow=false" @started="onBackfillStarted" />
 
-  <n-modal v-model:show="showCalDtl" preset="card" :title="'📊 ' + calDtlDate + ' 数据明细'" style="width:380px;max-width:92vw">
+  <n-modal v-model:show="showCalDtl" preset="card" :title="calDtlDate + ' 数据明细'" style="width:380px;max-width:92vw">
     <n-data-table v-if="calDtlData" :columns="calDtlCols" :data="calDtlRows" size="small" :bordered="false" :single-line="false" />
     <div v-else style="padding:20px;text-align:center;color:var(--c-text-dim);font-size:12px">无明细数据</div>
   </n-modal>
@@ -202,6 +202,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, computed, onMounted, onUnmounted, h } from 'vue'
 import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NRadioGroup, NRadioButton, useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
@@ -381,7 +382,7 @@ onMounted(() => {
   loadSysMetrics()
   loadPref()
   // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
-  setInterval(loadQuota, 30000)
+  quotaTimer = setInterval(loadQuota, 30000)
   wsUnwatch.value = addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
@@ -418,17 +419,18 @@ onMounted(() => {
 
 // WS 监听器清理（v-if 切 tab 时防止泄漏）
 const wsUnwatch = ref(null)
-onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value() })
+let quotaTimer = null
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer) })
 
 // ── 历史补数 ──
 
 const backfillBtns = [
-  { type: 'kline', label: '个股日K线', icon: '📈' },
-  { type: 'index', label: '指数日K线', icon: '📊' },
-  { type: 'etf', label: 'ETF日K线', icon: '💹' },
-  { type: 'fund', label: '基本面', icon: '📋' },
-  { type: 'calendar', label: '日历统计', icon: '📅' },
-  { type: 'stock_master', label: '更新股票列表', icon: '🔄' },
+  { type: 'kline', label: '个股日K线' },
+  { type: 'index', label: '指数日K线' },
+  { type: 'etf', label: 'ETF日K线' },
+  { type: 'fund', label: '基本面' },
+  { type: 'calendar', label: '日历统计' },
+  { type: 'stock_master', label: '更新股票列表' },
 ]
 
 const STATUS_LABELS = {
@@ -476,6 +478,14 @@ function onBackfillStarted() {
 function cancelBackfill() {
   const taskId = bfTask.value?.task_id
   if (!taskId) return
+  dialog.warning({
+    title: '确认取消补数？',
+    content: '已下载的数据会保留，但本次任务消耗的配额与时间不返还；断点可日后续跑。',
+    positiveText: '取消任务', negativeText: '继续运行',
+    onPositiveClick: () => doCancelBackfill(taskId),
+  })
+}
+function doCancelBackfill(taskId) {
   axios.post(API + '/api/data_status/backfill/' + taskId + '/cancel').then(r => {
     if (r.data?.ok) {
       message.success(r.data.message || '终止信号已发送')
@@ -558,7 +568,7 @@ const bfLogColumns = [
   { title: '日期范围', width: 150, className: 'nowrap-cell', ellipsis: { tooltip: true }, render(r) { return r.start_date ? `${r.start_date} ~ ${r.end_date || ''}` : '—' } },
   { title: '模式', width: 40, className: 'nowrap-cell', render(r) { return r.force ? '强制' : '续传' } },
   { title: '状态', width: 65, className: 'nowrap-cell', render(r) {
-    const m = { running: '⏳运行中', completed: '✅完成', failed: '❌失败', cancelled: '⏹已取消' }
+    const m = { running: '运行中', completed: '完成', failed: '失败', cancelled: '已取消' }
     return m[r.status] || r.status
   }},
   { title: '行数', width: 72, className: 'nowrap-cell', align: 'right', render(r) { return (r.progress?.rows || 0).toLocaleString() }},

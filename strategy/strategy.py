@@ -186,7 +186,9 @@ class TopkDropoutStrategy(BaseStrategy):
             last = scores.sort_values(ascending=False, kind='stable').index.tolist()
         else:
             last = []
-        held_set = set(last_codes)
+        # 事件退出（止损/止盈等）当日不换回：刚卖出的标的与持仓一样排除出候选，
+        # 否则同日先卖后买会把退出标的立刻买回（退出失效 + 双倍费用）
+        held_set = set(last_codes) | set(sold_event)
 
         # 候选买入：非持仓、可买（close>0 且非涨停）、有正分，取 top(n_drop + topk − len(last))
         n_candi = self.n_drop + self.topk - len(last)

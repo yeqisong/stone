@@ -1,8 +1,10 @@
 # 05 - Qlib 移植设计（回测引擎分层 + 组合构建 + 绩效报告 + 因子库）
 
-> 版本：v1.0（2026-08-31）
+> 版本：v1.1（2026-09-01）
 > 依据：微软 Qlib 源码精读（`/tmp/qlib-src`，commit 79633dd，2026-07）+ 本系统现状对照
 > 原则：**不整体引入 Qlib**（其数据层依赖 .bin 文件缓存与自研存储，与本系统 PostgreSQL 宽表架构冲突），只移植其经过验证的设计模式，用本系统既有基建（feature_values 宽表、dag_flows、KEPL）落地。
+>
+> **✅ 已全部实施完成**（M1~M7，随 v3.7.0 提交打 tag，commit bde3371f，2026-09-01）。实施结果与设计偏差见 §7.1。
 
 ---
 
@@ -246,6 +248,27 @@ for d in trade_days:
 | **M5 因子库** | KEPL 补算子（Ref/hhv/llv/quantile/回归系）+ Alpha158 生成器 + 入库 | 100+ 因子进 features；IC 体检跑通；greedy_dedup 给出精选集 |
 | **M6 DoubleEnsemble 实验** | LightGBM 版 DE 训练任务（v12 实验） | 与 v11 同区间 walk-forward 对比 |
 | **M7 切换** | 评估入口默认 engine=v2（对比通过后）；打 tag v3.7.0 | 全量回归：tests/ 通过 + 既有模型评估数字不变（v1 兼容层） |
+
+### 7.1 实施结果（v3.7.0，2026-09-01 交付）
+
+| 里程碑 | 结果 | 验收 |
+|---|---|---|
+| M1 撮合内核 | ✅ strategy/backtest/{models,exchange,account,engine}.py | 单测 15 全绿；v9.0 验证集 173 点净值曲线与 v1 **逐日 0 差异** |
+| M2 策略层 | ✅ TopkDropoutStrategy（strategy/strategy.py） | 单测 7 全绿（合并排序/hold_thresh/n_drop）；扫描支持 topk/n_drop（前端引擎选择入口） |
+| M3 纸面迁移 | ✅ dag_task_paper_portfolio 换 v2 内核；paper_day_step 删除 | 173 日回放终值与旧实现**精确到分一致**；种子账户 + EOD 幂等续跑 |
+| M4 绩效报告 | ✅ report.py + model_health 新列 ir/alpha_annualized/beta/excess_annualized/turnover_daily | 8 项指标手工对照全一致；ModelEval 绩效指标条 |
+| M5 因子库 | ✅ KEPL 补 14 算子 + 负字面量语法；alpha158.py 生成 **114 因子**入库 | IC 体检：绿 75 / 黄 20 / 红 19；greedy_dedup 精选 41；2000→今全量回补进行中 |
+| M6 DoubleEnsemble | ✅ strategy/models/double_ensemble.py（LightGBM）+ train_de.py | v12.0 PENDING：WF 3/4 sharpe 胜但 RankIC 未达标 FAIL（保持 PENDING 不激活） |
+| M7 切换 | ✅ `_backtest` 统一入口默认 engine=v2（v1 口径兼容 dict）；tag v3.7.0 | 单测 118 全绿；显示精度内既有评估数字不变 |
+
+**与设计的偏差**（实施中的务实取舍）：
+1. **executor.py 未独立成模块**——撮合循环并入 engine.py（两轮：先卖后买；BUY 逐笔立即入账保持 v1 现金递减语义）。拆分收益不抵间接层成本。
+2. **execution_stats 表未建**——逐单 ffr/pa 执行质量指标暂未落库（成交明细在 backtest_trades + 内存 records）；vol_limit/impact_cost 参数已实现但默认关闭。
+3. **paper_trades 未加 ffr/pa/engine/strategy 列**——v2 标识经 detail JSONB 承载，表结构未动。
+4. **`POST /{v}/backtest` 参数化回测端点未建**——strategy-scan（含 engine/strategy/topk/n_drop 参数）已覆盖该需求。
+5. **model_health 列名**：设计的 excess_sharpe/annual_turnover 实际落为 excess_annualized/turnover_daily。
+6. **Alpha158 为 114 因子**（非 158）：剔除需要 high/low 盘中价以外的Fundamental 组与重复窗口组；价格/量比/滚动统计三族全量保留。
+7. **M5 附带产物**：算子目录单一事实源 `GET /api/kepl/functions`（32 算子 `_OPERATOR_DOCS` 强校验）+ AI 上下文动态化 + Monaco 补全 + 函数页内置算子合并展示（48 条 = 32 算子 + DB 函数）。
 
 ---
 

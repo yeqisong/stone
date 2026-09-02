@@ -1,5 +1,5 @@
 <template>
-<n-modal v-model:show="visible" preset="card" :title="title" style="width:480px;max-width:92vw" :mask-closable="!running">
+<n-modal v-model:show="visible" preset="card" :title="title" style="width:480px;max-width:92vw" :mask-closable="!submitted">
   <n-space vertical size="medium">
     <!-- 日期选择（基本面隐藏） -->
     <n-space v-if="showDatePicker" vertical size="small">
@@ -12,7 +12,7 @@
     <!-- 强制更新开关 -->
     <div style="display:flex;align-items:center;justify-content:space-between">
       <div>
-        <div style="font-size:13px;color:var(--c-text)">{{ forceUpdate ? '🔴 强制更新' : '🟢 断点续传' }}</div>
+        <div style="font-size:13px;color:var(--c-text)">{{ forceUpdate ? ' 强制更新' : ' 断点续传' }}</div>
         <div style="font-size:11px;color:var(--c-text-dim)">{{ forceUpdate ? '重新下载并覆盖已有数据' : '跳过已有数据，仅补全缺失部分' }}</div>
       </div>
       <n-switch v-model:value="forceUpdate" />
@@ -44,7 +44,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { NModal, NSpace, NButton, NSwitch, NDatePicker, NInputNumber, useMessage } from 'naive-ui'
+import { NModal, NSpace, NButton, NSwitch, NDatePicker, NInputNumber, useMessage, useDialog } from 'naive-ui'
 import axios from 'axios'
 import { bjDateStr } from '../utils/date.js'
 
@@ -56,6 +56,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'started'])
 
 const message = useMessage()
+const dialog = useDialog()
 const API = window.location.origin
 
 const LABELS = {
@@ -63,7 +64,7 @@ const LABELS = {
   fund: '基本面', calendar: '日历统计',
 }
 
-const title = computed(() => `📥 ${LABELS[props.type] || props.type} 补数`)
+const title = computed(() => `${LABELS[props.type] || props.type} 补数`)
 const showDatePicker = computed(() => true)
 
 const visible = computed({
@@ -83,6 +84,18 @@ const submitted = ref(false)
 const running = ref(false)
 
 function onStart() {
+  if (forceUpdate.value) {
+    dialog.warning({
+      title: '确认强制覆盖补数？',
+      content: '将对所选区间重新下载并覆盖库内已有数据，消耗大量 TuShare 配额（8000 次/天预算）。断点续传通常已足够，仅在数据损坏时才需要强制。',
+      positiveText: '强制覆盖', negativeText: '返回',
+      onPositiveClick: () => doStart(),
+    })
+    return
+  }
+  doStart()
+}
+function doStart() {
   if (showDatePicker.value) {
     if (startDate.value > endDate.value) {
       message.warning('起始日期不能晚于截止日期')

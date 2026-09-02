@@ -14,6 +14,7 @@ from app.api.treemap import router as treemap_router
 from app.api.signals import router as signals_router
 from app.api.stock import router as stock_router
 from app.api.status import router as status_router
+from app.api.risk import router as risk_router
 from app.api.stocks import router as stocks_router
 from app.api.settings import router as settings_router
 from app.api.models import router as models_router
@@ -112,6 +113,7 @@ app.include_router(treemap_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
+app.include_router(risk_router, prefix="/api")
 app.include_router(stocks_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(models_router, prefix="/api")

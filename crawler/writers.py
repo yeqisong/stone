@@ -371,10 +371,15 @@ def batch_upsert_fundamentals(db, rows: List[FundamentalRow], batch_size: int = 
             "limit_status=COALESCE(EXCLUDED.limit_status, stock_fundamentals.limit_status), "
             "updated_at=EXCLUDED.updated_at"
         )
+        # SAVEPOINT 逐批隔离（对齐 batch_upsert_kline）：单批失败只回滚该批，
+        # 否则事务 aborted 后所有后续批静默失败，末尾 commit 等价全量回滚但 total 虚报
+        db.execute(text("SAVEPOINT sp_fund"))
         try:
             db.execute(text(sql), params)
+            db.execute(text("RELEASE SAVEPOINT sp_fund"))
             total += len(chunk)
         except Exception as e:
+            db.execute(text("ROLLBACK TO SAVEPOINT sp_fund"))
             logger.error(f"[writers] batch_upsert_fundamentals 异常 (batch {start}): {e}")
     db.commit()
     return total
@@ -427,14 +432,184 @@ def append_fundamentals_history(db, rows: List[FundamentalRow], batch_size: int 
             "dv_ttm=COALESCE(EXCLUDED.dv_ttm, stock_fundamentals_history.dv_ttm), "
             "ps_ttm=COALESCE(EXCLUDED.ps_ttm, stock_fundamentals_history.ps_ttm)"
         )
+        # SAVEPOINT 逐批隔离：失败只回滚该批（原 rollback 会连带丢掉同调用内
+        # 前序已成功批次，且 total 虚报落库行数）
+        db.execute(text("SAVEPOINT sp_fh"))
         try:
             db.execute(text(sql), params)
+            db.execute(text("RELEASE SAVEPOINT sp_fh"))
             total += len(chunk)
         except Exception as e:
+            db.execute(text("ROLLBACK TO SAVEPOINT sp_fh"))
             logger.error(f"[writers] append_fundamentals_history 异常: {e}")
-            try:
-                db.rollback()
-            except Exception:
-                pass
     db.commit()
     return total
+
+
+def batch_upsert_moneyflow(db, records):
+    """批量 UPSERT 资金流向（stock_moneyflow，PK trade_date+stock_code）。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO stock_moneyflow (trade_date, stock_code, stock_name,
+            buy_lg_amt, sell_lg_amt, buy_elg_amt, sell_elg_amt,
+            buy_md_amt, sell_md_amt, buy_sm_amt, sell_sm_amt, net_mf_amt)
+        VALUES (:trade_date, :stock_code, :stock_name,
+            :buy_lg_amt, :sell_lg_amt, :buy_elg_amt, :sell_elg_amt,
+            :buy_md_amt, :sell_md_amt, :buy_sm_amt, :sell_sm_amt, :net_mf_amt)
+        ON CONFLICT (trade_date, stock_code) DO UPDATE SET
+            stock_name=EXCLUDED.stock_name, buy_lg_amt=EXCLUDED.buy_lg_amt,
+            sell_lg_amt=EXCLUDED.sell_lg_amt, buy_elg_amt=EXCLUDED.buy_elg_amt,
+            sell_elg_amt=EXCLUDED.sell_elg_amt, buy_md_amt=EXCLUDED.buy_md_amt,
+            sell_md_amt=EXCLUDED.sell_md_amt, buy_sm_amt=EXCLUDED.buy_sm_amt,
+            sell_sm_amt=EXCLUDED.sell_sm_amt, net_mf_amt=EXCLUDED.net_mf_amt
+    """)
+    saved = 0
+    for i in range(0, len(records), 1000):
+        db.execute(sql, records[i:i + 1000])
+        db.commit()
+        saved += len(records[i:i + 1000])
+    return saved
+
+
+
+# ── 拓展数据接入（step2 扩展）──
+
+def batch_upsert_top_list(db, records):
+    """龙虎榜：ON CONFLICT (trade_date, stock_code, reason) 幂等。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO stock_top_list (trade_date, stock_code, stock_name, close, pct_chg,
+            turnover_ratio, total_amount, buy_amount, sell_amount, net_amount, reason)
+        VALUES (:trade_date, :stock_code, :stock_name, :close, :pct_chg,
+            :turnover_ratio, :total_amount, :buy_amount, :sell_amount, :net_amount, :reason)
+        ON CONFLICT (trade_date, stock_code, reason) DO UPDATE SET
+            stock_name=EXCLUDED.stock_name, close=EXCLUDED.close, pct_chg=EXCLUDED.pct_chg,
+            turnover_ratio=EXCLUDED.turnover_ratio, total_amount=EXCLUDED.total_amount,
+            buy_amount=EXCLUDED.buy_amount, sell_amount=EXCLUDED.sell_amount,
+            net_amount=EXCLUDED.net_amount
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved
+
+
+def batch_upsert_margin_detail(db, records):
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO stock_margin_detail (trade_date, stock_code, stock_name,
+            fin_amount, fin_buy_amount, sec_amount, sec_sell_amount, total_amount)
+        VALUES (:trade_date, :stock_code, :stock_name,
+            :fin_amount, :fin_buy_amount, :sec_amount, :sec_sell_amount, :total_amount)
+        ON CONFLICT (trade_date, stock_code) DO UPDATE SET
+            stock_name=EXCLUDED.stock_name, fin_amount=EXCLUDED.fin_amount,
+            fin_buy_amount=EXCLUDED.fin_buy_amount, sec_amount=EXCLUDED.sec_amount,
+            sec_sell_amount=EXCLUDED.sec_sell_amount, total_amount=EXCLUDED.total_amount
+    """)
+    saved = 0
+    for i in range(0, len(records), 1000):
+        db.execute(sql, records[i:i + 1000])
+        db.commit()
+        saved += len(records[i:i + 1000])
+    return saved
+
+
+def batch_upsert_moneyflow_hsgt(db, records):
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO moneyflow_hsgt (trade_date, ggt_ss, ggt_sz, hgt, sgt, north_money)
+        VALUES (:trade_date, :ggt_ss, :ggt_sz, :hgt, :sgt, :north_money)
+        ON CONFLICT (trade_date) DO UPDATE SET
+            ggt_ss=EXCLUDED.ggt_ss, ggt_sz=EXCLUDED.ggt_sz,
+            hgt=EXCLUDED.hgt, sgt=EXCLUDED.sgt, north_money=EXCLUDED.north_money
+    """)
+    db.execute(sql, records)
+    db.commit()
+    return len(records)
+
+
+def batch_upsert_block_trade(db, records):
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO block_trade (trade_date, stock_code, price, vol, amount, buyer, seller)
+        VALUES (:trade_date, :stock_code, :price, :vol, :amount, :buyer, :seller)
+        ON CONFLICT (trade_date, stock_code, price, vol) DO UPDATE SET
+            amount=EXCLUDED.amount, buyer=EXCLUDED.buyer, seller=EXCLUDED.seller
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved
+
+
+def batch_insert_events(db, table, records, conflict_cols, all_cols):
+    """事件表通用插入（forecast/express/dividend/share_float/repurchase）。
+
+    conflict_cols 建有唯一索引；冲突即跳过（ON CONFLICT DO NOTHING，保留首见）。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    col_str = ", ".join(all_cols)
+    ph = ", ".join(f":{c}" for c in all_cols)
+    conflict_ph = ", ".join(conflict_cols)
+    sql = text(f"INSERT INTO {table} ({col_str}) VALUES ({ph}) ON CONFLICT ({conflict_ph}) DO NOTHING")
+    saved = 0
+    for i in range(0, len(records), 500):
+        cur = db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return saved
+
+
+def batch_upsert_fina_indicator(db, records):
+    from sqlalchemy import text
+    if not records:
+        return 0
+    cols = ["stock_code", "end_date", "ann_date", "eps", "eps_ttm", "bps", "roe", "roe_waa",
+            "roe_dt", "roa", "grossprofit_margin", "netprofit_margin", "ocf_to_or", "ocfps",
+            "profit_dedt", "debt_to_assets", "current_ratio", "quick_ratio", "invturn",
+            "ar_turn", "assets_turn", "netprofit_yoy", "netprofit_2yoy", "or_yoy", "or_2yoy"]
+    col_str = ", ".join(cols)
+    ph = ", ".join(f":{c}" for c in cols)
+    updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in cols if c not in ("stock_code", "end_date"))
+    sql = text(f"""
+        INSERT INTO fina_indicator ({col_str}) VALUES ({ph})
+        ON CONFLICT (stock_code, end_date) DO UPDATE SET {updates}
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved
+
+
+def batch_upsert_index_weight(db, records):
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO index_weight (index_code, trade_date, stock_code, weight)
+        VALUES (:index_code, :trade_date, :stock_code, :weight)
+        ON CONFLICT (index_code, trade_date, stock_code) DO UPDATE SET weight=EXCLUDED.weight
+    """)
+    saved = 0
+    for i in range(0, len(records), 1000):
+        db.execute(sql, records[i:i + 1000])
+        db.commit()
+        saved += len(records[i:i + 1000])
+    return saved

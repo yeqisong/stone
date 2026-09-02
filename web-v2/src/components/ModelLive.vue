@@ -46,8 +46,8 @@
     <!-- 纸面组合（影子运行） -->
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-top:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🧪 纸面组合（影子运行）<span style="font-weight:400;color:var(--c-text-faint);margin-left:8px">跟随 ACTIVE 模型信号每日模拟成交，与实盘互不干扰</span></div>
-        <n-button size="tiny" quaternary @click="loadPaper">🔄</n-button>
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"><AppIcon name="e" :size="13" />  纸面组合（影子运行）<span style="font-weight:400;color:var(--c-text-faint);margin-left:8px">跟随 ACTIVE 模型信号每日模拟成交，与实盘互不干扰</span></div>
+        <n-button size="tiny" quaternary @click="loadPaper"><AppIcon name="refresh" :size="13" /> </n-button>
       </div>
       <div v-if="!paper || !paper.equity.length" style="font-size:11px;color:var(--c-text-faint);text-align:center;padding:14px">
         暂无影子记录——信号生成时自动建立，或在 DAG 流程中加入 paper_portfolio 节点回放历史信号
@@ -89,6 +89,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { computed, ref, onMounted, nextTick } from 'vue'
 import axios from 'axios'
 import * as echarts from 'echarts'

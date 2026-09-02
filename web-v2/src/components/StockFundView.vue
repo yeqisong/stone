@@ -1,11 +1,11 @@
 <template>
 <div style="flex:1;min-height:0;display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden">
   <!-- Header -->
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0">
-    <n-button size="small" quaternary @click="$emit('back')">← 返回</n-button>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0;flex-wrap:wrap">
+    <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回</n-button>
     <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ title }}</span>
-    <n-select v-model:value="filterType" :options="typeOpts" size="small" style="width:100px" @update:value="onTypeChange" />
-    <n-input v-model:value="search" size="small" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
+    <n-select v-model:value="filterType" :options="typeOpts" size="tiny" style="width:100px" @update:value="onTypeChange" />
+    <n-input v-model:value="search" size="tiny" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
 
   <!-- Table: 固定总宽 scroll-x，长文本列省略号，纵向单滚动 -->
@@ -19,7 +19,7 @@
   </div>
 
   <!-- History Modal -->
-  <n-modal v-model:show="showHistModal" preset="card" :title="'📊 基本面历史 — ' + histCode" style="width:800px;max-width:92vw" :segmented="{content:true}">
+  <n-modal v-model:show="showHistModal" preset="card" :title="'基本面历史 — ' + histCode" style="width:800px;max-width:92vw" :segmented="{content:true}">
     <n-data-table :columns="histCols" :data="histItems" size="small" :bordered="false" :loading="histLoading" />
     <n-pagination v-if="histTotal > histPageSize" :page="histPage" :page-count="Math.ceil(histTotal/histPageSize)" :page-size="histPageSize" size="small" style="margin-top:8px;justify-content:flex-end" @update:page="loadHist" />
   </n-modal>
@@ -27,6 +27,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, computed, h, onMounted } from 'vue'
 import { NButton, NDataTable, NInput, NSelect, NPagination, NModal, NTag } from 'naive-ui'
 import axios from 'axios'
@@ -120,7 +121,7 @@ const cols = [
   { title: '员工', key: 'employees', width: 60, align: 'right', render(r) { return r.employees || '—' } },
   { title: '主营业务', key: 'main_business', width: 230, render(r) { return ell(r.main_business, { maxWidth: '218px' }) } },
   // Fundamentals
-  { title: 'PE', key: 'pe_ttm', width: 55, align: 'right', render(r) { return r.pe_ttm != null ? r.pe_ttm.toFixed(2) : '—' } },
+  { title: 'PE', key: 'pe_ttm', width: 55, align: 'right', render(r) { return r.pe_ttm != null ? r.pe_ttm.toFixed(2) : '亏损' } },
   { title: 'PB', key: 'pb_mrq', width: 55, align: 'right', render(r) { return r.pb_mrq != null ? r.pb_mrq.toFixed(2) : '—' } },
   { title: 'PS(TTM)', key: 'ps_ttm', width: 65, align: 'right', render(r) { return r.ps_ttm != null ? r.ps_ttm.toFixed(2) : '—' } },
   { title: '股息率%', key: 'dv_ratio', width: 65, align: 'right', render(r) { return r.dv_ratio != null ? r.dv_ratio.toFixed(2) : '—' } },
@@ -149,7 +150,7 @@ const histPageSize = 20
 
 const histCols = [
   { title: '日期', key: 'trade_date', width: 85 },
-  { title: 'PE', key: 'pe_ttm', width: 55, render(r) { return r.pe_ttm ?? '—' } },
+  { title: 'PE', key: 'pe_ttm', width: 55, render(r) { return r.pe_ttm ?? '亏损' } },
   { title: 'PB', key: 'pb_mrq', width: 55, render(r) { return r.pb_mrq ?? '—' } },
   { title: 'PS', key: 'ps_ttm', width: 55, render(r) { return r.ps_ttm ?? '—' } },
   { title: '股息率', key: 'dv_ratio', width: 60, render(r) { return r.dv_ratio ?? '—' } },

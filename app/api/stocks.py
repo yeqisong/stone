@@ -137,3 +137,82 @@ def list_stocks(
         }
     finally:
         db.close()
+
+# ── 股票输入建议（suggest）──
+# 数字 = 代码前缀；中文 = 名称前缀；字母 = 名称前缀 或 拼音首字母前缀。
+# 拼音首字母映射进程内缓存（pypinyin，首查构建，~6000 只 <100ms）。
+_py_cache = {"initials": None}
+
+
+def _get_initials_map(db):
+    if _py_cache["initials"] is None:
+        from pypinyin import lazy_pinyin, Style
+        # stock_type ASC：复合主键同代码多类型（如 000001 平安银行/上证指数）时，
+        # stock 行最后写入 dict 覆盖 index 行（'stock' 字母序最大）
+        rows = db.execute(text(
+            "SELECT stock_code, stock_name FROM stock_master "
+            "WHERE stock_type IN ('stock','etf','index') AND status='N' "
+            "ORDER BY stock_type ASC"
+        )).fetchall()
+        m = {}
+        for code, name in rows:
+            try:
+                parts = lazy_pinyin(name or '', style=Style.FIRST_LETTER, errors='ignore')
+                ini = ''.join(p for p in parts if p and p[0].isascii()).lower()
+            except Exception:
+                ini = ''
+            m[code] = (name or '', ini)
+        _py_cache["initials"] = m
+    return _py_cache["initials"]
+
+
+@router.get("/stocks/suggest")
+def suggest_stocks(
+    q: str = Query("", max_length=20),
+    limit: int = Query(10, ge=1, le=20),
+):
+    """股票输入建议：代码/名称/拼音首字母 前匹配 TopN。"""
+    q = (q or '').strip()
+    if not q:
+        return {"items": []}
+    db = get_sync_db()
+    try:
+        out = []
+        seen = set()
+
+        def add(code, name):
+            if code not in seen:
+                seen.add(code)
+                out.append({"code": code, "name": name})
+
+        if q[0].isdigit():
+            rows = db.execute(text(
+                "SELECT stock_code, stock_name FROM stock_master "
+                "WHERE stock_code LIKE :q AND stock_type IN ('stock','etf','index') AND status='N' "
+                "ORDER BY stock_type DESC, stock_code LIMIT :l"
+            ), {"q": q + '%', "l": limit}).fetchall()
+            for c, n in rows:
+                add(c, n)
+        else:
+            ql = q.lower()
+            # 1) 名称前匹配（中文输入主路径）
+            rows = db.execute(text(
+                "SELECT stock_code, stock_name FROM stock_master "
+                "WHERE stock_name LIKE :q AND stock_type IN ('stock','etf','index') AND status='N' "
+                "ORDER BY stock_type DESC, stock_code LIMIT :l"
+            ), {"q": q + '%', "l": limit}).fetchall()
+            for c, n in rows:
+                add(c, n)
+            # 2) 字母输入：拼音首字母前匹配（进程内缓存）
+            if q[0].isascii() and len(out) < limit:
+                initials = _get_initials_map(db)
+                for c in sorted(initials):
+                    name, ini = initials[c]
+                    if ini.startswith(ql):
+                        add(c, name)
+                        if len(out) >= limit:
+                            break
+        return {"items": out[:limit]}
+    finally:
+        db.close()
+

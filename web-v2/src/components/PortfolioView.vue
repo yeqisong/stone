@@ -14,9 +14,9 @@
 </div>
 
 <n-modal v-model:show="showEdit">
-  <n-card style="width:450px" :title="isAdding?'✚ 新增持仓':'✎ 编辑持仓'" role="dialog" aria-modal="true">
+  <n-card style="width:450px" :title="isAdding ? '新增持仓' : '编辑持仓'" role="dialog" aria-modal="true">
     <n-space vertical>
-      <n-input v-if="isAdding" v-model:value="editForm.code" placeholder="000001" />
+      <StockSuggestInput v-if="isAdding" v-model:value="editForm.code" placeholder="代码/名称/拼音首字母" @select="onSuggestFill" />
       <n-input-number v-model:value="editForm.qty" :min="100" :step="100" :precision="0" />
       <n-input-number v-model:value="editForm.cost" :min="0" :step="0.01" :precision="2" />
       <n-date-picker v-model:formatted-value="editForm.date" type="date" value-format="yyyy-MM-dd" placeholder="建仓日期" clearable />
@@ -53,7 +53,7 @@
         <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">持仓</div><div style="font-size:16px;font-weight:700">{{historyPos.quantity}}股</div></div>
         <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">成本价</div><div style="font-size:16px;font-weight:700">¥{{historyPos.cost_price.toFixed(2)}}</div></div>
       </div>
-      <h4 style="margin:8px 0">📜 加减仓记录</h4>
+      <h4 style="margin:8px 0"><AppIcon name="file-text" :size="13" />  加减仓记录</h4>
       <div v-if="historyRecords.length" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <n-data-table :columns="historyColumns" :data="historyRecords" size="small" />
       </div>
@@ -64,6 +64,8 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
+import StockSuggestInput from './StockSuggestInput.vue'
 import { ref, reactive, h, computed, onMounted } from 'vue'
 import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag } from 'naive-ui'
 import axios from 'axios'
@@ -75,6 +77,9 @@ const message = useMessage()
 const auth2 = useAuthStore()
 const data = reactive({positions:[], count:0, total_value:0, total_pnl:0})
 const showEdit = ref(false), showDeleteConfirm = ref(false), loading = ref(true)
+function onSuggestFill() {
+  if (!editForm.qty) editForm.qty = 100   // 选中建议仅填充代码；数量为空给默认一手
+}
 const isAdding = ref(false)
 const editForm = reactive({code:'', qty:100, cost:0, date:null, note:''})
 const deleteCode = ref('')
@@ -106,7 +111,8 @@ async function showHistory(code){
     historyPos.value = r.data.position
   }catch(e){} finally { historyLoading.value = false }
 }
-const fmt = v => v!=null?Number(v).toLocaleString():'0'
+import { fmtMoney } from '../utils/ui'
+const fmt = v => v!=null?fmtMoney(Number(v)):'0'
 const statItems = computed(() => [
   { label: '持仓', value: data.count },
   { label: '市值', value: '¥' + fmt(data.total_value) },
@@ -128,7 +134,7 @@ const columns = [
     const isBuy = r.signal_direction === 'buy'
     const dateStr = (r.signal_date||'').slice(5)
     return h('span',{style:{color:isBuy?'#ef4444':'#10b981',fontSize:'12px',whiteSpace:'nowrap'}},
-      (isBuy?'🔴买':'🟢卖') + ' ★'.repeat(r.signal_strength||0) + ' ' + dateStr)
+      (isBuy?'买入':'卖出') + ' ★'.repeat(r.signal_strength||0) + ' ' + dateStr)
   }},
   { title:'备注', key:'notes', minWidth:80, render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
   { title:'操作', width:140, fixed:'right', render(row){return h('span',[
@@ -138,7 +144,7 @@ const columns = [
   ])}}
 ]
 function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{if(!e.target.closest('button'))emit('show-detail',row.stock_code)}}}
-async function load(){loading.value=true;try{const r=await axios.get(API+'/api/portfolio');Object.assign(data,r.data)}catch(e){}finally{loading.value=false}}
+async function load(){loading.value=true;try{const r=await axios.get(API+'/api/portfolio');Object.assign(data,r.data)}catch(e){message.error('持仓加载失败，请刷新重试')}finally{loading.value=false}}
 async function doAdd(){
   if(!editForm.code)return
   const auth2 = useAuthStore()

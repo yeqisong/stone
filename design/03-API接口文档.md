@@ -1,9 +1,9 @@
 # 03 — API 接口文档
 
-> K道（Stone）· 文档基准：代码版本 v3.2.1 · 共 **105 个 HTTP 端点 + 1 个 WebSocket**（102 router 装饰器 + `/api/login` + `/health` + `/webhook/feishu`，2026-08-22 核对）
+> K道（Stone）· 文档基准：代码版本 v3.7.0 · 共 **123 个 HTTP 端点 + 1 个 WebSocket**（120 router 装饰器 + `/api/login` + `/health` + `/webhook/feishu`，2026-09-01 核对）
 >
 > 认证标记：🔒 = `Depends(get_current_user)` / `optional_auth`（实际同样强制）；无标记 = 无需认证。
-> 路由注册：`app/main.py` L110-123；dag_types/dag_flows 自带 `/api/dag` 前缀；飞书挂 `/webhook/feishu`。
+> 路由注册：`app/main.py`；dag_types/dag_flows 自带 `/api/dag` 前缀；dbexplorer 前缀 `/api/dbx`；飞书挂 `/webhook/feishu`。
 
 ---
 
@@ -57,6 +57,7 @@
 
 | 方法+路径 | 功能 | 认证 | 请求 | 响应 |
 |---|---|---|---|---|
+| `GET /api/stocks/suggest`（2026-09） | 股票输入建议：代码/名称/拼音首字母前匹配 Top10（pypinyin 进程内缓存） | — | q, limit=10 |
 | `GET /api/stocks` | 分页列表（排序） | — | `page, page_size=20`(10-100), `keyword`, `category=stock`(stock/index/etf/bond/all), `order_by=trade_date`(price/chg_pct/pe_ttm/market_cap), `order_dir=desc` | `{stocks[], total, total_pages}` |
 
 ## 8. 系统设置 settings（api/settings.py）
@@ -85,6 +86,7 @@
 | `GET /api/dag_logs` | 节点日志（log_id 单查/最新组） | — | `log_id?` | `{ok, nodes[]}` |
 | `GET /api/data_status/sync_status` | sync_date 任务状态 | — | `task_id` | `{ok, task}` |
 | `GET /api/data-sources/health` | 数据源健康+活跃源 | — | — | `{sources[], active_source}` |
+| `GET /api/tushare_quota` | TuShare 配额（剩余/风险等级，v3.2.1） | — | — | `{used_today, limit_daily, ...}` |
 | `POST /api/data_status/backfill` | 启动历史补数 | ⚠️无 | `{type(kline/index/etf/fund/calendar/stock_master), start_date, end_date, force=false, batch_size=20}` | `{ok, task_id}` / `{busy:true}` |
 | `POST /api/data_status/backfill/{task_id}/cancel` | 取消补数 | ⚠️无 | — | 取消结果 |
 | `GET /api/data_status/backfill/history` | 补数历史 | — | `limit=20` | `{tasks[]}` |
@@ -128,10 +130,17 @@
 | `POST .../{v}/retrain` | REJECTED 重训→DRAFT | 🔒 | — |
 | `POST .../{v}/reject` | 拒绝→REJECTED | 🔒 | 仅 PENDING |
 | `GET .../{v}/quality-dashboard` | 特征质量仪表盘 | — | 当前占位数据 |
-| `POST .../{v}/strategy-scan` | 策略参数网格扫描（后台） | 🔒 | `{param_grid, val_start, val_end, hold_days=10}` |
+| `POST .../{v}/strategy-scan` | 策略参数网格扫描（后台） | 🔒 | `{param_grid, val_start, val_end, hold_days=10, engine="v2", strategy="signal"\|"topk_dropout", topk, n_drop}` |
 | `GET .../{v}/strategy-scan/{task_id}` | 扫描进度+热力图 | — | — |
 | `POST .../{v}/strategy-scan/{task_id}/apply` | 应用最优参数 | 🔒 | 扫描完成后 |
-| `POST .../{v}/attribution` | 归因分析（三基线+Brinson） | 🔒 | `{val_start, val_end}` |
+| `POST .../{v}/attribution` | 归因分析（三基线+Brinson） | 🔒 | `{val_start, val_end, engine="v2"(默认)}` |
+| `POST .../{v}/permutation`（v3.5） | 置换检验任务（real vs 噪声分布） | 🔒 | `{val_start, val_end, n_perm=200}`；结果 `perm_test` JSONB 留档 |
+| `GET .../{v}/permutation`（v3.5） | 读最近一次置换检验结果 | — | — |
+| `POST .../{v}/walk-forward`（v3.6） | 滚动窗口验证任务（连续不重叠窗口逐窗对比基线） | 🔒 | `{n_windows=4, val_start, val_end}`；report 落 version_comparisons |
+| `GET .../{v}/walk-forward`（v3.6） | 读最近一次 WF 判定（promotion_gate PASS/FAIL） | — | — |
+| `GET /api/v1/models/paper-portfolio`（v3.6） | 纸面组合净值/持仓/统计（vs 沪深300） | — | ⚠️ 必须声明在 `/{version}` 之前（路径参数吞噬） |
+
+> approve 审批门禁（v3.6）：最近一次 walk-forward 判定 FAIL 时拒绝上线，`force=true` 覆盖。
 
 ## 11. 函数管理 functions（api/functions.py，前缀 /functions）
 
@@ -152,11 +161,14 @@
 
 | 方法+路径 | 功能 | 认证 | 要点 |
 |---|---|---|---|
-| `GET /api/features` | 列表（实体/状态筛选+分页） | — | items 含质量统计列 |
+| `GET /api/features` | 列表（实体/状态筛选+分页） | — | items 含质量统计列 + ic_status |
+| `GET /api/features/fields`（v3.6） | 字段注册表（基本面字段近月覆盖率） | — | 函数页「字段注册表」弹窗数据源 |
 | `POST /api/features/validate` | 验证 KEPL 公式+提取依赖 | — | `{formula, target_entity}` |
 | `POST /api/features` | 新增（唯一性/解析/循环检测） | 🔒 | `{feature_name, formula, target_entity, feature_group, tags...}` |
 | `GET /api/features/groups` / `tags` | 特征族/标签列表 | — | — |
 | `GET /api/features/dependency-graph` | 全量依赖图 | — | `{nodes[], edges[]}` |
+| `GET /api/features/ic/board`（v3.4） | IC 体检看板（红绿灯+RankIC/ICIR） | — | ⚠️ 必须声明在 `/{feature_id}` 之前 |
+| `GET /api/features/ic/correlation`（v3.5） | 因子相关性矩阵+greedy_dedup 去冗推荐 | — | cs_rank 后 pooled Pearson（逐日截面 Spearman 时间平均） |
 | `GET /api/features/{id}` | 详情（上游+下游引用） | — | — |
 | `GET /api/features/{id}/quality` | 质量指标 | — | 完整度/缺失格/过期警告 |
 | `PUT /api/features/{id}` | 更新（改公式→级联 pending_recalc） | 🔒 | — |
@@ -169,21 +181,37 @@
 | `POST /api/features/{id}/recompute-stats` | 重算诊断（不触发计算） | 🔒 | — |
 | `GET /api/features/{id}/compute-status` | 补数进度查询 | — | — |
 | `POST /api/features/check-stats-integrity` | 统计一致性校验修复 | 🔒 | — |
+| `POST /api/features/{id}/ic`（v3.4） | 单因子 IC 体检任务 | 🔒 | `{horizon=10}` |
+| `GET /api/features/{id}/ic`（v3.4） | 读该因子 IC 结果 | — | — |
+| `GET /api/features/{id}/ic/task/{task_id}`（v3.4） | IC 任务进度 | — | — |
+| `PUT /api/features/{id}/ic-status`（v3.4） | 用户 IC 决策（included/excluded/candidate） | 🔒 | 重算不覆盖 |
 
 ## 13. KEPL 解析（api/kepl.py）
 
 | 方法+路径 | 功能 | 认证 | 请求 |
 |---|---|---|---|
 | `POST /api/kepl/parse` | 解析公式返回 AST+错误 | — | `{formula, entity="stock"}` |
+| `GET /api/kepl/functions`（v3.7） | 算子目录单一事实源（32 算子签名/描述/示例，强校验） | — | AI 上下文、Monaco 补全、函数页内置算子合并共用 |
 
-## 14. DAG 节点类型（api/dag_types.py，前缀 /api/dag）
+## 14. 数据库浏览器 dbexplorer（api/dbexplorer.py，前缀 /api/dbx，v3.6 新增）
+
+只读数据库浏览器（借鉴 Adminer/pgweb，应用内实现避免独立服务认证冲突）；表名/列名白名单校验防注入。
+
+| 方法+路径 | 功能 | 认证 |
+|---|---|---|
+| `GET /api/dbx/overview` | 库总览（表数/行数/体积） | — |
+| `GET /api/dbx/tables` | 表清单（行数/大小） | — |
+| `GET /api/dbx/tables/{table}/columns` | 列结构 | — |
+| `GET /api/dbx/tables/{table}/rows` | 数据预览（分页+排序） | — |
+
+## 15. DAG 节点类型（api/dag_types.py，前缀 /api/dag）
 
 | 方法+路径 | 功能 | 认证 |
 |---|---|---|
 | `GET /api/dag/node-types` | 已注册节点类型（含 has_function 状态） | — |
 | `GET /api/dag/node-types/{name}` | 单节点详情（含 sub_steps 内部依赖） | — |
 
-## 15. DAG 流程编排（api/dag_flows.py，前缀 /api/dag）
+## 16. DAG 流程编排（api/dag_flows.py，前缀 /api/dag）
 
 | 方法+路径 | 功能 | 认证 | 要点 |
 |---|---|---|---|

@@ -2,7 +2,11 @@
   <div class="dag-node" :class="[selected ? 'selected' : '', data?.status ? 'status-'+data.status : '']">
     <Handle type="target" :position="Position.Top" id="t-top" />
     <Handle type="target" :position="Position.Left" id="t-left" />
+    <Handle type="target" :position="Position.Bottom" id="t-bottom" />
+    <Handle type="target" :position="Position.Right" id="t-right" />
     <span class="dag-node-label">{{ data.label }}</span>
+    <Handle type="source" :position="Position.Top" id="s-top" />
+    <Handle type="source" :position="Position.Left" id="s-left" />
     <Handle type="source" :position="Position.Right" id="s-right" />
     <Handle type="source" :position="Position.Bottom" id="s-bottom" />
   </div>
@@ -27,14 +31,14 @@ defineProps(['id', 'data', 'selected'])
   position: relative;
 }
 .dag-node.selected {
-  border-color: #2080f0;
+  border-color: var(--c-info);
   box-shadow: 0 0 0 2px rgba(32,128,240,0.2);
 }
 .dag-node-label {
   display: block;
 }
 .dag-node.status-pending { border-color: #94a3b8; }
-.dag-node.status-running { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.3); }
+.dag-node.status-running { border-color: var(--c-info); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-info) 30%, transparent); }
 .dag-node.status-success { border-color: #10b981; }
 .dag-node.status-failed { border-color: #ef4444; }
 .dag-node :deep(.vue-flow__handle) {

@@ -16,9 +16,9 @@
         </div>
         <div style="flex:1;overflow-y:auto;padding:0 8px">
           <div style="display:flex;gap:4px;margin-bottom:8px">
-    <n-button size="tiny" :type="currentEntity==='stock'?'primary':'default'" @click="switchEntity('stock')">📈 个股</n-button>
-    <n-button size="tiny" :type="currentEntity==='index'?'primary':'default'" @click="switchEntity('index')">📊 指数</n-button>
-    <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')">💹 ETF</n-button>
+    <n-button size="tiny" :type="currentEntity==='stock'?'primary':'default'" @click="switchEntity('stock')"><AppIcon name="trending-up" :size="13" />  个股</n-button>
+    <n-button size="tiny" :type="currentEntity==='index'?'primary':'default'" @click="switchEntity('index')"><AppIcon name="bar-chart-2" :size="13" />  指数</n-button>
+    <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')"><AppIcon name="trending-up" :size="13" />  ETF</n-button>
   </div>
   <div v-for="v in store.versions" :key="v.version"
             :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-border)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-card-bg-hover)':'transparent'}"
@@ -29,13 +29,13 @@
                 <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
                 <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{store.statusLabel(v.status)}}</n-tag>
               </div>
-              <n-button v-if="!store.isMock && v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型">✕</n-button>
+              <n-button v-if="!store.isMock && v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="close" :size="13" /> </n-button>
             </div>
             <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
             <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--c-text-faint)">
-              <span v-if="v.sharpe!=null">📈 夏普 {{v.sharpe}}</span>
-              <span v-if="v.win_rate!=null">✅ {{(v.win_rate*100).toFixed(0)}}%</span>
-              <span>📅 {{(v.created_at||'').slice(5)}}</span>
+              <span v-if="v.sharpe!=null"><AppIcon name="trending-up" :size="13" />  夏普 {{v.sharpe}}</span>
+              <span v-if="v.win_rate!=null"><AppIcon name="check" :size="13" />  {{(v.win_rate*100).toFixed(0)}}%</span>
+              <span><AppIcon name="calendar" :size="13" />  {{(v.created_at||'').slice(5)}}</span>
             </div>
           </div>
           <n-empty v-if="!store.versions.length" description="暂无模型版本" style="padding:40px 0" />
@@ -60,7 +60,7 @@
 
           <div v-if="store.detailTab==='basic'" style="display:flex;flex-direction:column;gap:14px">
             <div v-if="store.selected?.status==='DRAFT'" style="display:flex;gap:8px;align-items:center">
-              <n-button size="tiny" @click="startEditConfig">✎ 编辑配置</n-button>
+              <n-button size="tiny" @click="startEditConfig"><AppIcon name="edit" :size="13" />  编辑配置</n-button>
             </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
               <div v-for="m in basicMetrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
@@ -104,7 +104,7 @@
           <div v-else-if="store.detailTab==='indicators'" style="display:flex;flex-direction:column;gap:8px">
             <div style="display:flex;align-items:center;justify-content:space-between">
               <span style="font-size:12px;color:var(--c-text-dim)">模型使用的特征</span>
-              <n-button size="tiny" @click="loadFeatureCheck" :loading="fcLoading">🔄 预检</n-button>
+              <n-button size="tiny" @click="loadFeatureCheck" :loading="fcLoading"><AppIcon name="refresh" :size="13" />  预检</n-button>
             </div>
             <div v-if="featuresForModel.length" style="display:flex;flex-wrap:wrap;gap:4px">
               <n-tag v-for="f in featuresForModel" :key="f" size="small" type="info" :bordered="false">{{ f }}</n-tag>
@@ -112,7 +112,7 @@
             <n-empty v-else description="未配置特征" style="padding:20px" />
             <div v-if="fcResult" style="margin-top:8px">
               <div :style="{fontSize:'11px',color:fcResult.ready?'#10b981':'#ef4444',marginBottom:'6px'}">
-                {{ fcResult.ready ? '✅ 全部特征数据就绪' : '⚠️ ' + fcResult.warnings.length + ' 个问题' }}
+                {{ fcResult.ready ? '<AppIcon name="check" :size="13" />  全部特征数据就绪' : '<AppIcon name="alert" :size="13" /> ️ ' + fcResult.warnings.length + ' 个问题' }}
               </div>
               <div v-if="fcResult.warnings?.length" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px">
                 <div v-for="w in fcResult.warnings" :key="w" style="font-size:10px;color:#f59e0b">{{ w }}</div>
@@ -126,7 +126,7 @@
     </div>
 
     <!-- Create Modal -->
-    <n-modal v-model:show="showCreate" preset="card" :title="editMode?'✎ 编辑配置':'✚ 创建模型版本'" style="width:640px;max-width:92vw" :mask-closable="false">
+    <n-modal v-model:show="showCreate" preset="card" :title="editMode ? '编辑配置' : '创建模型版本'" style="width:640px;max-width:92vw" :mask-closable="false">
         <n-space vertical>
           <n-input v-model:value="createName" placeholder="模型名称" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
@@ -140,6 +140,12 @@
               <n-select v-model:value="createForm.feature_norm" size="small" style="flex:1"
                 :options="[{label:'截面排名（推荐）',value:'cs_rank'},{label:'原始值（旧）',value:'none'}]" />
             </div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">中性化</span>
+              <n-switch v-model:value="createForm.feature_neut" size="small">
+                <template #checked>市值+行业</template>
+                <template #unchecked>关</template>
+              </n-switch>
+            </div>
           </div>
           <n-divider style="margin:4px 0">特征配置</n-divider>
           <n-space>
@@ -147,9 +153,9 @@
               :type="createForm.feature_names.includes(f.key)?'info':'default'"
               :style="{cursor:'pointer', opacity: f.ic_status==='excluded'?0.55:1,
                        border: f.ic_status==='excluded' ? '1px dashed #ef4444' : (f.traffic==='green' ? '1px solid #10b981' : (f.traffic==='yellow' ? '1px solid #f59e0b' : 'none'))}"
-              @click="toggleFeature(f.key)" :bordered="false" size="small">{{ f.traffic==='green'?'🟢':f.traffic==='yellow'?'🟡':f.traffic==='red'?'🔴':'' }}{{f.label}}{{ f.direction==='-'?'↩':'' }}</n-tag>
+              @click="toggleFeature(f.key)" :bordered="false" size="small">{{ f.traffic==='green'?'●':f.traffic==='yellow'?'●':f.traffic==='red'?'●':'' }}{{f.label}}{{ f.direction==='-'?' ↩':'' }}</n-tag>
           </n-space>
-          <div style="font-size:10px;color:var(--c-text-faint)">🟢/🟡/🔴 = IC 体检灯（10日前瞻）；↩ = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
+          <div style="font-size:10px;color:var(--c-text-faint)">// = IC 体检灯（10日前瞻）； = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
           <n-divider style="margin:4px 0">训练参数</n-divider>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">Optuna</span><n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="flex:1" size="small" /></div>
@@ -219,7 +225,7 @@
         </template>
     </n-modal>
     <!-- Delete Confirm Modal -->
-    <n-modal v-model:show="showDeleteModal" preset="card" :title="deleteInfo?.can_physical_delete ? '⚠️ 永久删除模型' : '🗑️ 删除模型'" style="width:420px;max-width:92vw" :mask-closable="false">
+    <n-modal v-model:show="showDeleteModal" preset="card" :title="deleteInfo?.can_physical_delete ? '永久删除模型' : '删除模型'" style="width:420px;max-width:92vw" :mask-closable="false">
         <template v-if="deleteInfo">
           <template v-if="deleteInfo.can_physical_delete">
             <p style="font-size:13px;color:var(--c-text);margin:0">
@@ -231,11 +237,11 @@
               模型 <b>{{ deleteTarget?.version }}</b> 已产生关联数据，删除后将标记为已删除状态，历史数据不受影响。
             </p>
             <div style="font-size:11px;color:var(--c-text-dim);padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
-              <div v-if="deleteInfo.related_data.signals > 0">📊 信号数据 {{ deleteInfo.related_data.signals }} 条</div>
-              <div v-if="deleteInfo.related_data.training_trials > 0">🧪 训练试验 {{ deleteInfo.related_data.training_trials }} 次</div>
-              <div v-if="deleteInfo.related_data.health_records > 0">💊 健康记录 {{ deleteInfo.related_data.health_records }} 条</div>
-              <div v-if="deleteInfo.related_data.comparisons > 0">📋 版本对比 {{ deleteInfo.related_data.comparisons }} 条</div>
-              <div v-if="deleteInfo.related_data.activated">🚀 曾上线运行</div>
+              <div v-if="deleteInfo.related_data.signals > 0"><AppIcon name="bar-chart-2" :size="13" />  信号数据 {{ deleteInfo.related_data.signals }} 条</div>
+              <div v-if="deleteInfo.related_data.training_trials > 0"><AppIcon name="e" :size="13" />  训练试验 {{ deleteInfo.related_data.training_trials }} 次</div>
+              <div v-if="deleteInfo.related_data.health_records > 0"> 健康记录 {{ deleteInfo.related_data.health_records }} 条</div>
+              <div v-if="deleteInfo.related_data.comparisons > 0"><AppIcon name="l" :size="13" />  版本对比 {{ deleteInfo.related_data.comparisons }} 条</div>
+              <div v-if="deleteInfo.related_data.activated"><AppIcon name="send" :size="13" />  曾上线运行</div>
             </div>
           </template>
         </template>
@@ -253,6 +259,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, reactive, computed, onMounted, h, watch } from 'vue'
 import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDatePicker, NCheckbox, NDivider, NCollapse, NCollapseItem, NSwitch, NDataTable, NSelect } from 'naive-ui'
 import { useDialog, useMessage } from 'naive-ui'
@@ -322,6 +329,7 @@ const createForm = reactive({
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
   // v3.5 方法论：excess=超额收益标签（相对沪深300）；cs_rank=特征逐日截面排名
   label_mode: 'excess', feature_norm: 'cs_rank',
+  feature_neut: false,
   // ML 买入阈值：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
   signal_threshold_mode: 'quantile', buy_top_pct: 0.05, ml_confidence_threshold: 0.02,
   // 六层策略配置默认值（策略扫描时搜索最优）
@@ -413,6 +421,7 @@ function startEditConfig() {
   // v3.5：旧模型 config 无此二键 → 回退旧口径，保证编辑保存不改变语义
   createForm.label_mode = cfg.label_mode || 'absolute'
   createForm.feature_norm = cfg.feature_norm || 'none'
+  createForm.feature_neut = cfg.feature_neut || false
   showCreate.value = true
 }
 
@@ -430,6 +439,7 @@ async function doSaveConfig() {
       optuna_trials: createForm.optuna_trials,
       label_mode: createForm.label_mode,
       feature_norm: createForm.feature_norm,
+      feature_neut: createForm.feature_neut,
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
       signal: {
         threshold_mode: createForm.signal_threshold_mode,
@@ -471,6 +481,7 @@ async function doCreate() {
       ml_confidence_threshold: createForm.ml_confidence_threshold,
       label_mode: createForm.label_mode,
       feature_norm: createForm.feature_norm,
+      feature_neut: createForm.feature_neut,
     })
     showCreate.value = false
     createName.value = ''
@@ -510,7 +521,7 @@ async function startTrain() {
     if (fcResult.value && !fcResult.value.ready) {
       trainingLoading.value = false
       dialog.warning({
-        title: '⚠️ 特征数据不完整（最近预检结果）',
+        title: '特征数据不完整（最近预检结果）',
         // 文本节点渲染，避免 warnings 内容注入 HTML（存储型 XSS）
         content: () => h('div', { style: 'font-size:12px;line-height:1.6' }, fcResult.value.warnings.map(w => h('div', null, String(w)))),
         positiveText: '仍然训练',
@@ -536,6 +547,14 @@ async function dostartTrain() {
   } catch(e) { message.error(e.response?.data?.detail || '启动训练失败') }
 }
 async function approveModel() {
+  dialog.warning({
+    title: '确认审批上线？',
+    content: `版本 ${store.selected.version} 将置为 ACTIVE 并开始产生实盘信号，同实体旧 ACTIVE 版本转入 ARCHIVED。若最近一次 walk-forward 判定为 FAIL，本次审批将被拒绝。`,
+    positiveText: '审批上线', negativeText: '取消',
+    onPositiveClick: () => doApprove(),
+  })
+}
+async function doApprove() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`)
     await store.loadVersions(currentEntity.value)
@@ -544,6 +563,9 @@ async function approveModel() {
   }
 }
 async function rejectModel() {
+  dialog.warning({ title: '确认拒绝该版本？', content: '版本将转入 REJECTED，之后可重新训练。', positiveText: '拒绝', negativeText: '取消', onPositiveClick: () => doReject() })
+}
+async function doReject() {
   try {
     await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/reject`)
     await store.loadVersions(currentEntity.value)

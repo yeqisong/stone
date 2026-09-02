@@ -1,6 +1,9 @@
 <template>
 <div>
   <n-spin v-if="loading" style="padding:60px" />
+  <div v-else-if="loadError" style="padding:40px;text-align:center;color:var(--c-error);font-size:13px">
+    统计加载失败 <n-button size="tiny" @click="load" style="margin-left:8px">重试</n-button>
+  </div>
   <template v-else-if="stats">
     <!-- Overview -->
     <StatStrip :items="overviews" />
@@ -8,11 +11,11 @@
     <!-- Charts Row -->
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
       <div style="flex:1;min-width:300px">
-        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px">📈 每日信号 & 胜率趋势</h4>
+        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px"><AppIcon name="trending-up" :size="13" />  每日信号 & 胜率趋势</h4>
         <div id="st-chart-trend" style="width:100%;height:280px"></div>
       </div>
       <div style="flex:1;min-width:260px">
-        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px">📊 收益分布 (已了结)</h4>
+        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px"><AppIcon name="bar-chart-2" :size="13" />  收益分布 (已了结)</h4>
         <div id="st-chart-dist" style="width:100%;height:280px"></div>
       </div>
     </div>
@@ -20,11 +23,11 @@
     <!-- Tables Row -->
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <div style="flex:1;min-width:280px">
-        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px">🏭 行业胜率 (Top 15)</h4>
+        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px"> 行业胜率 (Top 15)</h4>
         <n-data-table :columns="indCols" :data="stats.by_industry" size="small" :max-height="400" />
       </div>
       <div style="flex:1;min-width:280px">
-        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px">⭐ 个股信号 (Top 20)</h4>
+        <h4 style="font-size:13px;color:var(--c-text);margin:0 0 6px"> 个股信号 (Top 20)</h4>
         <n-data-table :columns="stkCols" :data="stats.top_stocks" size="small" :max-height="400" />
       </div>
     </div>
@@ -33,8 +36,9 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, onMounted, nextTick } from 'vue'
-import { NSpin, NDataTable } from 'naive-ui'
+import { NSpin, NDataTable, NButton } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import StatStrip from './StatStrip.vue'
@@ -42,6 +46,7 @@ import StatStrip from './StatStrip.vue'
 const API = window.location.origin
 const loading = ref(true)
 const stats = ref(null)
+const loadError = ref(false)
 
 const overviews = ref([])
 const indCols = [
@@ -77,7 +82,7 @@ async function load() {
     await nextTick()
     drawTrend()
     drawDist()
-  } catch(e) {} finally { loading.value = false }
+  } catch(e) { loadError.value = true } finally { loading.value = false }
 }
 
 function makeChart(id, opt) {

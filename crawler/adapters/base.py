@@ -29,7 +29,7 @@ class KlineRow:
     high: float
     low: float
     close: float            # 不复权收盘价
-    close_hfq: float        # 后复权收盘价
+    close_hfq: Optional[float]    # 后复权收盘价；None=本源无复权数据（UPSERT 保留库内旧值，留给补充器）
     volume: int             # 成交量（股）
     amount: float           # 成交额（元）
     turnover: Optional[float] = None  # 换手率 (%)

@@ -100,7 +100,7 @@
     <div v-if="trades.length" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">交易明细（共 {{rep.trade_count||trades.length}} 笔）</div>
-        <n-button size="tiny" @click="downloadTrades">⬇ 下载CSV</n-button>
+        <n-button size="tiny" @click="downloadTrades"><AppIcon name="trending-down" :size="13" />  下载CSV</n-button>
       </div>
       <div class="etbl-scroll" style="max-height:400px">
         <table class="etbl">
@@ -139,14 +139,14 @@
     <!-- 策略扫描 -->
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🔍 策略参数扫描</div>
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"><AppIcon name="search" :size="13" />  策略参数扫描</div>
         <n-button size="tiny" @click="showScanModal=true" :disabled="scanRunning">开始扫描</n-button>
       </div>
       <div v-if="scanTask" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
-        {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `✅ 完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
+        {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `<AppIcon name="check" :size="13" />  完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
       </div>
       <div v-if="scanBest" style="margin-top:8px;font-size:11px;color:var(--c-text)">
-        📌 已应用最优<template v-if="scanBest.engine">[{{ scanBest.engine }}]</template>：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
+        <AppIcon name="filter" :size="13" />  已应用最优<template v-if="scanBest.engine">[{{ scanBest.engine }}]</template>：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
         trailing{{((scanBest.trailing_retracement||0)*100).toFixed(0)}}%<template v-if="scanBest.topk"> / topk{{ scanBest.topk }}·换血{{ scanBest.n_drop }}</template> —
         sharpe <b style="color:#10b981">{{scanBest.sharpe?.toFixed(2)}}</b> ·
         收益 <b>{{(scanBest.total_return*100).toFixed(1)}}%</b> ·
@@ -157,8 +157,8 @@
     <!-- 归因分析 -->
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">📊 归因分析（基准锚定法）</div>
-        <n-button size="tiny" @click="loadAttribution" :loading="attrLoading">🔄 重新分析</n-button>
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"><AppIcon name="bar-chart-2" :size="13" />  归因分析（基准锚定法）</div>
+        <n-button size="tiny" @click="loadAttribution" :loading="attrLoading"><AppIcon name="refresh" :size="13" />  重新分析</n-button>
       </div>
       <div v-if="attrLoading && !attribution" style="font-size:11px;color:var(--c-text-dim);padding:6px 0">分析中（宽表 + 三基线回测，约 1 分钟）…</div>
       <div v-if="attribution?.matrix" style="display:flex;gap:8px;flex-wrap:wrap">
@@ -193,7 +193,7 @@
     <!-- 置换检验 -->
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🎲 置换检验（真预测 vs 打乱噪声分布）</div>
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"> 置换检验（真预测 vs 打乱噪声分布）</div>
         <div style="display:flex;gap:6px;align-items:center">
           <n-select v-model:value="permN" size="tiny" style="width:84px"
             :options="[10,20,50].map(n=>({label:n+' 次',value:n}))" />
@@ -203,7 +203,7 @@
       <div v-if="permTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
         检验中（宽表 + 预测 + {{permTask.params?.n_perms || permN}} 次打乱回测，约 5-10 分钟）…
       </div>
-      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px">❌ {{permTask.error}}</div>
+      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="close" :size="13" />  {{permTask.error}}</div>
       <template v-if="permTest">
         <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:permVerdict?.color}">{{permVerdict?.label}}</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -234,7 +234,7 @@
     <!-- Walk-Forward 晋升门槛 -->
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">🧭 Walk-Forward 多窗口检验（晋升门槛）</div>
+        <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"><AppIcon name="compass" :size="13" />  Walk-Forward 多窗口检验（晋升门槛）</div>
         <div style="display:flex;gap:6px;align-items:center">
           <n-select v-model:value="wfWindows" size="tiny" style="width:92px"
             :options="[2,3,4,6].map(n=>({label:n+' 窗口',value:n}))" />
@@ -244,7 +244,7 @@
       <div v-if="wfTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
         检验中（基线 {{wfTask.params?.baseline_version || '无'}}，{{wfTask.params?.n_windows}} 窗口 × 2 模型评估，约 2-4 分钟）…
       </div>
-      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px">❌ {{wfTask.error}}</div>
+      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="close" :size="13" />  {{wfTask.error}}</div>
       <template v-if="wf">
         <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:wfVerdict?.color}">{{wfVerdict?.label}}</div>
         <div style="font-size:11px;color:var(--c-text-dim);margin-top:2px">{{wf.reason}}<span v-if="wf.baseline">（基线 {{wf.baseline}}）</span></div>
@@ -267,7 +267,7 @@
                 <td>{{w.new?.rank_ic!=null?(w.new.rank_ic>=0?'+':'')+w.new.rank_ic.toFixed(3):'—'}}</td>
                 <td>{{w.baseline?.sharpe?.toFixed(2) ?? '—'}}</td>
                 <td>{{w.baseline?.rank_ic!=null?(w.baseline.rank_ic>=0?'+':'')+w.baseline.rank_ic.toFixed(3):'—'}}</td>
-                <td :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#10b981':'#ef4444'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✅ 胜':'❌ 负'}}</td>
+                <td :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#10b981':'#ef4444'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✓ 胜':'✕ 负'}}</td>
               </tr>
             </tbody>
           </table>
@@ -303,7 +303,7 @@
           <n-progress type="line" :percentage="Math.round(scanTask.completed/scanTask.total_combos*100)" />
         </div>
         <div v-if="scanTask?.status==='completed' && scanTask.best_so_far" style="margin-top:8px;font-size:11px;color:#10b981">
-          ✅ 最优[{{ scanTask.best_so_far.engine || 'v1' }}]：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}%<template v-if="scanTask.best_so_far.topk"> topk{{ scanTask.best_so_far.topk }}·换血{{ scanTask.best_so_far.n_drop }}</template> 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
+          <AppIcon name="check" :size="13" />  最优[{{ scanTask.best_so_far.engine || 'v1' }}]：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}%<template v-if="scanTask.best_so_far.topk"> topk{{ scanTask.best_so_far.topk }}·换血{{ scanTask.best_so_far.n_drop }}</template> 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
           <n-button size="tiny" type="primary" style="margin-left:8px" @click="applyScan">应用</n-button>
         </div>
       </n-space>
@@ -319,7 +319,8 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import AppIcon from './AppIcon.vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress, NSelect, useMessage } from 'naive-ui'
 import axios from 'axios'
 
@@ -342,9 +343,9 @@ const metrics = computed(() => [
 const overfitLabel = computed(() => {
   const gap = rep.value.overfit_gap
   if (gap == null) return '—'
-  if (gap > 0.5) return '⚠️ 过拟合'
-  if (gap < -0.3) return '📉 欠拟合'
-  return '✅ 正常'
+  if (gap > 0.5) return '过拟合'
+  if (gap < -0.3) return '欠拟合'
+  return '正常'
 })
 
 const overfitColor = computed(() => {
@@ -488,8 +489,8 @@ const attrVerdict = computed(() => {
   if (!a?.real || !a?.random) return null
   const rs = a.real.sharpe || 0, rd = a.random.sharpe || 0
   return rs > rd
-    ? { text: `✅ real 优于 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）`, color: '#10b981' }
-    : { text: `🔴 real 不及 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）——模型为负贡献`, color: '#ef4444' }
+    ? { text: `real 优于 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）`, color: '#10b981' }
+    : { text: `real 不及 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）——模型为负贡献`, color: '#ef4444' }
 })
 
 const cfgValStart = computed(() => props.version?.config?.val_strategy_range?.start || `${new Date().getFullYear()}-01-01`)
@@ -546,9 +547,9 @@ async function startPerm() {
 const permVerdict = computed(() => {
   const v = permTest.value?.verdict
   return {
-    strong: { label: '✅ 显著（进入噪声分布前 5%）', color: '#10b981' },
-    above_mean: { label: '🟡 高于噪声均值（未达显著）', color: '#f59e0b' },
-    noise: { label: '🔴 与噪声无异（无 alpha）', color: '#ef4444' },
+    strong: { label: '显著（进入噪声分布前 5%）', color: '#10b981' },
+    above_mean: { label: '高于噪声均值（未达显著）', color: '#f59e0b' },
+    noise: { label: '与噪声无异（无 alpha）', color: '#ef4444' },
   }[v] || null
 })
 
@@ -593,9 +594,9 @@ async function startWF() {
 const wfVerdict = computed(() => {
   const v = wf.value?.verdict
   return {
-    PASS: { label: '✅ 晋升门槛通过', color: '#10b981' },
-    FAIL: { label: '🔴 晋升门槛未通过', color: '#ef4444' },
-    NO_BASELINE: { label: '⚪ 无基线可比', color: '#6b7280' },
+    PASS: { label: '晋升门槛通过', color: '#10b981' },
+    FAIL: { label: '晋升门槛未通过', color: '#ef4444' },
+    NO_BASELINE: { label: '无基线可比', color: '#6b7280' },
   }[v] || null
 })
 
@@ -626,6 +627,12 @@ const optunaTrials = computed(() => (rep.value.trials || []).slice(-10).reverse(
   sharpe: t.sharpe?.toFixed(3) || '—',
   params: `lr=${t.params?.learning_rate?.toFixed(3)||'?'} d=${t.params?.max_depth||'?'} n=${t.params?.n_estimators||'?'}`,
 })))
+
+// 组件卸载统一清理轮询定时器（切 tab 泄漏会持续空转请求）
+onUnmounted(() => {
+  [scanPollTimer, permPollTimer, wfPollTimer].forEach(t => { if (t) clearInterval(t) })
+  scanPollTimer = permPollTimer = wfPollTimer = null
+})
 </script>
 
 <style scoped>

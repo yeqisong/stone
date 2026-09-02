@@ -2,34 +2,34 @@
 <div style="padding:16px;max-width:100%;flex:1;min-height:0;display:flex;flex-direction:column">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:10px">
-      <n-button v-if="editMode" size="small" quaternary @click="doExitEdit">← 返回</n-button>
+      <n-button v-if="editMode" size="small" quaternary @click="doExitEdit"><AppIcon name="arrow-left" :size="13" />  返回</n-button>
       <template v-if="editMode">
         <span v-if="!editingName" style="font-size:17px;font-weight:700;color:var(--c-text)">{{ '编辑 ' + (flowName || '新流程') }}</span>
         <n-input v-else v-model:value="flowName" size="small" style="width:180px" @blur="editingName=false" @keyup.enter="editingName=false" ref="nameInputRef" />
-        <n-button v-if="!editingName" size="tiny" quaternary @click="startEditName" style="font-size:12px">✎</n-button>
+        <n-button v-if="!editingName" size="tiny" quaternary @click="startEditName" style="font-size:12px"><AppIcon name="edit" :size="13" /> </n-button>
       </template>
       <span v-else style="font-size:17px;font-weight:700;color:var(--c-text)">DAG 流程编排</span>
     </div>
     <div style="display:flex;gap:6px">
-      <n-button v-if="editMode && flowStatus==='draft'" size="small" type="success" @click="doPublish" :loading="saving">🚀 发布</n-button>
-      <n-button v-if="editMode && flowStatus==='published'" size="small" type="warning" @click="doUnpublish" :loading="saving">⬇ 下线</n-button>
-      <n-button v-if="editMode && flowStatus==='published'" size="small" type="primary" @click="showExecModal=true">▶ 执行</n-button>
-      <n-button v-if="editMode" size="small" @click="autoLayout">🔀 自动布局</n-button>
-      <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">🔍 校验</n-button>
-      <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">💾 保存</n-button>
+      <n-button v-if="editMode && flowStatus==='draft'" size="small" type="success" @click="doPublish" :loading="saving">发布</n-button>
+      <n-button v-if="editMode && flowStatus==='published'" size="small" type="warning" @click="doUnpublish" :loading="saving">下线</n-button>
+      <n-button v-if="editMode && flowStatus==='published'" size="small" type="primary" @click="showExecModal=true">执行</n-button>
+      <n-button v-if="editMode" size="small" @click="autoLayout">自动布局</n-button>
+      <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">校验</n-button>
+      <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">保存</n-button>
       <n-button v-if="!editMode" size="small" type="primary" @click="nav.showFlowEditor('new')">+ 新建</n-button>
     </div>
   </div>
 
   <div v-if="editMode && validation" :style="{flexShrink:0,marginBottom:'6px',padding:'6px 10px',borderRadius:'6px',fontSize:'11px',background:validation.ok?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)',border:'1px solid '+(validation.ok?'rgba(16,185,129,.2)':'rgba(239,68,68,.2)')}">
-    <span v-if="validation.ok" style="color:#10b981">✅ 校验通过</span>
-    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#ef4444;margin-right:12px">❌ {{ e }}</span>
+    <span v-if="validation.ok" style="color:#10b981"><AppIcon name="check" :size="13" />  校验通过</span>
+    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#ef4444;margin-right:12px"><AppIcon name="close" :size="13" />  {{ e }}</span>
   </div>
 
-  <div v-if="editMode && flowStatus==='published'" style="padding:6px 12px;margin-bottom:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;font-size:11px;color:#f59e0b;flex-shrink:0">⚠ 此流程已发布，修改后将影响线上执行</div>
+  <div v-if="editMode && flowStatus==='published'" style="padding:6px 12px;margin-bottom:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;font-size:11px;color:#f59e0b;flex-shrink:0"><AppIcon name="alert" :size="13" />  此流程已发布，修改后将影响线上执行</div>
 
   <div v-if="editMode" style="display:flex;flex:1;min-height:0;gap:0;border:1px solid var(--c-border);border-radius:8px;overflow:hidden">
-    <div style="width:160px;flex-shrink:0;background:var(--c-card-bg);border-right:1px solid var(--c-border);padding:10px;overflow-y:auto">
+    <div v-if="!isNarrow" class="dfe-palette" style="width:160px;flex-shrink:0;background:var(--c-card-bg);border-right:1px solid var(--c-border);padding:10px;overflow-y:auto">
       <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">节点类型</div>
       <div v-for="nt in nodeTypes.filter(t => t.node_name !== 'cron')" :key="nt.name"
         :style="{padding:'8px 10px',marginBottom:'4px',borderRadius:'6px',border:'1px solid var(--c-border)',cursor:'pointer',fontSize:'11px',background:'var(--c-bg)',color:'var(--c-text)'}"
@@ -39,7 +39,8 @@
     </div>
 
     <div style="flex:1;min-width:0;position:relative">
-      <VueFlow id="dag-flow" v-model:nodes="nodes" v-model:edges="edges" @nodes-change="filterCron"
+      <div v-if="isNarrow && editMode" style="padding:8px 12px;background:color-mix(in srgb, var(--c-warning) 12%, transparent);border:1px solid var(--c-warning);border-radius:6px;font-size:12px;color:var(--c-warning);margin-bottom:8px"> 画布编辑建议在 PC 端进行（窄屏仅支持浏览与保存）</div>
+    <VueFlow id="dag-flow" v-model:nodes="nodes" v-model:edges="edges" @nodes-change="filterCron"
         :node-types="customNodeTypes"
         :default-viewport="{ x: 0, y: 0, zoom: 1 }"
         :snap-to-grid="true" :snap-grid="[20,20]"
@@ -49,8 +50,9 @@
         :connection-line-style="{ stroke: 'var(--c-text-dim)', strokeWidth: 2 }"
         @node-double-click="onNodeDblClick" @pane-click="onPaneClick" @connect="onConnect" @node-drag-stop="onNodeDragStop"
         :default-edge-options="defaultEdgeOpts"
-        :only-render-visible-elements="true">
+>
         <Background variant="dots" :gap="20" />
+        <MiniMap position="bottom-left" pannable zoomable node-color="#94a3b8" mask-color="rgba(200,200,200,0.45)" />
         <Controls position="bottom-right" />
         <div style="position:absolute;bottom:12px;right:52px;z-index:10;font-size:11px;color:var(--c-text-dim);background:var(--c-card-bg);padding:2px 6px;border-radius:4px;border:1px solid var(--c-border);pointer-events:none">
           {{ Math.round(viewport.zoom * 100) }}%
@@ -58,13 +60,13 @@
       </VueFlow>
     </div>
 
-    <div v-if="sidebarMode" style="width:280px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
+    <div v-if="sidebarMode" class="dfe-sidebar" style="width:280px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-weight:700;color:var(--c-text)">{{ sidebarMode==='flow' ? '⚙️ 流程属性' : (nodeDetail?.label || nodeDetail?.node_name || '') }}</span>
-        <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="sidebarMode=null">✕</span>
+        <span style="font-weight:700;color:var(--c-text)">{{ sidebarMode==='flow' ? '流程属性' : (nodeDetail?.label || nodeDetail?.node_name || '') }}</span>
+        <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="sidebarMode=null"><AppIcon name="close" :size="13" /> </span>
       </div>
       <template v-if="sidebarMode==='flow'">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">📋 流程名</div>
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px"><AppIcon name="l" :size="13" />  流程名</div>
         <n-input v-model:value="flowName" size="small" placeholder="流程名称" />
         <div style="margin-top:12px;font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">⏰ 定时执行 (Cron)</div>
         <n-select v-model:value="cronTab" :options="cronTabs" size="small" style="width:100%" @update:value="onCronTab" />
@@ -108,10 +110,10 @@
           <div v-if="cronTab==='custom'"><n-input v-model:value="cronCustomVal" size="small" placeholder="0 8 * * 1-5" @update:value="applyCustom" /></div>
         </div>
         <div v-if="cronError" style="margin-top:4px;font-size:10px;color:#ef4444">{{ cronError }}</div>
-        <div v-if="cronPreview && !cronError" style="margin-top:4px;font-size:10px;color:var(--c-text-dim)">💡 {{ cronPreview }}</div>
+        <div v-if="cronPreview && !cronError" style="margin-top:4px;font-size:10px;color:var(--c-text-dim)"> {{ cronPreview }}</div>
       </template>
       <template v-else-if="sidebarMode==='node' && nodeDetail">
-        <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'" style="margin-bottom:8px">{{ nodeDetail.has_function ? '✅ 已注册' : '⏸ 未注册' }}</n-tag>
+        <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'" style="margin-bottom:8px">{{ nodeDetail.has_function ? '✓ 已注册' : '⏸ 未注册' }}</n-tag>
         <div v-if="nodeDetail.sub_steps?.length">
           <div style="color:var(--c-text-dim);margin-bottom:4px">内部步骤</div>
           <div v-for="(s,i) in nodeDetail.sub_steps" :key="i" style="padding:5px 0;border-bottom:1px solid var(--c-border)">
@@ -128,13 +130,13 @@
     <n-empty v-if="!loading && !flows.length" description="暂无流程，点击「+ 新建」创建" style="padding:40px" />
   </div>
 
-  <n-modal v-model:show="showExecModal" preset="card" :title="'▶ 执行「' + (flowName || selectedFlow) + '」'" style="width:360px;max-width:92vw">
+  <n-modal v-model:show="showExecModal" preset="card" :title="'执行「' + (flowName || selectedFlow) + '」'" style="width:360px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">选择执行日期（默认今天）</div>
       <n-date-picker v-model:value="execDate" type="date" size="small" style="width:100%" />
       <div v-if="execResult" style="margin-top:8px;padding:8px;background:var(--c-card-bg);border-radius:6px;font-size:11px">
-        <div v-if="execResult.ok" style="color:#10b981">✅ 已触发 — {{ execResult.task_id }}</div>
-        <div v-else style="color:#ef4444">❌ {{ execResult.error }}</div>
+        <div v-if="execResult.ok" style="color:#10b981"><AppIcon name="check" :size="13" />  已触发 — {{ execResult.task_id }}</div>
+        <div v-else style="color:#ef4444"><AppIcon name="close" :size="13" />  {{ execResult.error }}</div>
       </div>
     </n-space>
     <template #footer>
@@ -157,9 +159,14 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
+import { useViewport } from '../utils/viewport'
+const { isNarrow } = useViewport()
 import { ref, onMounted, nextTick, h, watch, markRaw, onBeforeUnmount } from 'vue'
 import { NButton, NSelect, NInput, NInputNumber, NDataTable, NTag, NModal, NSpace, NDatePicker, NEmpty, NTimePicker, useMessage, useDialog } from 'naive-ui'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
+import dagre from 'dagre'
+import { MiniMap } from '@vue-flow/minimap'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { cronstrue } from 'cronstrue'
@@ -238,7 +245,7 @@ const edges = ref([])
 const { screenToFlowCoordinate, getNodes, viewport, fitView } = useVueFlow('dag-flow')
 
 const nodeDefaults = { type: 'default', style: { background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', borderRadius: 8, color: 'var(--c-text)', fontSize: 11, fontWeight: 600, width: 120, padding: '10px 6px', textAlign: 'center' } }
-const defaultEdgeOpts = { type: 'default', animated: false, updatable: true, style: { stroke: 'var(--c-text-dim)', strokeWidth: 2 } }
+const defaultEdgeOpts = { type: 'smoothstep', animated: false, updatable: true, pathOptions: { borderRadius: 10 }, style: { stroke: 'var(--c-text-dim)', strokeWidth: 2 } }
 
 function makeVfNode(id, label, x, y) {
   return { id, type: 'dag-node', position: { x: x ?? 100, y: y ?? 100 }, data: { label: label || id } }
@@ -251,22 +258,9 @@ function onNodeDblClick({ node }) {
   }).catch(() => {})
 }
 function onNodeDragStop({ node }) {
-  // 拖拽后自动更新边端点方向（根据相对位置选择最优 Handle）
-  edges.value.forEach(edge => {
-    if (edge.source !== node.id && edge.target !== node.id) return
-    const srcNode = nodes.value.find(n => n.id === edge.source)
-    const tgtNode = nodes.value.find(n => n.id === edge.target)
-    if (!srcNode || !tgtNode) return
-    const dx = tgtNode.position.x - srcNode.position.x
-    const dy = tgtNode.position.y - srcNode.position.y
-    if (Math.abs(dx) > Math.abs(dy)) {
-      edge.sourceHandle = dx > 0 ? 's-right' : 't-left'
-      edge.targetHandle = dx > 0 ? 't-left' : 's-right'
-    } else {
-      edge.sourceHandle = 's-bottom'
-      edge.targetHandle = 't-top'
-    }
-  })
+  // 拖拽停后按相对位置重选全部连线锚点（统一走 reanchorEdges）
+  reanchorEdges()
+  dirty.value = true
 }
 
 function onPaneClick() { sidebarMode.value = null }
@@ -320,19 +314,19 @@ function cronReadable(c) {
 
 const flowCols = [
   { title:'流程名', key:'flow_name', width:130 },
-  { title:'状态', key:'status', width:65, render(r){ return r.status==='published'?'✅ 已发布':'📝 '+r.status } },
+  { title:'状态', key:'status', width:65, render(r){ return r.status==='published'?'已发布':r.status } },
   { title:'节点', key:'node_count', width:45, align:'center', render(r){ return r.node_count||0 } },
   { title:'Cron', key:'cron_expr', width:130, render(r){ return cronReadable(r.cron_expr) } },
-  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'#2080f0',fontSize:'11px'}},'⟳ 执行中') } },
+  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'var(--c-info)',fontSize:'11px'}},'⟳ 执行中') } },
   { title:'操作', key:'actions', width:240, render(r){
     const hasRun = taskStatuses.value[r.id] && taskStatuses.value[r.id].status === 'running'
     return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},[
-      h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'✎ 编辑'),
+      h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'编辑'),
       r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'success',onClick:()=>doPublishList(r.id)},()=>'▶ 发布') : null,
       r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'⏸ 下线') : null,
-      r.status==='published' && !hasRun ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'⚡ 执行') : null,
-      h(NButton,{size:'tiny',quaternary:true,onClick:()=>{ nav.flowId = r.id; nav.tab = 'r' }},()=>'👁 查看'),
-      h(NButton,{size:'tiny',quaternary:true,onClick:()=>showFlowLog(r.id, r.flow_name)},()=>'📋 日志'),
+      r.status==='published' && !hasRun ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'执行') : null,
+      h(NButton,{size:'tiny',quaternary:true,onClick:()=>{ nav.flowId = r.id; nav.tab = 'r' }},()=>'查看'),
+      h(NButton,{size:'tiny',quaternary:true,onClick:()=>showFlowLog(r.id, r.flow_name)},()=>'日志'),
     ])
   }},
 ]
@@ -363,6 +357,28 @@ async function loadNodeTypes() {
   try { const r = await axios.get(API + '/api/dag/node-types'); nodeTypes.value = r.data.items || [] } catch(e) { console.error(e) }
 }
 function labelFor(name) { return nodeTypes.value.find(nt => nt.node_name === name)?.label || name }
+
+/** 按源/目标节点的相对位置动态选连线锚点：垂直主导=下边中点出/上边中点进，
+ *  水平主导=右侧出/左侧进；保证连线从正确的边上出发。 */
+function reanchorEdges() {
+  const byId = {}
+  for (const n of nodes.value) byId[n.id] = n
+  for (const e of edges.value) {
+    const s = byId[e.source], t = byId[e.target]
+    if (!s || !t) continue
+    const sw = s.width || 134, sh = s.height || 40
+    const tw = t.width || 134, th = t.height || 40
+    const dx = (t.position.x + tw / 2) - (s.position.x + sw / 2)
+    const dy = (t.position.y + th / 2) - (s.position.y + sh / 2)
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      if (dy >= 0) { e.sourceHandle = 's-bottom'; e.targetHandle = 't-top' }
+      else { e.sourceHandle = 's-top'; e.targetHandle = 't-bottom' }
+    } else {
+      if (dx >= 0) { e.sourceHandle = 's-right'; e.targetHandle = 't-left' }
+      else { e.sourceHandle = 's-left'; e.targetHandle = 't-right' }
+    }
+  }
+}
 function parseCron(cron) {
   if (!cron) return; const p = cron.split(' ')
   if (p.length === 6) p.shift(); if (p.length < 5) return
@@ -397,7 +413,10 @@ async function openEdit(id) {
     const newEdges = []
     for (const n of d.nodes || []) { for (const dep of n.deps || []) { const sid = dep + '->' + n.node_name; if (!newEdges.find(e => e.id === sid)) newEdges.push({ id: sid, source: dep, target: n.node_name, ...defaultEdgeOpts }) } }
     nodes.value = newNodes; edges.value = newEdges; dirty.value = false
-    await nextTick(); fitView({ padding: 0.2, maxZoom: 1 })
+    // 双帧等待：Vue Flow 完成节点测量后再 fitView，否则视口变换为空、进来只见局部
+    await nextTick()
+    await new Promise(r => requestAnimationFrame(r))
+    reanchorEdges(); fitView({ padding: 0.2, maxZoom: 1 })
   } catch(e) { console.error(e) } finally { loadingFlow.value = false }
 }
 function getFlowData() {
@@ -410,7 +429,7 @@ async function doValidate() {
   catch(e) { validation.value = { ok: false, errors: [e.response?.data?.detail || e.message] } }
 }
 function doSave() {
-  confirmTitle.value = '💾 保存流程'; confirmMsg.value = `即将保存「${flowName.value || '新流程'}」`; confirmChangelog.value = '手动编辑'
+  confirmTitle.value = '保存流程'; confirmMsg.value = `即将保存「${flowName.value || '新流程'}」`; confirmChangelog.value = '手动编辑'
   confirmCallback.value = async () => {
     saving.value = true; const data = getFlowData()
     try {
@@ -422,7 +441,7 @@ function doSave() {
   }; showConfirmModal.value = true
 }
 async function doPublish() {
-  confirmTitle.value = '🚀 发布流程'; confirmMsg.value = `发布「${flowName.value}」，定时任务将生效`; confirmChangelog.value = ''
+  confirmTitle.value = '发布流程'; confirmMsg.value = `发布「${flowName.value}」，定时任务将生效`; confirmChangelog.value = ''
   confirmCallback.value = async () => {
     if (!selectedFlow.value) return; saving.value = true
     try { await axios.post(API + `/api/dag/flows/${selectedFlow.value}/publish`); flowStatus.value = 'published'; showConfirmModal.value = false; loadFlows() }
@@ -457,17 +476,28 @@ async function doExecuteQuick(id, name) {
   execResult.value = null
   showExecModal.value = true
 }
-function autoLayout() {
+async function autoLayout() {
+  /* dagre 分层布局（Vue Flow / React Flow 官方自动布局同款引擎）：
+     TB 自上而下分层、层内去交叉，节点坐标为居中语义需回退半宽半高。 */
   const ns = getNodes.value; const es = edges.value
   if (!ns.length) return
-  const inDeg = {}; const adj = {}
-  ns.forEach(n => { inDeg[n.id] = 0; adj[n.id] = [] })
-  es.forEach(e => { if (inDeg[e.target] !== undefined) { inDeg[e.target]++; adj[e.source]?.push(e.target) } })
-  const layers = []; const queue = Object.keys(inDeg).filter(k => inDeg[k] === 0).map(k => ({ name: k, depth: 0 })); const visited = new Set()
-  while (queue.length) { const cur = queue.shift(); if (visited.has(cur.name)) continue; visited.add(cur.name); if (!layers[cur.depth]) layers[cur.depth] = []; layers[cur.depth].push(cur.name); (adj[cur.name] || []).forEach(next => { if (!visited.has(next)) queue.push({ name: next, depth: cur.depth + 1 }) }) }
-  ns.forEach(n => { if (!visited.has(n.id)) { if (!layers[0]) layers[0] = []; layers[0].push(n.id); visited.add(n.id) } })
-  const gapX = 160; const gapY = 80
-  layers.forEach((layer, li) => { const totalW = layer.length * gapX; const offsetX = 80 - totalW / 2 + gapX / 2; layer.forEach((name, ni) => { const n = ns.find(nd => nd.id === name); if (n) n.position = { x: offsetX + ni * gapX + 300, y: 60 + li * gapY } }) })
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({ rankdir: 'TB', nodesep: 50, ranksep: 60, marginx: 20, marginy: 20 })
+  g.setDefaultEdgeLabel(() => ({}))
+  ns.forEach(n => g.setNode(n.id, { width: n.width || 134, height: n.height || 40 }))
+  es.forEach(e => { if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target) })
+  dagre.layout(g)
+  ns.forEach(n => {
+    const pos = g.node(n.id)
+    if (pos) n.position = { x: pos.x - (n.width || 134) / 2, y: pos.y - (n.height || 40) / 2 }
+  })
+  // TB 分层下全部边自上而下：统一源节点底边中点出、目标节点顶边中点进
+  edges.value.forEach(e => { e.sourceHandle = 's-bottom'; e.targetHandle = 't-top' })
+  dirty.value = true
+  // 等 Vue Flow 应用新坐标并完成测量（两帧），fitView 边界才准确
+  await nextTick()
+  await new Promise(r => requestAnimationFrame(r))
+  fitView({ padding: 0.15, maxZoom: 1 })
 }
 onMounted(async () => {
   wsUnwatch.value = addWsListener((data) => {
@@ -500,4 +530,11 @@ async function createNew() { editMode.value = true; flowName.value = ''; flowCro
 
 <style>
 .vue-flow__node-default { padding: 10px 6px !important; }
+</style>
+<style>
+/* H5：DAG 编辑器降级——palette 隐藏、提示条置顶、sidebar 全宽覆盖 */
+@media (max-width: 768px) {
+  .dfe-palette { display: none; }
+  .dfe-sidebar { position: absolute; right: 0; top: 0; bottom: 0; width: 100% !important; z-index: 30; }
+}
 </style>

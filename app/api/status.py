@@ -497,8 +497,36 @@ async def broadcast_dag_status():
     _last_log_state = None
     _completed_since = None  # 记录全部完成的时间
     _sys_tracker = {"last": 0, "cpu_prev": None}  # sys metrics throttle + CPU prev
+    _last_alert_id = 0  # 风控告警增量推送游标（step3）
 
     while True:
+        # 初始化在 try 外：首轮 DB 异常时 has_running 已定义，避免 NameError 杀死广播协程
+        has_running = False
+        # 风控告警增量轮询：risk_alerts 有新行即推 risk_alert 消息（step3）
+        try:
+            _adb = get_sync_db()
+            _arows = _adb.execute(text(
+                "SELECT id, trade_date, kind, level, title, body FROM risk_alerts "
+                "WHERE id > :last ORDER BY id LIMIT 20"
+            ), {"last": _last_alert_id}).fetchall()
+            _adb.close()
+            if _arows:
+                _last_alert_id = _arows[-1][0]
+                _amsg = _json.dumps({"type": "risk_alert", "alerts": [
+                    {"id": r[0], "trade_date": str(r[1]), "kind": r[2], "level": r[3],
+                     "title": r[4], "body": r[5]} for r in _arows
+                ]})
+                dead_a = set()
+                for ws in list(_ws_clients):
+                    try:
+                        await ws.send_text(_amsg)
+                    except Exception:
+                        dead_a.add(ws)
+                _ws_clients -= dead_a
+        except Exception:
+            pass
+        node_list = []
+        run_status = {}
         try:
             db = get_sync_db()
             # 获取最新 run 的节点状态

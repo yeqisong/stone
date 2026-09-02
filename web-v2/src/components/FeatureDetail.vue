@@ -4,11 +4,11 @@
   <template v-else-if="feat">
     <!-- 顶部导航 -->
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-      <n-button size="small" quaternary @click="$emit('back')">← 返回列表</n-button>
+      <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回列表</n-button>
       <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ feat.feature_name }}</span>
-      <n-tag :type="statusTypeMap[feat.status]||'default'" size="small" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
+      <n-tag :type="statusTypeMap[feat.status]||'default'" size="tiny" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
       <div style="flex:1" />
-      <n-button size="small" @click="openEditInline">✎ 编辑</n-button>
+      <n-button size="tiny" @click="openEditInline"><AppIcon name="edit" :size="13" />  编辑</n-button>
     </div>
 
     <!-- 3 Tab 切换 -->
@@ -24,51 +24,51 @@
 
         <!-- 公式 -->
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;margin-bottom:14px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">📐 KEPL 公式</div>
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px"> KEPL 公式</div>
           <code style="font-size:14px;color:var(--c-text);word-break:break-all">{{ feat.formula }}</code>
         </div>
 
         <!-- 质量仪表盘 4 卡片 -->
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 数据完整度</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
             <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=60?'#10b981':completenessPct>=30?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
             <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
               <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=60?'#10b981':completenessPct>=30?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
             </div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 总格子</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="l" :size="13" />  总格子</div>
             <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
             <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">交易日×股票数</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">✅ 已计算</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="check" :size="13" />  已计算</div>
             <div style="font-size:20px;font-weight:700;color:#10b981">{{ computedActual.toLocaleString() }}</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 总缺失格</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  总缺失格</div>
             <div :style="{fontSize:'20px',fontWeight:700,color:feat.abnormal_missing_cells>0?'#f59e0b':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
           </div>
         </div>
 
         <!-- 最近计算 -->
         <div style="font-size:12px;color:var(--c-text-dim);margin-bottom:14px">
-          📅 最近计算日：<span :style="{color:feat.latest_computed_date?(staleDays>5?'#f59e0b':'var(--c-text)'):'var(--c-text-faint)'}">{{ feat.latest_computed_date || '从未计算' }}</span>
-          <span v-if="staleDays>5" style="color:#f59e0b;margin-left:8px">⚠ 超过 {{ staleDays }} 天未更新</span>
+          <AppIcon name="calendar" :size="13" />  最近计算日：<span :style="{color:feat.latest_computed_date?(staleDays>5?'#f59e0b':'var(--c-text)'):'var(--c-text-faint)'}">{{ feat.latest_computed_date || '从未计算' }}</span>
+          <span v-if="staleDays>5" style="color:#f59e0b;margin-left:8px"><AppIcon name="alert" :size="13" />  超过 {{ staleDays }} 天未更新</span>
         </div>
 
         <!-- 依赖关系 -->
         <div style="display:flex;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬆ 上游依赖</div>
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-up" :size="13" />  上游依赖</div>
             <div v-if="(feat.depends_on||[]).length">
               <n-tag v-for="d in feat.depends_on" :key="d" size="tiny" :bordered="false" type="info" style="margin-right:4px;margin-bottom:4px">{{ d }}</n-tag>
             </div>
             <div v-else style="font-size:11px;color:var(--c-text-faint)">无（仅依赖原始字段）</div>
           </div>
           <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬇ 下游引用</div>
+            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-down" :size="13" />  下游引用</div>
             <div v-if="(feat.downstream||[]).length">
               <div v-for="ds in feat.downstream" :key="ds.feature_name" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
                 <span style="font-size:12px;color:var(--c-text)">{{ ds.feature_name }}</span>
@@ -82,18 +82,18 @@
 
       <n-tab-pane name="diagnosis" tab="数据缺失诊断">
         <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-          <n-button size="tiny" quaternary @click="recomputeStats" :loading="statsLoading">🔄 重新诊断</n-button>
+          <n-button size="tiny" quaternary @click="recomputeStats" :loading="statsLoading"><AppIcon name="refresh" :size="13" />  重新诊断</n-button>
         </div>
         <div v-if="!feat.total_effective_cells" style="text-align:center;padding:60px 20px;color:var(--c-text-dim)">
-          <div style="font-size:14px;margin-bottom:8px">📭 暂无特征计算数据</div>
-          <div style="font-size:12px">该特征尚未执行计算，请通过列表页 📥 补数功能或 DAG 流水线触发特征计算。</div>
+          <div style="font-size:14px;margin-bottom:8px"><AppIcon name="inbox" :size="44" />  暂无特征计算数据</div>
+          <div style="font-size:12px">该特征尚未执行计算，请通过列表页 <AppIcon name="download" :size="13" />  补数功能或 DAG 流水线触发特征计算。</div>
         </div>
         <div v-else style="display:flex;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:300px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">缺失归因饼图</div>
             <div ref="pieChart" style="width:100%;height:260px"></div>
             <div v-if="uncomputedPct>50" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:8px;font-size:11px;color:#f59e0b;margin-top:8px">
-              🟠 {{ uncomputedPct }}% 的总格子尚未补数，请扩大补数日期范围覆盖更多历史数据。
+               {{ uncomputedPct }}% 的总格子尚未补数，请扩大补数日期范围覆盖更多历史数据。
             </div>
           </div>
           <div style="flex:2;min-width:350px">
@@ -108,7 +108,7 @@
 
       <n-tab-pane name="preview" tab="数据预览">
         <div v-if="feat.target_entity!=='global'" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-          <n-input v-model:value="previewCode" placeholder="输入股票代码筛选，如 000001" size="small" style="width:180px" clearable @keyup.enter="doLoadPreview" />
+          <StockSuggestInput v-model:value="previewCode" size="small" width="190px" @select="doLoadPreview" @enter="doLoadPreview" />
           <n-button size="small" @click="doLoadPreview">查询</n-button>
         </div>
         <n-spin v-if="previewLoading" style="padding:40px" />
@@ -122,7 +122,7 @@
 
       <n-tab-pane name="ic" tab="IC 体检">
         <div v-if="feat.target_entity!=='stock'" style="text-align:center;padding:50px;color:var(--c-text-dim)">
-          <div style="font-size:14px;margin-bottom:6px">📡 仅支持个股（stock）实体因子的 IC 检验</div>
+          <div style="font-size:14px;margin-bottom:6px"> 仅支持个股（stock）实体因子的 IC 检验</div>
           <div style="font-size:12px">当前实体：{{ entityLabel[feat.target_entity] || feat.target_entity }}</div>
         </div>
         <template v-else>
@@ -135,10 +135,10 @@
             <n-tag v-if="icDetail?.direction==='-'" size="small" type="warning" :bordered="false">↩ 反向因子（取反使用）</n-tag>
             <div style="flex:1" />
             <n-select v-model:value="icHorizon" :options="horizonOptions" size="tiny" style="width:96px" @update:value="loadIcDetail" />
-            <n-button size="tiny" @click="openIcCompute">🧪 重算…</n-button>
-            <n-button v-if="feat.ic_status!=='included'" size="tiny" type="primary" @click="doSetIcStatus('included')">✅ 入选</n-button>
-            <n-button v-if="feat.ic_status!=='excluded'" size="tiny" type="error" quaternary @click="doSetIcStatus('excluded')">🚫 剔除</n-button>
-            <n-button v-if="feat.ic_status==='candidate'||feat.ic_status==='excluded'" size="tiny" quaternary @click="doSetIcStatus('candidate')">↺ 候选</n-button>
+            <n-button size="tiny" @click="openIcCompute"><AppIcon name="e" :size="13" />  重算…</n-button>
+            <n-button v-if="feat.ic_status!=='included'" size="tiny" type="primary" @click="doSetIcStatus('included')"><AppIcon name="check" :size="13" />  入选</n-button>
+            <n-button v-if="feat.ic_status!=='excluded'" size="tiny" type="error" quaternary @click="doSetIcStatus('excluded')"> 剔除</n-button>
+            <n-button v-if="feat.ic_status==='candidate'||feat.ic_status==='excluded'" size="tiny" quaternary @click="doSetIcStatus('candidate')"><AppIcon name="refresh" :size="13" />  候选</n-button>
           </div>
 
           <n-spin v-if="icLoading" size="small" style="padding:24px" />
@@ -181,15 +181,15 @@
           </div>
 
           <!-- 历次记录 -->
-          <div v-if="icRecords.length" style="margin-top:14px">
+          <div v-if="icRecords.length" style="margin-top:14px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 12px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">历次检验记录（点击行切换图表周期）</div>
-            <n-data-table :columns="icHistoryCols" :data="icRecords" size="tiny" :max-height="200" :row-props="icRowProps" />
+            <n-data-table :columns="icHistoryCols" :data="icRecords" size="small" :max-height="200" :row-props="icRowProps" :bordered="false" :single-line="true" />
           </div>
 
           <div style="margin-top:12px;font-size:10px;color:var(--c-text-faint);line-height:1.8">
             口径：RankIC = 每日截面因子排名 vs 前瞻 N 日收益排名的 Spearman 相关；ICIR = mean(IC)/std(IC)；分层按因子值均分 5 组，
             净值按"前瞻收益/持有天数"日均化近似累计（未计交易成本，仅观察单调性，不作为回测依据）；
-            红绿灯：|RankIC|≥0.02 且 |ICIR|≥0.30 且 同号占比≥55% → 绿，两项 → 黄，其余 → 红；IC 为负时标注反向因子。
+            红绿灯：|RankIC|≥0.02 且 |ICIR|≥0.30 且 同号占比≥55% <AppIcon name="arrow-right" :size="13" />  绿，两项 <AppIcon name="arrow-right" :size="13" />  黄，其余 <AppIcon name="arrow-right" :size="13" />  红；IC 为负时标注反向因子。
           </div>
         </template>
       </n-tab-pane>
@@ -204,11 +204,11 @@
       <n-input v-model:value="editForm.description" type="textarea" placeholder="描述" :rows="2" />
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
-        <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px">🤖 AI 生成</n-button>
+        <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px"><AppIcon name="a" :size="13" />  AI 生成</n-button>
       </div>
       <MonacoEditor ref="formulaEditor" v-model="editForm.formula" :completions="keplCompletions" />
       <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-dim)">
-        <span style="font-weight:600">📚 算子速查</span>
+        <span style="font-weight:600"><AppIcon name="file-text" :size="13" />  算子速查</span>
         <span style="color:var(--c-text-faint)">编辑框内输入可自动补全；点击算子插入光标处</span>
         <n-button size="tiny" quaternary @click="showOpsPanel = !showOpsPanel">{{ showOpsPanel ? '收起' : '展开' }}</n-button>
       </div>
@@ -232,14 +232,14 @@
   </n-modal>
 
   <!-- AI 生成公式弹窗 -->
-  <n-modal v-model:show="showAiPrompt" preset="card" title="🤖 AI 生成 KEPL 公式" style="width:520px;max-width:92vw">
+  <n-modal v-model:show="showAiPrompt" preset="card" title="AI 生成 KEPL 公式" style="width:520px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">描述你需要的特征计算逻辑，AI 会根据 KEPL 语法规范和已有函数生成公式。</div>
       <n-input v-model:value="aiRequirement" type="textarea" placeholder="例如：计算收盘价相对于5日均线的偏离度，即 (close - ma(close,5)) / ma(close,5)" :rows="4" />
       <div v-if="aiResult" style="margin-top:8px">
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:160px;overflow-y:auto">{{ aiResult }}</div>
-        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult">✅ 填入公式框</n-button>
+        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入公式框</n-button>
       </div>
     </n-space>
     <template #footer>
@@ -250,7 +250,7 @@
     </template>
   </n-modal>
   <!-- IC 检验弹窗 -->
-  <n-modal v-if="feat" v-model:show="showIcCompute" preset="card" title="🧪 因子 IC 检验" style="width:460px;max-width:92vw" :mask-closable="false">
+  <n-modal v-if="feat" v-model:show="showIcCompute" preset="card" title="因子 IC 检验" style="width:460px;max-width:92vw" :mask-closable="false">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">对 <b>{{ feat.feature_name }}</b> 做逐日截面 IC 检验，结果落档 factor_ic_stats（不覆盖入选/剔除决策）。</div>
       <div style="display:flex;gap:8px">
@@ -270,9 +270,9 @@
       <div v-if="icTask && icTask.status==='running'" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-text-dim)">
         <n-spin size="small" /> 检验中（全周期约 40-60 秒，请勿关闭）…
       </div>
-      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#ef4444">❌ {{ icTask.error }}</div>
+      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#ef4444"><AppIcon name="close" :size="13" />  {{ icTask.error }}</div>
       <div v-if="icTask && icTask.status==='completed'" style="font-size:12px;color:#10b981">
-        ✅ 完成：{{ (icTask.results||[]).filter(r=>!r.error).length }}/{{ icTask.horizons?.length }} 个周期落档
+        <AppIcon name="check" :size="13" />  完成：{{ (icTask.results||[]).filter(r=>!r.error).length }}/{{ icTask.horizons?.length }} 个周期落档
         <span v-if="(icTask.failed||[]).length" style="color:#f59e0b">；{{ icTask.failed.map(f=>f.horizon+'d:'+f.error).join('；') }}</span>
       </div>
     </n-space>
@@ -287,7 +287,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import AppIcon from './AppIcon.vue'
+import StockSuggestInput from './StockSuggestInput.vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NSelect, NDataTable, NEmpty, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
@@ -345,7 +347,7 @@ watch(activeTab, (tab) => {
 // ── IC 体检 ──
 const icHorizon = ref(10)
 const horizonOptions = [1, 5, 10, 20].map(h => ({ label: h + '日前瞻', value: h }))
-const trafficMap = { green: '🟢 达标', yellow: '🟡 边缘', red: '🔴 未达标' }
+const trafficMap = { green: '达标', yellow: '边缘', red: '未达标' }
 const trafficTypeMap = { green: 'success', yellow: 'warning', red: 'error' }
 const icStatusMap = { candidate: '候选', included: '已入选', excluded: '已剔除' }
 const icStatusTypeMap = { candidate: 'default', included: 'success', excluded: 'error' }
@@ -501,18 +503,19 @@ async function startIcCompute() {
     }, { headers: authHeaders() })
     // 轮询任务
     const taskId = r.data.task_id
-    const poll = setInterval(async () => {
+    if (icPollTimer) clearInterval(icPollTimer)
+    icPollTimer = setInterval(async () => {
       try {
         const tr = await axios.get(API + `/api/features/${props.featureId}/ic/task/${taskId}`, { headers: authHeaders() })
         icTask.value = tr.data
         if (tr.data.status === 'completed' || tr.data.status === 'failed') {
-          clearInterval(poll)
+          clearInterval(icPollTimer); icPollTimer = null
           if (tr.data.status === 'completed') {
             message.success('IC 检验完成')
             await loadIcAll()
           }
         }
-      } catch (e) { clearInterval(poll) }
+      } catch (e) { clearInterval(icPollTimer); icPollTimer = null }
     }, 3000)
   } catch (e) {
     message.error(e.response?.data?.detail || '启动失败')
@@ -630,6 +633,8 @@ const previewCols = computed(() => {
 const previewTotalPages = computed(() => Math.max(1, Math.ceil(previewTotal.value / 50)))
 
 import { h } from 'vue'
+let icPollTimer = null
+onUnmounted(() => { if (icPollTimer) clearInterval(icPollTimer) })
 
 async function loadDetail() {
   loading.value = true
@@ -712,7 +717,7 @@ function loadHeatmap() {
           tooltip: {
             formatter(p) {
               const v = p.data[2]
-              const status = v === 2 ? '🟥 缺失' : v === 1 ? '⬜ 未上市/不适用' : '🟩 有值'
+              const status = v === 2 ? '缺失' : v === 1 ? '未上市/不适用' : '有值'
               return `${stock_labels[p.data[1]] || '#N'}<br/>${days_labels[p.data[0]] || ''}<br/>${status}`
             }
           },

@@ -58,7 +58,13 @@ export const useNavStore = defineStore('nav', () => {
     let target = '/'
     switch (tab.value) {
       case 'p': target = '/'; break
-      case 'm': target = '/market/' + marketDate.value; break
+      case 'm': {
+        // 保留树图页的 metric/color 查询参数（TreemapView 维护，切 tab 回来不丢）
+        const cur = location.hash.slice(1)
+        const qm = cur.startsWith('/market/') && cur.includes('?') ? cur.slice(cur.indexOf('?')) : ''
+        target = '/market/' + (marketDate.value || useMarketStore().selDate) + qm
+        break
+      }
       case 's': target = '/signals'; break
       case 'l': target = '/stocks'; break
       case 'x': {

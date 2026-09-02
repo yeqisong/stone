@@ -1,12 +1,20 @@
 <template>
 <div>
-  <n-space align="center" style="margin-bottom:8px">
-    <n-button size="small" @click="$emit('back')">◀ 返回</n-button>
-    <n-input v-model:value="code" placeholder="6位代码" style="width:150px" size="small" clearable @keyup.enter="load" />
-    <n-button type="primary" size="small" @click="load">查询</n-button>
-    <n-select v-model:value="adj" @update:value="reloadChart" size="small" style="width:105px" :options="adjOptions" />
-    <n-button size="small" :disabled="!prevCode" @click="jump(prevCode)">◀ 上一只</n-button>
-    <n-button size="small" :disabled="!nextCode" @click="jump(nextCode)">下一只 ▶</n-button>
+  <n-space align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap">
+    <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
+    <StockSuggestInput v-model:value="code" size="tiny" width="170px" @select="load" @enter="load" />
+    <n-button type="primary" size="tiny" @click="load">查询</n-button>
+    <n-select v-model:value="adj" @update:value="reloadChart" size="tiny" style="width:105px" :options="adjOptions" />
+    <n-button-group size="tiny">
+      <n-button v-for="p in PERIODS" :key="p.v" size="tiny" :type="period===p.v?'primary':'default'" @click="switchPeriod(p.v)">{{ p.t }}</n-button>
+    </n-button-group>
+    <n-button-group size="tiny">
+      <n-button v-for="r in RANGES" :key="r.d" size="tiny" :type="range===r.d?'primary':'default'" @click="switchRange(r.d)">{{ r.t }}</n-button>
+    </n-button-group>
+    <n-button-group size="tiny">
+      <n-button size="tiny" :disabled="!prevCode" @click="jump(prevCode)"><AppIcon name="arrow-left" :size="13" /> 上一只</n-button>
+      <n-button size="tiny" :disabled="!nextCode" @click="jump(nextCode)">下一只 <AppIcon name="arrow-right" :size="13" /></n-button>
+    </n-button-group>
   </n-space>
 
   <n-spin v-if="loading" />
@@ -17,16 +25,16 @@
 
     <!-- Strategy Signals -->
     <div style="margin-bottom:12px;min-height:50px">
-      <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">🎯 策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
+      <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
       <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:8px;flex-wrap:wrap">
         <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:8px;padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
             <n-tag :type="s.direction==='buy'?'error':s.direction==='sell'?'success':'default'" size="small" :bordered="false">{{dirName(s.direction)}}</n-tag>
-            <span v-if="s.combined_signal" style="color:var(--n-color-target);font-size:13px;font-weight:600">★{{s.strength}}</span>
-            <span v-else style="font-size:12px">{{'★'.repeat(s.strength)}}</span>
+            <span v-if="s.combined_signal" style="color:var(--n-color-target);font-size:13px;font-weight:600">{{s.strength}}</span>
+            <span v-else style="font-size:12px">{{''.repeat(s.strength)}}</span>
           </div>
           <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
-          <div v-if="s.model_version" style="font-size:10px;color:var(--c-text-faint);margin-top:2px">📦 {{s.model_version}}</div>
+          <div v-if="s.model_version" style="font-size:10px;color:var(--c-text-faint);margin-top:2px"><AppIcon name="inbox" :size="13" />  {{s.model_version}}</div>
         </div>
       </div>
       <n-empty v-else description="暂无信号" style="padding:10px" />
@@ -36,27 +44,27 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📈 K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📈 均线 (MA5/10/20/30/60/120/180)</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  均线 (MA5/10/20/30/60/120/180)</h4>
           <div :id="'c6'" style="width:100%;height:180px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 成交量</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  成交量</h4>
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📉 MACD</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-down" :size="13" />  MACD</h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📐 RSI</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)">📊 PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
       </div>
@@ -64,7 +72,7 @@
       <!-- Right: Fundamentals & Overview -->
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
         <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">🏢 基本面</h4>
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 基本面</h4>
           <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
           <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" style="width:100%;border-collapse:collapse;font-size:12px">
             <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
@@ -75,7 +83,7 @@
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
         <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)">📊 行情概览</h4>
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(32,128,240,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">开盘</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
@@ -94,8 +102,10 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
+import StockSuggestInput from './StockSuggestInput.vue'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect } from 'naive-ui'
+import {NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NButtonGroup} from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
@@ -112,6 +122,20 @@ const notFound = ref(false)
 const hcnt = ref(0)
 // 复权记忆：记住用户上次选择
 const adj = ref(localStorage.getItem('detail_adj') || 'none')
+// K 线周期与区间（方案1：区间快捷选择 + 日/周/月切换；days 上限 7000 ≈ 全部历史）
+const PERIODS = [{v:'day',t:'日'},{v:'week',t:'周'},{v:'month',t:'月'}]
+const RANGES = [{t:'1月',d:30},{t:'1年',d:250},{t:'2年',d:500},{t:'5年',d:1250},{t:'10年',d:2500},{t:'20年',d:4900},{t:'全部',d:7000}]
+const period = ref('day')
+const range = ref(500)
+
+async function loadKline() {
+  const r = await axios.get(API + '/api/stock/' + code.value + '/kline?days=' + range.value + '&period=' + period.value + '&adjust=' + adj.value)
+  lastKline = r.data
+  await nextTick()
+  drawCharts(lastKline)
+}
+function switchPeriod(v) { period.value = v; loadKline() }
+function switchRange(d) { range.value = d; loadKline() }
 let lastKline = null
 const dateRange = ref('')
 const peData = ref([])
@@ -138,12 +162,12 @@ window.__setDetailNavList = (codes) => { localStorage.setItem('detail_nav_list',
 const fundRows = computed(() => {
   const f = detail.value?.fundamentals
   if (!f || !Object.keys(f).length) return []
-  const Y = v => v != null ? v.toLocaleString() : '—'
+  const Y = v => v != null ? fmtMoney(Number(v)) : '—'
   const P = v => v != null ? Number(v).toFixed(2) : '—'
   const B = (v, d = 0) => v != null ? (v / 1e8).toFixed(d) + '亿' : '—'
   return [
     { lbl:'行业', val: f.industry || '—' },
-    { lbl:'PE(TTM)', val: f.pe_ttm != null ? P(f.pe_ttm) : '—' },
+    { lbl:'PE(TTM)', val: f.pe_ttm != null ? P(f.pe_ttm) : '亏损' },
     { lbl:'PE', val: f.pe != null ? P(f.pe) : '—' },
     { lbl:'PB', val: f.pb_mrq != null ? P(f.pb_mrq) : '—' },
     { lbl:'PS(TTM)', val: f.ps_ttm != null ? P(f.ps_ttm) : '—' },
@@ -183,7 +207,8 @@ const adjOptions = [
   {value:'hfq',label:'后复权'},
 ]
 const dirName = d => ({buy:'买入',sell:'卖出',neutral:'中性'}[d]||d)
-const fmt = v => v!=null?Number(v).toLocaleString():'0'
+import { fmtMoney } from '../utils/ui'
+const fmt = v => v!=null?fmtMoney(Number(v)):'0'
 const priceChg = ref(null)
 const priceColor = ref('#fff')
 const hoverInfo = ref(null)  // crosshair hover 时动态更新的行情数据
@@ -208,7 +233,7 @@ async function load(){
   try{
     const [r1, r2] = await Promise.all([
       axios.get(API+'/api/stock/'+code.value+'/detail'),
-      axios.get(API+'/api/stock/'+code.value+'/kline?days=500&adjust='+adj.value),
+      axios.get(API+'/api/stock/'+code.value+'/kline?days='+range.value+'&period='+period.value+'&adjust='+adj.value),
     ])
     detail.value = r1.data; hcnt.value = r1.data.history_count
     if(r2.data.kline) lastKline = r2.data
@@ -387,7 +412,7 @@ function drawPeChart(){
 async function reloadChart(){
   localStorage.setItem('detail_adj', adj.value)
   try{
-    const r = await axios.get(API+'/api/stock/'+code.value+'/kline?days=500&adjust='+adj.value)
+    const r = await axios.get(API+'/api/stock/'+code.value+'/kline?days='+range.value+'&period='+period.value+'&adjust='+adj.value)
     if(r.data.kline) lastKline = r.data
   }catch(e){} finally { if(lastKline){ await nextTick(); drawCharts(lastKline) } }
 }

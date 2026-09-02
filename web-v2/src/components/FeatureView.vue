@@ -3,8 +3,8 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">特征管理（Feature Registry）</div>
     <div style="display:flex;gap:6px">
-      <n-button size="small" quaternary @click="openDepGraph">🔗 依赖图</n-button>
-      <n-button size="small" quaternary @click="showDedup = true">🧭 去冗推荐</n-button>
+      <n-button size="small" quaternary @click="openDepGraph"><AppIcon name="link" :size="13" />  依赖图</n-button>
+      <n-button size="small" quaternary @click="showDedup = true"><AppIcon name="compass" :size="13" />  去冗推荐</n-button>
       <n-button type="primary" size="small" @click="openCreate">+ 新增特征</n-button>
     </div>
   </div>
@@ -38,13 +38,13 @@
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
         <div style="display:flex;gap:4px">
-          <n-button size="tiny" quaternary @click="showAiFormula = true" :loading="aiFormulaLoading" style="font-size:11px">🤖 AI</n-button>
-          <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size:11px">🔍 验证</n-button>
+          <n-button size="tiny" quaternary @click="showAiFormula = true" :loading="aiFormulaLoading" style="font-size:11px"><AppIcon name="a" :size="13" />  AI</n-button>
+          <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size:11px"><AppIcon name="search" :size="13" />  验证</n-button>
         </div>
       </div>
       <MonacoEditor ref="formulaEditor" v-model="form.formula" :completions="keplCompletions" />
       <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-dim)">
-        <span>📚 算子速查：输入可自动补全</span>
+        <span><AppIcon name="file-text" :size="13" />  算子速查：输入可自动补全</span>
         <n-button size="tiny" quaternary @click="showOpsPanel = !showOpsPanel">{{ showOpsPanel ? '收起' : '展开' }}</n-button>
       </div>
       <div v-if="showOpsPanel && keplFns" style="max-height:200px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:8px">
@@ -60,10 +60,10 @@
 
       <!-- 依赖预览 -->
       <div v-if="parseDeps.length > 0" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:10px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">📎 依赖项（自动提取）</div>
+        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px"><AppIcon name="link" :size="13" />  依赖项（自动提取）</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px">
           <n-tag v-for="d in parseDeps" :key="d" size="tiny" :bordered="false" :type="d.includes('.') ? 'warning' : 'info'">
-            {{ d.includes('.') ? '📄 ' : '🔗 ' }}{{ d }}
+            {{ d.includes('.') ? '<AppIcon name="file-text" :size="13" />  ' : '<AppIcon name="link" :size="13" />  ' }}{{ d }}
           </n-tag>
         </div>
       </div>
@@ -71,7 +71,7 @@
       <!-- 校验结果 -->
       <div v-if="validateResult">
         <div v-if="validateResult.ok" style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:6px;padding:8px;font-size:11px;color:#10b981">
-          ✅ 公式语法正确，共 {{ validateResult.dependencies?.length || 0 }} 个依赖项
+          <AppIcon name="check" :size="13" />  公式语法正确，共 {{ validateResult.dependencies?.length || 0 }} 个依赖项
         </div>
         <div v-else style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:8px">
           <div v-for="(e,i) in validateResult.errors" :key="i" style="font-size:11px;color:#ef4444">{{ e.message }}</div>
@@ -125,38 +125,38 @@
       <!-- 质量仪表盘 -->
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
         <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📊 数据完整度</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
           <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=80?'#10b981':completenessPct>=50?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
           <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
             <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=80?'#10b981':completenessPct>=50?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
           </div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📋 总格子</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="l" :size="13" />  总格子</div>
           <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">❌ 异常缺失</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  异常缺失</div>
           <div :style="{fontSize:'20px',fontWeight:700,color:detailItem.abnormal_missing_cells>0?'#ef4444':'var(--c-text-dim)'}">{{ (detailItem.abnormal_missing_cells||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">📅 最近计算</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="calendar" :size="13" />  最近计算</div>
           <div :style="{fontSize:'13px',fontWeight:600,color:detailStale?'#f59e0b':'var(--c-text)'}">{{ detailItem.latest_computed_date || '—' }}</div>
-          <div v-if="detailStale" style="font-size:10px;color:#f59e0b;margin-top:2px">⚠ 超过5天未更新</div>
+          <div v-if="detailStale" style="font-size:10px;color:#f59e0b;margin-top:2px"><AppIcon name="alert" :size="13" />  超过5天未更新</div>
         </div>
       </div>
 
       <!-- 依赖关系 -->
       <div style="display:flex;gap:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬆ 上游依赖（本特征依赖谁）</div>
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-up" :size="13" />  上游依赖（本特征依赖谁）</div>
           <div v-if="(detailItem.depends_on||[]).length">
             <n-tag v-for="d in detailItem.depends_on" :key="d" size="tiny" :bordered="false" type="info" style="margin-right:4px;margin-bottom:4px">{{ d }}</n-tag>
           </div>
           <div v-else style="font-size:11px;color:var(--c-text-faint)">无（仅依赖原始字段）</div>
         </div>
         <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">⬇ 下游引用（谁依赖本特征）</div>
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-down" :size="13" />  下游引用（谁依赖本特征）</div>
           <div v-if="(detailItem.downstream||[]).length">
             <div v-for="ds in detailItem.downstream" :key="ds.feature_name" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
               <span style="font-size:12px;color:var(--c-text)">{{ ds.feature_name }}</span>
@@ -172,21 +172,21 @@
         <span v-if="detailItem?.description" style="font-size:11px;color:var(--c-text-dim)">{{ detailItem.description }}</span>
         <div style="display:flex;gap:8px">
           <n-button size="small" @click="showDetail=false">关闭</n-button>
-          <n-button v-if="detailItem" size="small" type="primary" @click="showDetail=false; openEdit(detailItem)">✎ 编辑</n-button>
+          <n-button v-if="detailItem" size="small" type="primary" @click="showDetail=false; openEdit(detailItem)"><AppIcon name="edit" :size="13" />  编辑</n-button>
         </div>
       </n-space>
     </template>
   </n-modal>
 
   <!-- AI 生成公式弹窗 -->
-  <n-modal v-model:show="showAiFormula" preset="card" title="🤖 AI 生成 KEPL 公式" style="width:520px;max-width:92vw">
+  <n-modal v-model:show="showAiFormula" preset="card" title="AI 生成 KEPL 公式" style="width:520px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">描述计算逻辑，AI 根据 KEPL 语法和已注册函数生成公式。</div>
       <n-input v-model:value="aiFormulaText" type="textarea" placeholder="例如：收盘价相对5日均线的偏离度" :rows="4" />
       <div v-if="aiFormulaResult" style="margin-top:8px">
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:160px;overflow-y:auto">{{ aiFormulaResult }}</div>
-        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiFormula">✅ 填入公式框</n-button>
+        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiFormula"><AppIcon name="check" :size="13" />  填入公式框</n-button>
       </div>
     </n-space>
     <template #footer>
@@ -196,7 +196,7 @@
   </n-modal>
 
   <!-- Compute Range Modal -->
-  <n-modal v-model:show="showCompute" preset="card" title="📥 特征补数" style="width:420px;max-width:92vw" :mask-closable="false">
+  <n-modal v-model:show="showCompute" preset="card" title="特征补数" style="width:420px;max-width:92vw" :mask-closable="false">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text)">特征：<b>{{ computeTarget?.feature_name }}</b></div>
       <div style="font-size:11px;color:var(--c-text-dim)">选择补数日期范围，系统将对该特征在指定日期内重新计算并入库。</div>
@@ -209,7 +209,7 @@
         <n-progress type="line" :percentage="computeProgress.progress_pct || 0" :height="8" :border-radius="4"
           :status="computeProgress.status === 'failed' ? 'error' : computeProgress.status === 'completed' ? 'success' : 'default'" />
         <div v-if="computeProgress.status === 'failed'" style="margin-top:8px;padding:10px;background:var(--c-error-bg, #fff0f0);border-radius:4px;font-size:12px;color:var(--c-error, #d03050)">
-          ❌ 计算失败：{{ computeProgress.error || '未知错误' }}
+          <AppIcon name="close" :size="13" />  计算失败：{{ computeProgress.error || '未知错误' }}
         </div>
       </div>
     </n-space>
@@ -222,12 +222,12 @@
   </n-modal>
 
   <!-- Full Dependency Graph Modal -->
-  <n-modal v-model:show="showDepGraph" preset="card" title="🔗 特征依赖关系图" style="width:96vw;max-width:96vw;height:90vh" :mask-closable="true">
+  <n-modal v-model:show="showDepGraph" preset="card" title="特征依赖关系图" style="width:96vw;max-width:96vw;height:90vh" :mask-closable="true">
     <div ref="depGraphContainer" style="width:100%;height:calc(90vh - 120px)"></div>
   </n-modal>
 
   <!-- 去冗推荐弹窗 -->
-  <n-modal v-model:show="showDedup" preset="card" title="🧭 因子去冗推荐" style="width:860px;max-width:94vw" :mask-closable="true">
+  <n-modal v-model:show="showDedup" preset="card" title="因子去冗推荐" style="width:860px;max-width:94vw" :mask-closable="true">
     <n-space vertical>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <n-select v-model:value="dedupHorizon" :options="[1,5,10,20].map(h=>({label:h+'日前瞻',value:h}))" size="small" style="width:110px" />
@@ -244,18 +244,18 @@
           </div>
           <div style="flex:1;min-width:300px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">
-              ✅ 推荐入选（{{ dedup.recommended.length }} 个，按 |ICIR| 贪心）
+              <AppIcon name="check" :size="13" />  推荐入选（{{ dedup.recommended.length }} 个，按 |ICIR| 贪心）
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">
               <n-tag v-for="f in dedup.recommended" :key="f" size="small" :bordered="false"
                 :type="dedup.traffic[f]==='green'?'success':dedup.traffic[f]==='yellow'?'warning':'default'">
-                {{ dedup.traffic[f]==='green'?'🟢':dedup.traffic[f]==='yellow'?'🟡':'' }}{{ f }}
+                {{ dedup.traffic[f]==='green'?'':dedup.traffic[f]==='yellow'?'':'' }}{{ f }}
               </n-tag>
             </div>
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">⏭ 跳过（{{ dedup.skipped.length }} 个）</div>
             <n-data-table :columns="dedupSkipCols" :data="dedup.skipped" size="tiny" :max-height="240" />
             <n-button size="small" type="primary" style="margin-top:12px" :loading="dedupApplying"
-              @click="applyRecommended">✅ 推荐组设为入选</n-button>
+              @click="applyRecommended"><AppIcon name="check" :size="13" />  推荐组设为入选</n-button>
             <div style="font-size:10px;color:var(--c-text-faint);margin-top:8px;line-height:1.7">
               口径：相关性 = 因子逐日截面排名（cs_rank）后的 pooled Pearson，等价于逐日截面 Spearman
               的时间平均，回答"两个因子是否在挑同一批股票"；贪心按 |ICIR| 降序，与已选因子相关
@@ -271,6 +271,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress, NEmpty, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
@@ -309,7 +310,8 @@ async function loadIcBoard() {
   } catch (e) { console.error(e) }
 }
 
-const trafficDot = { green:'🟢', yellow:'🟡', red:'🔴' }
+// IC 红绿灯：渲染为彩色 CSS 圆点（canvas/文本皆不依赖彩色 emoji）
+const TRAFFIC_COLOR = { green:'#10b981', yellow:'#f59e0b', red:'#ef4444' }
 const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'success' }, excluded:{ label:'已剔除', type:'error' } }
 
 // ── 去冗推荐 ──
@@ -751,7 +753,8 @@ const columns = [
     if (row.target_entity !== 'stock') return h('span', { style:{color:'var(--c-text-faint)',fontSize:'11px'} }, '—')
     if (!b || b.rank_ic == null) return h('span', { style:{color:'var(--c-text-faint)',fontSize:'11px'} }, '○ 未检验')
     return h('div', { style:{display:'flex',alignItems:'center',gap:'6px'} }, [
-      h('span', { style:{fontSize:'11px'} }, trafficDot[b.traffic] || '○'),
+      h('span', { style:{display:'inline-block', width:'8px', height:'8px', borderRadius:'50%',
+        background: TRAFFIC_COLOR[b.traffic] || 'var(--c-text-faint)', verticalAlign:'middle', marginRight:'2px'} }, ''),
       h('span', { style:{fontSize:'11px',color:'var(--c-text)'} }, (b.rank_ic>=0?'+':'') + b.rank_ic.toFixed(4)),
       h('span', { style:{fontSize:'10px',color:'var(--c-text-dim)'} }, 'IR ' + (b.icir>=0?'+':'') + (b.icir??0).toFixed(2)),
       b.direction === '-' ? h('span', { style:{fontSize:'10px',color:'#f59e0b'} }, '↩') : null,
@@ -767,7 +770,7 @@ const columns = [
   { title:'操作', key:'actions', width:110, render(row) {
     return h('div', { style:{display:'flex',gap:'2px'} }, [
       h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openEdit(row) }, () => '编辑'),
-      h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openCompute(row) }, () => '📥'),
+      h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openCompute(row) }, () => h(AppIcon, { name: 'download', size: 12 })),
     ])
   }},
 ]

@@ -18,6 +18,14 @@ from scripts.dag import DagNode, DagExecutor
 # 任务函数（原有 generate_treemap / run_strategies / generate_stats 保持不变）
 # ══════════════════════════════════════════
 
+def _median(vals):
+    """中位数（行业块聚合用；空列表返回 0）。"""
+    vs = sorted(vals)
+    n = len(vs)
+    if not n: return 0
+    return round((vs[n//2] if n % 2 else (vs[n//2-1] + vs[n//2]) / 2), 2)
+
+
 def generate_treemap(trade_date: str, metric: str = 'mcap'):
     """为指定日期生成树图数据（mcap/volume/amount/pe），写入 stock_treemap_cache。"""
     from app.db.connection import get_sync_db
@@ -41,12 +49,45 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
         if not rows: return logger.warning(f"  {trade_date} 无行情数据，跳过") or 0
         logger.info(f"  {trade_date}: {len(rows)} 只股票")
 
+        # ── 批量窗口数据（最近 21 个交易日全市场一次查询）：产出趋势/前收盘/20日涨跌/量比
+        # 原 implementation 逐股 2-3 次查询 × 5000 只；现窗口查询 + Python 聚合
         from datetime import datetime, timedelta
-        d20 = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=20)).strftime("%Y-%m-%d")
-        trends = {}
-        for code in {r[0] for r in rows}:
-            rows20 = db.execute(text("SELECT close FROM daily_quote WHERE stock_code=:c AND trade_date<=:d ORDER BY trade_date DESC LIMIT 20"), {"c": code, "d": trade_date}).fetchall()
-            trends[code] = (len(rows20) >= 20 and float(rows20[0][0]) >= sum(float(x[0]) for x in rows20) / len(rows20)) if rows20 else True
+        win = {}
+        for wc, wtd, wclose, wvol in db.execute(text("""
+            WITH days AS (
+                SELECT DISTINCT trade_date FROM daily_quote
+                WHERE trade_date <= :d ORDER BY trade_date DESC LIMIT 21
+            )
+            SELECT stock_code, trade_date, close, volume FROM daily_quote
+            WHERE trade_date IN (SELECT trade_date FROM days)
+            ORDER BY stock_code, trade_date DESC
+        """), {"d": trade_date}).fetchall():
+            win.setdefault(wc, []).append(
+                (float(wclose) if wclose else 0, int(wvol) if wvol else 0))
+        trends, prev_map, chg20_map, volr_map = {}, {}, {}, {}
+        for code, seq in win.items():
+            c0 = seq[0][0] if seq else 0
+            prev_map[code] = seq[1][0] if len(seq) > 1 else None
+            closes20 = [x[0] for x in seq[:20]]      # 当日 + 前 19（与原 trends 口径一致）
+            trends[code] = (len(closes20) >= 20 and c0 >= sum(closes20) / len(closes20)) if closes20 else True
+            chg20_map[code] = (c0 - seq[20][0]) / seq[20][0] * 100 if len(seq) >= 21 and seq[20][0] > 0 else None
+            vols_prev = [x[1] for x in seq[1:21]]     # 前 20 日均量（不含今日）
+            avg_v = sum(vols_prev) / len(vols_prev) if vols_prev else 0
+            volr_map[code] = (seq[0][1] / avg_v) if avg_v > 0 else None
+
+        # ── 当日买点信号快照（历史日期回看用；前端对当日另行实时叠加最新信号） ──
+        sig_map = {}
+        for sc, st, reason, mv in db.execute(text("""
+            SELECT stock_code, strength, reason, model_version FROM signal_history
+            WHERE signal_date = :d AND strategy_name = 'model_signal' AND direction = 'buy'
+        """), {"d": trade_date}).fetchall():
+            sig_map[sc] = {'strength': int(st or 0), 'reason': (reason or '')[:60],
+                           'model_version': mv}
+
+        # ── 当日换手率（一次查询，供股票 tooltip 与行业块聚合） ──
+        tr_map = {tc: float(tv) for tc, tv in db.execute(text(
+            "SELECT stock_code, turnover_rate FROM stock_fundamentals WHERE trade_date = :d"
+        ), {"d": trade_date}).fetchall() if tv}
 
         l1_map, l1_names = {}, {'U':'其他'}
         for r in rows:
@@ -76,9 +117,8 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
                 db.rollback()
                 val = 0
 
-            chg = 0
-            prev = db.execute(text("SELECT close FROM daily_quote WHERE stock_code=:c AND trade_date<:d ORDER BY trade_date DESC LIMIT 1"), {"c": code, "d": trade_date}).fetchone()
-            if prev and prev[0]: chg = (price - float(prev[0])) / float(prev[0]) * 100
+            prev = prev_map.get(code)
+            chg = (price - prev) / prev * 100 if prev else 0
 
             # 申万行业：r[3]=一级(r[4]=二级)；无行业归"U 其他"
             ind_l1 = str(r[3]) if len(r) > 3 and r[3] else ''
@@ -92,7 +132,13 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
 
             l1_map.setdefault(l1, {"l2s": {}, "total_mcap": 0})
             l1_map[l1].setdefault("l2s", {}).setdefault(l2, {"name": l2_name, "stocks": [], "total_mcap": 0})
-            l1_map[l1]["l2s"][l2]["stocks"].append({"code": code, "name": name, "price": round(price, 2), "chg": round(chg, 2), "val": round(val, 2), "trend_up": trends.get(code, True)})
+            _c20 = chg20_map.get(code)
+            _vr = volr_map.get(code)
+            l1_map[l1]["l2s"][l2]["stocks"].append({"code": code, "name": name, "price": round(price, 2), "chg": round(chg, 2), "val": round(val, 2), "trend_up": trends.get(code, True),
+                "s20": round(_c20, 2) if _c20 is not None else None,          # 20 日涨跌%（反转视角）
+                "vr": round(_vr, 2) if _vr else None,                          # 量比（今日量/前20日均量）
+                "tr": round(tr_map[code], 2) if code in tr_map else None,        # 换手率 %
+                **({"signal": sig_map[code]} if code in sig_map else {})})
             l1_map[l1]["l2s"][l2]["total_mcap"] += val
             l1_map[l1]["total_mcap"] += val
 
@@ -104,10 +150,14 @@ def generate_treemap(trade_date: str, metric: str = 'mcap'):
             l1_data = l1_map[l1_code]
             stocks_flat = [s for l2d in l1_data["l2s"].values() for s in l2d["stocks"]]
             avg_chg = round(sum(s["chg"] for s in stocks_flat) / len(stocks_flat), 2) if stocks_flat else 0
-            db.execute(text(upsert), {"d": trade_date, "m": metric, "p": "root", "id": l1_code, "n": l1_names.get(l1_code, l1_code), "v": round(l1_data["total_mcap"], 2), "chg": avg_chg, "up": True, "t": "l1", "dt": json.dumps({"count": len(stocks_flat)})}); total += 1
+            db.execute(text(upsert), {"d": trade_date, "m": metric, "p": "root", "id": l1_code, "n": l1_names.get(l1_code, l1_code), "v": round(l1_data["total_mcap"], 2), "chg": avg_chg, "up": True, "t": "l1", "dt": json.dumps({"count": len(stocks_flat), "sig": sum(1 for x in stocks_flat if x.get("signal")), "up_ratio": round(sum(1 for x in stocks_flat if x["chg"] > 0) / len(stocks_flat) * 100, 1) if stocks_flat else 0,
+                "med_chg": _median([x["chg"] for x in stocks_flat]) if stocks_flat else 0,
+                "avg_tr": round(sum(x["tr"] for x in stocks_flat if x.get("tr") is not None) / max(sum(1 for x in stocks_flat if x.get("tr") is not None), 1), 2)})}); total += 1
             for l2_code, l2_data in l1_data["l2s"].items():
                 l2_avg = round(sum(s["chg"] for s in l2_data["stocks"]) / len(l2_data["stocks"]), 2) if l2_data["stocks"] else 0
-                db.execute(text(upsert), {"d": trade_date, "m": metric, "p": l1_code, "id": l2_code, "n": l2_data["name"], "v": round(l2_data["total_mcap"], 2), "chg": l2_avg, "up": True, "t": "l2", "dt": json.dumps({"count": len(l2_data["stocks"])})}); total += 1
+                db.execute(text(upsert), {"d": trade_date, "m": metric, "p": l1_code, "id": l2_code, "n": l2_data["name"], "v": round(l2_data["total_mcap"], 2), "chg": l2_avg, "up": True, "t": "l2", "dt": json.dumps({"count": len(l2_data["stocks"]), "sig": sum(1 for x in l2_data["stocks"] if x.get("signal")), "up_ratio": round(sum(1 for x in l2_data["stocks"] if x["chg"] > 0) / len(l2_data["stocks"]) * 100, 1) if l2_data["stocks"] else 0,
+                "med_chg": _median([x["chg"] for x in l2_data["stocks"]]) if l2_data["stocks"] else 0,
+                "avg_tr": round(sum(x["tr"] for x in l2_data["stocks"] if x.get("tr") is not None) / max(sum(1 for x in l2_data["stocks"] if x.get("tr") is not None), 1), 2)})}); total += 1
                 for stock in l2_data["stocks"]:
                     db.execute(text(upsert), {"d": trade_date, "m": metric, "p": l2_code, "id": stock["code"], "n": stock["name"], "v": stock["val"], "chg": stock["chg"], "up": stock["trend_up"], "t": "stock", "dt": json.dumps(stock)}); total += 1
         db.commit()
@@ -781,6 +831,7 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
     _cfg_row = db.execute(_text("SELECT config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
     _cfg = (_json.loads(_cfg_row[0]) if isinstance(_cfg_row[0], str) else (_cfg_row[0] or {})) if _cfg_row else {}
     feature_norm = _cfg.get('feature_norm', 'none')
+    feature_neut = _cfg.get('feature_neut', False)
     val_mask = (df['trade_date'] >= val_start) & (df['trade_date'] <= val_end)
     if not val_mask.any():
         return None, '验证集无数据'
@@ -803,6 +854,13 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
                 and 'ma_5' in val_df.columns and 'ma_20' in val_df.columns:
             # SQL NUMERIC 为 Decimal，0/0 会抛 DivisionUndefined，先转 float
             val_df['bias_5_20'] = val_df['ma_5'].astype(float) / val_df['ma_20'].astype(float) - 1
+        if 'vol_ratio_3d' in mf and 'vol_ratio_3d' not in val_df.columns \
+                and 'vol_ratio' in val_df.columns:
+            # vol_ratio 在 feature_values 是逐日行，eval 区间起点处前 2 日为 NaN
+            # （dropna 由调用方决定；XGBoost 走缺失分支）
+            val_df = val_df.sort_values(['stock_code', 'trade_date'])
+            val_df['vol_ratio_3d'] = val_df.groupby('stock_code')['vol_ratio'].transform(
+                lambda x: x.astype(float).rolling(3).mean())
         if 'idx_ret_20d' in mf and 'idx_ret_20d' not in val_df.columns:
             _s = (_d.fromisoformat(str(val_start)[:10]) - _td(days=90)).isoformat()
             idx_rows = db.execute(_text(
@@ -822,6 +880,10 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
         if len(cols) != len(mf):
             missing = [c for c in mf if c not in val_df.columns]
             return None, f'宽表缺少模型特征: {missing[:5]}'
+        # 推理端特征中性化：与训练端同配置（先中性化后排名）
+        if feature_neut:
+            val_df = merge_circ_mv_panel(val_df, db)
+            val_df = neutralize_features(val_df, mf, db)
         # 推理端特征标准化：与训练端同配置（cs_rank 逐日截面排名，idx_ret_20d 等常数列归 0.5）
         if feature_norm == 'cs_rank':
             val_df = cs_rank_features(val_df, mf)
@@ -1022,6 +1084,45 @@ def cs_rank_features(df, cols):
     return df
 
 
+def merge_circ_mv_panel(df, db):
+    """为宽表面板 merge 当日 circ_mv 截面（stock_fundamentals_history），中性化前置步骤。
+
+    trade_date 统一转 str[:10] 后左连接；返回带 circ_mv 列的 df（列残留无害，不在 FEATURES）。"""
+    import pandas as pd
+    from sqlalchemy import text
+    if 'circ_mv' in df.columns:
+        return df
+    sd = str(df['trade_date'].min())[:10]
+    ed = str(df['trade_date'].max())[:10]
+    rows = db.execute(text(
+        "SELECT stock_code, trade_date, circ_mv FROM stock_fundamentals_history "
+        "WHERE trade_date BETWEEN :s AND :e AND circ_mv IS NOT NULL"
+    ), {"s": sd, "e": ed}).fetchall()
+    if not rows:
+        return df
+    mv = pd.DataFrame(rows, columns=['stock_code', 'trade_date', 'circ_mv'])
+    mv['trade_date'] = mv['trade_date'].astype(str).str[:10]
+    mv['circ_mv'] = mv['circ_mv'].astype(float)
+    df = df.copy()
+    df['trade_date'] = df['trade_date'].astype(str).str[:10]
+    return df.merge(mv, on=['stock_code', 'trade_date'], how='left')
+
+
+def neutralize_features(df, cols, db):
+    """逐日截面市值+行业中性化（feature_neut 配置，方法论与 KEPL neut 算子同内核）。
+
+    必须先 merge_circ_mv_panel；NaN 保留为 NaN；与 cs_rank 组合时先中性化再排名。"""
+    from scripts.feature_compute import neutralize_columns
+    if 'circ_mv' not in df.columns:
+        logger.warning('[neut] 面板缺 circ_mv 列，跳过中性化')
+        return df
+    cols = [c for c in cols if c in df.columns]
+    if cols:
+        df = neutralize_columns(df, cols, db)
+        logger.info(f"[neut] 已中性化 {len(cols)} 列特征（市值+行业残差）")
+    return df
+
+
 def limit_pct(stock_code) -> float:
     """涨跌停幅度：创业板(30)/科创板(68) 20%，其余主板 10%（北交所不在股票池）。"""
     return 0.198 if str(stock_code).startswith(('30', '68')) else 0.098
@@ -1150,7 +1251,9 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
         cash = float(meta['initial_cash'])
         last_eod = db.execute(text(
             "SELECT cash FROM paper_trades WHERE action='EOD' ORDER BY trade_date DESC LIMIT 1")).scalar()
-        if last_eod is not None and pos_count:
+        # 只要有 EOD 记录就沿用最新现金（清仓后空仓续跑不能重置为初始资金）；
+        # pos_count 仅用于 replay 判定，不参与现金恢复
+        if last_eod is not None:
             cash = float(last_eod)
 
         # 行情 df：信号 ∪ 持仓代码；回放含区间前一日（涨跌停标记需要真实前收盘），
@@ -1263,6 +1366,17 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
 
         db.commit()
         n_tr = db.execute(text("SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL')")).scalar()
+
+        # ── 风控规则评估（step3）：规则启用了才产出告警（risk_alerts 表 + WS 推送）──
+        try:
+            from app.risk import evaluate_risk_rules
+            _alerts = evaluate_risk_rules(db, td)
+            if _alerts:
+                logger.info(f"[paper_portfolio] 风控告警 {len(_alerts)} 条: "
+                            + '; '.join(a['title'] for a in _alerts))
+        except Exception as _re:
+            logger.warning(f"[paper_portfolio] 风控评估失败（不影响组合步进）: {_re}")
+
         db.close()
         if log_id:
             write_node_log(log_id=log_id, status='success', rows=len(trade_days),
@@ -1357,17 +1471,28 @@ def dag_task_model_signal(trade_date=None, **kw):
             write_node_log(log_id=log_id, status='failed', detail='未配置 feature_names')
             db.close(); return 0
 
-        df_today = build_feature_wide_table(db, feature_names, today_str, today_str, 'stock')
+        # 宽表多拉 30 个自然日：vol_ratio_3d 等 rolling 派生特征在单日面板上恒为 NaN，
+        # 需要历史行才能算出与训练端一致的 3 日均值（最终只取当日行使用）
+        warmup_start = (_date.fromisoformat(today_str) - _td(days=30)).isoformat()
+        df_wide = build_feature_wide_table(db, feature_names, warmup_start, today_str, 'stock')
+        if df_wide.empty:
+            write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
+            db.close(); return 0
+        df_today = df_wide[df_wide['trade_date'] == today_str].copy()
         if df_today.empty:
             write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
             db.close(); return 0
 
         # 派生特征与训练端保持一致（bias_5_20/vol_ratio_3d/idx_ret_20d）：
         # 训练模型 feature_names_in_ 含这些列，信号侧缺列会导致 ML 预测逐股回退规则模式
-        if 'ma_5' in df_today.columns and 'ma_20' in df_today.columns:
-            df_today['bias_5_20'] = df_today['ma_5'] / df_today['ma_20'] - 1
-        if 'vol_ratio' in df_today.columns:
-            df_today['vol_ratio_3d'] = df_today.groupby('stock_code')['vol_ratio'].transform(lambda x: x.rolling(3).mean())
+        if 'ma_5' in df_wide.columns and 'ma_20' in df_wide.columns:
+            # SQL NUMERIC 为 Decimal，除零会抛 DivisionByZero，先转 float
+            df_wide['bias_5_20'] = df_wide['ma_5'].astype(float) / df_wide['ma_20'].astype(float) - 1
+            df_today = df_wide[df_wide['trade_date'] == today_str].copy()
+        if 'vol_ratio' in df_wide.columns:
+            df_wide['vol_ratio_3d'] = df_wide.groupby('stock_code')['vol_ratio'].transform(
+                lambda x: x.astype(float).rolling(3).mean())
+            df_today = df_wide[df_wide['trade_date'] == today_str].copy()
         idx_rows = db.execute(text(
             "SELECT close FROM index_daily_quote WHERE index_code='000300' AND trade_date <= :d ORDER BY trade_date DESC LIMIT 21"
         ), {"d": today_str}).fetchall()
@@ -1375,11 +1500,15 @@ def dag_task_model_signal(trade_date=None, **kw):
             closes = [float(x[0]) for x in reversed(idx_rows)]
             df_today['idx_ret_20d'] = closes[-1] / closes[0] - 1
 
+        # 特征中性化（与训练端一致）：feature_neut=true 时先做市值+行业残差化，再截面排名
+        norm_cols = list(dict.fromkeys(
+            list(feature_names) + [c for c in ('bias_5_20', 'vol_ratio_3d', 'idx_ret_20d')
+                                    if c in df_today.columns]))
+        if model_cfg_obj.get('feature_neut'):
+            df_today = merge_circ_mv_panel(df_today, db)
+            df_today = neutralize_features(df_today, norm_cols, db)
         # 特征标准化（与训练端一致）：模型配置 feature_norm=cs_rank 时逐列当日截面排名
         if model_cfg_obj.get('feature_norm') == 'cs_rank':
-            norm_cols = list(dict.fromkeys(
-                list(feature_names) + [c for c in ('bias_5_20', 'vol_ratio_3d', 'idx_ret_20d')
-                                        if c in df_today.columns]))
             df_today = cs_rank_features(df_today, norm_cols)
 
         # ── 执行约束：涨停股不可买，不产生买入信号 ──
@@ -1797,19 +1926,45 @@ def dag_task_model_health(trade_date=None, **kw):
             db.close()
             return 0
 
-        # 1. 回填 forward 收益（5/10/20 日前的信号，所有版本+方向）
+        # 1. 回填 forward 收益（5/10/20 个交易日前的信号，所有版本+方向）
+        # v3.7 修复：原先按自然日回推（5 自然日 ≈ 3 交易日，系统性短算）且只匹配
+        # "恰好第 N 天"那一天（节点当天没跑则永久漏填）；现按交易日历回推，
+        # 并补填历史漏填的 NULL 行（按信号日 + N 交易日的目标日收盘价计算）
+        trade_cal = [str(r[0])[:10] for r in db.execute(text(
+            "SELECT cal_date FROM trade_calendar WHERE cal_date <= :d ORDER BY cal_date DESC LIMIT 80"
+        ), {"d": td}).fetchall()]
+        cal_idx = {d: i for i, d in enumerate(trade_cal)}   # 0=今天，越大越早
         missed = 0
         for days in [5, 10, 20]:
             col = f"forward_{days}d_return"
-            target_date = (_date.today() - timedelta(days=days)).isoformat()
+            if days >= len(trade_cal):
+                continue
+            target_date = trade_cal[days]                   # 今天往前第 N 个交易日
+            # 新信号：恰好到期的当日回填
             signals = db.execute(text(f"""
                 SELECT id, stock_code, signal_date, price, direction FROM signal_history
-                WHERE signal_date = :d AND strategy_name = 'model_signal'
+                WHERE signal_date = :d AND strategy_name = 'model_signal' AND {col} IS NULL
             """), {"d": target_date}).fetchall()
+            # 漏填补录：到期已超过 1 个交易日但仍为 NULL 的信号（历史节点缺跑）
+            if days + 1 < len(trade_cal):
+                backstop_date = trade_cal[days + 1]
+                signals += db.execute(text(f"""
+                    SELECT id, stock_code, signal_date, price, direction FROM signal_history
+                    WHERE signal_date = :d AND strategy_name = 'model_signal' AND {col} IS NULL
+                """), {"d": backstop_date}).fetchall()
             for sig in signals:
+                # 到期日收盘价：按交易日历取信号日后第 N 个交易日（漏填补录时该日 < 今天）
+                if sig.signal_date not in cal_idx:
+                    continue
+                sig_seq = cal_idx[sig.signal_date]
+                expire_seq = sig_seq - days
+                if expire_seq < 0 or expire_seq >= len(trade_cal):
+                    missed += 1
+                    continue
+                expire_date = trade_cal[expire_seq]
                 close = db.execute(text(
                     "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
-                ), {"c": sig.stock_code, "d": td}).scalar()
+                ), {"c": sig.stock_code, "d": expire_date}).scalar()
                 if close and sig.price and float(sig.price) > 0:
                     ret = (float(close) - float(sig.price)) / float(sig.price)
                     db.execute(text(f"UPDATE signal_history SET {col}=:r WHERE id=:id"),
@@ -1822,11 +1977,23 @@ def dag_task_model_health(trade_date=None, **kw):
         # 2. 信号了结检查（按信号自身偏好确定止损线）
         # 预加载偏好的止损映射
         sp_map = {'left': 0.10, 'balanced': 0.08, 'right': 0.05}
+        # 超时了结：超过 N 个交易日未触发止损/止盈的信号按到期日收盘价了结
+        # （原先只有止损了结 → actual_return 恒为负 → 胜率恒 0 → 健康度恒 CRITICAL）
+        timeout_days = 20
+        try:
+            _paper_cfg = db.execute(text(
+                "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
+            _pc = _json.loads(_paper_cfg) if isinstance(_paper_cfg, str) else (_paper_cfg or {})
+            timeout_days = int(_pc.get('hold_days', 20)) or 20
+        except Exception:
+            pass
+        cal_list = [d for d in reversed(trade_cal)]          # 升序（旧→今），长度 ≤80
         open_sigs = db.execute(text("""
             SELECT id, stock_code, signal_date, price, direction, preference FROM signal_history
             WHERE strategy_name='model_signal' AND status IS NULL
         """)).fetchall()
         for sig in open_sigs:
+            sig_d = str(sig.signal_date)[:10]
             close_price = db.execute(text(
                 "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
             ), {"c": sig.stock_code, "d": td}).scalar()
@@ -1835,13 +2002,28 @@ def dag_task_model_health(trade_date=None, **kw):
             if close_price and sig.price and float(sig.price) > 0:
                 pnl = (float(close_price) - float(sig.price)) / float(sig.price)
                 stop = sp_map.get(sig.preference, 0.08)  # 用信号自身偏好
-                if sig.direction == 'buy' and pnl < -stop:
-                    reason = 'stop_loss'
-                    actual_ret = pnl
+                tp = stop + 0.07                          # 止盈线：止损线的镜像偏移（与纸面 0.08/0.15 同比例）
+                expired = False
+                if sig_d in cal_idx:
+                    held = cal_idx[sig_d]                 # 信号日到今天隔了几个交易日
+                    expired = held >= timeout_days
+                if sig.direction == 'buy':
+                    if pnl < -stop:
+                        reason = 'stop_loss'
+                        actual_ret = pnl
+                    elif pnl >= tp:
+                        reason = 'take_profit'
+                        actual_ret = pnl
+                    elif expired:
+                        reason = 'hold_expire'
+                        actual_ret = pnl
                 elif sig.direction == 'sell':
                     # 卖出信号：价格上涨超过止损线→了结
                     if pnl > stop:
                         reason = 'stop_loss'
+                        actual_ret = pnl
+                    elif expired:
+                        reason = 'hold_expire'
                         actual_ret = pnl
             if reason:
                 db.execute(text("UPDATE signal_history SET status='closed', actual_return=:r, close_reason=:c, closed_at=CURRENT_DATE WHERE id=:id"),
@@ -1936,7 +2118,10 @@ def dag_task_model_health(trade_date=None, **kw):
 
         db.commit()
         db.close()
-        ic_desc = f" RankIC均值{ic_stats['rolling_mean']:.4f}({ic_status})" if ic_stats else " IC不可用"
+        # rolling_mean 为 None（成熟截面 <5 个）时不能进入 :.4f 格式化（ValueError 会把
+        # 已 commit 的成功节点误标 failed）；dict 本身非空，须单独判键
+        ic_desc = (f" RankIC均值{ic_stats['rolling_mean']:.4f}({ic_status})"
+                   if ic_stats and ic_stats.get('rolling_mean') is not None else " IC不可用")
         write_node_log(log_id=log_id, status='success', rows=total,
                        detail=f'{health}: 胜率{win_rate:.0%} {total}信号{ic_desc}')
         return total
@@ -2410,6 +2595,11 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
 
         # 涨跌停标记（训练内回测的执行约束；在 dropna 前计算，避免缺口行误判前收盘）
         df['_limit_up'], df['_limit_down'] = limit_flags(df)
+
+        # 特征中性化（feature_neut）：先残差化后排名——对原始因子去市值/行业暴露
+        if cfg.get('feature_neut'):
+            df = merge_circ_mv_panel(df, db)
+            df = neutralize_features(df, FEATURES, db)
 
         # 特征标准化（v3.5 可配置）：cs_rank=逐日截面排名 pct——在 dropna 之前做，
         # 与推理端一致（对每个特征的现有值排名，NaN 不参与排名）
@@ -3142,6 +3332,262 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
 #  stock_master 更新
 # ═══════════════════════════════════════════════
 
+def dag_task_analyze(trade_date=None, **kw):
+    """DAG 节点：刷新大表统计信息（ANALYZE）。
+
+    特征/行情/资金流当日写入后刷新 planner 统计，避免分区大表因统计过期
+    走错执行计划（2026-09 分区改造后实测：无统计时数据页查询计划盲选）。"""
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('analyze')
+    write_node_log(log_id=log_id, status='running', detail='ANALYZE 大表…')
+    def _run():
+        from app.db.connection import get_sync_db
+        from sqlalchemy import text
+        db = get_sync_db()
+        done = []
+        for tbl in ('feature_values', 'daily_quote', 'stock_moneyflow'):
+            db.execute(text(f'ANALYZE {tbl}'))
+            done.append(tbl)
+        db.close()
+        return {'tables': done}
+    try:
+        r = _with_hb(log_id, _rid(kw), _run)
+        write_node_log(log_id=log_id, status='success',
+                       detail='已刷新统计: ' + ', '.join(r.get('tables', [])))
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
+
+def dag_task_moneyflow(trade_date=None, **kw):
+    """DAG 节点：资金流向（tushare moneyflow 全市场，写 stock_moneyflow）。"""
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('moneyflow')
+    write_node_log(log_id=log_id, status='running', detail='采集中')
+    def _run():
+        from crawler.adapters import get_data_source_manager
+        from app.db.connection import get_sync_db
+        from crawler.writers import batch_upsert_moneyflow
+        source = get_data_source_manager().get_source()
+        rows = source.fetch_moneyflow(td)
+        db = get_sync_db()
+        saved = batch_upsert_moneyflow(db, rows)
+        db.close()
+        return {'rows': saved, '_source': source.name}
+    try:
+        r = _with_hb(log_id, rid, _run)
+        rows = r.get('rows', 0)
+        write_node_log(log_id=log_id, status='success', rows=rows,
+                       detail=f'完成 {rows} 行 (来源:{r.get("_source", "?")})')
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
+
+
+# ── 拓展数据采集器（每日节点与 data_backfill 回补共用，step2 扩展）──
+
+def _ext_moneyflow(source, db, td):
+    from crawler.writers import batch_upsert_moneyflow
+    return batch_upsert_moneyflow(db, source.fetch_moneyflow(td))
+
+def _ext_top_list(source, db, td):
+    from crawler.writers import batch_upsert_top_list
+    return batch_upsert_top_list(db, source.fetch_top_list(td))
+
+def _ext_margin_detail(source, db, td):
+    from crawler.writers import batch_upsert_margin_detail
+    return batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(td))
+
+def _ext_moneyflow_hsgt(source, db, td):
+    from crawler.writers import batch_upsert_moneyflow_hsgt
+    return batch_upsert_moneyflow_hsgt(db, source.fetch_moneyflow_hsgt(td))
+
+def _ext_block_trade(source, db, td):
+    from crawler.writers import batch_upsert_block_trade
+    return batch_upsert_block_trade(db, source.fetch_block_trade(td))
+
+def _ext_share_float(source, db, td):
+    from crawler.writers import batch_insert_events
+    return batch_insert_events(db, 'stock_share_float', source.fetch_share_float(td),
+                               ['stock_code', 'float_date', 'holder_name'],
+                               ['stock_code', 'ann_date', 'float_date', 'holder_name',
+                                'shares', 'float_ratio', 'holder_type'])
+
+def _ext_repurchase(source, db, td):
+    from crawler.writers import batch_insert_events
+    return batch_insert_events(db, 'stock_repurchase', source.fetch_repurchase(td),
+                               ['stock_code', 'ann_date', 'vol', 'amount'],
+                               ['stock_code', 'ann_date', 'end_date', 'proc', 'vol',
+                                'amount', 'high_limit', 'low_limit'])
+
+def _ext_dividend(source, db, td):
+    from crawler.writers import batch_insert_events
+    return batch_insert_events(db, 'stock_dividend', source.fetch_dividend(td),
+                               ['stock_code', 'end_date', 'div_proc'],
+                               ['stock_code', 'end_date', 'div_proc', 'ann_date', 'stk_div',
+                                'cash_div', 'cash_div_tax', 'record_date', 'ex_date',
+                                'pay_date', 'base_share'])
+
+def _ext_forecast(source, db, td):
+    from crawler.writers import batch_insert_events
+    return batch_insert_events(db, 'stock_forecast', source.fetch_forecast(td),
+                               ['stock_code', 'end_date', 'ann_date'],
+                               ['stock_code', 'ann_date', 'end_date', 'type', 'p_change_min',
+                                'p_change_max', 'net_profit_min', 'net_profit_max',
+                                'last_parent_net', 'reason'])
+
+def _ext_express(source, db, td):
+    from crawler.writers import batch_insert_events
+    return batch_insert_events(db, 'stock_express', source.fetch_express(td),
+                               ['stock_code', 'end_date', 'ann_date'],
+                               ['stock_code', 'ann_date', 'end_date', 'revenue', 'or_yoy',
+                                'netprofit', 'yoy_net_profit', 'bps', 'total_assets'])
+
+def _ext_index_weight(source, db, td):
+    from crawler.writers import batch_upsert_index_weight
+    from datetime import date as _d, timedelta as _td
+    total = 0
+    # 月度快照发布在月末交易日：窗口跨上月+本月，PK 去重幂等
+    d = _d.fromisoformat(td)
+    start = (_d(d.year, d.month, 1) - _td(days=1)).replace(day=1).isoformat() if (d.month > 1) else f'{d.year - 1}-12-01'
+    for idx in ('000300.SH', '000905.SH'):
+        total += batch_upsert_index_weight(db, source.fetch_index_weight(idx, start, td))
+    return total
+
+def _ext_fina_code(source, db, code):
+    """单票全历史财务指标（fina_indicator(ts_code) 一次调用返回全部报告期）。"""
+    from crawler.writers import batch_upsert_fina_indicator
+    return batch_upsert_fina_indicator(db, source.fetch_fina_indicator(code))
+
+# (采集函数, 已入库存在性检查 SQL)；None = 无法按日期幂等（dividend/index_weight 按期去重）
+_EXT_COLLECTORS = {
+    'moneyflow':       (_ext_moneyflow,       "SELECT 1 FROM stock_moneyflow WHERE trade_date=:d LIMIT 1"),
+    'top_list':        (_ext_top_list,        "SELECT 1 FROM stock_top_list WHERE trade_date=:d LIMIT 1"),
+    'margin_detail':   (_ext_margin_detail,   "SELECT 1 FROM stock_margin_detail WHERE trade_date=:d LIMIT 1"),
+    'moneyflow_hsgt':  (_ext_moneyflow_hsgt,  "SELECT 1 FROM moneyflow_hsgt WHERE trade_date=:d LIMIT 1"),
+    'block_trade':     (_ext_block_trade,     "SELECT 1 FROM block_trade WHERE trade_date=:d LIMIT 1"),
+    'share_float':     (_ext_share_float,     "SELECT 1 FROM stock_share_float WHERE ann_date=:d LIMIT 1"),
+    'repurchase':      (_ext_repurchase,      "SELECT 1 FROM stock_repurchase WHERE ann_date=:d LIMIT 1"),
+    'dividend':        (_ext_dividend,        "SELECT 1 FROM stock_dividend WHERE ex_date=:d LIMIT 1"),
+    'forecast':        (_ext_forecast,        "SELECT 1 FROM stock_forecast WHERE ann_date=:d LIMIT 1"),
+    'express':         (_ext_express,         "SELECT 1 FROM stock_express WHERE ann_date=:d LIMIT 1"),
+    'index_weight':    (_ext_index_weight,    None),
+}
+# 代码轮换型采集器（按股票代码而非日期回补：fina_indicator 单票一次调用返回全部报告期）
+_EXT_CODE_COLLECTORS = {
+    'fina_indicator': _ext_fina_code,
+}
+
+
+def _make_ext_node(name, doc):
+    def _node(trade_date=None, **kw):
+        from datetime import date
+        td = str(trade_date or date.today())[:10]
+        rid = _rid(kw)
+        log_id = (kw.get('_node_log_ids', {}) or {}).get(name)
+        write_node_log(log_id=log_id, status='running', detail='采集中')
+        def _run():
+            from crawler.adapters import get_data_source_manager
+            from app.db.connection import get_sync_db
+            source = get_data_source_manager().get_source()
+            db = get_sync_db()
+            saved = _EXT_COLLECTORS[name][0](source, db, td)
+            db.close()
+            return {'rows': saved, '_source': source.name}
+        try:
+            r = _with_hb(log_id, rid, _run)
+            rows = r.get('rows', 0)
+            write_node_log(log_id=log_id, status='success', rows=rows,
+                           detail=f'完成 {rows} 行 (来源:{r.get("_source", "?")})')
+            return r
+        except Exception as e:
+            write_node_log(log_id=log_id, status='failed', detail=str(e))
+            raise
+    _node.__name__ = f'dag_task_{name}'
+    _node.__doc__ = doc
+    return _node
+
+
+def dag_task_data_backfill(trade_date=None, **kw):
+    """DAG 节点：拓展数据通用回补（配额熔断 + 断点续跑）。
+
+    参数存 strategy_config（strategy_name='backfill_ext'，params JSON）：
+      {"tables": [...], "start_date": "2014-01-01", "end_date": "...", "reserve": 1000}
+    循环「交易日 × 表」，已入库日期跳过；配额余量低于 reserve 即优雅退出，每夜自动续跑。"""
+    from datetime import date as _d
+    import json as _json
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    from crawler.adapters import get_data_source_manager
+    from crawler.adapters.tushare_quota import TushareQuota, QuotaExhausted
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('data_backfill')
+    write_node_log(log_id=log_id, status='running', detail='回补中')
+
+    def _run():
+        db = get_sync_db()
+        row = db.execute(text("SELECT params FROM strategy_config WHERE strategy_name='backfill_ext' "
+                              "ORDER BY id DESC LIMIT 1")).fetchone()
+        cfg = _json.loads(row[0]) if row and isinstance(row[0], str) else (row[0] if row else {})
+        tables = [t for t in cfg.get('tables', []) if t != 'fina_indicator']
+        start, end = cfg.get('start_date', '2014-01-01'), cfg.get('end_date') or str(_d.today())
+        reserve = int(cfg.get('reserve', 1000))
+        days = [str(r[0]) for r in db.execute(text(
+            "SELECT DISTINCT cal_date FROM trade_calendar WHERE cal_date BETWEEN :s AND :e "
+            "AND is_trade_day = true ORDER BY cal_date"), {"s": start, "e": end}).fetchall()]
+        quota = TushareQuota.get()
+        source = get_data_source_manager().get_source()
+        done = fail = 0
+        # 代码轮换轴：fina_indicator（无 ann_date 扫描通道，按票全历史拉取，5000 点覆盖全市场）
+        if cfg.get('fina_indicator'):
+            have = {r[0] for r in db.execute(text("SELECT DISTINCT stock_code FROM fina_indicator")).fetchall()}
+            codes = [r[0] for r in db.execute(text(
+                "SELECT stock_code FROM stock_master WHERE stock_type='stock' "
+                "ORDER BY stock_code")).fetchall() if r[0] not in have]
+            logger.info(f"[data_backfill] fina_indicator 待轮换 {len(codes)} 只")
+            for c in codes:
+                if quota.remaining() <= reserve:
+                    break
+                try:
+                    done += _ext_fina_code(source, db, c)
+                except QuotaExhausted:
+                    break
+                except Exception as e:
+                    fail += 1
+                    logger.warning(f"[data_backfill] fina_indicator {c}: {str(e)[:80]}")
+        for td in days:
+            for t in tables:
+                if t not in _EXT_COLLECTORS:
+                    continue
+                fn, exists_sql = _EXT_COLLECTORS[t]
+                if exists_sql and db.execute(text(exists_sql), {"d": td}).fetchone():
+                    continue
+                if quota.remaining() <= reserve:
+                    db.close()
+                    return {'rows': done, 'halted': True,
+                            '_detail': f'配额熔断（余 {quota.remaining()} ≤ 保留 {reserve}），已补 {done} 项，下次续跑'}
+                try:
+                    done += fn(source, db, td)
+                except QuotaExhausted:
+                    db.close()
+                    return {'rows': done, 'halted': True, '_detail': f'配额耗尽，已补 {done} 项，下次续跑'}
+                except Exception as e:
+                    fail += 1
+                    logger.warning(f"[data_backfill] {t}@{td}: {str(e)[:80]}")
+        db.close()
+        return {'rows': done, '_detail': f'回补完成 {done} 项（异常 {fail}），配额余 {quota.remaining()}'}
+    try:
+        r = _with_hb(log_id, rid, _run)
+        detail = r.get('_detail', f"完成 {r.get('rows', 0)} 项")
+        write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0), detail=detail)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
+
 def dag_task_stock_master(trade_date=None, **kw):
     """DAG 节点：更新 stock_master（复用 BackfillManager 统一实现，与补数按钮同逻辑）。"""
     from types import SimpleNamespace
@@ -3175,6 +3621,7 @@ def dag_task_factor_ic(trade_date=None, **kw):
     """
     from datetime import date as _date, timedelta as _td
     from app.db.connection import get_sync_db
+    from sqlalchemy import text
     from scripts.factor_ic import compute_factor_ic
 
     rid = _rid(kw)
@@ -3224,4 +3671,10 @@ NODE_FN_MAP = {
     'entity_stats':      dag_task_entity_stats,
     'factor_ic':         dag_task_factor_ic,
     'paper_portfolio':   dag_task_paper_portfolio,
+    'moneyflow':         dag_task_moneyflow,
+    'analyze':           dag_task_analyze,
+    **{n: _make_ext_node(n, f'DAG 节点：{n} 拓展数据采集') for n in (
+        'top_list', 'margin_detail', 'moneyflow_hsgt', 'block_trade', 'share_float',
+        'repurchase', 'dividend', 'forecast', 'express', 'index_weight', 'fina_daily')},
+    'data_backfill':     dag_task_data_backfill,
 }

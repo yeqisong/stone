@@ -3,7 +3,7 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">函数管理（Operator Registry）</div>
     <div style="display:flex;gap:6px">
-      <n-button size="small" quaternary @click="openFields">📋 字段注册表</n-button>
+      <n-button size="small" quaternary @click="openFields">字段注册表</n-button>
       <n-button type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
     </div>
   </div>
@@ -33,7 +33,7 @@
           <n-select v-model:value="form.category" :options="catOpts" placeholder="分类" />
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
             <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">函数定义（Python def，第一个参数必须是 df）</div>
-            <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px">🤖 AI 生成</n-button>
+            <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px"><AppIcon name="a" :size="13" />  AI 生成</n-button>
           </div>
           <MonacoEditor v-model="form.source_code" @update:modelValue="parseParams" />
           <!-- 动态参数表 -->
@@ -50,7 +50,7 @@
       </div>
       <!-- 编码规则侧边栏 -->
       <div style="width:220px;flex-shrink:0;border-left:1px solid var(--c-border);padding-left:12px;font-size:10px;color:var(--c-text-dim);overflow-y:auto;max-height:520px">
-        <div style="font-weight:600;color:var(--c-text);margin-bottom:8px">📐 编码规则</div>
+        <div style="font-weight:600;color:var(--c-text);margin-bottom:8px"> 编码规则</div>
         <div style="margin-bottom:10px">
           <div style="color:#f59e0b;font-weight:600;margin-bottom:3px">函数签名</div>
           <div>• 第一个参数必须是 <b>df</b>（接收数据列）</div>
@@ -61,25 +61,25 @@
           </div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#ef4444;font-weight:600;margin-bottom:3px">🛡 代码安全</div>
+          <div style="color:#ef4444;font-weight:600;margin-bottom:3px"><AppIcon name="x" :size="13" />  代码安全</div>
           <div>禁止: import, exec, eval, open, os.system, subprocess, __import__</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#f59e0b;font-weight:600;margin-bottom:3px">⚡ 性能约束</div>
+          <div style="color:#f59e0b;font-weight:600;margin-bottom:3px"><AppIcon name="zap" :size="13" />  性能约束</div>
           <div>• 沙箱限时 2s，超时禁止发布</div>
           <div>• 超过 500ms 黄色警告</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#2080f0;font-weight:600;margin-bottom:3px">📊 向量化要求</div>
+          <div style="color:#2080f0;font-weight:600;margin-bottom:3px"><AppIcon name="bar-chart-2" :size="13" />  向量化要求</div>
           <div>• 必须用 Pandas/NumPy 向量化</div>
           <div>• 禁止 for 循环逐行处理</div>
           <div>• 返回值长度 = 输入长度</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#10b981;font-weight:600;margin-bottom:3px">🧪 参数类型体系</div>
-          <div>• <b>标量</b> → 传入默认值，如 5 / 0.05</div>
-          <div>• <b>序列</b> → 一维随机数组，如收盘价</div>
-          <div>• <b>矩阵</b> → 二维 DataFrame，如多股票表</div>
+          <div style="color:#10b981;font-weight:600;margin-bottom:3px"><AppIcon name="e" :size="13" />  参数类型体系</div>
+          <div>• <b>标量</b> <AppIcon name="arrow-right" :size="13" />  传入默认值，如 5 / 0.05</div>
+          <div>• <b>序列</b> <AppIcon name="arrow-right" :size="13" />  一维随机数组，如收盘价</div>
+          <div>• <b>矩阵</b> <AppIcon name="arrow-right" :size="13" />  二维 DataFrame，如多股票表</div>
           <div style="margin-top:3px;font-size:9px;color:var(--c-text-faint)">函数不耦合股票字段，通过类型绑定业务数据</div>
         </div>
       </div>
@@ -87,9 +87,9 @@
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showCreate = false">取消</n-button>
-        <n-button @click="showTestRun = true">🧪 试一试</n-button>
-        <n-button @click="doCreate" :loading="creating">存为草稿</n-button>
-        <n-button v-if="editId" type="primary" @click="publishFunc" :loading="publishing">📤 保存并发布</n-button>
+        <n-button @click="showTestRun = true"><AppIcon name="e" :size="13" />  试一试</n-button>
+        <n-button @click="editId ? doUpdate() : doCreate()" :loading="creating">{{ editId ? '保存修改' : '存为草稿' }}</n-button>
+        <n-button v-if="editId" type="primary" @click="publishFunc" :loading="publishing">保存并发布</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -101,12 +101,12 @@
   </n-modal>
 
   <!-- 试运行弹窗 -->
-  <n-modal v-model:show="showTestRun" preset="card" title="🧪 试运行" style="width:600px;max-width:92vw">
+  <n-modal v-model:show="showTestRun" preset="card" title="试运行" style="width:600px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">对函数进行沙箱测试，检验语法、安全性和性能。</div>
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-        <n-button type="primary" size="small" @click="doTestRun" :loading="testRunning">▶ 执行测试</n-button>
-        <n-button size="small" @click="publishFunc" :loading="publishing">📤 保存并发布</n-button>
+        <n-button type="primary" size="small" @click="doTestRun" :loading="testRunning">执行测试</n-button>
+        <n-button size="small" :disabled="!editId" :title="editId ? '' : '请先保存草稿'" @click="publishFunc" :loading="publishing">保存并发布</n-button>
       </div>
       <div v-if="testResult" style="margin-top:8px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
@@ -115,7 +115,7 @@
             {{ testResult.elapsed_ms }}ms
           </span>
           <n-tag :type="testResult.elapsed_ms<500?'success':testResult.elapsed_ms<2000?'warning':'error'" size="small">
-            {{ testResult.elapsed_ms<500 ? '✅ 通过' : testResult.elapsed_ms<2000 ? '⚠️ 警告' : '❌ 不合格' }}
+            {{ testResult.elapsed_ms<500 ? '✓ 通过' : testResult.elapsed_ms<2000 ? '! 警告' : '✕ 不合格' }}
           </n-tag>
         </div>
         <div v-if="testResult.error" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:8px;font-family:monospace;font-size:10px;color:#ef4444;white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ testResult.error }}</div>
@@ -131,14 +131,14 @@
   </n-modal>
 
   <!-- AI 生成弹窗 -->
-  <n-modal v-model:show="showAiPrompt" preset="card" title="🤖 AI 生成函数代码" style="width:520px;max-width:92vw">
+  <n-modal v-model:show="showAiPrompt" preset="card" title="AI 生成函数代码" style="width:520px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">描述你想要的函数功能，AI 会根据编码规则和已有函数自动生成代码。</div>
       <n-input v-model:value="aiRequirement" type="textarea" placeholder="例如：计算N日价格变化率，即 (今日收盘 - N日前收盘) / N日前收盘" :rows="4" />
       <div v-if="aiResult" style="margin-top:8px">
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ aiResult }}</div>
-        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult">✅ 填入编辑器</n-button>
+        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入编辑器</n-button>
       </div>
     </n-space>
     <template #footer>
@@ -211,12 +211,12 @@
       </div>
     </div>
     <template #footer>
-      <n-button size="small" @click="openVersionsFromDetail">📋 版本历史</n-button>
+      <n-button size="small" @click="openVersionsFromDetail">版本历史</n-button>
     </template>
   </n-modal>
 </div>
   <!-- 字段注册表弹窗 -->
-  <n-modal v-model:show="showFields" preset="card" title="📋 字段注册表（KEPL 公式可引用的原始字段）" style="width:640px;max-width:92vw" :mask-closable="true">
+  <n-modal v-model:show="showFields" preset="card" title="字段注册表（KEPL 公式可引用的原始字段）" style="width:640px;max-width:92vw" :mask-closable="true">
     <n-space vertical>
       <div style="font-size:11px;color:var(--c-text-dim)">公式中直接引用以下字段名；基本面字段来自个股基本面日度历史表（stock_fundamentals_history），缺失日为空值。覆盖率 = 近 35 天非空占比。</div>
       <n-data-table :columns="fieldCols" :data="fieldRows" size="small" :max-height="420" />
@@ -225,6 +225,7 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
 import { useNavStore } from '../stores/nav'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination, useMessage, useDialog } from 'naive-ui'
@@ -334,11 +335,11 @@ const columns = [
         h('span', { 
           style:'cursor:pointer;color:#2080f0;font-size:14px',
           onClick: (e) => { e.stopPropagation(); openEdit(r) }
-        }, '✎'),
+        }, () => h(AppIcon, { name: 'edit', size: 13 })),
         h('span', {
           style:'cursor:pointer;color:#ef4444;font-size:14px',
           onClick: (e) => { e.stopPropagation(); confirmDel(r) }
-        }, '✕'),
+        }, () => h(AppIcon, { name: 'close', size: 13 })),
       ])
     }
   },
@@ -390,15 +391,31 @@ function parseHashParams() {
   if (sp.has('search')) searchText.value = sp.get('search')
 }
 
+// KEPL 内置算子目录（只读展示层合并，不落 functions 表）
+let keplOpsCache = null
+async function fetchKeplOps() {
+  if (keplOpsCache) return keplOpsCache
+  const r = await axios.get(API + '/api/kepl/functions')
+  const ops = []
+  for (const list of Object.values(r.data)) {
+    if (!Array.isArray(list)) continue
+    for (const o of list) ops.push({
+      id: 'op-' + o.name, name: o.name, display_name: o.sig,
+      description: (o.desc || '') + (o.eg ? '\n示例: ' + o.eg : ''),
+      category: 'builtin_kepl', status: 'builtin', is_builtin: true, status_text: '内置',
+      parameters: [],
+    })
+  }
+  keplOpsCache = ops.sort((a, b) => a.name.localeCompare(b.name))
+  return keplOpsCache
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const params = { page: page.value, page_size: PAGE_SIZE }
-    if (filterCategory.value && filterCategory.value !== 'all') params.category = filterCategory.value
-    if (filterStatus.value && filterStatus.value !== 'all') params.status = filterStatus.value
-    if (searchText.value) params.search = searchText.value
-    const r = await axios.get(API + '/api/functions', { params })
-    items.value = r.data.items.map(i => {
+    // DB 函数全量拉取（当前量级小），与内置算子合并后统一客户端过滤+分页
+    const r = await axios.get(API + '/api/functions', { params: { page: 1, page_size: 1000 } })
+    const dbRows = r.data.items.map(i => {
       // 构建用法摘要
       const params = (typeof i.parameters === 'string' ? JSON.parse(i.parameters) : i.parameters) || []
       const isOp = String(i.id).startsWith('op-')
@@ -409,13 +426,30 @@ async function loadData() {
           : `${i.name}()`)
       return {
         ...i,
-        name: (i.is_builtin ? '🔧 ' : '') + i.name,
+        name: i.name,
         usage: usage + (params.length ? ' — ' + params.map(p => p.desc || p.name).join('; ') : ''),
         status_text: isOp ? '内置' : (statusMap[i.status] || i.status),
         parameters: params,
       }
     })
-    total.value = r.data.total
+    let all = dbRows
+    const cat = filterCategory.value
+    if (!cat || cat === 'all' || cat === 'builtin_kepl') {
+      const ops = await fetchKeplOps()
+      all = cat === 'builtin_kepl' ? ops : [...ops, ...dbRows]
+    }
+    if (cat && cat !== 'all' && cat !== 'builtin_kepl') all = all.filter(i => i.category === cat)
+    const st = filterStatus.value
+    if (st && st !== 'all') all = all.filter(i => i.status === st)
+    const kw = (searchText.value || '').toLowerCase()
+    if (kw) all = all.filter(i =>
+      i.name.toLowerCase().includes(kw) ||
+      (i.display_name || '').toLowerCase().includes(kw) ||
+      (i.description || '').toLowerCase().includes(kw))
+    total.value = all.length
+    let start = (page.value - 1) * PAGE_SIZE
+    if (start >= all.length) { page.value = 1; start = 0 }
+    items.value = all.slice(start, start + PAGE_SIZE)
     syncHash()
   } catch(e) {} finally { loading.value = false }
 }
@@ -571,12 +605,10 @@ async function doTestRun() {
   testRunning.value = true
   testResult.value = null
   try {
-    const endpoint = editId.value
-      ? API + '/api/functions/' + editId.value + '/test-run'
-      : API + '/api/functions/test-run-temp'
-    const body = editId.value
-      ? { test_data: {} }
-      : { source_code: form.value.source_code, parameters: formParams.value, category: form.value.category }
+    // 一律走临时试运行并携带编辑器当前代码：已有函数若走 /test-run 会跑库中旧代码，
+    // 用户改完代码看到的测试结果是旧的（v3.7 审查 P2）
+    const endpoint = API + '/api/functions/test-run-temp'
+    const body = { source_code: form.value.source_code, parameters: formParams.value, category: form.value.category }
     const r = await axios.post(endpoint, body, { headers: authHeaders() })
     testResult.value = r.data
   } catch(e) {
@@ -588,16 +620,22 @@ async function publishFunc() {
   if (!editId.value) return
   publishing.value = true
   try {
-    // 先试运行
+    // 先保存当前表单（含 Monaco 里的代码修改），否则发布的是库中旧代码
+    await axios.put(API + '/api/functions/' + editId.value, {
+      ...form.value,
+      parameters: formParams.value,
+    }, { headers: authHeaders() })
+    // 再试运行：语法错误/执行失败（无 elapsed_ms）或耗时超限都拦截发布
     const tr = await axios.post(API + '/api/functions/' + editId.value + '/test-run', { test_data: {} }, { headers: authHeaders() })
-    if (tr.data.status === 'failed' && tr.data.elapsed_ms > 2000) {
-      message.warning('函数性能不达标（>2000ms），无法发布')
+    if (tr.data.status === 'failed' || (tr.data.elapsed_ms || 0) > 2000) {
+      message.warning(tr.data.status === 'failed' ? '函数试运行失败，无法发布' : '函数性能不达标（>2000ms），无法发布')
       return
     }
     // 发布
     await axios.put(API + '/api/functions/' + editId.value, { status: 'published' }, { headers: authHeaders() })
-    message.success('发布成功！')
+    message.success('已保存并发布！')
     showTestRun.value = false
+    showCreate.value = false
     await loadData()
   } catch(e) {
     message.error(e.response?.data?.detail || '发布失败')

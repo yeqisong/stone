@@ -480,9 +480,13 @@ class BackfillManager:
                 return
             sups = manager.get_supplement()
             rows = db.execute(text(
+                # 覆盖 NULL 与已退化行（close_hfq=close）：历史上 ETF 日线曾以
+                # close_hfq=close 入库覆盖掉 baostock 补充值，仅查 IS NULL 会漏掉
+                # 这些退化行，补充逻辑空转（v3.7 审查 P0）
                 "SELECT DISTINCT q.stock_code FROM daily_quote q "
                 "JOIN stock_master s ON s.stock_code=q.stock_code AND s.stock_type='etf' "
-                "WHERE q.trade_date BETWEEN :s AND :e AND q.close_hfq IS NULL"
+                "WHERE q.trade_date BETWEEN :s AND :e "
+                "AND (q.close_hfq IS NULL OR q.close_hfq = q.close)"
             ), {"s": start_date, "e": end_date}).fetchall()
             codes = [r[0] for r in rows]
             if not codes:

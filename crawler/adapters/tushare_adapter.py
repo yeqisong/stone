@@ -224,7 +224,8 @@ class TuShareAdapter(DataSourceAdapter):
                         tr_map[str(r['ts_code']).split('.')[0].zfill(6)] = (
                             float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None)
                 adj_map = {}
-                if adj is not None and not adj.empty:
+                adj_ok = adj is not None and not adj.empty
+                if adj_ok:
                     for _, r in adj.iterrows():
                         adj_map[str(r['ts_code']).split('.')[0].zfill(6)] = (
                             float(r['adj_factor']) if pd.notna(r.get('adj_factor')) else 1.0)
@@ -234,12 +235,15 @@ class TuShareAdapter(DataSourceAdapter):
                     if code_set is not None and code not in code_set:
                         continue
                     close = float(r['close'])
+                    # adj_factor 整体失败时 close_hfq 传 None（保留库内旧值）而非 close×1.0：
+                    # 后者会经 UPSERT 覆盖掉此前正确的复权价，且当日因 80% 完整度阈值
+                    # 判完成不再重拉，错误值永久化（v3.7 审查 P1）
                     results.append(KlineRow(
                         trade_date=str(r['trade_date']), stock_code=code,
                         stock_name='', exchange=code_to_exchange(code),
                         open=float(r['open']), high=float(r['high']),
                         low=float(r['low']), close=close,
-                        close_hfq=close * adj_map.get(code, 1.0),
+                        close_hfq=close * adj_map.get(code, 1.0) if adj_ok else None,
                         volume=int(r['vol']) * 100 if pd.notna(r.get('vol')) else 0,
                         amount=float(r['amount']) * 1000 if pd.notna(r.get('amount')) else 0,
                         turnover=tr_map.get(code)))
@@ -298,10 +302,14 @@ class TuShareAdapter(DataSourceAdapter):
                         if code_set is not None and c not in code_set:
                             continue
                         ex2 = 'SSE' if c.startswith('5') else 'SZSE'
+                        # close_hfq 传 None：ETF 无免费复权因子（fund_adj 需高积分），
+                        # 传 close 会被 UPSERT 覆盖掉 baostock 已补充的复权价，且补充器
+                        # 只找 IS NULL 的行，形成永久覆盖链（v3.7 审查 P0）。None 走
+                        # UPSERT 的空值保护，保留库内旧值，缺口留给补充器。
                         results.append(KlineRow(
                             trade_date=str(r['trade_date']), stock_code=c, stock_name='',
                             exchange=ex2, open=float(r['open']), high=float(r['high']),
-                            low=float(r['low']), close=float(r['close']), close_hfq=float(r['close']),
+                            low=float(r['low']), close=float(r['close']), close_hfq=None,
                             volume=int(r['vol'])*100 if pd.notna(r.get('vol')) else 0,
                             amount=float(r['amount'])*1000 if pd.notna(r.get('amount')) else 0))
             except QuotaExhausted:
@@ -412,17 +420,26 @@ class TuShareAdapter(DataSourceAdapter):
             result = []
             if df is not None and not df.empty:
                 for _, r in df.iterrows():
+                    # tushare 真实列为 *_amount 风格（lg=大单, elg=特大单, md=中单, sm=小单）
+                    def _f(*keys):
+                        for k in keys:
+                            val = r.get(k)
+                            if val is not None and pd.notna(val):
+                                return float(val)
+                        return None
                     result.append({
                         "trade_date": str(r.get('trade_date',''))[:10],
                         "stock_code": str(r.get('ts_code','')).split('.')[0].zfill(6),
                         "stock_name": str(r.get('name','')),
-                        "buy_lg_amt": float(r.get('buy_lg_amt',0)) if pd.notna(r.get('buy_lg_amt')) else None,
-                        "sell_lg_amt": float(r.get('sell_lg_amt',0)) if pd.notna(r.get('sell_lg_amt')) else None,
-                        "buy_md_amt": float(r.get('buy_md_amt',0)) if pd.notna(r.get('buy_md_amt')) else None,
-                        "sell_md_amt": float(r.get('sell_md_amt',0)) if pd.notna(r.get('sell_md_amt')) else None,
-                        "buy_sm_amt": float(r.get('buy_sm_amt',0)) if pd.notna(r.get('buy_sm_amt')) else None,
-                        "sell_sm_amt": float(r.get('sell_sm_amt',0)) if pd.notna(r.get('sell_sm_amt')) else None,
-                        "net_mf_amt": float(r.get('net_mf_amt',0)) if pd.notna(r.get('net_mf_amt')) else None,
+                        "buy_lg_amt": _f('buy_lg_amount', 'buy_lg_amt'),
+                        "sell_lg_amt": _f('sell_lg_amount', 'sell_lg_amt'),
+                        "buy_elg_amt": _f('buy_elg_amount'),
+                        "sell_elg_amt": _f('sell_elg_amount'),
+                        "buy_md_amt": _f('buy_md_amount', 'buy_md_amt'),
+                        "sell_md_amt": _f('sell_md_amount', 'sell_md_amt'),
+                        "buy_sm_amt": _f('buy_sm_amount', 'buy_sm_amt'),
+                        "sell_sm_amt": _f('sell_sm_amount', 'sell_sm_amt'),
+                        "net_mf_amt": _f('net_mf_amount', 'net_mf_amt'),
                     })
             return result
         except QuotaExhausted:
@@ -567,3 +584,289 @@ class TuShareAdapter(DataSourceAdapter):
         except Exception as e:
             logger.warning(f"[tushare] fetch_sw_industry 失败: {e}")
         return result
+
+    # ── 拓展数据接入（step2 扩展：13 接口，字段映射按 tushare 真实返回列）──
+
+    def _rows(self, df, mapping):
+        """通用行映射：df + {输出键: tushare 列} → list[dict]，缺列/NaN → None。"""
+        out = []
+        if df is None or df.empty:
+            return out
+        for _, r in df.iterrows():
+            d = {}
+            for k, col in mapping.items():
+                v = r.get(col)
+                if v is None or pd.isna(v):
+                    d[k] = None
+                elif isinstance(v, str):
+                    d[k] = v
+                else:
+                    d[k] = float(v)
+            out.append(d)
+        return out
+
+    def fetch_top_list(self, trade_date: str) -> list:
+        """龙虎榜（每日榜单，同票可因多个 reason 上榜）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.top_list(trade_date=td)
+            rows = self._rows(df, {
+                "trade_date": "trade_date", "stock_code": "ts_code", "stock_name": "name",
+                "close": "close", "pct_chg": "pct_change", "turnover_ratio": "turnover_rate",
+                "total_amount": "amount", "buy_amount": "l_buy", "sell_amount": "l_sell",
+                "net_amount": "net_amount", "reason": "reason"})
+            for r in rows:
+                r["trade_date"] = td
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] top_list {td} 失败: {e}")
+            return []
+
+    def fetch_margin_detail_ext(self, trade_date: str) -> list:
+        """两融明细（全标的）。列名沿用 stock_margin_detail 表：fin_amount=rzye 等。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.margin_detail(trade_date=td)
+            rows = self._rows(df, {
+                "trade_date": "trade_date", "stock_code": "ts_code", "stock_name": "name",
+                "fin_amount": "rzye", "fin_buy_amount": "rzmre",
+                "sec_amount": "rqye", "sec_sell_amount": "rqmcl", "total_amount": "rzrqye"})
+            for r in rows:
+                r["trade_date"] = td
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] margin_detail {td} 失败: {e}")
+            return []
+
+    def fetch_moneyflow_hsgt(self, trade_date: str) -> list:
+        """沪深港通资金流向（北向整体，每日一行）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.moneyflow_hsgt(start_date=td, end_date=td)
+            rows = self._rows(df, {
+                "trade_date": "trade_date", "ggt_ss": "ggt_ss", "ggt_sz": "ggt_sz",
+                "hgt": "hgt", "sgt": "sgt", "north_money": "north_money"})
+            for r in rows:
+                r["trade_date"] = td
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] moneyflow_hsgt {td} 失败: {e}")
+            return []
+
+    def fetch_block_trade(self, trade_date: str) -> list:
+        """大宗交易。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.block_trade(trade_date=td)
+            rows = self._rows(df, {
+                "trade_date": "trade_date", "stock_code": "ts_code", "price": "price",
+                "vol": "amount", "amount": "turnover", "buyer": "buyer", "seller": "seller"})
+            for r in rows:
+                r["trade_date"] = td
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] block_trade {td} 失败: {e}")
+            return []
+
+    def fetch_share_float(self, trade_date: str) -> list:
+        """限售解禁（按解禁日扫描）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.share_float(trade_date=td)
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "ann_date": "ann_date", "float_date": "float_date",
+                "holder_name": "holder_name", "shares": "shares",
+                "float_ratio": "float_ratio", "holder_type": "holder_type"})
+            for r in rows:
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                r["holder_name"] = r.get("holder_name") or ''
+                for k in ('ann_date', 'float_date'):
+                    if r.get(k):
+                        r[k] = str(r[k])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] share_float {td} 失败: {e}")
+            return []
+
+    def fetch_repurchase(self, trade_date: str) -> list:
+        """回购（按公告日扫描）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.repurchase(ann_date=td)
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "ann_date": "ann_date", "end_date": "end_date",
+                "proc": "proc", "vol": "vol", "amount": "amount",
+                "high_limit": "high_limit", "low_limit": "low_limit"})
+            for r in rows:
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                r["vol"] = r.get("vol") if r.get("vol") is not None else -1
+                r["amount"] = r.get("amount") if r.get("amount") is not None else -1
+                for k in ('ann_date', 'end_date'):
+                    if r.get(k):
+                        r[k] = str(r[k])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] repurchase {td} 失败: {e}")
+            return []
+
+    def fetch_dividend(self, trade_date: str) -> list:
+        """分红送转（按除权除息日扫描，2000 积分下不支持纯 period 全市场查询）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.dividend(ex_date=td)
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "end_date": "end_date", "div_proc": "div_proc",
+                "ann_date": "ann_date", "stk_div": "stk_div", "cash_div": "cash_div",
+                "cash_div_tax": "cash_div_tax", "record_date": "record_date",
+                "ex_date": "ex_date", "pay_date": "pay_date", "base_share": "base_share"})
+            for r in rows:
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                for k in ('end_date', 'ann_date', 'record_date', 'ex_date', 'pay_date'):
+                    if r.get(k):
+                        r[k] = str(r[k])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] dividend ex={td} 失败: {e}")
+            return []
+
+    def fetch_forecast(self, trade_date: str) -> list:
+        """业绩预告（按公告日扫描）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.forecast(ann_date=td)
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "ann_date": "ann_date", "end_date": "end_date",
+                "type": "type", "p_change_min": "p_change_min", "p_change_max": "p_change_max",
+                "net_profit_min": "net_profit_min", "net_profit_max": "net_profit_max",
+                "last_parent_net": "last_parent_net", "reason": "reason"})
+            for r in rows:
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                r["ann_date"] = td
+                if r.get("end_date"):
+                    r["end_date"] = str(r["end_date"])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] forecast {td} 失败: {e}")
+            return []
+
+    def fetch_express(self, trade_date: str) -> list:
+        """业绩快报（按公告日扫描）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.express(ann_date=td)
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "ann_date": "ann_date", "end_date": "end_date",
+                "revenue": "revenue", "or_yoy": "or_yoy", "netprofit": "netprofit",
+                "yoy_net_profit": "yoy_net_profit", "bps": "bps", "total_assets": "total_assets"})
+            for r in rows:
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                r["ann_date"] = td
+                if r.get("end_date"):
+                    r["end_date"] = str(r["end_date"])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] express {td} 失败: {e}")
+            return []
+
+    def fetch_income_ann(self, trade_date: str) -> list:
+        """按公告日扫描利润表——仅用于发现当日披露财报的股票（ts_code + end_date）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.income(ann_date=td)
+            out = []
+            if df is not None and not df.empty:
+                seen = set()
+                for _, r in df.iterrows():
+                    code = str(r.get('ts_code', '')).split('.')[0].zfill(6)
+                    end = str(r.get('end_date', ''))[:10]
+                    if code not in seen:
+                        seen.add(code)
+                        out.append({"stock_code": code, "end_date": end})
+            return out
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] income ann={td} 失败: {e}")
+            return []
+
+    def fetch_fina_indicator(self, ts_code: str, period: str = None) -> list:
+        """财务指标精选字段（period=None 返回该票全部报告期历史——代码轮换回补用）。"""
+        try:
+            self.quota.consume()
+            df = (self._pro.fina_indicator(ts_code=ts_code, period=period)
+                  if period else self._pro.fina_indicator(ts_code=ts_code))
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "ann_date": "ann_date",
+                "eps": "eps", "eps_ttm": "eps_ttm", "bps": "bps",
+                "roe": "roe", "roe_waa": "roe_waa", "roe_dt": "roe_dt", "roa": "roa",
+                "grossprofit_margin": "grossprofit_margin", "netprofit_margin": "netprofit_margin",
+                "ocf_to_or": "ocf_to_or", "ocfps": "ocfps", "profit_dedt": "profit_dedt",
+                "debt_to_assets": "debt_to_assets", "current_ratio": "current_ratio",
+                "quick_ratio": "quick_ratio", "invturn": "invturn", "ar_turn": "ar_turn",
+                "assets_turn": "assets_turn", "netprofit_yoy": "netprofit_yoy",
+                "netprofit_2yoy": "netprofit_2yoy", "or_yoy": "or_yoy", "or_2yoy": "or_2yoy"})
+            for r in rows:
+                r["stock_code"] = ts_code.split('.')[0].zfill(6)
+                if period:
+                    r["end_date"] = period
+                elif r.get("end_date"):
+                    r["end_date"] = str(r["end_date"])[:10]
+                if r.get("ann_date"):
+                    r["ann_date"] = str(r["ann_date"])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] fina_indicator {ts_code} {period} 失败: {e}")
+            return []
+
+    def fetch_index_weight(self, index_code: str, start_date: str, end_date: str) -> list:
+        """指数成分权重（月频快照）。"""
+        sd, ed = start_date.replace('-', '')[:8], end_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.index_weight(index_code=index_code, start_date=sd, end_date=ed)
+            rows = self._rows(df, {
+                "index_code": "index_code", "trade_date": "trade_date",
+                "stock_code": "con_code", "weight": "weight"})
+            for r in rows:
+                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                if r.get("trade_date"):
+                    r["trade_date"] = str(r["trade_date"])[:10]
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] index_weight {index_code} 失败: {e}")
+            return []

@@ -79,6 +79,61 @@ NODE_SUB_STEPS = {
         {'name': 'JOIN 计算总格子', 'desc': 'daily_quote 行数 × 特征数 = 总预期格子'},
         {'name': '写入 entity_stats', 'desc': '每只股票一行的数据完整度基线'},
     ],
+    'analyze': [
+        {'name': '刷新大表统计', 'desc': 'ANALYZE feature_values/daily_quote/stock_moneyflow，防止分区大表统计过期'},
+    ],
+    'top_list': [
+        {'name': '拉取龙虎榜', 'desc': 'tushare top_list 每日上榜明细（含上榜原因）'},
+        {'name': '写入 stock_top_list', 'desc': 'UPSERT 按 trade_date+stock_code+reason 去重'},
+    ],
+    'margin_detail': [
+        {'name': '拉取两融明细', 'desc': 'tushare margin_detail 融资融券全标的'},
+        {'name': '写入 stock_margin_detail', 'desc': 'UPSERT 按 trade_date+stock_code 去重'},
+    ],
+    'moneyflow_hsgt': [
+        {'name': '拉取沪深港通资金流向', 'desc': 'tushare moneyflow_hsgt 北向/南向整体'},
+        {'name': '写入 moneyflow_hsgt', 'desc': 'UPSERT 按 trade_date 去重'},
+    ],
+    'block_trade': [
+        {'name': '拉取大宗交易', 'desc': 'tushare block_trade 大宗交易明细'},
+        {'name': '写入 block_trade', 'desc': 'UPSERT 按 trade_date+code+price+vol 去重'},
+    ],
+    'share_float': [
+        {'name': '拉取限售解禁', 'desc': 'tushare share_float 按解禁日扫描'},
+        {'name': '写入 stock_share_float', 'desc': 'UPSERT 按 code+float_date+holder 去重'},
+    ],
+    'repurchase': [
+        {'name': '拉取回购', 'desc': 'tushare repurchase 按公告日扫描'},
+        {'name': '写入 stock_repurchase', 'desc': 'UPSERT 按 code+ann_date+vol+amount 去重'},
+    ],
+    'dividend': [
+        {'name': '拉取分红送转', 'desc': 'tushare dividend 按报告期全市场（本期中报+上年年报）'},
+        {'name': '写入 stock_dividend', 'desc': 'UPSERT 按 code+end_date+div_proc 去重'},
+    ],
+    'forecast': [
+        {'name': '拉取业绩预告', 'desc': 'tushare forecast 按公告日扫描'},
+        {'name': '写入 stock_forecast', 'desc': 'UPSERT 按 code+end_date+ann_date 去重'},
+    ],
+    'express': [
+        {'name': '拉取业绩快报', 'desc': 'tushare express 按公告日扫描'},
+        {'name': '写入 stock_express', 'desc': 'UPSERT 按 code+end_date+ann_date 去重'},
+    ],
+    'index_weight': [
+        {'name': '拉取指数成分权重', 'desc': 'tushare index_weight 沪深300/中证500 月度快照'},
+        {'name': '写入 index_weight', 'desc': 'UPSERT 按 index_code+trade_date+stock_code 去重'},
+    ],
+    'fina_daily': [
+        {'name': '扫描当日披露财报', 'desc': 'income 按 ann_date 发现当日新披露'},
+        {'name': '逐票拉取财务指标', 'desc': 'fina_indicator 单票补全（上限 300 只/日）'},
+    ],
+    'data_backfill': [
+        {'name': '读取回补参数', 'desc': 'strategy_config: backfill_ext（表清单/区间/配额保留）'},
+        {'name': '循环交易日回补', 'desc': '交易日×表采集，已入库跳过，配额熔断续跑'},
+    ],
+    'moneyflow': [
+        {'name': '拉取资金流向', 'desc': 'tushare moneyflow 全市场主力/中单/小单'},
+        {'name': '写入 stock_moneyflow', 'desc': 'UPSERT 按 trade_date+stock_code 去重'},
+    ],
     'stock_master': [
         {'name': '拉取股票列表', 'desc': 'tushare stock_basic 全量股票'},
         {'name': 'UPSERT stock_master', 'desc': '逐行写入/更新（IPO/退市/名称/交易所）'},
@@ -88,13 +143,60 @@ NODE_SUB_STEPS = {
         {'name': '拉取龙虎榜', 'desc': 'tushare top_list 每日数据'},
         {'name': '写入 stock_top_list', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
     ],
+    'analyze': [
+        {'name': '刷新大表统计', 'desc': 'ANALYZE feature_values/daily_quote/stock_moneyflow，防止分区大表统计过期'},
+    ],
+    'top_list': [
+        {'name': '拉取龙虎榜', 'desc': 'tushare top_list 每日上榜明细（含上榜原因）'},
+        {'name': '写入 stock_top_list', 'desc': 'UPSERT 按 trade_date+stock_code+reason 去重'},
+    ],
+    'margin_detail': [
+        {'name': '拉取两融明细', 'desc': 'tushare margin_detail 融资融券全标的'},
+        {'name': '写入 stock_margin_detail', 'desc': 'UPSERT 按 trade_date+stock_code 去重'},
+    ],
+    'moneyflow_hsgt': [
+        {'name': '拉取沪深港通资金流向', 'desc': 'tushare moneyflow_hsgt 北向/南向整体'},
+        {'name': '写入 moneyflow_hsgt', 'desc': 'UPSERT 按 trade_date 去重'},
+    ],
+    'block_trade': [
+        {'name': '拉取大宗交易', 'desc': 'tushare block_trade 大宗交易明细'},
+        {'name': '写入 block_trade', 'desc': 'UPSERT 按 trade_date+code+price+vol 去重'},
+    ],
+    'share_float': [
+        {'name': '拉取限售解禁', 'desc': 'tushare share_float 按解禁日扫描'},
+        {'name': '写入 stock_share_float', 'desc': 'UPSERT 按 code+float_date+holder 去重'},
+    ],
+    'repurchase': [
+        {'name': '拉取回购', 'desc': 'tushare repurchase 按公告日扫描'},
+        {'name': '写入 stock_repurchase', 'desc': 'UPSERT 按 code+ann_date+vol+amount 去重'},
+    ],
+    'dividend': [
+        {'name': '拉取分红送转', 'desc': 'tushare dividend 按报告期全市场（本期中报+上年年报）'},
+        {'name': '写入 stock_dividend', 'desc': 'UPSERT 按 code+end_date+div_proc 去重'},
+    ],
+    'forecast': [
+        {'name': '拉取业绩预告', 'desc': 'tushare forecast 按公告日扫描'},
+        {'name': '写入 stock_forecast', 'desc': 'UPSERT 按 code+end_date+ann_date 去重'},
+    ],
+    'express': [
+        {'name': '拉取业绩快报', 'desc': 'tushare express 按公告日扫描'},
+        {'name': '写入 stock_express', 'desc': 'UPSERT 按 code+end_date+ann_date 去重'},
+    ],
+    'index_weight': [
+        {'name': '拉取指数成分权重', 'desc': 'tushare index_weight 沪深300/中证500 月度快照'},
+        {'name': '写入 index_weight', 'desc': 'UPSERT 按 index_code+trade_date+stock_code 去重'},
+    ],
+    'fina_daily': [
+        {'name': '扫描当日披露财报', 'desc': 'income 按 ann_date 发现当日新披露'},
+        {'name': '逐票拉取财务指标', 'desc': 'fina_indicator 单票补全（上限 300 只/日）'},
+    ],
+    'data_backfill': [
+        {'name': '读取回补参数', 'desc': 'strategy_config: backfill_ext（表清单/区间/配额保留）'},
+        {'name': '循环交易日回补', 'desc': '交易日×表采集，已入库跳过，配额熔断续跑'},
+    ],
     'moneyflow': [
         {'name': '拉取资金流向', 'desc': 'tushare moneyflow 每日数据'},
         {'name': '写入 stock_moneyflow', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
-    ],
-    'hk_hold': [
-        {'name': '拉取沪深港通持股', 'desc': 'tushare hk_hold 每日数据'},
-        {'name': '写入 stock_hk_hold', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},
     ],
     'margin_detail': [
         {'name': '拉取融资融券', 'desc': 'tushare margin_detail 每日数据'},

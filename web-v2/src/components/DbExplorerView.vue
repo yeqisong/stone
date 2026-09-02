@@ -7,7 +7,7 @@
       <div class="ov-value">{{ m.value }}</div>
     </div>
     <div style="flex:1" />
-    <n-button size="small" quaternary @click="loadAll">🔄 刷新</n-button>
+    <n-button size="small" quaternary @click="loadAll"><AppIcon name="refresh" :size="13" />  刷新</n-button>
   </div>
 
   <!-- 主体：左表清单（独立滚动） + 右数据（独立滚动） -->
@@ -40,7 +40,7 @@
             <span class="dbx-rows">{{ totalRows.toLocaleString() }} 行 · 只读</span>
           </div>
           <div class="dbx-tools">
-            <n-button size="tiny" quaternary @click="showSchema = true">🗂 字段 ({{ columns.length }})</n-button>
+            <n-button size="tiny" quaternary @click="showSchema = true"><AppIcon name="folder" :size="13" />  字段 ({{ columns.length }})</n-button>
             <n-select v-model:value="orderBy" size="tiny" style="width:150px" clearable
               :options="columns.map(c => ({ label: c.name, value: c.name }))"
               placeholder="排序列" @update:value="() => loadData()" />
@@ -83,12 +83,12 @@
           <span v-else class="pager-hint">最多显示 {{ pageSize }} 行 / 页</span>
         </div>
       </template>
-      <n-empty v-else description="← 点击左侧表查看数据" style="margin:auto" />
+      <n-empty v-else description="点击左侧表查看数据" style="margin:auto" />
     </section>
   </div>
 
   <!-- 字段元数据抽屉（按钮入口） -->
-  <n-drawer v-model:show="showSchema" placement="right" :width="480">
+  <n-drawer v-model:show="showSchema" placement="right" :width="isNarrow ? '100%' : 480">
     <n-drawer-content :title="`字段定义 · ${selected}`" closable>
       <n-data-table :columns="schemaCols" :data="columns" size="small" :max-height="560"
         :row-key="r => r.name" />
@@ -98,7 +98,10 @@
 </template>
 
 <script setup>
+import AppIcon from './AppIcon.vue'
 import { ref, computed, onMounted, h } from 'vue'
+import { useViewport } from '../utils/viewport'
+const { isNarrow } = useViewport()
 import { NButton, NInput, NDataTable, NEmpty, NPagination, NSelect, NSpin, NTooltip, NDrawer, NDrawerContent } from 'naive-ui'
 import axios from 'axios'
 
@@ -269,3 +272,11 @@ onMounted(loadAll)
 .dbx-pager { display: flex; justify-content: center; align-items: center; min-height: 28px; }
 .pager-hint { font-size: 11px; color: var(--c-text-faint); }
 </style>
+
+/* H5：左清单 300px 固定宽在窄屏挤压数据区 → 纵向布局，清单收成顶部横向列表 */
+@media (max-width: 768px) {
+  .dbx-body { flex-direction: column; }
+  .dbx-left { width: 100%; flex-shrink: 1; max-height: 30vh; }
+  .dbx-table-list { flex-direction: row; flex-wrap: wrap; }
+  .tbl-item { font-size: 11px; padding: 4px 8px; }
+}

@@ -218,8 +218,9 @@ def get_stock_history(
 
 @router.get("/stock/{code}/kline")
 def get_stock_kline(
-    code: str, days: int = Query(120, ge=30, le=500),
+    code: str, days: int = Query(120, ge=30, le=7000),
     adjust: str = Query("none", description="复权: none=不复权, qfq=前复权, hfq=后复权"),
+    period: str = Query("day", description="周期: day=日, week=周, month=月（指标按聚合后序列计算）"),
     type: str = Query(None, description="证券类型: stock/index/etf"),
 ):
     """获取 K线 + 技术指标。支持切换复权类型。支持个股/指数/ETF。"""
@@ -255,21 +256,45 @@ def get_stock_kline(
         if not rows:
             raise HTTPException(status_code=404, detail=f"未找到 {code}")
 
-        closes = pd.Series([float(r.close) for r in rows])
-        dates = [str(r.trade_date) for r in rows]
+        # ── 周期聚合（week/month）：OHLC 合成（开=首/高=最高/低=最低/收=末），量额求和，
+        # 换手均值；指标（BOLL/RSI/MACD）按聚合后序列计算，长周期口径更正确
+        if period in ('week', 'month'):
+            df = pd.DataFrame([{
+                'date': str(r.trade_date), 'open': float(r.open), 'high': float(r.high),
+                'low': float(r.low), 'close': float(r.close),
+                'volume': int(r.volume or 0),
+                'amount': float(r.amount) if getattr(r, 'amount', None) else 0.0,
+                'turnover': float(r.turnover) if getattr(r, 'turnover', None) else None,
+            } for r in rows])
+            ts = pd.to_datetime(df['date'])
+            if period == 'week':
+                df['_key'] = ts.dt.strftime('%G-%V')       # ISO 周（周四周起点语义由 %G/%V 保证）
+            else:
+                df['_key'] = ts.dt.strftime('%Y-%m')
+            agg = df.groupby('_key', sort=False).agg(
+                date=('date', 'last'), open=('open', 'first'), high=('high', 'max'),
+                low=('low', 'min'), close=('close', 'last'),
+                volume=('volume', 'sum'), amount=('amount', 'sum'),
+                turnover=('turnover', 'mean')).reset_index(drop=True)
+            rows = agg.to_dict('records')
+
+        closes = pd.Series([float(r['close'] if isinstance(r, dict) else r.close) for r in rows])
+        dates = [str(r['date'] if isinstance(r, dict) else r.trade_date) for r in rows]
         mid, upper, lower, bw = bollinger_bands(closes)
         rsi_vals = rsi(closes)
         dif, dea, macd_bar = macd(closes)
 
         kline = []
         for i, r in enumerate(rows):
+            is_dict = isinstance(r, dict)
+            g = (lambda k: r.get(k) if is_dict else getattr(r, k, None))
             kline.append({
                 "trade_date": dates[i],
-                "open": float(r.open), "high": float(r.high),
-                "low": float(r.low), "close": float(r.close),
-                "volume": int(r.volume),
-                "amount": float(r.amount) if getattr(r, 'amount', None) else None,
-                "turnover": float(r.turnover) if getattr(r, 'turnover', None) else None,
+                "open": float(r['open'] if is_dict else r.open), "high": float(r['high'] if is_dict else r.high),
+                "low": float(r['low'] if is_dict else r.low), "close": float(r['close'] if is_dict else r.close),
+                "volume": int(r['volume'] if is_dict else r.volume),
+                "amount": float(g('amount')) if g('amount') else None,
+                "turnover": float(g('turnover')) if g('turnover') else None,
                 "boll_mid": round(float(mid.iloc[i]), 2) if not pd.isna(mid.iloc[i]) else None,
                 "boll_upper": round(float(upper.iloc[i]), 2) if not pd.isna(upper.iloc[i]) else None,
                 "boll_lower": round(float(lower.iloc[i]), 2) if not pd.isna(lower.iloc[i]) else None,

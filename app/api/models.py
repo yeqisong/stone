@@ -135,7 +135,6 @@ def list_models(entity: str = Query("stock")):
         db.close()
 
 
-@router.get("/v1/models/{version}")
 @router.get("/v1/models/paper-portfolio")
 def get_paper_portfolio(user: str = Depends(get_current_user)):
     """纸面组合（影子运行）：净值曲线 vs 沪深300 + 当前持仓 + 最近模拟成交。"""
@@ -210,6 +209,7 @@ def get_paper_portfolio(user: str = Depends(get_current_user)):
         db.close()
 
 
+@router.get("/v1/models/{version}")
 def get_model(version: str):
     """模型版本详情。"""
     db = get_sync_db()
@@ -779,10 +779,6 @@ def train_model(version: str, user: str = Depends(get_current_user)):
         {"node_name": "train_optuna"},
         {"node_name": "train_evaluate"},
     ]
-    task = tm.create_task(task_type="model_train", flow_name=f"训练 {version}", nodes=nodes)
-    if task.status == "failed":
-        return {"ok": False, "error": task.error}
-
     db = get_sync_db()
     try:
         r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
@@ -796,6 +792,22 @@ def train_model(version: str, user: str = Depends(get_current_user)):
         raise
     finally:
         db.close()
+
+    # 先校验版本再建任务：校验失败路径若已建任务，TaskManager 并发槽永不释放
+    # （该路径不会调用 complete/fail），5 次后全系统任务瘫痪
+    task = tm.create_task(task_type="model_train", flow_name=f"训练 {version}", nodes=nodes)
+    if task.status == "failed":
+        # 回滚状态，避免版本卡在 TRAINING 无法再触发
+        db = get_sync_db()
+        try:
+            db.execute(text("UPDATE model_versions SET status=:s WHERE version=:v"),
+                       {"s": r[0], "v": version})
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+        return {"ok": False, "error": task.error}
 
     stop_event = threading.Event()
     with _train_events_lock:

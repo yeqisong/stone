@@ -57,6 +57,7 @@ _OPERATOR_DOCS = {
     'rank':        {'sig': 'rank(字段)', 'desc': '截面分位（0~1，逐日排名）', 'eg': 'rank(close)'},
     'quantile':    {'sig': 'quantile(字段, Q)', 'desc': '截面分位数', 'eg': 'close - quantile(close, 0.5)'},
     'zscore':      {'sig': 'zscore(字段)', 'desc': '截面 z 标准化', 'eg': 'zscore(close/ma(close, 20))'},
+    'neut':        {'sig': 'neut(字段)', 'desc': '市值+行业中性化（逐日截面回归取残差）', 'eg': 'neut(ma(close, 20))'},
 }
 
 
