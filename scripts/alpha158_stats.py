@@ -27,10 +27,9 @@ def main():
     # 汇总
     with eng.connect() as c:
         st = c.execute(text(
-            "SELECT data_completeness, COUNT(*) FROM features "
-            "WHERE feature_name LIKE 'a158\\_%' GROUP BY CASE "
-            "WHEN data_completeness >= 0.9 THEN 0.9 WHEN data_completeness >= 0.6 THEN 0.6 "
-            "ELSE 0 END ORDER BY 1 DESC")).fetchall()
+            "SELECT CASE WHEN data_completeness >= 0.9 THEN 0.9 "
+            "WHEN data_completeness >= 0.6 THEN 0.6 ELSE 0 END AS bucket, COUNT(*) "
+            "FROM features WHERE feature_name LIKE 'a158\\_%' GROUP BY 1 ORDER BY 1 DESC")).fetchall()
         sample = c.execute(text(
             "SELECT feature_name, total_effective_cells, data_completeness, latest_computed_date "
             "FROM features WHERE feature_name IN ('a158_KMID','a158_MA_5','a158_CORR_20','a158_RSQR_60') "

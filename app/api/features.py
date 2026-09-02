@@ -1308,13 +1308,42 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
         wake_dag_broadcast()
 
 
+# 十年保留窗口基线（与 feature_values 保留政策对齐）
+FEATURE_STATS_WINDOW_START = '2017-01-01'
+_stock_window_cache: dict = {}
+
+
+def _stock_window_cells(db) -> int:
+    """stock 实体的十年窗口理论格子数（进程级缓存）。
+
+    = 窗口内 daily_quote 的 (股票, 交易日) 格子数（close>0，沪深 A 股），
+    与特征计算的取数面板同口径。"""
+    from sqlalchemy import text
+    if 'cells' in _stock_window_cache:
+        return _stock_window_cache['cells']
+    try:
+        n = db.execute(text(
+            "SELECT count(*) FROM daily_quote q "
+            "JOIN stock_master sm ON sm.stock_code = q.stock_code AND sm.stock_type = 'stock' "
+            "WHERE q.trade_date >= :ws AND q.close > 0 AND q.exchange IN ('SSE','SZSE')"
+        ), {"ws": FEATURE_STATS_WINDOW_START}).scalar() or 0
+        _stock_window_cache['cells'] = int(n)
+    except Exception as e:
+        from loguru import logger as _log
+        _log.error(f"[stats] 窗口格子查询失败: {e}")
+        _stock_window_cache['cells'] = 0
+    return _stock_window_cache['cells']
+
+
 def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool = False):
     """计算完成后更新特征的数据统计。
 
-    总格子     = 从 entity_stats 表读取（DAG 每日增量更新，永不 JOIN）
-    正常缺失   = 停牌天数 + 活跃股票数 × lookback（天然无解的窗口期）
-    异常缺失   = 总格子 - 正常缺失 - 已计算（需要排查的）
-    完整度     = 已计算 / 总格子
+    总格子     = 十年保留窗口内理论格子（stock 实体：daily_quote 窗口内 close>0 行数，
+                 进程级缓存；其他实体沿用 entity_stats 全历史口径）
+    正常缺失   = 活跃股票数 × lookback（天然无解的窗口期）
+    异常缺失   = 总格子 - 已计算（需要排查的）
+    完整度     = 已计算 / 总格子（窗口内口径，与十年保留政策对齐——
+                 2026-09 前用全历史分母导致 2017+ 特征恒显示 ~0.57）
 
     Args:
         force_recompute: 保留兼容性，当前不再需要 JOIN 重算（entity_stats 已预计算）
@@ -1344,16 +1373,21 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
             ), {"names": depends_on}).scalar() or 0
             max_lookback = max(max_lookback, lb_rows)
 
-        # 1. 理论总格子：从 entity_stats 读（DAG 每日增量更新）
-        es = db.execute(text(
-            "SELECT total_cells, active_count FROM entity_stats WHERE entity_type = :et"
-        ), {"et": entity}).fetchone()
-        if es:
-            total_cells, stock_count = es[0], max(es[1], 1)
+        # 1. 理论总格子：stock 实体 = 十年保留窗口内 daily_quote 理论格子（进程级缓存）；
+        #    其他实体沿用 entity_stats 全历史口径
+        if entity == 'stock':
+            total_cells = _stock_window_cells(db)
+            stock_count = max(int((total_cells or 0) / 2400), 1)   # 粗估活跃数（窗口约 2400 交易日）
         else:
-            # entity_stats 未初始化时的回退（不应发生）
-            total_cells = 1
-            stock_count = 1
+            es = db.execute(text(
+                "SELECT total_cells, active_count FROM entity_stats WHERE entity_type = :et"
+            ), {"et": entity}).fetchone()
+            if es:
+                total_cells, stock_count = es[0], max(es[1], 1)
+            else:
+                # entity_stats 未初始化时的回退（不应发生）
+                total_cells = 1
+                stock_count = 1
 
         # 2. 实际已计算
         actual = db.execute(text(
