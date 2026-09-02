@@ -172,7 +172,7 @@
     <n-space vertical>
       <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" scroll-x="700" />
+        <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" scroll-x="860" />
       </div>
       <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="(p) => { bfLogPage = p || 1; nav.bfLogPage = bfLogPage; nav.syncHash(); loadBfLogs() }" />
     </n-space>
@@ -593,7 +593,7 @@ const bfLogTotal = ref(0)
 const bfLogTotalPages = ref(1)
 
 const bfLogColumns = [
-  { title: '开始', key: 'started_at', width: 115, ellipsis: { tooltip: true }, className: 'nowrap-cell', render(r) { return (r.started_at || '').slice(0, 16) } },
+  { title: '开始', key: 'started_at', width: 115, fixed: 'left', ellipsis: { tooltip: true }, className: 'nowrap-cell', render(r) { return (r.started_at || '').slice(0, 16) } },
   { title: '结束', key: 'completed_at', width: 115, ellipsis: { tooltip: true }, className: 'nowrap-cell', render(r) { return r.completed_at ? r.completed_at.slice(0, 16) : (r.status==='running'?'—':'') } },
   { title: '类型', key: 'task_label', width: 75, className: 'nowrap-cell' },
   { title: '日期范围', width: 150, className: 'nowrap-cell', ellipsis: { tooltip: true }, render(r) { return r.start_date ? `${r.start_date} ~ ${r.end_date || ''}` : '—' } },

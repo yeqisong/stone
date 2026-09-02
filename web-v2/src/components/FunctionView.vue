@@ -16,7 +16,7 @@
   </div>
 
   <n-data-table :columns="columns" :data="items" :loading="loading" size="small"
-    :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" />
+    :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" scroll-x="510" />
   <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
     <span>共 {{ total }} 条</span>
     <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
@@ -219,7 +219,7 @@
   <n-modal v-model:show="showFields" preset="card" title="字段注册表（KEPL 公式可引用的原始字段）" style="width:640px;max-width:92vw" :mask-closable="true">
     <n-space vertical>
       <div style="font-size:11px;color:var(--c-text-dim)">公式中直接引用以下字段名；基本面字段来自个股基本面日度历史表（stock_fundamentals_history），缺失日为空值。覆盖率 = 近 35 天非空占比。</div>
-      <n-data-table :columns="fieldCols" :data="fieldRows" size="small" :max-height="420" />
+      <n-data-table :columns="fieldCols" :data="fieldRows" size="small" :max-height="420" scroll-x="700" />
     </n-space>
   </n-modal>
 </template>
@@ -238,9 +238,9 @@ const API = window.location.origin
 const showFields = ref(false)
 const fieldRows = ref([])
 const fieldCols = [
-  { title: '字段名', key: 'name', width: 140, render: r => h('code', { style: 'font-size:12px' }, r.name) },
-  { title: '来源表', key: 'source', width: 220, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.source) },
-  { title: '说明', key: 'desc' },
+  { title: '字段名', key: 'name', width: 140, fixed: 'left', render: r => h('code', { style: 'font-size:12px' }, r.name) },
+  { title: '来源表', key: 'source', width: 220, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.source) },
+  { title: '说明', key: 'desc', minWidth: 240, ellipsis: { tooltip: true } },
   { title: '近月覆盖', key: 'coverage', width: 90, align: 'right', render: r =>
       r.coverage == null ? '—' : h('span', { style: `color:${r.coverage >= 0.9 ? '#10b981' : r.coverage >= 0.5 ? '#f59e0b' : '#ef4444'}` },
         (r.coverage * 100).toFixed(0) + '%') },
@@ -323,12 +323,12 @@ const statusOptions = [
 const statusMap = { draft:'草稿', published:'已发布', deprecated:'已弃用' }
 
 const columns = [
-  { title:'名称', key:'name', width:120 },
+  { title:'名称', key:'name', width:160, fixed:'left' },
   { title:'中文名', key:'display_name', width:100 },
   { title:'分类', key:'category', width:80 },
   { title:'状态', key:'status_text', width:60 },
   {
-    title:'', key:'actions', width:80,
+    title:'', key:'actions', width:80, fixed:'right',
     render(r) {
       if (r.is_builtin) return ''
       return h('div', { style:'display:flex;gap:8px;align-items:center' }, [

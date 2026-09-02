@@ -50,17 +50,17 @@ const loadError = ref(false)
 
 const overviews = ref([])
 const indCols = [
-  { title:'行业', key:'industry', width:120, ellipsis:{tooltip:true} },
+  { title:'行业', key:'industry', width:120, fixed:'left', ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:55 },
-  { title:'胜率', width:65, render(r){ const v=r.win_rate; const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
-  { title:'均收益', width:75, render(r){ const v=r.avg_return; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
+  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 const stkCols = [
-  { title:'代码', key:'stock_code', width:65 },
+  { title:'代码', key:'stock_code', width:65, fixed:'left' },
   { title:'名称', key:'stock_name', width:72, ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:45 },
-  { title:'胜率', width:60, render(r){ const v=r.win_rate; const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
-  { title:'均收益', width:70, render(r){ const v=r.avg_return; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
+  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 
 import { h } from 'vue'

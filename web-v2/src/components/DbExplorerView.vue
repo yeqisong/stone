@@ -91,7 +91,7 @@
   <n-drawer v-model:show="showSchema" placement="right" :width="isNarrow ? '100%' : 480">
     <n-drawer-content :title="`字段定义 · ${selected}`" closable>
       <n-data-table :columns="schemaCols" :data="columns" size="small" :max-height="560"
-        :row-key="r => r.name" />
+        :row-key="r => r.name" scroll-x="680" />
     </n-drawer-content>
   </n-drawer>
 </div>
@@ -155,11 +155,11 @@ function fmt(v) {
 }
 
 const schemaCols = [
-  { title: '字段', key: 'name', width: 170, render: r => h('code', { style: 'font-size:11px' }, r.name) },
-  { title: '类型', key: 'type', width: 140, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.type) },
+  { title: '字段', key: 'name', width: 170, fixed: 'left', render: r => h('code', { style: 'font-size:11px' }, r.name) },
+  { title: '类型', key: 'type', width: 140, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.type) },
   { title: '可空', key: 'nullable', width: 56, align: 'center', render: r => (r.nullable ? '✓' : '') },
   { title: '默认值', key: 'default', width: 110, ellipsis: { tooltip: true }, render: r => r.default || '—' },
-  { title: '注释', key: 'comment', ellipsis: { tooltip: true }, render: r => r.comment || '—' },
+  { title: '注释', key: 'comment', minWidth: 200, ellipsis: { tooltip: true }, render: r => r.comment || '—' },
 ]
 
 async function loadAll() {

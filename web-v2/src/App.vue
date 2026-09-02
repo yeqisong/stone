@@ -263,6 +263,15 @@ if (!showLogin.value) {
 /* 数字防跳动：全站表格与统计值统一等宽数字 */
 .app-root .n-data-table td, .app-root .n-data-table th { font-variant-numeric: tabular-nums; }
 .app-root .stat-value, .app-root .num { font-variant-numeric: tabular-nums; }
+
+/* ═══ 全站数据表规范：单元格不换行（长文本省略号，横向滚动看全量） ═══ */
+.n-data-table-td, .n-data-table-th { white-space: nowrap; }
+.n-data-table-td { overflow: hidden; text-overflow: ellipsis; }
+/* H5：左侧最多固定一列 —— 第一个固定列保持 sticky（offset 恒为 0），其余固定列退回普通定位 */
+@media (max-width: 768px) {
+  .n-data-table-td--fixed-left ~ .n-data-table-td--fixed-left,
+  .n-data-table-th--fixed-left ~ .n-data-table-th--fixed-left { position: static !important; }
+}
 .app-header { display: flex; align-items: center; justify-content: space-between; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border); padding: 8px 20px; }
 .app-header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand { font-size: 18px; font-weight: 700; color: var(--c-text); display: flex; align-items: center; gap: 6px; }

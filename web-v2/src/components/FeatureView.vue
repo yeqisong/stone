@@ -17,7 +17,7 @@
     <n-button size="small" @click="loadData">查询</n-button>
   </div>
 
-  <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" />
+  <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" scroll-x="1100" />
   <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
     <span>共 {{ total }} 条</span>
     <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
@@ -732,10 +732,10 @@ const statusOptions = [
 const entityOpts = Object.entries(entityLabel).map(([k,v]) => ({ label:v, value:k }))
 
 const columns = [
-  { title:'英文名', key:'feature_name', width:100, ellipsis:{tooltip:true}, render(row) {
+  { title:'英文名', key:'feature_name', width:150, fixed:'left', ellipsis:{tooltip:true}, render(row) {
     return h('span', { style:{cursor:'pointer',color:'#2080f0',textDecoration:'underline'}, onClick:() => openDetail(row.id) }, row.feature_name)
   }},
-  { title:'中文名', key:'display_name', width:90, ellipsis:{tooltip:true} },
+  { title:'中文名', key:'display_name', width:100, fixed:'left', ellipsis:{tooltip:true} },
   { title:'族', key:'feature_group', width:70, render:(row) => row.feature_group || '—' },
   { title:'实体', key:'target_entity', width:60, render:(row) => entityLabel[row.target_entity] || row.target_entity },
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
@@ -767,7 +767,7 @@ const columns = [
   { title:'异常缺失', key:'abnormal_missing_cells', width:70, align:'right', render:(row) => (row.abnormal_missing_cells||0).toLocaleString() },
   { title:'最近计算', key:'latest_computed_date', width:90, render:(row) => row.latest_computed_date || '—' },
   { title:'依赖数', key:'depends_on', width:60, align:'center', render:(row) => (row.depends_on?.length || 0) },
-  { title:'操作', key:'actions', width:110, render(row) {
+  { title:'操作', key:'actions', width:110, fixed:'right', render(row) {
     return h('div', { style:{display:'flex',gap:'2px'} }, [
       h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openEdit(row) }, () => '编辑'),
       h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openCompute(row) }, () => h(AppIcon, { name: 'download', size: 12 })),

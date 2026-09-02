@@ -117,7 +117,7 @@
               <div v-if="fcResult.warnings?.length" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px">
                 <div v-for="w in fcResult.warnings" :key="w" style="font-size:10px;color:#f59e0b">{{ w }}</div>
               </div>
-              <n-data-table v-if="fcResult.features?.length" :columns="fcCols" :data="fcResult.features" size="small" :bordered="false" />
+              <n-data-table v-if="fcResult.features?.length" :columns="fcCols" :data="fcResult.features" size="small" :bordered="false" scroll-x="550" />
             </div>
           </div>
         </template>
@@ -282,7 +282,7 @@ const featuresForModel = computed(() => {
 const fcLoading = ref(false)
 const fcResult = ref(null)
 const fcCols = [
-  { title:'特征', key:'name', width:80 },
+  { title:'特征', key:'name', width:110, fixed:'left', ellipsis:{tooltip:true} },
   { title:'股票', key:'stocks', width:45, align:'right' },
   { title:'总量', key:'total_rows', width:65, align:'right', render(r) { return (r.total_rows||0).toLocaleString() } },
   { title:'训练', key:'train', width:65, align:'right', render(r) { return (r.train||0).toLocaleString() } },

@@ -112,7 +112,7 @@
           <n-button size="small" @click="doLoadPreview">查询</n-button>
         </div>
         <n-spin v-if="previewLoading" style="padding:40px" />
-        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" />
+        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" scroll-x="500" />
         <div v-if="previewItems.length" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
           <span>共 {{ previewTotal }} 条</span>
           <n-pagination v-if="previewTotalPages > 1" :page="previewPage" :page-count="previewTotalPages" @update:page="p => { previewPage = p; loadPreview() }" size="small" />
@@ -183,7 +183,7 @@
           <!-- 历次记录 -->
           <div v-if="icRecords.length" style="margin-top:14px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 12px">
             <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">历次检验记录（点击行切换图表周期）</div>
-            <n-data-table :columns="icHistoryCols" :data="icRecords" size="small" :max-height="200" :row-props="icRowProps" :bordered="false" :single-line="true" />
+            <n-data-table :columns="icHistoryCols" :data="icRecords" size="small" :max-height="200" :row-props="icRowProps" :bordered="false" :single-line="true" scroll-x="730" />
           </div>
 
           <div style="margin-top:12px;font-size:10px;color:var(--c-text-faint);line-height:1.8">
@@ -476,7 +476,7 @@ function renderIcCharts() {
 }
 
 const icHistoryCols = [
-  { title: '前瞻', key: 'horizon', width: 56, render: r => r.horizon + '日' },
+  { title: '前瞻', key: 'horizon', width: 56, fixed: 'left', render: r => r.horizon + '日' },
   { title: '区间', key: 'val_start', width: 150, render: r => `${r.val_start} ~ ${r.val_end}` },
   { title: 'RankIC', key: 'rank_ic', width: 76, render: r => r.rank_ic?.toFixed(4) ?? '—' },
   { title: 'ICIR', key: 'icir', width: 70, render: r => r.icir?.toFixed(3) ?? '—' },
@@ -612,8 +612,8 @@ const infoCards = computed(() => {
 const previewCols = computed(() => {
   const cols = []
   if (feat.value?.target_entity !== 'global') {
-    cols.push({ title:'代码', key:'stock_code', width:70 })
-    cols.push({ title:'名称', key:'stock_name', width:80, ellipsis:{tooltip:true} })
+    cols.push({ title:'代码', key:'stock_code', width:70, fixed:'left' })
+    cols.push({ title:'名称', key:'stock_name', width:80, fixed:'left', ellipsis:{tooltip:true} })
     cols.push({ title:'交易所', key:'exchange', width:55 })
   }
   cols.push({ title:'日期', key:'trade_date', width:90 })

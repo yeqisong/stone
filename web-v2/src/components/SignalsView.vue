@@ -14,7 +14,7 @@
   <template v-if="!showStats">
     <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
     <div v-if="data.signals" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-      <n-data-table :columns="columns" :data="data.signals" size="small" :scroll-x="520" />
+      <n-data-table :columns="columns" :data="data.signals" size="small" :scroll-x="840" />
     </div>
     <n-empty v-else description="暂无信号" />
   </template>
@@ -57,16 +57,16 @@ const columns = computed(() => {
     { title:'#', key:'index', width:35, render:(_,i)=>i+1 },
     { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
     { title:'名称', key:'stock_name', width:100, fixed:'left', render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
-    { title:'现价', width:95, align:'right', render(r){return '¥'+((r.price||0).toFixed(2))} },
-    { title:'方向', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
-    { title:'强度', width:70, render(r){return '★'.repeat(r.strength||0)} },
-    { title:'预测5d', width:70, align:'right', render(r){ const v=r.predict_5d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+    { title:'现价', key:'price', width:95, align:'right', render(r){return '¥'+((r.price||0).toFixed(2))} },
+    { title:'方向', key:'direction', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
+    { title:'强度', key:'strength', width:70, render(r){return '★'.repeat(r.strength||0)} },
+    { title:'预测5d', key:'predict_5d', width:70, align:'right', render(r){ const v=r.predict_5d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
   ]
   if (isNarrow.value) return base
   return [
     ...base,
-    { title:'预测10d', width:70, align:'right', render(r){ const v=r.predict_10d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
-    { title:'策略', minWidth:140, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
+    { title:'预测10d', key:'predict_10d', width:70, align:'right', render(r){ const v=r.predict_10d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+    { title:'策略', key:'reason', minWidth:260, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
   ]
 })
 async function doGenerate() {

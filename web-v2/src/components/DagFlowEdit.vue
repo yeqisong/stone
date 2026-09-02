@@ -126,7 +126,7 @@
   </div>
 
   <div v-else style="flex:1;overflow-y:auto">
-    <n-data-table :columns="flowCols" :data="flows" size="small" :loading="loading" />
+    <n-data-table :columns="flowCols" :data="flows" size="small" :loading="loading" scroll-x="700" />
     <n-empty v-if="!loading && !flows.length" description="暂无流程，点击「+ 新建」创建" style="padding:40px" />
   </div>
 
@@ -315,12 +315,12 @@ function cronReadable(c) {
 }
 
 const flowCols = [
-  { title:'流程名', key:'flow_name', width:130 },
+  { title:'流程名', key:'flow_name', width:150, fixed:'left' },
   { title:'状态', key:'status', width:65, render(r){ return r.status==='published'?'已发布':r.status } },
   { title:'节点', key:'node_count', width:45, align:'center', render(r){ return r.node_count||0 } },
   { title:'Cron', key:'cron_expr', width:130, render(r){ return cronReadable(r.cron_expr) } },
   { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'var(--c-info)',fontSize:'11px'}},'⟳ 执行中') } },
-  { title:'操作', key:'actions', width:240, render(r){
+  { title:'操作', key:'actions', width:240, fixed:'right', render(r){
     const hasRun = taskStatuses.value[r.id] && taskStatuses.value[r.id].status === 'running'
     return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},[
       h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'编辑'),

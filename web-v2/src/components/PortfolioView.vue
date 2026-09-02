@@ -7,7 +7,7 @@
   <n-spin v-if="loading" style="padding:40px" />
   <div v-else>
     <div style="overflow-x:auto">
-      <n-data-table v-if="data.positions&&data.positions.length" :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="750" />
+      <n-data-table v-if="data.positions&&data.positions.length" :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1000" />
       <n-empty v-else description="暂无持仓" />
     </div>
   </div>
@@ -119,24 +119,24 @@ const statItems = computed(() => [
   { label: '盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? '#ef4444' : '#10b981' },
 ])
 const columns = [
-  { title:'代码', key:'stock_code', width:85, render(r){return h('span',{style:{color:'var(--n-color-target)'}},r.stock_code)} },
-  { title:'名称', key:'stock_name', width:100 },
+  { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)'}},r.stock_code)} },
+  { title:'名称', key:'stock_name', width:100, fixed:'left' },
   { title:'数量', key:'quantity', width:70, align:'right' },
-  { title:'成本', width:95, align:'right', render(r){return '¥'+(r.cost_price||0).toFixed(2)} },
-  { title:'现价', width:95, align:'right', render(r){return '¥'+(r.current_price||0).toFixed(2)} },
-  { title:'市值', width:105, align:'right', render(r){return '¥'+fmt(r.market_value)} },
-  { title:'盈亏', width:110, align:'right', render(r){
+  { title:'成本', key:'cost_price', width:95, align:'right', render(r){return '¥'+(r.cost_price||0).toFixed(2)} },
+  { title:'现价', key:'current_price', width:95, align:'right', render(r){return '¥'+(r.current_price||0).toFixed(2)} },
+  { title:'市值', key:'market_value', width:105, align:'right', render(r){return '¥'+fmt(r.market_value)} },
+  { title:'盈亏', key:'pnl', width:110, align:'right', render(r){
     const pnl=r.pnl||0, pct=(r.pnl_pct||0).toFixed(1)
     return h('span',{style:{color:pnl>=0?'#ef4444':'#10b981',whiteSpace:'nowrap'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
   }},
-  { title:'今日信号', width:115, align:'center', render(r){
+  { title:'今日信号', key:'signal_direction', width:115, align:'center', render(r){
     if (!r.signal_direction) return h('span',{style:{color:'var(--c-text-faint)'}},'—')
     const isBuy = r.signal_direction === 'buy'
     const dateStr = (r.signal_date||'').slice(5)
     return h('span',{style:{color:isBuy?'#ef4444':'#10b981',fontSize:'12px',whiteSpace:'nowrap'}},
       (isBuy?'买入':'卖出') + ' ★'.repeat(r.signal_strength||0) + ' ' + dateStr)
   }},
-  { title:'备注', key:'notes', minWidth:80, render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
+  { title:'备注', key:'notes', minWidth:80, fixed:'right', render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
   { title:'操作', width:140, fixed:'right', render(row){return h('span',[
     h(NButton,{size:'tiny',onClick:()=>showHistory(row.stock_code)},{default:()=>'详情'}),
     h(NButton,{size:'tiny',onClick:()=>{isAdding.value=false;editForm.code=row.stock_code;editForm.qty=row.quantity;editForm.cost=row.cost_price;editForm.date=null;editForm.note=row.notes||'';showEdit.value=true}},{default:()=>'编辑'}),

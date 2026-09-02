@@ -652,6 +652,7 @@ onUnmounted(() => {
 .etbl tbody td {
   padding: 5px 10px; color: var(--c-text);
   border-bottom: 1px solid var(--c-border-light);
+  white-space: nowrap;
 }
 .etbl tbody tr:hover td { background: var(--c-card-bg-hover); }
 .etbl td.strong { font-weight: 600; }
