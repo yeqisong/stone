@@ -332,16 +332,16 @@ function prevMonth() {
   const d = new Date(smonth.value + '-01T00:00:00')
   d.setMonth(d.getMonth() - 1)
   smonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-  nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
+  nav.statusMonth = smonth.value; nav.syncHash(); loadCalendar()
 }
 function nextMonth() {
   const d = new Date(smonth.value + '-01T00:00:00')
   d.setMonth(d.getMonth() + 1)
   smonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-  nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
+  nav.statusMonth = smonth.value; nav.syncHash(); loadCalendar()
 }
 function goToday() {
-  smonth.value = bjDateStr().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadDataStatus()
+  smonth.value = bjDateStr().slice(0,7); nav.statusMonth = smonth.value; nav.syncHash(); loadCalendar()
 }
 
 async function refreshStats() {
@@ -350,6 +350,21 @@ async function refreshStats() {
     const r = await axios.post(API + '/api/refresh_stats')
     if (r.data.busy) { dialog.warning({ title: '任务进行中', content: '已有统计任务在进行中，请稍候再试' }); statsLoading.value = false }
   } catch(e) { statsLoading.value = false }
+}
+
+// 由接口返回的日历数组重建格子（含月初星期补位），供全量/轻量两条路径共用
+function applyCalendar(data) {
+  const arr = (data.calendar||[]).map(x => ({
+    day: parseInt(x.date.slice(8)), td:x.is_trade_day, cp:x.completeness,
+    future: new Date(x.date)>new Date(), date:x.date, syncing:false,
+    detail: x.detail
+  }))
+  const y=parseInt(smonth.value.slice(0,4)), m=parseInt(smonth.value.slice(5,7))
+  const fd=new Date(y,m-1,1).getDay()
+  const offset=fd===0?6:fd-1
+  const pad=[]
+  for(let i=0;i<offset;i++) pad.push({day:null,td:false,cp:null,future:false,date:''})
+  cal.value=pad.concat(arr)
 }
 
 async function loadDataStatus() {
@@ -362,18 +377,17 @@ async function loadDataStatus() {
     todayStrategy.value = data.today_strategy||null
     dataTables.value = data.data_tables||[]
     statsTime.value = data.stats_computed_at||''
-    const arr = (data.calendar||[]).map(x => ({
-      day: parseInt(x.date.slice(8)), td:x.is_trade_day, cp:x.completeness,
-      future: new Date(x.date)>new Date(), date:x.date, syncing:false,
-      detail: x.detail
-    }))
-    const y=parseInt(smonth.value.slice(0,4)), m=parseInt(smonth.value.slice(5,7))
-    const fd=new Date(y,m-1,1).getDay()
-    const offset=fd===0?6:fd-1
-    const pad=[]
-    for(let i=0;i<offset;i++) pad.push({day:null,td:false,cp:null,future:false,date:''})
-    cal.value=pad.concat(arr)
+    applyCalendar(data)
   } catch(e) {} finally { loading.value = false }
+}
+
+// 切月轻量路径：只拉日历+缺失日期，不动 loading（无整页白屏）
+async function loadCalendar() {
+  try {
+    const r = await axios.get(API+'/api/data_status?month='+smonth.value+'&part=calendar')
+    missingDates.value = r.data.missing_dates||[]
+    applyCalendar(r.data)
+  } catch(e) {}
 }
 
 async function loadDataSources() {

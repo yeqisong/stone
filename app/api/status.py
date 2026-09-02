@@ -35,6 +35,7 @@ def _fast_count(db, query: str, key: str, ttl: int = 300) -> int:
 @router.get("/data_status")
 def get_data_status(
     month: str = Query(None),
+    part: str = Query(None),
 ):
     db = get_sync_db()
     try:
@@ -127,6 +128,11 @@ def get_data_status(
                 if is_trade and days_ago <= 30 and current <= today: missing_dates.append(d)
                 calendar.append({"date": d, "is_trade_day": is_trade, "completeness": {"rows": 0, "pct": 0, "baseline": 0} if is_trade else None, "weekday": current.weekday()})
             current += timedelta(days=1)
+
+        # 轻量模式：切月只需日历，跳过概览/统计等重查询
+        if part == "calendar":
+            db.close()
+            return {"calendar": calendar, "missing_dates": missing_dates}
 
         # ── 今日策略 ──
         row = db.execute(text("SELECT metric_value, status, detail, checked_at FROM system_metrics WHERE metric_name='daily_strategy' ORDER BY checked_at DESC LIMIT 1")).fetchone()
