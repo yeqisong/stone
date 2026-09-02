@@ -29,41 +29,58 @@
     </div>
   </div>
 
-  <!-- Two-column layout: Data Detail + Calendar (same height) -->
-  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">
-    <!-- Left: Data Tables Detail -->
-    <div style="flex:1;min-width:280px;display:flex;flex-direction:column">
-      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="l" :size="13" />  数据明细
-        <span v-if="statsTime" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
-        <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
+  <!-- 数据明细（通栏：≥1440px 3列，以下 2列） -->
+  <div>
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="l" :size="13" />  数据明细
+      <span v-if="statsTime" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
+      <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
+    </div>
+    <div class="sv-dt-grid">
+      <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
+        <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
+          <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">{{dt.label}}</span>
+          <span v-if="dt.items!=null" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:14px;font-weight:700;color:var(--c-text)"><span v-if="dt.detail" style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} · </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
+          <div v-if="dt.start" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.start}} ~ {{dt.end}}</div>
+          <div v-else style="font-size:10px;color:var(--c-text-faint)">暂无数据</div>
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:4px;flex:1">
-        <div v-for="dt in dataTables" :key="dt.label" style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
-          <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
-            <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">{{dt.label}}</span>
-            <span v-if="dt.items!=null" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:14px;font-weight:700;color:var(--c-text)"><span v-if="dt.detail" style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} · </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
-            <div v-if="dt.start" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.start}} ~ {{dt.end}}</div>
-            <div v-else style="font-size:10px;color:var(--c-text-faint)">暂无数据</div>
+    </div>
+  </div>
+
+  <!-- 服务器监控（左） + 交易日历（右） -->
+  <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;margin-top:14px">
+    <!-- 左：服务器监控 -->
+    <div class="sv-half sv-half-l" style="flex:1;min-width:420px;display:flex;flex-direction:column">
+      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="monitor" :size="13" />  服务器监控</div>
+      <div class="sv-metric-grid">
+        <div v-for="m in sysMetrics" :key="m.label" style="padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :style="{cursor: m.clickable?'pointer':'default'}" @click="m.clickable && openDbDetail()">
+          <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size:9px"></span></div>
+          <div style="font-size:16px;font-weight:700;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size:11px;font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
+          <div v-if="m.sub" style="font-size:10px;color:var(--c-text-dim)">{{ m.sub }}</div>
+          <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
+            <div :style="{width:m.pct+'%',height:'100%',background:m.pct>80?'#ef4444':m.pct>50?'#f59e0b':'#10b981',borderRadius:'2px'}"></div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Right: Calendar + Log -->
-    <div style="flex:1;min-width:300px;display:flex;flex-direction:column">
-      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="calendar" :size="13" />  交易日历</div>
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
-        <n-button size="tiny" @click="prevMonth"><AppIcon name="chevron-left" :size="13" /></n-button>
-        <span style="font-weight:600;font-size:13px;color:var(--c-text)">{{monthLabel}}</span>
-        <n-button size="tiny" @click="nextMonth"><AppIcon name="chevron-right" :size="13" /></n-button>
-        <n-button size="tiny" @click="goToday">今天</n-button>
+    <!-- 右：交易日历 -->
+    <div class="sv-half sv-half-r" style="flex:1;min-width:380px;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="calendar" :size="13" />  交易日历</span>
+        <span style="display:flex;align-items:center;gap:6px">
+          <n-button size="tiny" @click="prevMonth"><AppIcon name="chevron-left" :size="13" /></n-button>
+          <span style="font-weight:600;font-size:13px;color:var(--c-text)">{{monthLabel}}</span>
+          <n-button size="tiny" @click="nextMonth"><AppIcon name="chevron-right" :size="13" /></n-button>
+          <n-button size="tiny" @click="goToday">今天</n-button>
+        </span>
       </div>
 
       <!-- Calendar grid + legend side by side -->
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;flex:1">
         <div style="flex:1">
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:9px;color:var(--c-text-faint);margin-bottom:2px;text-align:center">
             <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ef4444">六</span><span style="color:#ef4444">日</span>
@@ -89,37 +106,6 @@
       </div>
 
     </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════ -->
-  <!--  服务器监控                                            -->
-  <!-- ══════════════════════════════════════════ -->
-  <div style="margin-top:14px">
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="monitor" :size="13" />  服务器监控</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div v-for="m in sysMetrics" :key="m.label" style="flex:1;min-width:100px;padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :style="{cursor: m.clickable?'pointer':'default'}" @click="m.clickable && openDbDetail()">
-        <div style="font-size:10px;color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size:9px"></span></div>
-        <div style="font-size:16px;font-weight:700;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size:11px;font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
-        <div v-if="m.sub" style="font-size:10px;color:var(--c-text-dim)">{{ m.sub }}</div>
-        <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
-          <div :style="{width:m.pct+'%',height:'100%',background:m.pct>80?'#ef4444':m.pct>50?'#f59e0b':'#10b981',borderRadius:'2px'}"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════ -->
-  <!--  历史补数                                              -->
-  <!-- ══════════════════════════════════════════ -->
-  <!--  全局交易偏好                                            -->
-  <!-- ══════════════════════════════════════════ -->
-  <div style="margin-top:14px">
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="target" :size="13" />  全局交易偏好</div>
-    <n-radio-group v-model:value="prefMode" @update:value="setPref">
-      <n-radio-button value="left" label="左侧" />
-      <n-radio-button value="balanced" label="均衡" />
-      <n-radio-button value="right" label="右侧" />
-    </n-radio-group>
   </div>
 
   <!-- ══════════════════════════════════════════ -->
@@ -170,6 +156,18 @@
       <span style="margin-left:8px">{{ bfLastTask.progress?.rows?.toLocaleString() || 0 }} 行</span>
       <span style="margin-left:8px">耗时 {{fmtDuration(bfLastTask.elapsed_seconds)}}</span>
     </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!--  全局交易偏好（model_signal 信号阈值 + 飞书 AI 上下文在用） -->
+  <!-- ══════════════════════════════════════════ -->
+  <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
+    <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="target" :size="13" />  全局交易偏好</span>
+    <n-radio-group v-model:value="prefMode" @update:value="setPref">
+      <n-radio-button value="left" label="左侧" />
+      <n-radio-button value="balanced" label="均衡" />
+      <n-radio-button value="right" label="右侧" />
+    </n-radio-group>
   </div>
 
   <!-- Backfill Log Modal -->
@@ -625,4 +623,11 @@ async function loadBfLogs() {
 <style>
 .nowrap-cell, .nowrap-cell .n-data-table-th { white-space:nowrap !important; }
 .n-data-table-td__ellipsis { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap !important; }
+
+/* 状态页：数据明细通栏网格（≥1440px 3列，以下 2列） */
+.sv-dt-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
+@media (min-width:1440px) { .sv-dt-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+
+/* 状态页：服务器监控卡片网格，行高 1fr 撑满与右侧日历等高 */
+.sv-metric-grid { flex:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); grid-auto-rows:1fr; gap:10px; }
 </style>
