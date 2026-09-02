@@ -5,8 +5,8 @@
   <!-- Overview Strip (same style as portfolio page) -->
   <StatStrip :items="overviewItems" />
 
-  <!-- Data Source Health -->
-  <div v-if="dataSources.length" style="display:flex;align-items:center;gap:12px;padding:0 0 10px;flex-wrap:wrap">
+  <!-- Data Source Health + 全局交易偏好（右对齐，model_signal 阈值 + 飞书 AI 上下文在用） -->
+  <div style="display:flex;align-items:center;gap:12px;padding:0 0 10px;flex-wrap:wrap">
     <span style="font-size:11px;color:var(--c-text-dim)">数据源</span>
     <div v-for="src in dataSources" :key="src.name" style="display:flex;align-items:center;gap:4px;padding:3px 10px;border-radius:12px;font-size:11px" :style="{background: src.name===activeSource ? 'rgba(32,128,240,0.1)' : 'var(--c-card-bg)', border: src.name===activeSource ? '1px solid rgba(32,128,240,0.3)' : '1px solid var(--c-border)'}">
       <span :style="{background: src.healthy ? '#10b981' : '#ef4444', width:'8px', height:'8px', borderRadius:'50%', display:'inline-block', flexShrink:0}"></span>
@@ -27,6 +27,15 @@
       <span v-else-if="quota.risk_level==='medium'" style="color:#f59e0b">注意</span>
       <span style="color:var(--c-text-faint)">分钟 {{quota.minute_calls}}/{{quota.minute_limit}}</span>
     </div>
+    <!-- 全局交易偏好（右侧右对齐） -->
+    <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;color:var(--c-text-dim)"><AppIcon name="target" :size="13" />  交易偏好</span>
+      <n-button-group size="tiny">
+        <n-button size="tiny" :type="prefMode==='left'?'primary':'default'" @click="setPref('left')">左侧</n-button>
+        <n-button size="tiny" :type="prefMode==='balanced'?'primary':'default'" @click="setPref('balanced')">均衡</n-button>
+        <n-button size="tiny" :type="prefMode==='right'?'primary':'default'" @click="setPref('right')">右侧</n-button>
+      </n-button-group>
+    </span>
   </div>
 
   <!-- 数据明细（通栏：≥1440px 3列，以下 2列） -->
@@ -158,18 +167,6 @@
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════ -->
-  <!--  全局交易偏好（model_signal 信号阈值 + 飞书 AI 上下文在用） -->
-  <!-- ══════════════════════════════════════════ -->
-  <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
-    <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="target" :size="13" />  全局交易偏好</span>
-    <n-radio-group v-model:value="prefMode" @update:value="setPref">
-      <n-radio-button value="left" label="左侧" />
-      <n-radio-button value="balanced" label="均衡" />
-      <n-radio-button value="right" label="右侧" />
-    </n-radio-group>
-  </div>
-
   <!-- Backfill Log Modal -->
   <n-modal v-model:show="showBfLogModal" preset="card" title="补数日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadBfLogs">
     <n-space vertical>
@@ -208,7 +205,7 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import { ref, computed, onMounted, onUnmounted, h } from 'vue'
-import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NRadioGroup, NRadioButton, useDialog, useMessage } from 'naive-ui'
+import { NDataTable, NButton, NButtonGroup, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
 import StatStrip from './StatStrip.vue'
@@ -229,8 +226,9 @@ async function loadPref() {
     prefMode.value = r.data.preference?.mode || 'balanced'
   } catch(e) { prefMode.value = 'balanced' }
 }
-async function setPref(m) {
-  try { await axios.post(API + '/api/settings/preference', { mode: m }) } catch(e) {}
+function setPref(m) {
+  prefMode.value = m
+  axios.post(API + '/api/settings/preference', { mode: m }).catch(() => {})
 }
 const loading = ref(true)
 const overview = ref({total_rows:0,total_stocks:0,latest_date:'',exchanges:{}})
