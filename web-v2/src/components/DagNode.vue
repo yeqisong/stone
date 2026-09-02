@@ -1,13 +1,7 @@
 <template>
   <div class="dag-node" :class="[selected ? 'selected' : '', data?.status ? 'status-'+data.status : '']">
     <Handle type="target" :position="Position.Top" id="t-top" />
-    <Handle type="target" :position="Position.Left" id="t-left" />
-    <Handle type="target" :position="Position.Bottom" id="t-bottom" />
-    <Handle type="target" :position="Position.Right" id="t-right" />
     <span class="dag-node-label">{{ data.label }}</span>
-    <Handle type="source" :position="Position.Top" id="s-top" />
-    <Handle type="source" :position="Position.Left" id="s-left" />
-    <Handle type="source" :position="Position.Right" id="s-right" />
     <Handle type="source" :position="Position.Bottom" id="s-bottom" />
   </div>
 </template>

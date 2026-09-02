@@ -244,6 +244,7 @@ const nodes = ref([])
 const edges = ref([])
 const { screenToFlowCoordinate, getNodes, viewport, fitView } = useVueFlow('dag-flow')
 
+
 const nodeDefaults = { type: 'default', style: { background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', borderRadius: 8, color: 'var(--c-text)', fontSize: 11, fontWeight: 600, width: 120, padding: '10px 6px', textAlign: 'center' } }
 const defaultEdgeOpts = { type: 'smoothstep', animated: false, updatable: true, pathOptions: { borderRadius: 10 }, style: { stroke: 'var(--c-text-dim)', strokeWidth: 2 } }
 
@@ -272,7 +273,8 @@ function onConnect(conn) {
   if (edges.value.find(e => e.id === reverse)) return
   const sid = conn.source + '->' + conn.target
   if (!edges.value.find(e => e.id === sid)) {
-    edges.value.push({ id: sid, source: conn.source, target: conn.target, ...defaultEdgeOpts })
+    edges.value.push({ id: sid, source: conn.source, target: conn.target,
+                       sourceHandle: 's-bottom', targetHandle: 't-top', ...defaultEdgeOpts })
   }
   dirty.value = true
 }
@@ -354,29 +356,34 @@ async function loadFlows() {
   loading.value = false
 }
 async function loadNodeTypes() {
-  try { const r = await axios.get(API + '/api/dag/node-types'); nodeTypes.value = r.data.items || [] } catch(e) { console.error(e) }
+  try {
+    const r = await axios.get(API + '/api/dag/node-types')
+    nodeTypes.value = r.data.items || []
+    // 标签竞态修复：若流程节点先于类型清单渲染（label 曾回退英文名），清单到位后回填中文
+    for (const n of nodes.value) n.data.label = labelFor(n.id)
+  } catch(e) { console.error(e) }
 }
 function labelFor(name) { return nodeTypes.value.find(nt => nt.node_name === name)?.label || name }
 
-/** 按源/目标节点的相对位置动态选连线锚点：垂直主导=下边中点出/上边中点进，
- *  水平主导=右侧出/左侧进；保证连线从正确的边上出发。 */
+/** 等节点完成尺寸测量后 fitView：容器刚挂载时节点未测量，立即调用 fitView 会静默失效。 */
+async function fitWhenReady(retries = 20) {
+  await nextTick()
+  for (let i = 0; i < retries; i++) {
+    await new Promise(r => requestAnimationFrame(r))
+    const ready = getNodes.value.length > 0 && getNodes.value.every(n => (n.width || 0) > 0)
+    if (ready) break
+    await nextTick()
+  }
+  reanchorEdges()
+  fitView({ padding: 0.2, maxZoom: 1 })
+}
+
+/** 连线锚点规范化：流程图为自上而下 DAG，所有边统一「源底边中点出 → 目标顶边中点进」。
+ *  节点只保留唯一 source/target 句柄，锚点与拖拽方式、布局变化完全无关（所见即所得）。 */
 function reanchorEdges() {
-  const byId = {}
-  for (const n of nodes.value) byId[n.id] = n
   for (const e of edges.value) {
-    const s = byId[e.source], t = byId[e.target]
-    if (!s || !t) continue
-    const sw = s.width || 134, sh = s.height || 40
-    const tw = t.width || 134, th = t.height || 40
-    const dx = (t.position.x + tw / 2) - (s.position.x + sw / 2)
-    const dy = (t.position.y + th / 2) - (s.position.y + sh / 2)
-    if (Math.abs(dy) >= Math.abs(dx)) {
-      if (dy >= 0) { e.sourceHandle = 's-bottom'; e.targetHandle = 't-top' }
-      else { e.sourceHandle = 's-top'; e.targetHandle = 't-bottom' }
-    } else {
-      if (dx >= 0) { e.sourceHandle = 's-right'; e.targetHandle = 't-left' }
-      else { e.sourceHandle = 's-left'; e.targetHandle = 't-right' }
-    }
+    e.sourceHandle = 's-bottom'
+    e.targetHandle = 't-top'
   }
 }
 function parseCron(cron) {
@@ -413,10 +420,7 @@ async function openEdit(id) {
     const newEdges = []
     for (const n of d.nodes || []) { for (const dep of n.deps || []) { const sid = dep + '->' + n.node_name; if (!newEdges.find(e => e.id === sid)) newEdges.push({ id: sid, source: dep, target: n.node_name, ...defaultEdgeOpts }) } }
     nodes.value = newNodes; edges.value = newEdges; dirty.value = false
-    // 双帧等待：Vue Flow 完成节点测量后再 fitView，否则视口变换为空、进来只见局部
-    await nextTick()
-    await new Promise(r => requestAnimationFrame(r))
-    reanchorEdges(); fitView({ padding: 0.2, maxZoom: 1 })
+    await fitWhenReady()
   } catch(e) { console.error(e) } finally { loadingFlow.value = false }
 }
 function getFlowData() {
@@ -506,6 +510,7 @@ onMounted(async () => {
       else delete taskStatuses.value[data.flow_id]
     }
   })
+  await loadNodeTypes()   // 先加载类型清单（中文标签），再打开流程画布
   await loadFlows()
   loadTaskStatuses()
   if (props.flowId === 'new') { createNew() } else if (props.flowId > 0) { openEdit(props.flowId) } })
