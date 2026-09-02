@@ -202,6 +202,21 @@ def generate_stats(*args, **kwargs):
         ('交易日历', lambda: (q("SELECT COUNT(*) FROM trade_calendar"), None),
          ("SELECT MIN(cal_date)::text FROM trade_calendar", "SELECT MAX(cal_date)::text FROM trade_calendar")),
     ]
+    # 拓展数据表卡片（v3.8 tushare 2000 积分拓展）：表名→日频主表为行数口径，事件类为事件数口径
+    ext_cards = [
+        ('个股资金流', 'stock_moneyflow', 'trade_date'),
+        ('两融明细', 'stock_margin_detail', 'trade_date'),
+        ('龙虎榜', 'stock_top_list', 'trade_date'),
+        ('大宗交易', 'block_trade', 'trade_date'),
+        ('沪深港通', 'moneyflow_hsgt', 'trade_date'),
+        ('指数权重', 'index_weight', 'trade_date'),
+        ('限售解禁', 'stock_share_float', 'float_date'),
+        ('股票回购', 'stock_repurchase', 'ann_date'),
+        ('分红送配', 'stock_dividend', 'ex_date'),
+        ('业绩预告', 'stock_forecast', 'ann_date'),
+        ('业绩快报', 'stock_express', 'ann_date'),
+        ('财务指标', 'fina_indicator', 'end_date'),
+    ]
     stats = []
     for label, fn, date_q in tables:
         try:
@@ -226,6 +241,23 @@ def generate_stats(*args, **kwargs):
                 er = db.execute(text(date_q[1])).scalar()
                 if sr: s['start'] = str(sr)[:10]
                 if er: s['end'] = str(er)[:10]
+            stats.append(s)
+        except Exception as e:
+            logger.warning(f"[pipeline] 统计 {label} 失败: {e}")
+            try: db.rollback()
+            except: pass
+            stats.append({'label': label, 'rows': -1, 'items': 0})
+    # 拓展表卡片：行数精确 COUNT（万级），个股维度表带 items，市场级表（沪深港通）无 items
+    for label, tbl, dcol in ext_cards:
+        try:
+            rows = db.execute(text(f"SELECT COUNT(*) FROM {tbl}")).scalar() or 0
+            s = {'label': label, 'rows': rows, 'items': None}
+            if tbl != 'moneyflow_hsgt':
+                s['items'] = db.execute(text(f"SELECT COUNT(DISTINCT stock_code) FROM {tbl}")).scalar() or 0
+            sr = db.execute(text(f"SELECT MIN({dcol})::text FROM {tbl}")).scalar()
+            er = db.execute(text(f"SELECT MAX({dcol})::text FROM {tbl}")).scalar()
+            if sr: s['start'] = str(sr)[:10]
+            if er: s['end'] = str(er)[:10]
             stats.append(s)
         except Exception as e:
             logger.warning(f"[pipeline] 统计 {label} 失败: {e}")
@@ -2162,21 +2194,40 @@ def dag_task_completeness(trade_date=None, **kw):
         stock_bl = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N' AND ipo_date <= :d"), {"d": td}).scalar() or 0
         index_bl = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='index' AND ipo_date <= :d"), {"d": td}).scalar() or 0
         etf_bl   = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE stock_type='etf' AND ipo_date <= :d"), {"d": td}).scalar() or 0
-
+        # 拓展表当日行数（表名→日期轴；事件类表当日 0 行属正常，仅展示不参与 pct 计算）
+        ext_axes = {
+            'stock_moneyflow': 'trade_date', 'stock_margin_detail': 'trade_date',
+            'stock_top_list': 'trade_date', 'block_trade': 'trade_date',
+            'moneyflow_hsgt': 'trade_date', 'index_weight': 'trade_date',
+            'stock_share_float': 'float_date', 'stock_repurchase': 'ann_date',
+            'stock_dividend': 'ex_date', 'stock_forecast': 'ann_date',
+            'stock_express': 'ann_date', 'fina_indicator': 'ann_date',
+        }
+        ext_stats = {}
+        for tbl, dcol in ext_axes.items():
+            try:
+                ext_stats[tbl] = db.execute(text(f"SELECT COUNT(*) FROM {tbl} WHERE {dcol}=:d"), {"d": td}).scalar() or 0
+            except Exception as ee:
+                db.rollback()
+                logger.warning(f"[completeness] 拓展表 {tbl} 统计失败: {ee}")
+                ext_stats[tbl] = -1
+        import json as _json
         db.execute(text("""
             INSERT INTO daily_completeness (trade_date, stock_rows, index_rows, etf_rows, fund_rows,
-                stock_baseline, index_baseline, etf_baseline, fund_baseline)
-            VALUES (:d, :sr, :ir, :er, :fr, :sb, :ib, :eb, :fb)
+                stock_baseline, index_baseline, etf_baseline, fund_baseline, ext_stats)
+            VALUES (:d, :sr, :ir, :er, :fr, :sb, :ib, :eb, :fb, CAST(:ext AS JSONB))
             ON CONFLICT (trade_date) DO UPDATE SET
                 stock_rows=EXCLUDED.stock_rows, index_rows=EXCLUDED.index_rows,
                 etf_rows=EXCLUDED.etf_rows, fund_rows=EXCLUDED.fund_rows,
                 stock_baseline=EXCLUDED.stock_baseline, index_baseline=EXCLUDED.index_baseline,
                 etf_baseline=EXCLUDED.etf_baseline, fund_baseline=EXCLUDED.fund_baseline,
+                ext_stats=EXCLUDED.ext_stats,
                 updated_at=CURRENT_TIMESTAMP
         """), {"d": td, "sr": stock, "ir": idx_r, "er": etf, "fr": fund,
-               "sb": stock_bl, "ib": index_bl, "eb": etf_bl, "fb": stock_bl})
+               "sb": stock_bl, "ib": index_bl, "eb": etf_bl, "fb": stock_bl,
+               "ext": _json.dumps(ext_stats)})
         db.commit(); db.close()
-        write_node_log(log_id=log_id, status='success', rows=4, detail=f'stock={stock} idx={idx_r} etf={etf}')
+        write_node_log(log_id=log_id, status='success', rows=4, detail=f'stock={stock} idx={idx_r} etf={etf} ext={sum(v for v in ext_stats.values() if v>0)}')
         return 4
     except Exception as e:
         try: db.rollback(); db.close()

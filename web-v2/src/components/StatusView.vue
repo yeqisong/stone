@@ -195,6 +195,12 @@
   <n-modal v-model:show="showCalDtl" preset="card" :title="calDtlDate + ' 数据明细'" style="width:380px;max-width:92vw">
     <n-data-table v-if="calDtlData" :columns="calDtlCols" :data="calDtlRows" size="small" :bordered="false" :single-line="false" />
     <div v-else style="padding:20px;text-align:center;color:var(--c-text-dim);font-size:12px">无明细数据</div>
+    <template v-if="extRows.length">
+      <div style="font-size:11px;color:var(--c-text-dimmer);margin:10px 0 5px">拓展数据 · 当日{{ extHint }}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">
+        <span v-for="e in extRows" :key="e.label" :style="{'font-size':'10px','padding':'2px 6px','border-radius':'4px','background':'var(--c-card-bg-hover)','color':e.n>0?'var(--c-text)':'var(--c-text-dimmer)','opacity':e.n>0?1:0.55}">{{e.label}} {{e.n<0?'-':e.n}}</span>
+      </div>
+    </template>
   </n-modal>
 
 </div>
@@ -305,6 +311,21 @@ const calDtlRows = computed(() => {
     { label:'基本面', ...calDtlData.value.fund },
   ]
 })
+// 拓展数据当日行数徽标（ext_stats JSONB；日频表 0 行暗显提示缺数，事件类 0 行属正常）
+const EXT_LABELS = {
+  stock_moneyflow:'个股资金流', stock_margin_detail:'两融明细', stock_top_list:'龙虎榜',
+  block_trade:'大宗交易', moneyflow_hsgt:'沪深港通', index_weight:'指数权重',
+  stock_share_float:'限售解禁', stock_repurchase:'股票回购', stock_dividend:'分红送配',
+  stock_forecast:'业绩预告', stock_express:'业绩快报', fina_indicator:'财务指标',
+}
+const EXT_DAILY = ['stock_moneyflow','stock_margin_detail','stock_top_list','block_trade','moneyflow_hsgt','index_weight']
+const extRows = computed(() => {
+  const ext = calDtlData.value?.ext || {}
+  return Object.entries(EXT_LABELS)
+    .filter(([k]) => ext[k] !== undefined && (ext[k] > 0 || EXT_DAILY.includes(k)))
+    .map(([k, label]) => ({ label, n: ext[k] }))
+})
+const extHint = computed(() => extRows.value.some(e => e.n > 0) ? '行数' : '暂无采集记录')
 function showCalDetail(d) {
   calDtlDate.value = d.date
   calDtlData.value = d.detail

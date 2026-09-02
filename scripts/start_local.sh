@@ -34,10 +34,3 @@ if ! pgrep -f 'alpha158_full' >/dev/null; then
   setsid nohup venv/bin/python scripts/alpha158_full.py --start-year 2017 >> /tmp/a158_full.log 2>&1 < /dev/null &
   echo "a158 resume started (2017+)" >> "$LOG"
 fi
-
-# 资金流历史回补自动续跑（幂等：跳过已入库日期；配额熔断自动跨天续）
-if ! pgrep -f 'backfill_moneyflow' >/dev/null; then
-  cd /home/bnbnyu/projects/stone
-  setsid nohup venv/bin/python scripts/backfill_moneyflow.py >> /tmp/backfill_mf.log 2>&1 < /dev/null &
-  echo "moneyflow backfill resumed" >> "$LOG"
-fi

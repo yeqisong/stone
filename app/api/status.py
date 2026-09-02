@@ -79,11 +79,12 @@ def get_data_status(
         # ── 交易日历 + 每日数据量（从 daily_completeness 表增量读取） ──
         dc_rows = db.execute(text(
             "SELECT trade_date, stock_rows, index_rows, etf_rows, fund_rows, "
-            "stock_baseline, index_baseline, etf_baseline, fund_baseline "
+            "stock_baseline, index_baseline, etf_baseline, fund_baseline, ext_stats "
             "FROM daily_completeness WHERE trade_date BETWEEN :s AND :e ORDER BY trade_date"
         ), {"s": cal_start, "e": cal_end}).fetchall()
         dc = {str(r[0]): {"stock": r[1] or 0, "index": r[2] or 0, "etf": r[3] or 0, "fund": r[4] or 0,
-                           "sb": r[5] or 0, "ib": r[6] or 0, "eb": r[7] or 0, "fb": r[8] or 0} for r in dc_rows}
+                           "sb": r[5] or 0, "ib": r[6] or 0, "eb": r[7] or 0, "fb": r[8] or 0,
+                           "ext": r[9] if r[9] else {}} for r in dc_rows}
 
         tc_rows = db.execute(text(
             "SELECT cal_date, is_trade_day FROM trade_calendar WHERE cal_date BETWEEN :s AND :e ORDER BY cal_date"
@@ -119,6 +120,7 @@ def get_data_status(
                         "index":  {"actual": dd['index'],  "baseline": ib, "pct": ip},
                         "etf":    {"actual": dd['etf'],    "baseline": eb, "pct": ep},
                         "fund":   {"actual": dd['fund'],   "baseline": fb, "pct": fp},
+                        "ext":    dd.get('ext') or {},
                     },
                     "weekday": current.weekday()})
             else:

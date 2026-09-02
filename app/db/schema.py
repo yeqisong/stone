@@ -473,7 +473,7 @@ CREATE TABLE IF NOT EXISTS dag_config (
     updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
-    ('cron', '', '⏰ Corn', 0),
+    ('cron', '', '⏰ 定时触发', 0),
     ('daily_update', 'cron', '更新汇总', 1),
     ('kline', 'daily_update', 'A股日K线', 2),
     ('index', 'daily_update', '指数', 3),
@@ -523,6 +523,7 @@ CREATE TABLE IF NOT EXISTS daily_completeness (
     index_baseline INTEGER DEFAULT 0,
     etf_baseline   INTEGER DEFAULT 0,
     fund_baseline  INTEGER DEFAULT 0,
+    ext_stats      JSONB,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -1109,6 +1110,12 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS {col} INTEGER DEFAULT 0"))
         except Exception:
             sync_session.rollback()
+
+    # 迁移：daily_completeness 新增拓展表当日行数（JSONB，v3.8 完整度拓展）
+    try:
+        sync_session.execute(text("ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS ext_stats JSONB"))
+    except Exception:
+        sync_session.rollback()
 
     # 迁移：entity_stats 表 + dag_config 节点（v2.8 entity_stats 增量）
     try:
