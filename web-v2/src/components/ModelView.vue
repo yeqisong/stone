@@ -16,9 +16,9 @@
         </div>
         <div style="flex:1;overflow-y:auto;padding:0 8px">
           <div style="display:flex;gap:4px;margin-bottom:8px">
-    <n-button size="tiny" :type="currentEntity==='stock'?'primary':'default'" @click="switchEntity('stock')"><AppIcon name="trending-up" :size="13" />  个股</n-button>
+    <n-button size="tiny" :type="currentEntity==='stock'?'primary':'default'" @click="switchEntity('stock')"><AppIcon name="filter" :size="13" />  个股</n-button>
     <n-button size="tiny" :type="currentEntity==='index'?'primary':'default'" @click="switchEntity('index')"><AppIcon name="bar-chart-2" :size="13" />  指数</n-button>
-    <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')"><AppIcon name="trending-up" :size="13" />  ETF</n-button>
+    <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')"><AppIcon name="pie-chart" :size="13" />  ETF</n-button>
   </div>
   <div v-for="v in store.versions" :key="v.version"
             :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-border)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-card-bg-hover)':'transparent'}"
@@ -29,7 +29,7 @@
                 <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
                 <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{store.statusLabel(v.status)}}</n-tag>
               </div>
-              <n-button v-if="!store.isMock && v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="close" :size="13" /> </n-button>
+              <n-button v-if="!store.isMock && v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="trash" :size="13" /> </n-button>
             </div>
             <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
             <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--c-text-faint)">
@@ -240,7 +240,7 @@
               <div v-if="deleteInfo.related_data.signals > 0"><AppIcon name="bar-chart-2" :size="13" />  信号数据 {{ deleteInfo.related_data.signals }} 条</div>
               <div v-if="deleteInfo.related_data.training_trials > 0"><AppIcon name="e" :size="13" />  训练试验 {{ deleteInfo.related_data.training_trials }} 次</div>
               <div v-if="deleteInfo.related_data.health_records > 0"> 健康记录 {{ deleteInfo.related_data.health_records }} 条</div>
-              <div v-if="deleteInfo.related_data.comparisons > 0"><AppIcon name="l" :size="13" />  版本对比 {{ deleteInfo.related_data.comparisons }} 条</div>
+              <div v-if="deleteInfo.related_data.comparisons > 0"><AppIcon name="shuffle" :size="13" />  版本对比 {{ deleteInfo.related_data.comparisons }} 条</div>
               <div v-if="deleteInfo.related_data.activated"><AppIcon name="send" :size="13" />  曾上线运行</div>
             </div>
           </template>

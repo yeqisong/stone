@@ -100,7 +100,7 @@
     <div v-if="trades.length" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">交易明细（共 {{rep.trade_count||trades.length}} 笔）</div>
-        <n-button size="tiny" @click="downloadTrades"><AppIcon name="trending-down" :size="13" />  下载CSV</n-button>
+        <n-button size="tiny" @click="downloadTrades"><AppIcon name="download" :size="13" />  下载CSV</n-button>
       </div>
       <div class="etbl-scroll" style="max-height:400px">
         <table class="etbl">
@@ -146,7 +146,7 @@
         {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `<AppIcon name="check" :size="13" />  完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
       </div>
       <div v-if="scanBest" style="margin-top:8px;font-size:11px;color:var(--c-text)">
-        <AppIcon name="filter" :size="13" />  已应用最优<template v-if="scanBest.engine">[{{ scanBest.engine }}]</template>：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
+        <AppIcon name="check" :size="13" />  已应用最优<template v-if="scanBest.engine">[{{ scanBest.engine }}]</template>：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
         trailing{{((scanBest.trailing_retracement||0)*100).toFixed(0)}}%<template v-if="scanBest.topk"> / topk{{ scanBest.topk }}·换血{{ scanBest.n_drop }}</template> —
         sharpe <b style="color:#10b981">{{scanBest.sharpe?.toFixed(2)}}</b> ·
         收益 <b>{{(scanBest.total_return*100).toFixed(1)}}%</b> ·
@@ -203,7 +203,7 @@
       <div v-if="permTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
         检验中（宽表 + 预测 + {{permTask.params?.n_perms || permN}} 次打乱回测，约 5-10 分钟）…
       </div>
-      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="close" :size="13" />  {{permTask.error}}</div>
+      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="x-circle" :size="13" />  {{permTask.error}}</div>
       <template v-if="permTest">
         <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:permVerdict?.color}">{{permVerdict?.label}}</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -244,7 +244,7 @@
       <div v-if="wfTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
         检验中（基线 {{wfTask.params?.baseline_version || '无'}}，{{wfTask.params?.n_windows}} 窗口 × 2 模型评估，约 2-4 分钟）…
       </div>
-      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="close" :size="13" />  {{wfTask.error}}</div>
+      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="x-circle" :size="13" />  {{wfTask.error}}</div>
       <template v-if="wf">
         <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:wfVerdict?.color}">{{wfVerdict?.label}}</div>
         <div style="font-size:11px;color:var(--c-text-dim);margin-top:2px">{{wf.reason}}<span v-if="wf.baseline">（基线 {{wf.baseline}}）</span></div>

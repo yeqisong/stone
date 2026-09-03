@@ -23,7 +23,7 @@
 
   <div v-if="editMode && validation" :style="{flexShrink:0,marginBottom:'6px',padding:'6px 10px',borderRadius:'6px',fontSize:'11px',background:validation.ok?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)',border:'1px solid '+(validation.ok?'rgba(16,185,129,.2)':'rgba(239,68,68,.2)')}">
     <span v-if="validation.ok" style="color:#10b981"><AppIcon name="check" :size="13" />  校验通过</span>
-    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#ef4444;margin-right:12px"><AppIcon name="close" :size="13" />  {{ e }}</span>
+    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#ef4444;margin-right:12px"><AppIcon name="x-circle" :size="13" />  {{ e }}</span>
   </div>
 
   <div v-if="editMode && flowStatus==='published'" style="padding:6px 12px;margin-bottom:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;font-size:11px;color:#f59e0b;flex-shrink:0"><AppIcon name="alert" :size="13" />  此流程已发布，修改后将影响线上执行</div>
@@ -135,8 +135,8 @@
       <div style="font-size:12px;color:var(--c-text-dim)">选择执行日期（默认今天）</div>
       <n-date-picker v-model:value="execDate" type="date" size="small" style="width:100%" />
       <div v-if="execResult" style="margin-top:8px;padding:8px;background:var(--c-card-bg);border-radius:6px;font-size:11px">
-        <div v-if="execResult.ok" style="color:#10b981"><AppIcon name="check" :size="13" />  已触发 — {{ execResult.task_id }}</div>
-        <div v-else style="color:#ef4444"><AppIcon name="close" :size="13" />  {{ execResult.error }}</div>
+        <div v-if="execResult.ok" style="color:#10b981"><AppIcon name="send" :size="13" />  已触发 — {{ execResult.task_id }}</div>
+        <div v-else style="color:#ef4444"><AppIcon name="x-circle" :size="13" />  {{ execResult.error }}</div>
       </div>
     </n-space>
     <template #footer>

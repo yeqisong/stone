@@ -2,7 +2,7 @@
 <div class="flv-outer" style="padding:16px;max-width:100%;flex:1;min-height:0;display:flex;flex-direction:column">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-shrink:0">
     <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回</n-button>
-    <span style="font-size:17px;font-weight:700;color:var(--c-text)"><AppIcon name="l" :size="13" />  执行日志</span>
+    <span style="font-size:17px;font-weight:700;color:var(--c-text)"><AppIcon name="file-text" :size="13" />  执行日志</span>
     <n-button size="tiny" :type="filterFlow ? 'primary' : 'default'" @click="toggleFilter" style="margin-left:auto;font-size:11px">
       {{ filterFlow ? '仅当前流程' : '全部流程' }}
     </n-button>
@@ -46,8 +46,8 @@
             <span v-if="n.finished_at"> {{ n.finished_at }}</span>
           </div>
           <div v-if="n.rows !== undefined && n.rows !== null" style="font-size:10px;color:var(--c-text-dim);margin-top:2px"><AppIcon name="bar-chart-2" :size="13" />  行数: {{ n.rows }}</div>
-          <div v-if="n.detail" style="font-size:10px;color:var(--c-text-dim);margin-top:2px"><AppIcon name="edit" :size="13" />  {{ n.detail }}</div>
-          <div v-if="n.error" style="font-size:10px;color:#ef4444;margin-top:2px"><AppIcon name="close" :size="13" />  {{ n.error }}</div>
+          <div v-if="n.detail" style="font-size:10px;color:var(--c-text-dim);margin-top:2px"><AppIcon name="file-text" :size="13" />  {{ n.detail }}</div>
+          <div v-if="n.error" style="font-size:10px;color:#ef4444;margin-top:2px"><AppIcon name="x-circle" :size="13" />  {{ n.error }}</div>
         </div>
       </template>
     </div>

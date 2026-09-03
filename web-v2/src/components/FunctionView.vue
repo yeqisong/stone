@@ -61,7 +61,7 @@
           </div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#ef4444;font-weight:600;margin-bottom:3px"><AppIcon name="x" :size="13" />  代码安全</div>
+          <div style="color:#ef4444;font-weight:600;margin-bottom:3px"><AppIcon name="shield" :size="13" />  代码安全</div>
           <div>禁止: import, exec, eval, open, os.system, subprocess, __import__</div>
         </div>
         <div style="margin-bottom:10px">

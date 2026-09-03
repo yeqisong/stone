@@ -40,7 +40,7 @@
 
   <!-- 数据明细（通栏：≥1440px 3列，以下 2列） -->
   <div>
-    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="l" :size="13" />  数据明细
+    <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="w" :size="13" />  数据明细
       <span v-if="statsTime" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
       <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
     </div>
@@ -122,7 +122,7 @@
   <div style="margin-top:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="download" :size="13" />  历史补数</span>
-      <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()"><AppIcon name="l" :size="13" />  日志</n-button>
+      <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()"><AppIcon name="file-text" :size="13" />  日志</n-button>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" :data-bf="btn.type" @click="openBackfill(btn.type)">

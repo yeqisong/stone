@@ -13,7 +13,7 @@
       </div>
     </div>
     <div v-if="errorDetail" style="margin-top:16px;padding:10px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px">
-      <div style="color:#ef4444;font-weight:600;margin-bottom:4px"><AppIcon name="close" :size="13" />  训练失败</div>
+      <div style="color:#ef4444;font-weight:600;margin-bottom:4px"><AppIcon name="x-circle" :size="13" />  训练失败</div>
       <div style="color:var(--c-text-dim);word-break:break-all;max-height:200px;overflow-y:auto">{{ errorDetail }}</div>
     </div>
     <div style="font-size:11px;color:var(--c-text-faint);text-align:center;margin-top:12px">

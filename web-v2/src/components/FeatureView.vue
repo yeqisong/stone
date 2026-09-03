@@ -132,7 +132,7 @@
           </div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="l" :size="13" />  总格子</div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
           <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
@@ -209,7 +209,7 @@
         <n-progress type="line" :percentage="computeProgress.progress_pct || 0" :height="8" :border-radius="4"
           :status="computeProgress.status === 'failed' ? 'error' : computeProgress.status === 'completed' ? 'success' : 'default'" />
         <div v-if="computeProgress.status === 'failed'" style="margin-top:8px;padding:10px;background:var(--c-error-bg, #fff0f0);border-radius:4px;font-size:12px;color:var(--c-error, #d03050)">
-          <AppIcon name="close" :size="13" />  计算失败：{{ computeProgress.error || '未知错误' }}
+          <AppIcon name="x-circle" :size="13" />  计算失败：{{ computeProgress.error || '未知错误' }}
         </div>
       </div>
     </n-space>

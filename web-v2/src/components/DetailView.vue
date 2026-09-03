@@ -34,7 +34,7 @@
             <span v-else style="font-size:12px">{{''.repeat(s.strength)}}</span>
           </div>
           <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
-          <div v-if="s.model_version" style="font-size:10px;color:var(--c-text-faint);margin-top:2px"><AppIcon name="inbox" :size="13" />  {{s.model_version}}</div>
+          <div v-if="s.model_version" style="font-size:10px;color:var(--c-text-faint);margin-top:2px"><AppIcon name="f" :size="13" />  {{s.model_version}}</div>
         </div>
       </div>
       <n-empty v-else description="暂无信号" style="padding:10px" />
@@ -56,7 +56,7 @@
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-down" :size="13" />  MACD</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="s" :size="13" />  MACD</h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">

@@ -35,11 +35,11 @@
         <!-- 宽屏顶部导航：核心 | 管理 分组 -->
         <div v-if="!isNarrow" class="app-nav">
           <template v-for="t in primaryTabs" :key="t.key">
-            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" @click="nav.switchTab(t.key)"><AppIcon :name="t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
+            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
           </template>
           <span class="nav-divider"></span>
           <template v-for="t in adminTabs" :key="t.key">
-            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" @click="nav.switchTab(t.key)"><AppIcon :name="t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
+            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
           </template>
         </div>
 
@@ -65,7 +65,7 @@
         <!-- H5 底部 TabBar：5 核心 + 管理 入口 -->
         <div v-if="isNarrow" class="h5-tabbar">
           <button v-for="t in primaryTabs" :key="t.key" class="h5-tab" :class="{ active: nav.tab===t.key }" @click="nav.switchTab(t.key)">
-            <span class="h5-tab-icon"><AppIcon :name="t.key" :size="20" /></span>
+            <span class="h5-tab-icon"><AppIcon :name="t.icon || t.key" :size="20" /></span>
             <span class="h5-tab-label">{{ t.label }}</span>
           </button>
           <button class="h5-tab" :class="{ active: isAdminTab }" @click="showAdmin = !showAdmin">
@@ -80,7 +80,7 @@
             <div class="admin-sheet-title">管理</div>
             <div class="admin-sheet-grid">
               <button v-for="t in adminTabs" :key="t.key" class="admin-sheet-item" :class="{ active: nav.tab===t.key }" @click="nav.switchTab(t.key); showAdmin = false">
-                <span class="admin-sheet-icon"><AppIcon :name="t.key" :size="16" /></span>
+                <span class="admin-sheet-icon"><AppIcon :name="t.icon || t.key" :size="16" /></span>
                 <span>{{ t.label }}</span>
               </button>
             </div>
@@ -179,7 +179,7 @@ const primaryTabs = [
   { key: 'p', label: '持仓' },
   { key: 'm', label: '选股' },
   { key: 's', label: '信号' },
-  { key: 'l', label: '个股' },
+  { key: 'l', label: '个股', icon: 'filter' },
   { key: 'x', label: '状态' },
 ]
 const adminTabs = [

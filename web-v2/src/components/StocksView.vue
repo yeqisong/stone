@@ -4,7 +4,7 @@
     <n-button-group size="tiny">
       <n-button size="tiny" :type="cat==='stock'?'primary':'default'" @click="switchCat('stock')"><AppIcon name="filter" :size="13" />  个股</n-button>
       <n-button size="tiny" :type="cat==='index'?'primary':'default'" @click="switchCat('index')"><AppIcon name="bar-chart-2" :size="13" />  指数</n-button>
-      <n-button size="tiny" :type="cat==='etf'?'primary':'default'" @click="switchCat('etf')"><AppIcon name="trending-up" :size="13" />  ETF</n-button>
+      <n-button size="tiny" :type="cat==='etf'?'primary':'default'" @click="switchCat('etf')"><AppIcon name="pie-chart" :size="13" />  ETF</n-button>
     </n-button-group>
     <StockSuggestInput v-model:value="kw" size="tiny" width="180px" placeholder="搜索代码或名称..." @select="onSuggestPick" @enter="doSearch" />
     <n-button type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>

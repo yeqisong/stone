@@ -38,7 +38,7 @@
             </div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="l" :size="13" />  总格子</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
             <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
             <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">交易日×股票数</div>
           </div>
@@ -47,7 +47,7 @@
             <div style="font-size:20px;font-weight:700;color:#10b981">{{ computedActual.toLocaleString() }}</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  总缺失格</div>
+            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  总缺失格</div>
             <div :style="{fontSize:'20px',fontWeight:700,color:feat.abnormal_missing_cells>0?'#f59e0b':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
           </div>
         </div>
@@ -270,7 +270,7 @@
       <div v-if="icTask && icTask.status==='running'" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-text-dim)">
         <n-spin size="small" /> 检验中（全周期约 40-60 秒，请勿关闭）…
       </div>
-      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#ef4444"><AppIcon name="close" :size="13" />  {{ icTask.error }}</div>
+      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#ef4444"><AppIcon name="x-circle" :size="13" />  {{ icTask.error }}</div>
       <div v-if="icTask && icTask.status==='completed'" style="font-size:12px;color:#10b981">
         <AppIcon name="check" :size="13" />  完成：{{ (icTask.results||[]).filter(r=>!r.error).length }}/{{ icTask.horizons?.length }} 个周期落档
         <span v-if="(icTask.failed||[]).length" style="color:#f59e0b">；{{ icTask.failed.map(f=>f.horizon+'d:'+f.error).join('；') }}</span>

@@ -3,9 +3,9 @@
   <n-space align="center" style="margin-bottom:8px" wrap>
     <n-button-group size="tiny">
   <n-button size="tiny" :type="metric==='mcap'?'primary':'default'" @click="switchMetric('mcap')"><AppIcon name="bar-chart-2" :size="13" />  市值</n-button>
-  <n-button size="tiny" :type="metric==='volume'?'primary':'default'" @click="switchMetric('volume')"><AppIcon name="trending-up" :size="13" />  成交量</n-button>
+  <n-button size="tiny" :type="metric==='volume'?'primary':'default'" @click="switchMetric('volume')"><AppIcon name="bar-chart-2" :size="13" />  成交量</n-button>
   <n-button size="tiny" :type="metric==='amount'?'primary':'default'" @click="switchMetric('amount')"><AppIcon name="dollar-sign" :size="13" />  成交额</n-button>
-  <n-button size="tiny" :type="metric==='pe'?'primary':'default'" @click="switchMetric('pe')"><AppIcon name="trending-down" :size="13" />  PE</n-button>
+  <n-button size="tiny" :type="metric==='pe'?'primary':'default'" @click="switchMetric('pe')"><AppIcon name="bar-chart-2" :size="13" />  PE</n-button>
 </n-button-group>
     <n-date-picker v-model:formatted-value="selDate" type="date" value-format="yyyy-MM-dd" size="tiny" style="width:140px" @update:formatted-value="onDateChange" />
     <n-button size="tiny" @click="showGenModal = true"><AppIcon name="zap" :size="13" />  生成</n-button>
@@ -14,7 +14,7 @@
       <n-button size="tiny" :type="colorMode==='chg20d'?'primary':'default'" @click="switchColorMode('chg20d')" title="20 日涨跌（超跌=深绿，反转视角）">20日</n-button>
       <n-button size="tiny" :type="colorMode==='volr'?'primary':'default'" @click="switchColorMode('volr')" title="量比（今日量/前20日均量）">量比</n-button>
     </n-button-group>
-    <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="zap" :size="13" />  只看信号</n-button>
+    <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="s" :size="13" />  只看信号</n-button>
     <span v-if="!loading && !noData" style="font-size:10px;color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 · 蓝实线=实盘持仓 · 青虚线=纸面组合">
       <span :style="{color:SIG_COLOR}">━</span>信号 · <span style="color:var(--c-info)">━</span>实盘 · <span style="color:#06b6d4">╌</span>纸面
     </span>
