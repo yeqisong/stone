@@ -26,10 +26,11 @@ def _check_and_trigger():
             try:
                 cron = croniter(f[2], now)
                 prev = cron.get_prev(datetime)
-                # 到期判定：上次执行时刻在最近 70s 内（扫描周期 60s + 余量）。
-                # 用 dag_flows.last_run_at 做幂等：同一 cron 周期只触发一次，
-                # 避免扫描延迟/重复扫描导致同一流程触发两次
-                if prev and (now - prev).total_seconds() < 70:
+                # 到期判定：当前时间距上一 cron 槽位 24h 内即触发（重启补跑）。
+                # last_run_at 幂等保证同一槽位只触发一次：last_run_at >= 槽位 → 跳过。
+                # 2026-09-03 修复：原 70s 窗口导致后端在触发时刻宕机/重启时流程被
+                # 永久跳过（当日 00:05 错过即全天无数据采集），放宽为 24h 内补跑。
+                if prev and (now - prev).total_seconds() < 86400:
                     last_run = db.execute(text(
                         "SELECT last_run_at FROM dag_flows WHERE id=:id"
                     ), {"id": f[0]}).scalar()
