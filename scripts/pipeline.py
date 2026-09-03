@@ -1505,7 +1505,7 @@ def dag_task_model_signal(trade_date=None, **kw):
 
         # 宽表多拉 30 个自然日：vol_ratio_3d 等 rolling 派生特征在单日面板上恒为 NaN，
         # 需要历史行才能算出与训练端一致的 3 日均值（最终只取当日行使用）
-        warmup_start = (_date.fromisoformat(today_str) - _td(days=30)).isoformat()
+        warmup_start = (_date.fromisoformat(today_str) - timedelta(days=30)).isoformat()
         df_wide = build_feature_wide_table(db, feature_names, warmup_start, today_str, 'stock')
         if df_wide.empty:
             write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
