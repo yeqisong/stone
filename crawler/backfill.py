@@ -511,7 +511,7 @@ class BackfillManager:
                     db.execute(text(
                         "UPDATE daily_quote q SET close_hfq=v.close_hfq "
                         f"FROM (VALUES {vals}) AS v(code, date, close_hfq) "
-                        "WHERE q.stock_code=v.code AND q.trade_date=v.date"
+                        "WHERE q.stock_code=v.code AND q.trade_date=v.date::date"
                     ))
                 db.commit()
                 task.error_message = f"ETF 复权补充 {min(bi + 200, total)}/{total} 只"
