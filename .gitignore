@@ -60,3 +60,6 @@ backups_server_final/
 
 # 运行时数据（模型pkl/备份/进度，勿入库）
 data/
+
+# 运行时进度（防 a158 重跑标记，勿入库）
+.a158_full_progress.json
