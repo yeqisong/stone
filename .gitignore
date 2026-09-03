@@ -38,9 +38,7 @@ logs/
 Thumbs.db
 
 # 项目配置
-reasonix.toml
 .claude/
-.reasonix/
 
 # Docker
 docker-compose.override.yml
