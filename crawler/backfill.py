@@ -772,7 +772,8 @@ class BackfillManager:
                 # 数据源不支持 index/ETF 列表 → 从已有数据反推
                 if not stock_list and stype != "stock":
                     if stype == "index":
-                        rows = db.execute(_t("SELECT DISTINCT index_code FROM index_daily_quote")).fetchall()
+                        # 过滤超长变体代码（如 931571CNY06/000300HKD08 币种对冲版），stock_code VARCHAR(6) 装不下会炸整事务
+                        rows = db.execute(_t("SELECT DISTINCT index_code FROM index_daily_quote WHERE LENGTH(index_code) <= 6")).fetchall()
                         stock_list = [type("_", (), {"stock_code": r[0], "stock_name": "", "ipo_date": None})() for r in rows]
                     elif stype == "etf":
                         rows = db.execute(_t("SELECT DISTINCT stock_code FROM daily_quote WHERE LEFT(stock_code,2)='15' OR LEFT(stock_code,1)='5'")).fetchall()
@@ -782,6 +783,8 @@ class BackfillManager:
                 total = len(stock_list)
                 for i, s in enumerate(stock_list):
                     code = getattr(s, "stock_code", "") or ""
+                    if not code or len(code) > 6:
+                        continue  # 防御：异常代码不入 master，也不参与退市判定
                     current_codes.add(code)
                     ipo = s.ipo_date if hasattr(s, "ipo_date") and s.ipo_date else None
                     name = getattr(s, "stock_name", code) or code
