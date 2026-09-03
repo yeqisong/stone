@@ -823,11 +823,14 @@ class TuShareAdapter(DataSourceAdapter):
     def fetch_fina_indicator(self, ts_code: str, period: str = None) -> list:
         """财务指标精选字段（period=None 返回该票全部报告期历史——代码轮换回补用）。"""
         try:
+            # 兼容裸 6 位代码：tushare 必须带交易所后缀，否则静默返回空
+            if '.' not in ts_code:
+                ts_code = self._ts_code(ts_code)
             self.quota.consume()
             df = (self._pro.fina_indicator(ts_code=ts_code, period=period)
                   if period else self._pro.fina_indicator(ts_code=ts_code))
             rows = self._rows(df, {
-                "stock_code": "ts_code", "ann_date": "ann_date",
+                "stock_code": "ts_code", "ann_date": "ann_date", "end_date": "end_date",
                 "eps": "eps", "eps_ttm": "eps_ttm", "bps": "bps",
                 "roe": "roe", "roe_waa": "roe_waa", "roe_dt": "roe_dt", "roa": "roa",
                 "grossprofit_margin": "grossprofit_margin", "netprofit_margin": "netprofit_margin",

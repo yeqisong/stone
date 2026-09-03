@@ -47,6 +47,10 @@ async def lifespan(app: FastAPI):
     try:
         init_db(db)
         logger.info("Database initialized successfully")
+        # 补数孤儿任务恢复（仅后端启动时执行：上次异常终止的 running 任务标记 failed；
+        # 诊断脚本等旁路实例化 BackfillManager 不会触发，避免误杀运行中的任务）
+        from crawler.backfill import BackfillManager
+        BackfillManager.get_instance(recover_orphans=True)
         # 初始化 entity_stats（首次启动时 JOIN 计算基线，后续 DAG 每日增量更新）
         try:
             es_rows = db.execute(text(

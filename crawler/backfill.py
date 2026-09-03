@@ -154,18 +154,19 @@ class BackfillManager:
     """
     _instance: Optional["BackfillManager"] = None
 
-    def __init__(self):
+    def __init__(self, recover_orphans: bool = False):
         self._lock = threading.Lock()
         self._active_task: Optional[BackfillTask] = None
         self._last_completed_task: Optional[dict] = None
         self._history: List[BackfillTask] = []
-        # 启动时恢复：将上次异常终止的 running 任务标记为 failed
-        self._recover_orphaned_tasks()
+        # 仅后端 lifespan 启动时恢复孤儿任务；诊断脚本等旁路实例化不得误杀运行中的任务
+        if recover_orphans:
+            self._recover_orphaned_tasks()
 
     @classmethod
-    def get_instance(cls) -> "BackfillManager":
+    def get_instance(cls, recover_orphans: bool = False) -> "BackfillManager":
         if cls._instance is None:
-            cls._instance = cls()
+            cls._instance = cls(recover_orphans=recover_orphans)
         return cls._instance
 
     # ── 公开接口 ──

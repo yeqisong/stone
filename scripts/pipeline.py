@@ -3598,7 +3598,8 @@ def dag_task_data_backfill(trade_date=None, **kw):
                 "SELECT stock_code FROM stock_master WHERE stock_type='stock' "
                 "ORDER BY stock_code")).fetchall() if r[0] not in have]
             logger.info(f"[data_backfill] fina_indicator 待轮换 {len(codes)} 只")
-            for c in codes:
+            # 进度上报：fina 轮换全程 >1 小时，不更新 rows 会被心跳看门狗判"无进展"误杀
+            for ci, c in enumerate(codes):
                 if quota.remaining() <= reserve:
                     break
                 try:
@@ -3608,7 +3609,14 @@ def dag_task_data_backfill(trade_date=None, **kw):
                 except Exception as e:
                     fail += 1
                     logger.warning(f"[data_backfill] fina_indicator {c}: {str(e)[:80]}")
-        for td in days:
+                if ci % 20 == 0:
+                    update_node_progress(log_id=log_id, rows=done,
+                                         detail=f'财务指标轮换 {ci}/{len(codes)} 只')
+                    db.commit()
+        for di, td in enumerate(days):
+            if di % 10 == 0:
+                update_node_progress(log_id=log_id, rows=done,
+                                     detail=f'日期轴 {td}（{di}/{len(days)}）')
             for t in tables:
                 if t not in _EXT_COLLECTORS:
                     continue
