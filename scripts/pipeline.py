@@ -1172,8 +1172,9 @@ def merge_circ_mv_panel(df, db):
     sd = str(df['trade_date'].min())[:10]
     ed = str(df['trade_date'].max())[:10]
     rows = db.execute(text(
-        "SELECT stock_code, trade_date, circ_mv FROM stock_fundamentals_history "
-        "WHERE trade_date BETWEEN :s AND :e AND circ_mv IS NOT NULL"
+        # 该表交易日列名为 report_date（语义即交易日，见 feature_compute._fetch 字段注册）
+        "SELECT stock_code, report_date AS trade_date, circ_mv FROM stock_fundamentals_history "
+        "WHERE report_date BETWEEN :s AND :e AND circ_mv IS NOT NULL"
     ), {"s": sd, "e": ed}).fetchall()
     if not rows:
         return df
