@@ -383,9 +383,16 @@ import threading as _t
 import time as _time
 
 def _hb_thread(log_id, rid, stop, start_time):
-    """心跳线程：每 25 秒更新 heartbeat + 已运行时长。超时 5 分钟无进展则标记失败。"""
+    """心跳线程：每 25 秒更新 heartbeat + 已运行时长。超时 5 分钟无进展则标记失败。
+
+    进展判定看 rows 和 detail 双指标：读库先于写入自身心跳 detail，心跳自身
+    的写入不会被计入（last_detail 保存的是读到的值）。只看 rows 会误杀
+    "长时间拉 0 行"的合法阶段——如拓展回补重走已完成日期轴时连续多日
+    事件表 0 行、done 不增（2026-09-04 08:29 误杀实例）。
+    """
     from app.signal import is_stop_requested, clear_stop_request
     last_rows = -1
+    last_detail = None
     idle_start = None
     while not stop.is_set():
         if is_stop_requested(rid):
@@ -399,13 +406,20 @@ def _hb_thread(log_id, rid, stop, start_time):
             from app.db.connection import get_sync_db
             from sqlalchemy import text as _sql
             db = get_sync_db()
-            r = db.execute(_sql("SELECT rows FROM dag_run_log WHERE id=:lid"), {"lid": log_id}).scalar()
-            rows_count = int(r) if r else 0
+            r = db.execute(_sql("SELECT rows, detail FROM dag_run_log WHERE id=:lid"), {"lid": log_id}).fetchone()
+            rows_count = int(r[0]) if r and r[0] else 0
+            detail_seen = (r[1] or '') if r else ''
             db.close()
         except:
             rows_count = None
+            detail_seen = None
         update_node_progress(log_id=log_id, rows=rows_count, detail=detail)
-        if rows_count is not None and rows_count == last_rows:
+        # detail 比较：排除心跳自身写入的 '采集中…'（其时长后缀每轮必变，会把
+        # 无进展永久掩盖）。节点写入的其他 detail 变化均视为进展。
+        own_detail = detail_seen is not None and detail_seen.startswith('采集中')
+        progressed = (rows_count is None or rows_count != last_rows
+                      or (detail_seen is not None and not own_detail and detail_seen != last_detail))
+        if rows_count is not None and not progressed:
             if idle_start is None:
                 idle_start = _time.time()
             elif _time.time() - idle_start > 300:
@@ -416,18 +430,49 @@ def _hb_thread(log_id, rid, stop, start_time):
         else:
             idle_start = None
             last_rows = rows_count if rows_count is not None else -1
+            if detail_seen is not None and not own_detail:
+                last_detail = detail_seen
         stop.wait(25)
 
+def _node_stopped(rid, log_id=None):
+    """节点协作终止检查：_with_hb 注册的 stop 事件已被置位（看门狗超时/用户终止）。
+
+    注册键带节点级 log_id：同流程并行节点共用 rid，仅用 rid 会互相读到
+    对方收官时的置位事件而误判被终止。
+    """
+    if not rid:
+        return False
+    from app.signal import get_stop_event
+    key = f"{rid}:{log_id}" if log_id else rid
+    ev = get_stop_event(key)
+    if ev:
+        return ev.is_set()
+    if log_id:
+        ev = get_stop_event(rid)  # 兼容旧调用方（无 log_id 注册）
+        return bool(ev and ev.is_set())
+    return False
+
 def _with_hb(log_id, rid, fn):
-    """带心跳保护执行函数。"""
+    """带心跳保护执行函数。
+
+    stop 事件注册到 app.signal：心跳线程因看门狗超时或用户终止 set 时，
+    节点内部长循环可通过 _node_stopped(rid, log_id) 协作感知并尽快退出
+    （否则循环继续跑完会把 failed 覆盖回 success）。
+    """
+    from app.signal import set_stop_event, clear_stop_events
     stop = _t.Event()
     start_time = _time.time()
+    key = f"{rid}:{log_id}" if rid else None
+    if key:
+        set_stop_event(key, stop)
     hb = _t.Thread(target=_hb_thread, args=(log_id, rid, stop, start_time), daemon=True)
     hb.start()
     try:
         return fn()
     finally:
         stop.set()
+        if key:
+            clear_stop_events(key)
 
 def _terminate_node(log_id, reason='用户手动终止'):
     """原子节点终止自身：更新日志状态为 failed。"""
@@ -3600,6 +3645,9 @@ def dag_task_data_backfill(trade_date=None, **kw):
             logger.info(f"[data_backfill] fina_indicator 待轮换 {len(codes)} 只")
             # 进度上报：fina 轮换全程 >1 小时，不更新 rows 会被心跳看门狗判"无进展"误杀
             for ci, c in enumerate(codes):
+                if _node_stopped(rid, log_id):
+                    db.close()
+                    raise RuntimeError('节点已终止（看门狗/用户），fina 轮换中断，可续跑')
                 if quota.remaining() <= reserve:
                     break
                 try:
@@ -3614,6 +3662,9 @@ def dag_task_data_backfill(trade_date=None, **kw):
                                          detail=f'财务指标轮换 {ci}/{len(codes)} 只')
                     db.commit()
         for di, td in enumerate(days):
+            if _node_stopped(rid, log_id):
+                db.close()
+                raise RuntimeError('节点已终止（看门狗/用户），日期轴回补中断，可续跑')
             if di % 10 == 0:
                 update_node_progress(log_id=log_id, rows=done,
                                      detail=f'日期轴 {td}（{di}/{len(days)}）')
