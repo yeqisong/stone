@@ -3674,16 +3674,30 @@ def dag_task_data_backfill(trade_date=None, **kw):
                 fn, exists_sql = _EXT_COLLECTORS[t]
                 if exists_sql and db.execute(text(exists_sql), {"d": td}).fetchone():
                     continue
+                # 已核空登记：事件类表大量"真 0 行"历史日（share_float 等 ~2900 空日/表），
+                # 不登记则每轮 walk 从头重拉空日期烧配额，熔断点永远落在前段空日期区，
+                # 回补永不收敛。0 行也登记，永不再拉。
+                if db.execute(text(
+                    "SELECT 1 FROM backfill_ext_checked WHERE table_name=:t AND checked_date=:d"
+                ), {"t": t, "d": td}).fetchone():
+                    continue
                 if quota.remaining() <= reserve:
                     db.close()
                     return {'rows': done, 'halted': True,
                             '_detail': f'配额熔断（余 {quota.remaining()} ≤ 保留 {reserve}），已补 {done} 项，下次续跑'}
                 try:
-                    done += fn(source, db, td)
+                    n = fn(source, db, td)
+                    done += n
+                    db.execute(text(
+                        "INSERT INTO backfill_ext_checked (table_name, checked_date, rows_found) "
+                        "VALUES (:t, :d, :n) ON CONFLICT DO NOTHING"), {"t": t, "d": td, "n": n})
+                    db.commit()
                 except QuotaExhausted:
+                    db.rollback()
                     db.close()
                     return {'rows': done, 'halted': True, '_detail': f'配额耗尽，已补 {done} 项，下次续跑'}
                 except Exception as e:
+                    db.rollback()
                     fail += 1
                     logger.warning(f"[data_backfill] {t}@{td}: {str(e)[:80]}")
         db.close()

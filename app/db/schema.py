@@ -895,6 +895,19 @@ CREATE INDEX IF NOT EXISTS idx_ra_date ON risk_alerts (trade_date);
 CREATE INDEX IF NOT EXISTS idx_ra_ack ON risk_alerts (ack, id);
 """
 
+# ── 拓展回补已核空日期登记（2026-09-04）：事件类拓展表历史上大量"真 0 行"日期
+#    （share_float/repurchase 等 ~2900 空日/表），exists_sql 判不出"已拉过且为空"，
+#    每轮 walk 从头重拉空日期烧配额且永不收敛。0 行也登记，永不再拉。──
+CREATE_BACKFILL_EXT_CHECKED = """
+CREATE TABLE IF NOT EXISTS backfill_ext_checked (
+    table_name   VARCHAR(32) NOT NULL,
+    checked_date DATE NOT NULL,
+    rows_found   INTEGER DEFAULT 0,
+    checked_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (table_name, checked_date)
+);
+"""
+
 CREATE_PAPER_POSITIONS = """
 CREATE TABLE IF NOT EXISTS paper_positions (
     stock_code    VARCHAR(6) PRIMARY KEY,
@@ -961,6 +974,7 @@ ALL_TABLES = [
     ("factor_ic_stats", CREATE_FACTOR_IC_STATS),
     ("paper_positions", CREATE_PAPER_POSITIONS),
     ("risk_alerts", CREATE_RISK_ALERTS),
+    ("backfill_ext_checked", CREATE_BACKFILL_EXT_CHECKED),
     ("moneyflow_hsgt", CREATE_MONEYFLOW_HSGT),
     ("block_trade", CREATE_BLOCK_TRADE),
     ("stock_share_float", CREATE_SHARE_FLOAT),
