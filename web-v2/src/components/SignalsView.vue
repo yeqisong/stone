@@ -14,9 +14,13 @@
   <template v-if="!showStats">
     <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
     <div v-if="data.signals" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-      <n-data-table :columns="columns" :data="data.signals" size="small" :scroll-x="840" />
+      <n-data-table :columns="columns" :data="pagedSignals" size="small" :scroll-x="840" />
     </div>
     <n-empty v-else description="暂无信号" />
+    <n-space justify="end" style="margin-top:10px">
+      <n-pagination v-if="(data.signals?.length||0) > sigPageSize" :page="sigPage" :item-count="data.signals?.length||0"
+        :page-size="sigPageSize" size="small" @update:page="p=>sigPage=p" />
+    </n-space>
   </template>
   <SignalStatsView v-else />
 
@@ -35,7 +39,7 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import { ref, reactive, h, computed, onMounted } from 'vue'
-import { NDataTable, NDatePicker, NButton, NButtonGroup, NSpace, NTag, NEmpty, NModal } from 'naive-ui'
+import { NDataTable, NDatePicker, NButton, NButtonGroup, NSpace, NTag, NEmpty, NModal, NPagination } from 'naive-ui'
 import axios from 'axios'
 import SignalStatsView from './SignalStatsView.vue'
 import { useViewport } from '../utils/viewport'
@@ -45,6 +49,10 @@ const API = window.location.origin
 const bjToday = () => bjDateStr()
 const sigDate = ref(bjToday())
 const data = reactive({signals:null, scanned:0, total_signals:0})
+// 本地分页：单日信号数百条，一次拉全后前端翻页（与个股列表页 n-pagination 样式一致）
+const sigPage = ref(1)
+const sigPageSize = 50
+const pagedSignals = computed(() => (data.signals || []).slice((sigPage.value-1)*sigPageSize, sigPage.value*sigPageSize))
 const showStats = ref(false)
 const showGenModal = ref(false)
 const genLoading = ref(false)
@@ -81,8 +89,10 @@ async function doGenerate() {
 async function load(){
   try{
     const d = typeof sigDate.value === 'string' ? sigDate.value : bjDateStr()
-    const r = await axios.get(API+'/api/buy_signals',{params:{signal_date:d}})
+    // top_n=500：接口原默认 20 且上限 100，单日信号可达数百条被截断
+    const r = await axios.get(API+'/api/buy_signals',{params:{signal_date:d, top_n:500}})
     Object.assign(data, r.data)
+    sigPage.value = 1
     const mr = await axios.get(API+'/api/v1/models')
     const active = (mr.data?.versions||[]).find(v=>v.status==='ACTIVE')
     activeModel.value = active?.version || null

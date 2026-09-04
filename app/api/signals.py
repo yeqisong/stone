@@ -12,7 +12,7 @@ router = APIRouter(tags=["signals"])
 @router.get("/buy_signals")
 def get_buy_signals(
     signal_date: str = Query(None, description="日期 YYYY-MM-DD，默认最近交易日"),
-    top_n: int = Query(20, ge=1, le=100),
+    top_n: int = Query(20, ge=1, le=1000),
     include_stale: bool = Query(False, description="true=包含旧版本的模型信号（默认只显示 ACTIVE 模型）"),
 ):
     """获取指定日期的买点扫描结果（仅融合信号）。默认过滤旧版本的 model_signal。"""
@@ -87,7 +87,9 @@ def get_buy_signals(
         ), {"d": signal_date})
         total = result.scalar() or 0
 
-        result = db.execute(text("SELECT COUNT(*) FROM stock_master WHERE status = 'N'"))
+        # 扫描域口径 = A 股个股（model_signal 宽表实体），不含指数/ETF/变体码
+        result = db.execute(text(
+            "SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N'"))
         scanned = result.scalar() or 0
 
         return {
