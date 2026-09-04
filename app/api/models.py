@@ -1325,6 +1325,9 @@ def get_walk_forward(version: str, task_id: str = Query(None), user: str = Depen
             WHERE version_a=:v ORDER BY created_at DESC LIMIT 1
         """), {"v": version}).fetchone()
         db.close()
+        # 新模型尚未跑过 WF 对比时无记录，返回空结果而非 500
+        if not r:
+            return {"version": version, "result": None, "created_at": None}
         report = r[0] if isinstance(r[0], dict) else (json.loads(r[0]) if r[0] else None)
         return {"version": version, "result": report, "created_at": str(r[1]) if r and r[1] else None}
     except Exception as e:
