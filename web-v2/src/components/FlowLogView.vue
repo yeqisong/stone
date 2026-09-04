@@ -72,6 +72,7 @@ const API = window.location.origin
 const tasks = ref([])
 const selectedTask = ref(null)
 const filterFlow = ref(props.flowId ? parseInt(props.flowId) : 0)
+let taskLimit = 50  // 任务列表分页大小（v3.8.0 重构时声明丢失致 loadAllTasks 抛 ReferenceError、列表恒空）
 
 function toggleFilter() {
   filterFlow.value = filterFlow.value ? 0 : (parseInt(props.flowId) || 0)

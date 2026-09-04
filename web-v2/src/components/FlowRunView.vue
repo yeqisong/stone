@@ -101,7 +101,7 @@ async function loadFlow() {
     const es = []
     for (const n of d.nodes || []) {
       for (const dep of n.deps || []) {
-        es.push({ id: dep+'->'+n.node_name, source: dep, target: n.node_name, type: 'default', style: { stroke: 'var(--c-text-dim)', strokeWidth: 2 } })
+        es.push({ id: dep+'->'+n.node_name, source: dep, target: n.node_name, type: 'smoothstep', pathOptions: { borderRadius: 10 }, style: { stroke: 'var(--c-text-dim)', strokeWidth: 2 } })
       }
     }
     nodes.value = ns; edges.value = es
