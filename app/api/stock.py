@@ -10,6 +10,18 @@ from strategy.indicators import bollinger_bands, rsi, macd
 router = APIRouter(tags=["stock"])
 
 
+def _real_close_map(db, code, dates):
+    """信号日真实收盘（不复权）：price 列存后复权价（前瞻收益口径），展示层需真实价。"""
+    ds = sorted({str(d)[:10] for d in dates if d})
+    if not ds:
+        return {}
+    rows = db.execute(text(
+        "SELECT trade_date, close FROM daily_quote "
+        "WHERE stock_code=:c AND trade_date = ANY(CAST(:ds AS date[]))"
+    ), {"c": code, "ds": ds}).fetchall()
+    return {str(r[0])[:10]: (float(r[1]) if r[1] else None) for r in rows}
+
+
 @router.get("/stock/{code}/detail")
 def get_stock_detail(code: str, type: str = Query(None, description="证券类型: stock/index/etf，不传则自动检测")):
     """获取个股/指数/ETF 详情：最新行情 + 最新交易日策略信号 + 历史信号概览。"""
@@ -59,6 +71,7 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                 FROM signal_history WHERE stock_code=:c AND signal_date=:d
                 ORDER BY combined_signal DESC, strength DESC
             """), {"c": code, "d": str(latest_signal_date)})
+            rc_map = _real_close_map(db, code, [latest_signal_date])
             seen = set()
             for r in result.fetchall():
                 key = r.strategy_name
@@ -75,6 +88,7 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                     "signal_date": str(r.signal_date), "direction": r.direction,
                     "strength": r.strength, "strategy_name": r.strategy_name,
                     "reason": r.reason, "price": float(r.price) if r.price else 0,
+                    "real_price": rc_map.get(str(r.signal_date)[:10]),
                     "suggested_action": r.suggested_action or "",
                     "combined_signal": r.combined_signal,
                     "source_strategies": src or [],
@@ -180,8 +194,10 @@ def get_stock_history(
                 LIMIT :l OFFSET :o
             """), {"c": code, "l": page_size, "o": offset})
 
+        sig_rows = result.fetchall()
+        rc_map = _real_close_map(db, code, [r.signal_date for r in sig_rows])
         signals = []
-        for r in result.fetchall():
+        for r in sig_rows:
             src = r.source_strategies
             if isinstance(src, str):
                 try:
@@ -192,6 +208,7 @@ def get_stock_history(
                 "signal_date": str(r.signal_date), "direction": r.direction,
                 "strength": r.strength, "strategy_name": r.strategy_name,
                 "reason": r.reason, "price": float(r.price) if r.price else 0,
+                "real_price": rc_map.get(str(r.signal_date)[:10]),
                 "suggested_action": r.suggested_action or "",
                 "combined_signal": r.combined_signal,
                 "source_strategies": src or [],
