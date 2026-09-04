@@ -57,7 +57,7 @@ const columns = computed(() => {
     { title:'#', key:'index', width:35, render:(_,i)=>i+1 },
     { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
     { title:'名称', key:'stock_name', width:100, fixed:'left', render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
-    { title:'现价', key:'price', width:95, align:'right', render(r){return '¥'+((r.price||0).toFixed(2))} },
+    { title:'现价', key:'price', width:95, align:'right', render(r){ const v=r.real_price??r.price; return '¥'+((v||0).toFixed(2)) } },
     { title:'方向', key:'direction', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
     { title:'强度', key:'strength', width:70, render(r){return '★'.repeat(r.strength||0)} },
     { title:'预测5d', key:'predict_5d', width:70, align:'right', render(r){ const v=r.predict_5d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},

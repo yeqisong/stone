@@ -32,20 +32,23 @@ def get_buy_signals(
                 "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
             )).scalar()
             if active_ver:
-                model_filter = "AND (strategy_name != 'model_signal' OR model_version = :av)"
+                model_filter = "AND (s.strategy_name != 'model_signal' OR s.model_version = :av)"
                 params["av"] = active_ver
 
         result = db.execute(text(f"""
-            SELECT stock_code, stock_name, direction, strength,
-                   reason, price, suggested_action,
-                   source_strategies, preference,
-                   predict_5d_return, predict_10d_return, predict_20d_return, predict_score
-            FROM signal_history
-            WHERE signal_date = :d
-              AND direction = 'buy'
-              AND combined_signal = true
+            SELECT s.stock_code, s.stock_name, s.direction, s.strength,
+                   s.reason, s.price, s.suggested_action,
+                   s.source_strategies, s.preference,
+                   s.predict_5d_return, s.predict_10d_return, s.predict_20d_return, s.predict_score,
+                   q.close AS real_close
+            FROM signal_history s
+            LEFT JOIN daily_quote q
+              ON q.stock_code = s.stock_code AND q.trade_date = s.signal_date
+            WHERE s.signal_date = :d
+              AND s.direction = 'buy'
+              AND s.combined_signal = true
               {model_filter}
-            ORDER BY COALESCE(predict_score, 0) DESC, strength DESC
+            ORDER BY COALESCE(s.predict_score, 0) DESC, s.strength DESC
             LIMIT :n
         """), params)
         rows = result.fetchall()
@@ -68,6 +71,8 @@ def get_buy_signals(
                 "strength": r.strength,
                 "reason": r.reason,
                 "price": float(r.price) if r.price else 0,
+                # price 存后复权价（前瞻收益口径所需）；展示层用信号日真实收盘，避免与行情软件对不上
+                "real_price": float(r.real_close) if r.real_close else None,
                 "suggested_action": r.suggested_action or "",
                 "source_strategies": source,
                 "preference": r.preference or "balanced",
