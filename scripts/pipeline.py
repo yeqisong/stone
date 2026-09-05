@@ -2587,7 +2587,7 @@ def compute_regime_gates(db, dates, cfg=None):
     idx_code = cfg.get('index_code', '000300')
     win = int(cfg.get('ma_window', 20) or 20)
     max_skip = int(cfg.get('max_skip_days', 2) or 2)
-    ds = sorted({str(d)[:10] for d in (dates or [])})
+    ds = sorted({str(d)[:10] for d in (dates if dates is not None else [])})
     if not ds:
         return set()
     start = (_dtm.strptime(ds[0], '%Y-%m-%d') - _tdm(days=win * 3)).isoformat()
