@@ -297,7 +297,7 @@ class TuShareAdapter(DataSourceAdapter):
                 try:
                     self.quota.consume()
                     fadj = self._pro.fund_adj(trade_date=td_str)
-                    for _, fr in (fadj or pd.DataFrame()).iterrows():
+                    for _, fr in (fadj if fadj is not None and not fadj.empty else pd.DataFrame()).iterrows():
                         fc = str(fr['ts_code']).split('.')[0]
                         if len(fc) == 6 and pd.notna(fr.get('adj_factor')):
                             factors[fc.zfill(6)] = float(fr['adj_factor'])
@@ -340,9 +340,10 @@ class TuShareAdapter(DataSourceAdapter):
             self.quota.consume()
             df = self._pro.fund_adj(ts_code=ts_code, start_date=td, end_date=de)
             out = {}
-            for _, r in (df or pd.DataFrame()).iterrows():
-                if pd.notna(r.get('adj_factor')):
-                    out[str(r['trade_date'])] = float(r['adj_factor'])
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    if pd.notna(r.get('adj_factor')):
+                        out[str(r['trade_date'])] = float(r['adj_factor'])
             return out
         except QuotaExhausted:
             raise
