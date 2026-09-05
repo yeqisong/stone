@@ -2581,6 +2581,7 @@ def compute_regime_gates(db, dates, cfg=None):
     """
     import pandas as _pd2
     from datetime import datetime as _dtm, timedelta as _tdm
+    from sqlalchemy import text as _sqltext
     cfg = cfg or {}
     if not cfg.get('enabled'):
         return set()
@@ -2591,9 +2592,9 @@ def compute_regime_gates(db, dates, cfg=None):
     if not ds:
         return set()
     start = (_dtm.strptime(ds[0], '%Y-%m-%d') - _tdm(days=win * 3)).isoformat()
-    rows = db.execute(text(
+    rows = db.execute(_sqltext(
         "SELECT trade_date, close FROM index_daily_quote "
-        "WHERE stock_code=:c AND trade_date BETWEEN :s AND :e AND close IS NOT NULL "
+        "WHERE index_code=:c AND trade_date BETWEEN :s AND :e AND close IS NOT NULL "
         "ORDER BY trade_date"
     ), {"c": idx_code, "s": start, "e": ds[-1]}).fetchall()
     if len(rows) < win + 1:
