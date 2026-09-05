@@ -281,7 +281,8 @@ class TuShareAdapter(DataSourceAdapter):
                 logger.warning(f"[tushare] 指数 {td_str} 失败: {e}")
         return results
 
-    # ── ETF 日K线（按交易日全市场；复权因子 tushare 需 fund_adj 高积分 → close_hfq 由 baostock 补充）──
+    # ── ETF 日K线（按交易日全市场；复权因子同步 fund_adj(trade_date) 一次调用带上，
+    #    close_hfq = close × adj_factor 自源头写入，替代原 baostock 补充（2026-09-05 切换）──
 
     def fetch_etf_kline(self, codes, start, end):
         results = []
@@ -291,6 +292,19 @@ class TuShareAdapter(DataSourceAdapter):
             try:
                 self.quota.consume()
                 df = self._pro.fund_daily(trade_date=td_str)
+                # 当日全市场复权因子：1 次调用，每日增量成本 +1 配额
+                factors = {}
+                try:
+                    self.quota.consume()
+                    fadj = self._pro.fund_adj(trade_date=td_str)
+                    for _, fr in (fadj or pd.DataFrame()).iterrows():
+                        fc = str(fr['ts_code']).split('.')[0]
+                        if len(fc) == 6 and pd.notna(fr.get('adj_factor')):
+                            factors[fc.zfill(6)] = float(fr['adj_factor'])
+                except QuotaExhausted:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[tushare] fund_adj {td_str} 失败: {e}")
                 if df is not None and not df.empty:
                     for _, r in df.iterrows():
                         raw = str(r['ts_code'])
@@ -302,14 +316,14 @@ class TuShareAdapter(DataSourceAdapter):
                         if code_set is not None and c not in code_set:
                             continue
                         ex2 = 'SSE' if c.startswith('5') else 'SZSE'
-                        # close_hfq 传 None：ETF 无免费复权因子（fund_adj 需高积分），
-                        # 传 close 会被 UPSERT 覆盖掉 baostock 已补充的复权价，且补充器
-                        # 只找 IS NULL 的行，形成永久覆盖链（v3.7 审查 P0）。None 走
-                        # UPSERT 的空值保护，保留库内旧值，缺口留给补充器。
+                        # 复权价自源头计算；无因子的（脏码/漏调）传 None 走 UPSERT 空值保护，
+                        # 缺口留给存量补充（_supplement_etf_hfq，tushare fund_adj 按代码优先）
+                        factor = factors.get(c)
+                        close_hfq = float(r['close']) * factor if factor else None
                         results.append(KlineRow(
                             trade_date=str(r['trade_date']), stock_code=c, stock_name='',
                             exchange=ex2, open=float(r['open']), high=float(r['high']),
-                            low=float(r['low']), close=float(r['close']), close_hfq=None,
+                            low=float(r['low']), close=float(r['close']), close_hfq=close_hfq,
                             volume=int(r['vol'])*100 if pd.notna(r.get('vol')) else 0,
                             amount=float(r['amount'])*1000 if pd.notna(r.get('amount')) else 0))
             except QuotaExhausted:
@@ -317,6 +331,41 @@ class TuShareAdapter(DataSourceAdapter):
             except Exception as e:
                 logger.warning(f"[tushare] ETF {td_str} 失败: {e}")
         return results
+
+    def fetch_etf_adj_history(self, ts_code: str, start: str, end: str):
+        """单只 ETF 全历史复权因子（存量回补用）：{trade_date: adj_factor}，1 配额/只。"""
+        td = start.replace('-', '')[:8]
+        de = end.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.fund_adj(ts_code=ts_code, start_date=td, end_date=de)
+            out = {}
+            for _, r in (df or pd.DataFrame()).iterrows():
+                if pd.notna(r.get('adj_factor')):
+                    out[str(r['trade_date'])] = float(r['adj_factor'])
+            return out
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] fund_adj {ts_code} 失败: {e}")
+            return None
+
+    def fetch_holder_history(self, ts_code: str, start: str, end: str):
+        """股东户数（stk_holdernumber，公告制）单只全历史，1 配额/只。"""
+        td = start.replace('-', '')[:8]
+        de = end.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.stk_holdernumber(ts_code=ts_code, start_date=td, end_date=de)
+            rows = self._rows(df, {"end_date": "end_date", "holder_num": "holder_num"})
+            for r in rows:
+                r["stock_code"] = ts_code.split('.')[0].zfill(6)
+            return rows
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] stk_holdernumber {ts_code} 失败: {e}")
+            return []
 
     def fetch_fundamentals(self, codes: List[str], trade_date: str = None) -> List[FundamentalRow]:
         """用 daily_basic 按日获取全市场基本面（1 次/天）。

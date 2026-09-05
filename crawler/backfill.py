@@ -470,20 +470,18 @@ class BackfillManager:
             db.close()
 
     def _supplement_etf_hfq(self, db, manager, task, start_date, end_date):
-        """任务级 ETF 后复权补充：按代码全区间一次性查询（baostock），而非逐日逐只。
+        """任务级 ETF 后复权补充：按代码全区间一次性查询，而非逐日逐只。
 
-        - 断点：只补 stock_master 中"尚无任何 close_hfq 行"的 ETF，已补过则秒过
-        - 每只 ETF 一次 query_history_k_data_plus 返回整个区间，避免 O(天数×只数) 爆炸
-        - baostock 不可用/失败仅告警：close_hfq 保持 close（回退口径与 kline 一致）
+        数据源（2026-09-05 切换，用户拍板 tushare 优先）：tushare fund_adj 按代码
+        1 配额/只、因子口径与股票 adj_factor 一致；不可用时回退 baostock 补充器。
+
+        - 断点：只补"NULL 或已退化(hfq=close)"的 ETF，已补过则秒过
+        - 每只一次调用返回整个区间，避免 O(天数×只数) 爆炸
         """
         try:
-            if not manager.supplement_healthy():
-                return
-            sups = manager.get_supplement()
             rows = db.execute(text(
                 # 覆盖 NULL 与已退化行（close_hfq=close）：历史上 ETF 日线曾以
-                # close_hfq=close 入库覆盖掉 baostock 补充值，仅查 IS NULL 会漏掉
-                # 这些退化行，补充逻辑空转（v3.7 审查 P0）
+                # close_hfq=close 入库覆盖掉补充值，仅查 IS NULL 会漏掉这些退化行
                 "SELECT DISTINCT q.stock_code FROM daily_quote q "
                 "JOIN stock_master s ON s.stock_code=q.stock_code AND s.stock_type='etf' "
                 "WHERE q.trade_date BETWEEN :s AND :e "
@@ -493,7 +491,46 @@ class BackfillManager:
             if not codes:
                 return
             total = len(codes)
-            logger.info(f"[backfill] ETF 复权补充启动: {total} 只（区间 {start_date}~{end_date}）")
+
+            # ── tushare fund_adj 优先 ──
+            ts_adapter = None
+            try:
+                from crawler.adapters import get_data_source_manager
+                ts_adapter = get_data_source_manager().get_source()
+            except Exception as e:
+                logger.warning(f"[backfill] tushare 主源不可用，ETF 复权回退 baostock: {e}")
+            if ts_adapter is not None and hasattr(ts_adapter, 'fetch_etf_adj_history'):
+                logger.info(f"[backfill] ETF 复权补充启动(tushare fund_adj): {total} 只")
+                for i, c in enumerate(codes):
+                    if getattr(task, "_stop_requested", False):
+                        return
+                    ts_code = c + ('.SH' if c.startswith('5') else '.SZ')
+                    try:
+                        factors = ts_adapter.fetch_etf_adj_history(ts_code, start_date, end_date)
+                    except Exception as e:
+                        factors = None
+                        logger.warning(f"[backfill] fund_adj {ts_code}: {str(e)[:80]}")
+                    if factors:
+                        vals = ",".join(f"('{c}', '{d}', {f})" for d, f in factors.items())
+                        db.execute(text(
+                            "UPDATE daily_quote q SET close_hfq = q.close * v.f, adj_factor_hfq = v.f "
+                            f"FROM (VALUES {vals}) AS v(code, d, f) "
+                            "WHERE q.stock_code=v.code AND q.trade_date=v.d::date "
+                            "AND (q.close_hfq IS NULL OR q.close_hfq = q.close)"))
+                        db.commit()
+                    if (i + 1) % 100 == 0:
+                        task.error_message = f"ETF 复权补充(tushare) {i + 1}/{total} 只"
+                        task.updated_at = datetime.now().isoformat()
+                        self._update_task_db(task)
+                        self._wake_ws()
+                logger.info(f"[backfill] ETF 复权补充(tushare)完成: {total} 只")
+                return
+
+            # ── baostock 回退 ──
+            if not manager.supplement_healthy():
+                return
+            sups = manager.get_supplement()
+            logger.info(f"[backfill] ETF 复权补充启动(baostock回退): {total} 只")
             for bi in range(0, total, 200):
                 if getattr(task, "_stop_requested", False):
                     return

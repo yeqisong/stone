@@ -3636,6 +3636,18 @@ def _ext_fina_code(source, db, code):
     from crawler.writers import batch_upsert_fina_indicator
     return batch_upsert_fina_indicator(db, source.fetch_fina_indicator(code))
 
+
+def _ext_holder_number_code(source, db, code):
+    """单票全历史股东户数（stk_holdernumber，公告制）→ stock_holder_number。"""
+    from crawler.writers import batch_insert_events
+    from datetime import date as _d
+    ts_code = code + ('.SH' if code.startswith(('6', '9')) else '.SZ')
+    rows = source.fetch_holder_history(ts_code, '2010-01-01', str(_d.today()))
+    return batch_insert_events(db, 'stock_holder_number', rows,
+                               ['stock_code', 'end_date'],
+                               ['stock_code', 'end_date', 'holder_num'])
+
+
 # (采集函数, 已入库存在性检查 SQL)；None = 无法按日期幂等（dividend/index_weight 按期去重）
 _EXT_COLLECTORS = {
     'moneyflow':       (_ext_moneyflow,       "SELECT 1 FROM stock_moneyflow WHERE trade_date=:d LIMIT 1"),
@@ -3653,6 +3665,7 @@ _EXT_COLLECTORS = {
 # 代码轮换型采集器（按股票代码而非日期回补：fina_indicator 单票一次调用返回全部报告期）
 _EXT_CODE_COLLECTORS = {
     'fina_indicator': _ext_fina_code,
+    'holder_number': _ext_holder_number_code,
 }
 
 
@@ -3715,30 +3728,32 @@ def dag_task_data_backfill(trade_date=None, **kw):
         quota = TushareQuota.get()
         source = get_data_source_manager().get_source()
         done = fail = 0
-        # 代码轮换轴：fina_indicator（无 ann_date 扫描通道，按票全历史拉取，5000 点覆盖全市场）
-        if cfg.get('fina_indicator'):
-            have = {r[0] for r in db.execute(text("SELECT DISTINCT stock_code FROM fina_indicator")).fetchall()}
+        # 代码轮换轴：fina_indicator / holder_number（公告制无日频扫描通道，按票全历史拉取）
+        for _rot, _table in (('fina_indicator', 'fina_indicator'), ('holder_number', 'stock_holder_number')):
+            if not cfg.get(_rot):
+                continue
+            have = {r[0] for r in db.execute(text(f"SELECT DISTINCT stock_code FROM {_table}")).fetchall()}
             codes = [r[0] for r in db.execute(text(
                 "SELECT stock_code FROM stock_master WHERE stock_type='stock' "
                 "ORDER BY stock_code")).fetchall() if r[0] not in have]
-            logger.info(f"[data_backfill] fina_indicator 待轮换 {len(codes)} 只")
-            # 进度上报：fina 轮换全程 >1 小时，不更新 rows 会被心跳看门狗判"无进展"误杀
+            logger.info(f"[data_backfill] {_rot} 待轮换 {len(codes)} 只")
+            # 进度上报：轮换全程 >1 小时，不更新 rows 会被心跳看门狗判"无进展"误杀
             for ci, c in enumerate(codes):
                 if _node_stopped(rid, log_id):
                     db.close()
-                    raise RuntimeError('节点已终止（看门狗/用户），fina 轮换中断，可续跑')
+                    raise RuntimeError(f'节点已终止（看门狗/用户），{_rot} 轮换中断，可续跑')
                 if quota.remaining() <= reserve:
                     break
                 try:
-                    done += _ext_fina_code(source, db, c)
+                    done += _EXT_CODE_COLLECTORS[_rot](source, db, c)
                 except QuotaExhausted:
                     break
                 except Exception as e:
                     fail += 1
-                    logger.warning(f"[data_backfill] fina_indicator {c}: {str(e)[:80]}")
+                    logger.warning(f"[data_backfill] {_rot} {c}: {str(e)[:80]}")
                 if ci % 20 == 0:
                     update_node_progress(log_id=log_id, rows=done,
-                                         detail=f'财务指标轮换 {ci}/{len(codes)} 只')
+                                         detail=f'{_rot} 轮换 {ci}/{len(codes)} 只')
                     db.commit()
         for di, td in enumerate(days):
             if _node_stopped(rid, log_id):
