@@ -28,6 +28,9 @@ from strategy.indicators import sma, ema, rsi, macd, atr, bollinger_bands
 EXTRA_FIELD_SOURCES = {
     'pe_ttm': 'stock_fundamentals_history',
     'pb_mrq': 'stock_fundamentals_history',
+    'roe': 'stock_fundamentals_history',
+    'revenue_yoy': 'stock_fundamentals_history',
+    'profit_yoy': 'stock_fundamentals_history',
     'ps_ttm': 'stock_fundamentals_history',
     'dv_ratio': 'stock_fundamentals_history',
     'dv_ttm': 'stock_fundamentals_history',
