@@ -1561,6 +1561,17 @@ def dag_task_model_signal(trade_date=None, **kw):
             write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
             db.close(); return 0
 
+        # 空仓闸门（regime）：风险期不开新买入。config.regime.enabled 显式开启才生效，
+        # 旧模型（v11.0 等无此键）信号行为不变；闸门放行日（连续第 3 天）正常产生信号
+        _regime = model_cfg_obj.get('regime') or {}
+        if _regime.get('enabled'):
+            _gated = compute_regime_gates(db, [today_str], _regime)
+            if today_str in _gated:
+                write_node_log(log_id=log_id, status='success', rows=0,
+                               detail=f'空仓信号日：指数<{_regime.get("ma_window", 20)}日线风险期，不开新仓（连续第 '
+                                      f'{_regime.get("max_skip_days", 2)}+1 天放行）')
+                db.close(); return 0
+
         # 派生特征与训练端保持一致（bias_5_20/vol_ratio_3d/idx_ret_20d）：
         # 训练模型 feature_names_in_ 含这些列，信号侧缺列会导致 ML 预测逐股回退规则模式
         if 'ma_5' in df_wide.columns and 'ma_20' in df_wide.columns:
@@ -2557,6 +2568,56 @@ def index_forward_return(idx_dates, idx_close, tdate, days):
     return idx_close[j] / idx_close[pos] - 1
 
 
+def compute_regime_gates(db, dates, cfg=None):
+    """市场择时空仓闸门：指数收盘 < MA(N) 为风险期，风险期连续前 max_skip_days 天不开新仓。
+
+    「不能连续空仓 3 天」约束（2026-09-05 用户拍板）：风险期第 1、2 天禁止买入，
+    第 3 天强制放行并把连续计数归零——熊市中呈「禁、禁、买」循环，保留反弹敞口。
+    cfg 来自 model_versions.config['regime']：
+      {"enabled": true, "index_code": "000300", "ma_window": 20, "max_skip_days": 2}
+    cfg 缺 enabled 键视为未启用；指数数据不足 win+1 天时不启用（不误伤）。
+    返回 gated 日期字符串集合（这些日期不产生新买入）。streak 沿指数完整交易日轴累计，
+    单日调用也能拿到正确的连续计数上下文。
+    """
+    import pandas as _pd2
+    from datetime import datetime as _dtm, timedelta as _tdm
+    cfg = cfg or {}
+    if not cfg.get('enabled'):
+        return set()
+    idx_code = cfg.get('index_code', '000300')
+    win = int(cfg.get('ma_window', 20) or 20)
+    max_skip = int(cfg.get('max_skip_days', 2) or 2)
+    ds = sorted({str(d)[:10] for d in (dates or [])})
+    if not ds:
+        return set()
+    start = (_dtm.strptime(ds[0], '%Y-%m-%d') - _tdm(days=win * 3)).isoformat()
+    rows = db.execute(text(
+        "SELECT trade_date, close FROM index_daily_quote "
+        "WHERE stock_code=:c AND trade_date BETWEEN :s AND :e AND close IS NOT NULL "
+        "ORDER BY trade_date"
+    ), {"c": idx_code, "s": start, "e": ds[-1]}).fetchall()
+    if len(rows) < win + 1:
+        return set()
+    idx = _pd2.DataFrame(rows, columns=['d', 'close'])
+    idx['close'] = idx['close'].astype(float)
+    idx['ma'] = idx['close'].rolling(win).mean()
+    gated_all = set()
+    streak = 0
+    for r in idx.itertuples(index=False):
+        if _pd2.isna(r.ma):
+            continue  # MA 未成形期不设闸
+        d10 = str(r.d)[:10]
+        if r.close < r.ma:
+            streak += 1
+            if streak <= max_skip:
+                gated_all.add(d10)
+            else:
+                streak = 0  # 第 max_skip+1 天强制放行，连续计数归零
+        else:
+            streak = 0
+    return {d for d in ds if d in gated_all}
+
+
 def dag_task_model_train(trade_date=None, version=None, **kw):
     """Optuna 超参数搜索 + XGBoost 训练 + 逐轮回测 → 存储最优模型。
 
@@ -2861,7 +2922,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days,
                        bt_ver='', bt_label='', stop_loss=None, take_profit=None,
                        commission=None, stamp_tax=None, slippage=None,
-                       limit_up=None, limit_down=None):
+                       limit_up=None, limit_down=None, gated_dates=None):
             """回测引擎：资金约束 + 流动性约束 + 整数手约束 + 涨跌停约束。
 
             Args:
@@ -2877,6 +2938,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 take_profit: 止盈阈值（默认取配置值 × 2）
                 commission/stamp_tax/slippage: 成本参数（默认取配置值）
                 limit_up/limit_down: 涨停/跌停布尔数组（与 dates 对齐；涨停不买、跌停不卖）
+                gated_dates: 空仓信号日集合（YYYY-MM-DD）——该日不开新仓，持仓仍按止损/到期退出
             """
             sl_val = stop_loss if stop_loss is not None else 0.08
             tp_val = take_profit if take_profit is not None else 0.15
@@ -2990,6 +3052,13 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 holdings = surviving
 
                 # ── 2. 开仓：预测最高 N 只未持仓股票 ──
+                # 空仓信号日：不开新仓（持仓仍按止损/到期退出），权益记账连续
+                if gated_dates and str(d)[:10] in gated_dates:
+                    equity = cash + sum(h['shares'] * float(
+                        val_df[(val_df['date'] == d) & (val_df['code'] == h['code'])]['price'].iloc[0]
+                    ) if not val_df[(val_df['date'] == d) & (val_df['code'] == h['code'])].empty else 0 for h in holdings)
+                    equity_curve.append(equity)
+                    continue
                 day = val_df[val_df['date'] == d].copy()
                 # 排除已持仓
                 held_codes = {h['code'] for h in holdings}
@@ -3219,6 +3288,13 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         test_volume = df[test_mask]['volume'].values
         test_idx_ret = df[test_mask]['idx_ret_20d'].values
 
+        # 空仓闸门（regime）：训练评估与实盘信号同一规则，风险期不开新仓
+        _regime_cfg = cfg.get('regime') or {}
+        regime_gates = compute_regime_gates(db, df['trade_date'].unique(), _regime_cfg)
+        if _regime_cfg.get('enabled'):
+            update_node_progress(log_id=log_id, rows=4,
+                                 detail=f'空仓闸门已启用（指数<{_regime_cfg.get("ma_window", 20)}日线不开新仓，{len(regime_gates)} 个风险日）')
+
         def _run_backtests(mask):
             """对给定切分跑全部周期的回测，附带 test R²。"""
             res = {}
@@ -3235,7 +3311,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    hdays, bt_ver=ver, bt_label=label,
                                    stop_loss=stop_loss, take_profit=stop_loss*2,
                                    commission=commission, stamp_tax=stamp_tax, slippage=slippage,
-                                   limit_up=lups, limit_down=ldowns)
+                                   limit_up=lups, limit_down=ldowns,
+                                   gated_dates=regime_gates)
                     bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
                     res[label] = bt
             return res
