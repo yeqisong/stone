@@ -2923,7 +2923,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days,
                        bt_ver='', bt_label='', stop_loss=None, take_profit=None,
                        commission=None, stamp_tax=None, slippage=None,
-                       limit_up=None, limit_down=None, gated_dates=None):
+                       limit_up=None, limit_down=None, gated_dates=None, dd_gate=None):
             """回测引擎：资金约束 + 流动性约束 + 整数手约束 + 涨跌停约束。
 
             Args:
@@ -2940,6 +2940,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 commission/stamp_tax/slippage: 成本参数（默认取配置值）
                 limit_up/limit_down: 涨停/跌停布尔数组（与 dates 对齐；涨停不买、跌停不卖）
                 gated_dates: 空仓信号日集合（YYYY-MM-DD）——该日不开新仓，持仓仍按止损/到期退出
+                dd_gate: 组合熔断阈值（如 0.10）——净值较峰值回撤超阈值即停开仓，
+                         直至回撤收敛回阈值内（以昨日收盘净值判定，无未来函数）
             """
             sl_val = stop_loss if stop_loss is not None else 0.08
             tp_val = take_profit if take_profit is not None else 0.15
@@ -3053,8 +3055,12 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 holdings = surviving
 
                 # ── 2. 开仓：预测最高 N 只未持仓股票 ──
-                # 空仓信号日：不开新仓（持仓仍按止损/到期退出），权益记账连续
-                if gated_dates and str(d)[:10] in gated_dates:
+                # 组合熔断：昨日收盘净值较峰值回撤超 dd_gate → 停开仓（持仓按止损/到期退出）
+                peak_eq = max(equity_curve) if equity_curve else float(initial_cash)
+                _dd_gated = (dd_gate is not None and equity_curve
+                             and equity_curve[-1] < peak_eq * (1 - dd_gate))
+                # 空仓信号日/熔断生效：不开新仓（持仓仍按止损/到期退出），权益记账连续
+                if (gated_dates and str(d)[:10] in gated_dates) or _dd_gated:
                     equity = cash + sum(h['shares'] * float(
                         val_df[(val_df['date'] == d) & (val_df['code'] == h['code'])]['price'].iloc[0]
                     ) if not val_df[(val_df['date'] == d) & (val_df['code'] == h['code'])].empty else 0 for h in holdings)
@@ -3289,8 +3295,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         test_volume = df[test_mask]['volume'].values
         test_idx_ret = df[test_mask]['idx_ret_20d'].values
 
-        # 空仓闸门（regime）：训练评估与实盘信号同一规则，风险期不开新仓
+        # 空仓闸门（regime）+ 组合熔断（portfolio_gate）：训练评估与实盘信号同一规则
         _regime_cfg = cfg.get('regime') or {}
+        pdd_gate = (cfg.get('portfolio_gate') or {}).get('dd')
         regime_gates = compute_regime_gates(db, df['trade_date'].unique(), _regime_cfg)
         if _regime_cfg.get('enabled'):
             update_node_progress(log_id=log_id, rows=4,
@@ -3313,7 +3320,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    stop_loss=stop_loss, take_profit=stop_loss*2,
                                    commission=commission, stamp_tax=stamp_tax, slippage=slippage,
                                    limit_up=lups, limit_down=ldowns,
-                                   gated_dates=regime_gates)
+                                   gated_dates=regime_gates, dd_gate=pdd_gate)
                     bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
                     res[label] = bt
             return res
