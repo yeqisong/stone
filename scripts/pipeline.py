@@ -1767,8 +1767,13 @@ def dag_task_model_signal(trade_date=None, **kw):
                     rank = float((vals < p).mean() + 0.5 * (vals == p).mean())
                     # 强度：分位映射 0-3（与规则评分同量纲），SMALLINT 取整
                     strength = min(max(round(rank * 3), 0), 3)
-                    reason = (f'ML预测{p*100:.2f}%(top{buy_top_pct*100:.0f}%档)'
-                              if ml_mode == 'quantile' else f'ML预测{p*100:.2f}%(≥阈值{thr*100:.2f}%)')
+                    _lt = (model_cfg_obj.get('label_transform') or 'none')
+                    if _lt == 'rank':
+                        reason = (f'ML分位{p*100:.1f}%(top{buy_top_pct*100:.0f}%档)'
+                                  if ml_mode == 'quantile' else f'ML分位{p*100:.1f}%(≥阈值{thr*100:.2f}%)')
+                    else:
+                        reason = (f'ML预测{p*100:.2f}%(top{buy_top_pct*100:.0f}%档)'
+                                  if ml_mode == 'quantile' else f'ML预测{p*100:.2f}%(≥阈值{thr*100:.2f}%)')
                     _insert_buy(r, strength, reason, rank=rank)
                     buy_count += 1
 
@@ -2927,6 +2932,15 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         except ImportError:
             pass
 
+        # 标签截面排名化（label_transform=rank，v14 配置驱动）：收益数值噪声大且
+        # 模型决策只用排序，标签换为当日全市场百分位（0~1）——损失与决策对齐。
+        # 下游全部按排序消费预测分，对预测值量纲透明（原因文案在 signal 端适配）。
+        label_transform = cfg.get('label_transform', 'none')
+        if label_transform == 'rank':
+            for col in ['target_5d', 'target_10d', 'target_20d']:
+                df[col] = df.groupby('trade_date')[col].rank(pct=True)
+            logger.info('[train] 标签已截面排名化（label_transform=rank）')
+
         # ── 3. 标签 + 切分 ──
         update_node_progress(log_id=log_id, rows=3, detail='步骤3:标签计算')
 
@@ -2973,6 +2987,37 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         # 读取搜索空间（cfg 已在数据加载阶段获取）
         ss = cfg.get('search_space', {})
         n_trials = cfg.get('optuna_trials', 20)  # XGBoost 多核并行，20 轮足够收敛
+        # 训练目标（v14 配置驱动）：regression=XGBRegressor 回归；
+        # pairwise=XGBRanker rank:pairwise 按交易日分组学习排序——评估指标从 r²
+        # 改用预测分与标签的秩相关（Spearman，按字段名 r2 落库沿用 trial 记录结构）
+        train_objective = cfg.get('train_objective', 'regression')
+
+        def _fit_model(params, X, y, dates_of_X, X_es=None, y_es=None):
+            """按 train_objective 训练单周期模型，返回 (model, score_on_val 用 .score 或另行计算)。"""
+            if train_objective == 'pairwise':
+                from xgboost import XGBRanker
+                import itertools as _it
+                order = np.argsort(dates_of_X, kind='stable')
+                X_o, y_o = X[order], np.asarray(y)[order]
+                d_o = dates_of_X[order]
+                groups = np.array([len(g) for _, g in _it.groupby(d_o)], dtype=np.uint32)
+                m = XGBRanker(objective='rank:pairwise', **params)
+                m.fit(X_o, y_o, group=groups)
+                return m
+            from xgboost import XGBRegressor
+            if X_es is not None:
+                m = XGBRegressor(**params, early_stopping_rounds=20)
+                m.fit(X, y, eval_set=[(X_es, y_es)], verbose=False)
+            else:
+                m = XGBRegressor(**params)
+                m.fit(X, y)
+            return m
+
+        def _rank_score(model, X, y):
+            """pairwise/rank 标签下的评估：预测分与标签的 Spearman 秩相关。"""
+            from scipy.stats import spearmanr
+            p = model.predict(X)
+            return round(float(spearmanr(p, y).statistic), 4)
         update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:0/{n_trials} 开始搜索')
 
         # ── 回测引擎（模块四：资金管理 + 持仓 + 止损 + T+1）──
@@ -3304,10 +3349,14 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 Y_es = {tname: df[train_mask][tname].values[train_n:] for _, tname, _ in TARGETS}
 
                 total_r2 = 0
+                _tr_dates = df[train_mask]['trade_date'].values
                 for label, tname, hdays in TARGETS:
-                    model = XGBRegressor(**params, early_stopping_rounds=20)
-                    model.fit(X_tr, Y_tr[tname], eval_set=[(X_es, Y_es[tname])], verbose=False)
-                    r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
+                    if train_objective == 'pairwise':
+                        model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates)
+                        r2 = _rank_score(model, X_val, df[val_mask][tname])
+                    else:
+                        model = _fit_model(params, X_tr, Y_tr[tname], None, X_es, Y_es[tname])
+                        r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
                     models[label] = {'model': model, 'r2': r2}
                     total_r2 += r2
                 avg_r2 = total_r2 / len(TARGETS)
@@ -3335,10 +3384,13 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                       'subsample': 0.8, 'colsample_bytree': 0.8,
                       'n_jobs': -1, 'random_state': 42, 'verbosity': 0,
                       'device': TRAIN_DEVICE}
+            _tr_dates2 = df[train_mask]['trade_date'].values
             for label, tname, hdays in TARGETS:
-                model = XGBRegressor(**params)
-                model.fit(X_train, df[train_mask][tname])
-                r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
+                model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates2)
+                if train_objective == 'pairwise':
+                    r2 = _rank_score(model, X_val, df[val_mask][tname])
+                else:
+                    r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
                 best_models[label] = model
                 best_params_store[label] = {'params': params, 'r2': r2}
             update_node_progress(log_id=log_id, rows=1, detail='训练完成(无Optuna)')
@@ -3384,7 +3436,10 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    commission=commission, stamp_tax=stamp_tax, slippage=slippage,
                                    limit_up=lups, limit_down=ldowns,
                                    gated_dates=regime_gates, dd_gate=pdd_gate)
-                    bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
+                    if train_objective == 'pairwise':
+                        bt['r2'] = _rank_score(best_models[label], df[mask][FEATURES].values, df[mask][tname])
+                    else:
+                        bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
                     res[label] = bt
             return res
 

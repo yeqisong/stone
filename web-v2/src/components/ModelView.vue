@@ -140,6 +140,14 @@
               <n-select v-model:value="createForm.feature_norm" size="small" style="flex:1"
                 :options="[{label:'截面排名（推荐）',value:'cs_rank'},{label:'原始值（旧）',value:'none'}]" />
             </div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">标签变换</span>
+              <n-select v-model:value="createForm.label_transform" size="small" style="flex:1"
+                :options="[{label:'原始收益值',value:'none'},{label:'截面排名（v14）',value:'rank'}]" />
+            </div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">训练目标</span>
+              <n-select v-model:value="createForm.train_objective" size="small" style="flex:1"
+                :options="[{label:'回归（默认）',value:'regression'},{label:'排序 pairwise（v14）',value:'pairwise'}]" />
+            </div>
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">中性化</span>
               <n-switch v-model:value="createForm.feature_neut" size="small">
                 <template #checked>市值+行业</template>
@@ -328,7 +336,7 @@ const createForm = reactive({
   feature_names: [],
   optuna_trials: 50, initial_cash: 1000000, max_positions: 5,
   // v3.5 方法论：excess=超额收益标签（相对沪深300）；cs_rank=特征逐日截面排名
-  label_mode: 'excess', feature_norm: 'cs_rank',
+  label_mode: 'excess', feature_norm: 'cs_rank', label_transform: 'none', train_objective: 'regression',
   feature_neut: false,
   // ML 买入阈值：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
   signal_threshold_mode: 'quantile', buy_top_pct: 0.05, ml_confidence_threshold: 0.02,
@@ -420,6 +428,8 @@ function startEditConfig() {
   createForm.ml_confidence_threshold = sigCfg.ml_confidence_threshold ?? 0.02
   // v3.5：旧模型 config 无此二键 → 回退旧口径，保证编辑保存不改变语义
   createForm.label_mode = cfg.label_mode || 'absolute'
+  createForm.label_transform = cfg.label_transform || 'none'
+  createForm.train_objective = cfg.train_objective || 'regression'
   createForm.feature_norm = cfg.feature_norm || 'none'
   createForm.feature_neut = cfg.feature_neut || false
   showCreate.value = true
@@ -438,6 +448,8 @@ async function doSaveConfig() {
       features: createForm.feature_names,
       optuna_trials: createForm.optuna_trials,
       label_mode: createForm.label_mode,
+      label_transform: createForm.label_transform,
+      train_objective: createForm.train_objective,
       feature_norm: createForm.feature_norm,
       feature_neut: createForm.feature_neut,
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
@@ -480,6 +492,8 @@ async function doCreate() {
       buy_top_pct: createForm.buy_top_pct,
       ml_confidence_threshold: createForm.ml_confidence_threshold,
       label_mode: createForm.label_mode,
+      label_transform: createForm.label_transform,
+      train_objective: createForm.train_objective,
       feature_norm: createForm.feature_norm,
       feature_neut: createForm.feature_neut,
     })

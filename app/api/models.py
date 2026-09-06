@@ -80,6 +80,10 @@ class CreateModel(BaseModel):
     # 旧模型 config 无这两个键时训练端按 absolute/none 兼容处理
     label_mode: str = "excess"
     feature_norm: str = "cs_rank"
+    # 训练方式（v14 配置驱动）：label_transform=rank 标签截面排名化（损失对齐排序决策）；
+    # train_objective=pairwise 用 XGBRanker rank:pairwise 按日分组学排序（评估指标=秩相关）
+    label_transform: str = "none"     # none / rank
+    train_objective: str = "regression"  # regression / pairwise
     # 交易规则（买卖规则描述，前端表单整段提交）
     trading_rules: Optional[dict] = None
     # 交易成本
@@ -297,6 +301,8 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
             "trading_rules": body.trading_rules or {},
             "label_mode": body.label_mode,
             "feature_norm": body.feature_norm,
+            "label_transform": body.label_transform,
+            "train_objective": body.train_objective,
             "risk": {
                 "stop_loss_pct": body.stop_loss_pct,
                 "signal_timeout_days": body.signal_timeout_days,
