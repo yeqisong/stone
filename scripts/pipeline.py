@@ -1702,20 +1702,23 @@ def dag_task_model_signal(trade_date=None, **kw):
             if dif > hist: score += 1; reasons.append('MACD正柱')
             return score, reasons
 
-        def _insert_buy(row, strength, reason):
+        def _insert_buy(row, strength, reason, rank=None):
             p5 = pred_by_h.get('5d', {}).get(row.stock_code)
             p10 = pred_by_h.get('10d', {}).get(row.stock_code)
             p20 = pred_by_h.get('20d', {}).get(row.stock_code)
             score = round((p5 + p10 + p20) / 3.0, 4) if None not in (p5, p10, p20) else None
             db.execute(text("""
                 INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference,
-                    predict_5d_return, predict_10d_return, predict_20d_return, predict_score)
-                VALUES (:d,:c,:n,'buy',:s,:p,'model_signal',:r,true,:v,:sn,:pref,:p5,:p10,:p20,:score)
+                    predict_5d_return, predict_10d_return, predict_20d_return, predict_score,
+                    ml_confidence, suggested_action, source_strategies)
+                VALUES (:d,:c,:n,'buy',:s,:p,'model_signal',:r,true,:v,:sn,:pref,:p5,:p10,:p20,:score,
+                    :conf, 'buy', '["model_signal"]')
             """), {"d": td, "c": row.stock_code, "n": row.stock_name, "s": strength, "p": row.close,
                    "r": reason, "v": ver, "sn": model_snapshot, "pref": pref_mode,
                    "p5": round(p5, 4) if p5 is not None else None,
                    "p10": round(p10, 4) if p10 is not None else None,
-                   "p20": round(p20, 4) if p20 is not None else None, "score": score})
+                   "p20": round(p20, 4) if p20 is not None else None, "score": score,
+                   "conf": round(rank, 3) if rank is not None else None})
 
         if use_predict and xgb_models:
             # M2：预测统一走 predict_for_version（特征派生/标准化/模型加载共享唯一入口，消除内联漂移）
@@ -1766,7 +1769,7 @@ def dag_task_model_signal(trade_date=None, **kw):
                     strength = min(max(round(rank * 3), 0), 3)
                     reason = (f'ML预测{p*100:.2f}%(top{buy_top_pct*100:.0f}%档)'
                               if ml_mode == 'quantile' else f'ML预测{p*100:.2f}%(≥阈值{thr*100:.2f}%)')
-                    _insert_buy(r, strength, reason)
+                    _insert_buy(r, strength, reason, rank=rank)
                     buy_count += 1
 
             # 预测失败回退规则评分
