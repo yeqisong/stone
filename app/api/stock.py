@@ -328,11 +328,19 @@ def get_stock_kline(
 # ── 信号效果追踪 ──
 
 @router.get("/signal/stats")
-def get_signal_stats(days: int = Query(90, ge=30, le=365)):
-    """信号效果统计：胜率、平均收益、趋势、行业分布。"""
+def get_signal_stats(days: int = Query(90, ge=30, le=365),
+                     model_version: str = Query('active', description="active=当前ACTIVE模型 / all=全部 / 具体版本号")):
+    """信号效果统计：胜率、平均收益、趋势、行业分布。默认只统计当前 ACTIVE 模型。"""
     db = get_sync_db()
     try:
         min_date = "CURRENT_DATE - :days * INTERVAL '1 day'"
+        version_filter = ""
+        vparams = {}
+        if model_version == 'active':
+            version_filter = " AND model_version = (SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1)"
+        elif model_version != 'all':
+            version_filter = " AND model_version = :mv"
+            vparams = {"mv": model_version}
 
         # 总览
         overview = db.execute(text(f"""
@@ -345,8 +353,8 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
                    AVG(forward_10d_return) as avg_f10d,
                    AVG(forward_20d_return) as avg_f20d
             FROM signal_history
-            WHERE strategy_name='model_signal' AND signal_date >= {min_date}
-        """), {"days": days}).fetchone()
+            WHERE strategy_name='model_signal' AND signal_date >= {min_date}{version_filter}
+        """), {**{"days": days}, **vparams}).fetchone()
 
         total = overview.total or 0
         closed = overview.closed or 0
@@ -359,9 +367,9 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
                    COUNT(*) FILTER (WHERE status='closed' AND actual_return > 0) * 1.0 /
                      NULLIF(COUNT(*) FILTER (WHERE status='closed'), 0) as win_rate
             FROM signal_history
-            WHERE strategy_name='model_signal' AND signal_date >= {min_date}
+            WHERE strategy_name='model_signal' AND signal_date >= {min_date}{version_filter}
             GROUP BY signal_date ORDER BY signal_date
-        """), {"days": days}).fetchall()
+        """), {**{"days": days}, **vparams}).fetchall()
         daily_trend = [{"date": str(r[0]), "signals": r[1], "win_rate": round(float(r[2]) if r[2] else 0, 3)} for r in daily]
 
         # 收益分布
@@ -369,9 +377,9 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
             SELECT width_bucket(actual_return, -0.15, 0.15, 10) as bucket, COUNT(*)
             FROM signal_history
             WHERE strategy_name='model_signal' AND status='closed'
-              AND actual_return IS NOT NULL AND signal_date >= {min_date}
+              AND actual_return IS NOT NULL AND signal_date >= {min_date}{version_filter}
             GROUP BY bucket ORDER BY bucket
-        """), {"days": days}).fetchall()
+        """), {**{"days": days}, **vparams}).fetchall()
         buckets = [round(-0.15 + 0.03 * i, 2) for i in range(11)]
         counts = [0] * 11
         for r in dist:
@@ -388,10 +396,10 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
             FROM signal_history sh
             LEFT JOIN stock_master sm ON sm.stock_code = sh.stock_code AND sm.stock_type = 'stock'
-            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
+            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}{version_filter}
             GROUP BY sm.industry_l2 HAVING COUNT(*) >= 5
             ORDER BY signals DESC LIMIT 15
-        """), {"days": days}).fetchall()
+        """), {**{"days": days}, **vparams}).fetchall()
         by_industry = [{"industry": r[0] or "未分类", "signals": r[1],
                         "win_rate": round(float(r[2]) if r[2] else 0, 3),
                         "avg_return": round(float(r[3]) if r[3] else 0, 4)} for r in industry]
@@ -404,16 +412,22 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365)):
                      NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
             FROM signal_history sh
-            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}
+            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}{version_filter}
             GROUP BY sh.stock_code, sh.stock_name HAVING COUNT(*) >= 3
             ORDER BY signals DESC LIMIT 20
-        """), {"days": days}).fetchall()
+        """), {**{"days": days}, **vparams}).fetchall()
         top = [{"stock_code": r[0], "stock_name": r[1], "signals": r[2],
                 "win_rate": round(float(r[3]) if r[3] else 0, 3),
                 "avg_return": round(float(r[4]) if r[4] else 0, 4)} for r in top_stocks]
 
+        used_version = model_version
+        if model_version == 'active':
+            used_version = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1"
+            )).scalar()
         return {
             "days": days,
+            "model_version": used_version,
             "overview": {
                 "total": total, "closed": closed, "open": overview.open_sigs or 0,
                 "wins": wins,

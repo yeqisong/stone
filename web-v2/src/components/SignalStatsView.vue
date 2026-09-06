@@ -5,6 +5,13 @@
     统计加载失败 <n-button size="tiny" @click="load" style="margin-left:8px">重试</n-button>
   </div>
   <template v-else-if="stats">
+    <!-- 版本筛选 -->
+    <n-space align="center" style="margin-bottom:8px" wrap>
+      <span style="font-size:12px;color:var(--c-text-dim)">统计版本:</span>
+      <n-select v-model:value="selVersion" :options="versionOptions" size="tiny" style="width:200px"
+        @update:value="load" />
+      <span style="font-size:11px;color:var(--c-text-faint)">近 {{ stats.days }} 天 · model_signal</span>
+    </n-space>
     <!-- Overview -->
     <StatStrip :items="overviews" />
 
@@ -38,7 +45,7 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import { ref, onMounted, nextTick } from 'vue'
-import { NSpin, NDataTable, NButton } from 'naive-ui'
+import { NSpin, NDataTable, NButton, NSpace, NSelect } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import StatStrip from './StatStrip.vue'
@@ -65,12 +72,22 @@ const stkCols = [
 
 import { h } from 'vue'
 
+const selVersion = ref('active')
+const versionOptions = ref([{ label: '当前 ACTIVE 模型', value: 'active' }, { label: '全部模型', value: 'all' }])
+
 async function load() {
   loading.value = true
   try {
-    const r = await axios.get(API + '/api/signal/stats?days=90')
+    const r = await axios.get(API + '/api/signal/stats', { params: { days: 90, model_version: selVersion.value } })
     stats.value = r.data
     const o = r.data.overview
+    if (versionOptions.value.length <= 2) {
+      try {
+        const mr = await axios.get(API + '/api/v1/models')
+        const vs = (mr.data?.versions || []).filter(v => ['ACTIVE','PENDING','ARCHIVED'].includes(v.status)).map(v => ({ label: v.version + (v.status==='ACTIVE'?' (现役)':''), value: v.version }))
+        versionOptions.value = [{ label: '当前 ACTIVE 模型', value: 'active' }, ...vs, { label: '全部模型', value: 'all' }]
+      } catch(e) {}
+    }
     overviews.value = [
       { label:'累计信号', value: o.total, color: 'var(--c-text)' },
       { label:'已了结', value: o.closed, color: 'var(--c-text)' },
@@ -79,10 +96,11 @@ async function load() {
       { label:'前5日均', value: (o.avg_forward_5d>=0?'+':'')+(o.avg_forward_5d*100).toFixed(2)+'%', color: o.avg_forward_5d>=0?'#ef4444':'#10b981' },
       { label:'前10日均', value: (o.avg_forward_10d>=0?'+':'')+(o.avg_forward_10d*100).toFixed(2)+'%', color: o.avg_forward_10d>=0?'#ef4444':'#10b981' },
     ]
+    loading.value = false
     await nextTick()
     drawTrend()
     drawDist()
-  } catch(e) { loadError.value = true } finally { loading.value = false }
+  } catch(e) { loadError.value = true; loading.value = false }
 }
 
 function makeChart(id, opt) {
