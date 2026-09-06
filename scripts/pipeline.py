@@ -1219,6 +1219,31 @@ def limit_flags(df):
     return pct >= lim, pct <= -lim
 
 
+def _paper_meta_from_model(db, ver, td):
+    """从 ACTIVE 模型 config 构造纸面组合参数（键名/单位与训练评估口径对齐）。
+
+    2026-09-06 审计修复：原初始化读 trading_rules.risk_management（模型配置无此键）
+    → 全部落默认（止损恒 5%），且配置首次写入后永不随模型激活刷新（冻结在 v8.0）。
+    对齐口径：stop_loss=risk.stop_loss_pct/100（模型配置是百分数值）、
+    take_profit=止损×2（训练回测同式）、trailing=0（训练回测无移动止盈）、
+    hold_days=risk.signal_timeout_days。
+    """
+    import json as _json
+    from sqlalchemy import text
+    mcfg = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
+    c = _json.loads(mcfg) if isinstance(mcfg, str) else (mcfg or {})
+    risk = c.get('risk', {}) or {}
+    stop = float(risk.get('stop_loss_pct', 8)) / 100.0
+    return {'initial_cash': c.get('initial_cash', 1_000_000),
+            'max_positions': int(c.get('max_positions', 5)),
+            'stop_loss': stop,
+            'take_profit': round(stop * 2, 4),
+            'trailing': 0.0,
+            'hold_days': int(risk.get('signal_timeout_days', 20)),
+            'portfolio_gate_dd': (c.get('portfolio_gate') or {}).get('dd'),
+            'model_version': ver, 'started': td}
+
+
 def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
     """paper_portfolio 节点 — 纸面组合（影子运行，v2 撮合内核）。
 
@@ -1261,17 +1286,18 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
             "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
         if meta_row:
             meta = _json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
+            # 模型切换即刷新：旧配置冻结在上一任模型的风控（v8.0 止损5%/5仓），
+            # 新 ACTIVE 上线后若不刷新，纸面行为与该模型回测承诺完全脱节
+            if meta.get('model_version') != ver:
+                meta = _paper_meta_from_model(db, ver, td)
+                db.execute(text(
+                    "UPDATE strategy_config SET params=:p WHERE strategy_name='paper_portfolio'"),
+                    {"p": _json.dumps(meta, ensure_ascii=False)})
+                db.commit()
+                logger.info(f"[paper] 模型切换→{ver}，纸面风控已刷新: 止损{meta['stop_loss']:.0%} "
+                            f"{meta['max_positions']}仓 持有{meta['hold_days']}日")
         else:
-            mcfg = db.execute(text("SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).scalar()
-            c = _json.loads(mcfg) if isinstance(mcfg, str) else (mcfg or {})
-            risk = (c.get('trading_rules', {}) or {}).get('risk_management', {}) or {}
-            meta = {'initial_cash': c.get('initial_cash', 1_000_000),
-                    'max_positions': c.get('max_positions', 5),
-                    'stop_loss': risk.get('stop_loss', 0.05),
-                    'take_profit': risk.get('take_profit', 0.10),
-                    'trailing': risk.get('trailing_retracement', 0.05),
-                    'hold_days': risk.get('max_holding_days', 20),
-                    'model_version': ver, 'started': td}
+            meta = _paper_meta_from_model(db, ver, td)
             db.execute(text("""
                 INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
                 VALUES ('paper_portfolio', '纸面组合（影子运行）', true, :p)
@@ -1312,13 +1338,29 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
             range_start = td
 
         # 信号（回放取整段 / 单日取当日），按 (date, code) 索引
+        # 评分用 predict_score（模型三周期均值预测），历史行/异常行回退 strength
+        # （2026-09-06 审计修复：原用 0-3 粗分档 strength，top2% 下同档并列靠代码序
+        #   随机买入，纸面选股与模型排序脱节）
         sig_rows = db.execute(text(
-            "SELECT signal_date, stock_code, strength, id, stock_name FROM signal_history "
+            "SELECT signal_date, stock_code, strength, id, stock_name, predict_score FROM signal_history "
             "WHERE strategy_name='model_signal' AND direction='buy' AND model_version=:v "
             "AND signal_date >= :s AND signal_date <= :d ORDER BY signal_date, id"),
             {"v": ver, "s": range_start, "d": td}).fetchall()
-        sig_map = {(str(r[0])[:10], r[1]): {'strength': int(r[2] or 0), 'signal_id': r[3],
+        sig_map = {(str(r[0])[:10], r[1]): {'strength': float(r[5]) if r[5] is not None else float(r[2] or 0),
+                                            'signal_id': r[3],
                                             'stock_name': r[4] or ''} for r in sig_rows}
+        # 组合熔断（与训练评估同口径）：最新 EOD 净值较历史峰值回撤超阈值 → 今日不供新买入信号
+        # （持仓退出由引擎照常处理）
+        pdd = meta.get('portfolio_gate_dd')
+        if pdd:
+            eod_all = db.execute(text(
+                "SELECT trade_date, equity FROM paper_trades WHERE action='EOD' AND trade_date < :d "
+                "ORDER BY trade_date"), {"d": range_start}).fetchall()
+            if eod_all:
+                eq_hist = [float(r[1]) for r in eod_all]
+                if eq_hist and eq_hist[-1] < max(eq_hist) * (1 - float(pdd)):
+                    sig_map = {(d_, c): v_ for (d_, c), v_ in sig_map.items() if d_ != td}
+                    logger.info(f"[paper] 组合熔断生效（回撤 {(1 - eq_hist[-1]/max(eq_hist)):.1%} ≥ {pdd:.0%}），{td} 停止开仓")
 
         # 既有持仓（单日步进时作为种子账户）
         pos_rows = db.execute(text("SELECT * FROM paper_positions")).fetchall()
@@ -1661,22 +1703,38 @@ def dag_task_model_signal(trade_date=None, **kw):
             return score, reasons
 
         def _insert_buy(row, strength, reason):
+            p5 = pred_by_h.get('5d', {}).get(row.stock_code)
+            p10 = pred_by_h.get('10d', {}).get(row.stock_code)
+            p20 = pred_by_h.get('20d', {}).get(row.stock_code)
+            score = round((p5 + p10 + p20) / 3.0, 4) if None not in (p5, p10, p20) else None
             db.execute(text("""
-                INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference)
-                VALUES (:d,:c,:n,'buy',:s,:p,'model_signal',:r,true,:v,:sn,:pref)
+                INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference,
+                    predict_5d_return, predict_10d_return, predict_20d_return, predict_score)
+                VALUES (:d,:c,:n,'buy',:s,:p,'model_signal',:r,true,:v,:sn,:pref,:p5,:p10,:p20,:score)
             """), {"d": td, "c": row.stock_code, "n": row.stock_name, "s": strength, "p": row.close,
-                   "r": reason, "v": ver, "sn": model_snapshot, "pref": pref_mode})
+                   "r": reason, "v": ver, "sn": model_snapshot, "pref": pref_mode,
+                   "p5": round(p5, 4) if p5 is not None else None,
+                   "p10": round(p10, 4) if p10 is not None else None,
+                   "p20": round(p20, 4) if p20 is not None else None, "score": score})
 
         if use_predict and xgb_models:
             # M2：预测统一走 predict_for_version（特征派生/标准化/模型加载共享唯一入口，消除内联漂移）
-            ml_pred, ml_err = predict_for_version(db, ver, df_today, today_str, today_str,
-                                                  horizon=[5, 10, 20])
-            preds_map = {}      # stock_code -> 预测收益率均值
+            # 分周期各调一次：均值做截面排序（predict_score），同时落库 predict_{5,10,20}d_return
+            # （2026-09-06 审计修复：四列建表以来从未写入，信号页预测列恒空、纸面组合无分可用）
+            _p5, _e5 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=5)
+            _p10, _e10 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=10)
+            _p20, _e20 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=20)
+            preds_map = {}      # stock_code -> 预测收益率均值（排序依据）
+            pred_by_h = {}      # 周期 -> {stock_code: 预测值}
             fallback_rows = []  # 预测失败（特征缺失/模型异常）→ 回退规则评分
-            if ml_pred is not None:
-                preds_map = {df_today.loc[i, 'stock_code']: float(v) for i, v in ml_pred.items()}
+            if _p5 is not None and _p10 is not None and _p20 is not None:
+                for h, p in (('5d', _p5), ('10d', _p10), ('20d', _p20)):
+                    pred_by_h[h] = {df_today.loc[i, 'stock_code']: float(v) for i, v in p.items()}
+                preds_map = {c: (v5 + pred_by_h['10d'][c] + pred_by_h['20d'][c]) / 3.0
+                             for c, v5 in pred_by_h['5d'].items()
+                             if c in pred_by_h['10d'] and c in pred_by_h['20d']}
             else:
-                logger.warning(f"[model_signal] 统一预测入口失败: {ml_err}，整体回退规则模式")
+                logger.warning(f"[model_signal] 统一预测入口失败: {_e5 or _e10 or _e20}，整体回退规则模式")
                 fallback_rows = rows
 
             # 阈值：quantile=当日预测 top N%（精确截断，模型无区分度时比例依然固定）；absolute=绝对预测收益率
@@ -2096,6 +2154,8 @@ def dag_task_model_health(trade_date=None, **kw):
                 if sig_d in cal_idx:
                     held = cal_idx[sig_d]                 # 信号日到今天隔了几个交易日
                     expired = held >= timeout_days
+                elif sig_d < trade_cal[-1]:
+                    expired = True  # 早于80天日历窗口的悬空信号（原逻辑永不过期）
                 if sig.direction == 'buy':
                     if pnl < -stop:
                         reason = 'stop_loss'
