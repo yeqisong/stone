@@ -310,12 +310,12 @@ def compute_feature(
     import re as _re
 
     try:
-        # 0. 从公式提取需要的原始字段（OHLCV + 基本面注册表字段）
+        # 0. 从公式提取需要的原始字段（OHLCV + 基本面/拓展表注册表——动态生成单一事实源。
+        #    2026-09-07 修复：此处原为手写硬编码名单，与 EXTRA_FIELD_SOURCES 漂移——
+        #    roe/revenue_yoy/profit_yoy 加了拉取注册却不在提取名单，公式解析不到字段 → 0 行）
         _ohlcv_fields = {"close", "open", "high", "low", "volume", "amount"}
-        found = set(_re.findall(
-            r'\b(close|open|high|low|volume|amount|pe_ttm|pb_mrq|ps_ttm|dv_ratio|dv_ttm'
-            r'|turnover_rate|volume_ratio|circ_mv|total_mv'
-            r'|buy_lg_amt|sell_lg_amt|buy_elg_amt|sell_elg_amt|net_mf_amt|margin_rzye|margin_rzmre|margin_total)\b', formula))
+        _all_reg_fields = sorted(_ohlcv_fields | set(EXTRA_FIELD_SOURCES) | set(_ALL_EXTRA_TABLE_COLS))
+        found = set(_re.findall(r'\b(' + '|'.join(_all_reg_fields) + r')\b', formula))
         ohlv_cols = sorted(_ohlcv_fields & found)
         extra_cols = sorted((set(EXTRA_FIELD_SOURCES) | set(_ALL_EXTRA_TABLE_COLS)) & found)
         needed_cols = ohlv_cols + extra_cols
