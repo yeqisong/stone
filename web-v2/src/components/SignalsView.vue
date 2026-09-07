@@ -14,7 +14,7 @@
   <template v-if="!showStats">
     <div style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">扫描 <b>{{data.scanned}}</b> 只, 买入 <b>{{data.total_signals}}</b> 只</div>
     <div v-if="data.signals" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-      <n-data-table :columns="columns" :data="pagedSignals" size="small" :scroll-x="840" />
+      <n-data-table :columns="columns" :data="pagedSignals" size="small" :scroll-x="880" />
     </div>
     <n-empty v-else description="暂无信号" />
     <n-space justify="end" style="margin-top:10px">
@@ -74,6 +74,7 @@ const columns = computed(() => {
   return [
     ...base,
     { title:'预测10d', key:'predict_10d', width:70, align:'right', render(r){ const v=r.predict_10d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
+    { title:'预测20d', key:'predict_20d', width:70, align:'right', render(r){ const v=r.predict_20d; return v!=null ? h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%') : '—' }},
     { title:'策略', key:'reason', minWidth:260, render(r){return h('span',{style:{fontSize:'11px'}}, r.reason)} },
   ]
 })
