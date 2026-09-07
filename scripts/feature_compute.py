@@ -1075,7 +1075,20 @@ def compute_all_features(
         from datetime import datetime as _dtp, timedelta as _tdp
         margin = max(int(max_lb * 2.0), 10)
         fetch_start = (_dtp.strptime(start_date, "%Y-%m-%d") - _tdp(days=margin)).strftime("%Y-%m-%d")
-    df = _fetch_ohlcv(db, target_entity, fetch_start, end_date)
+    # 2026-09-07 修复：共享拉取必须携带全部公式引用字段的并集——原实现不传 columns，
+    # 共享 df 只有 OHLCV，凡公式引用基本面/资金流字段的特征在夜间节点全部失败
+    # （ep_ttm/bp_mrq/size_inv 等 11 个，手动单算正常因单算路径自检测字段）
+    import re as _re0
+    _base = {"close", "open", "high", "low", "volume", "amount"}
+    _all_fields = sorted(_base | set(EXTRA_FIELD_SOURCES) | set(_ALL_EXTRA_TABLE_COLS))
+    _union = set(_base)
+    for _, f in rows:
+        _union |= set(_re0.findall(r'\b(' + '|'.join(_all_fields) + r')\b', f))
+        if _re0.search(r'\batr\b', f):
+            _union |= {"high", "low"}
+        if _re0.search(r'\bneut\b', f):
+            _union |= {"circ_mv"}
+    df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, columns=sorted(_union))
 
     results = []
     for r in rows:

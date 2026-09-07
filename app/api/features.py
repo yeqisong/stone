@@ -1285,6 +1285,16 @@ def _run_compute(task_id, feature_id, feature_name, target_entity, formula, star
 
         _report(70, f"已计算 {rows_count} 行")
 
+        # 重算完成后 pending_recalc 自动翻回 enabled（2026-09-07 修复：
+        # 修改公式标记 pending_recalc 后无任何路径恢复，夜间节点只算 enabled，
+        # fund_ep/fund_bp 修复公式重算完成却永久滞留 pending 状态被跳过）
+        try:
+            db.execute(text(
+                "UPDATE features SET status='enabled' WHERE id=:fid AND status='pending_recalc'"),
+                {"fid": feature_id})
+            db.commit()
+        except Exception:
+            db.rollback()
         db.close()
 
         # 数据诊断：总格子、正常缺失(停牌+lookback)、异常缺失、完整度

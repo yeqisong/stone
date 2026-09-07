@@ -593,10 +593,32 @@ def dag_task_fund(trade_date=None, **kw):
         saved = batch_upsert_fundamentals(db, rows)
         # 日度 PE/PB 追加到 history（PE 历史走势图数据源）
         hist = append_fundamentals_history(db, rows)
-        # baostock 补 ROE/营收/净利仅发生在补数场景（串行逐只较慢，DAG 节点不做同步补充）
-        # DAG 每日流程：tushare 主字段入库；ROE 等缺口由状态页补数触发补充
+        # 当日 roe/营收/净利前向填充（2026-09-07 修复：此前设计依赖 baostock 补数场景，
+        # 但该链路长期挂起——面板 roe 只有历史回填的脚印、新交易日永远 NULL，
+        # fund_roe 族因子逐日断供。改为库内 fina_indicator 按公告日时点填充，零网络调用）
+        try:
+            synced = db.execute(text("""
+                WITH cand AS (
+                  SELECT fh.id, fi.roe, fi.or_yoy, fi.netprofit_yoy
+                  FROM stock_fundamentals_history fh
+                  JOIN LATERAL (
+                    SELECT roe, or_yoy, netprofit_yoy FROM fina_indicator fi
+                    WHERE fi.stock_code=fh.stock_code AND fi.ann_date<=fh.report_date AND fi.roe IS NOT NULL
+                    ORDER BY fi.ann_date DESC LIMIT 1
+                  ) fi ON true
+                  WHERE fh.roe IS NULL AND fh.report_date >= CURRENT_DATE - INTERVAL '3 day'
+                )
+                UPDATE stock_fundamentals_history fh
+                SET roe=cand.roe, revenue_yoy=cand.or_yoy, profit_yoy=cand.netprofit_yoy
+                FROM cand WHERE fh.id=cand.id
+            """)).rowcount
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"[fund] 当日 roe 前向填充失败: {e}")
+            synced = 0
         if rows:
-            logger.info(f"[fund] DAG 节点写 tushare 主字段+日度PE({hist}行)，ROE 等由补数场景补充")
+            logger.info(f"[fund] DAG 节点写 tushare 主字段+日度PE({hist}行)，roe前向填充{synced}行")
         db.close()
         return {'rows': saved, '_source': source.name}
     try:
