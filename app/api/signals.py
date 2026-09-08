@@ -92,11 +92,23 @@ def get_buy_signals(
             "SELECT COUNT(*) FROM stock_master WHERE stock_type='stock' AND status='N'"))
         scanned = result.scalar() or 0
 
+        # rank 标签模型（v15+）的 predict_* 是当日截面分位(0~1)而非收益率，
+        # 前端需按分位渲染（否则 0.52 显示成 +52% 收益造成误读）
+        predict_is_rank = False
+        if active_ver:
+            try:
+                _cfg = db.execute(text(
+                    "SELECT config FROM model_versions WHERE version=:v"), {"v": active_ver}).scalar()
+                _c = json.loads(_cfg) if isinstance(_cfg, str) else (_cfg or {})
+                predict_is_rank = (_c.get('label_transform') == 'rank')
+            except Exception:
+                pass
         return {
             "signal_date": signal_date,
             "scanned": scanned,
             "total_signals": total,
             "top_n": top_n,
+            "predict_is_rank": predict_is_rank,
             "signals": signals,
         }
     finally:
