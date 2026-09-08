@@ -990,7 +990,11 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
         for h, model in models:
             # 特征缺失行保持 NaN 交给 XGBoost 缺失分支（训练端 dropna 无缺失样本；
             # 旧信号内联同口径——fillna(0) 会把"无数据"伪装成截面最低分位，已废弃）
-            preds.append(model.predict(val_df[cols].values))
+            # 二分类模型取正类概率：predict 返回 0/1 类标签会让排序全部并列
+            if hasattr(model, 'predict_proba'):
+                preds.append(model.predict_proba(val_df[cols].values)[:, 1])
+            else:
+                preds.append(model.predict(val_df[cols].values))
         y = _np.mean(preds, axis=0) if len(preds) > 1 else preds[0]
         return _pd.Series(y, index=pred_index), None
     except Exception:
@@ -3061,8 +3065,12 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             return round(float(spearmanr(p, y).statistic), 4)
 
         def _auc_score(model, X, y):
-            """binary 标签下的评估：AUC（Mann-Whitney 秩公式，纯 numpy）。"""
-            p = model.predict(X)
+            """binary 标签下的评估：AUC（Mann-Whitney 秩公式，纯 numpy）。
+
+            必须取 predict_proba——XGBClassifier.predict 返回 0/1 类标签，
+            正类基础率 20% 时预测几乎全 0，并列秩会让 AUC 恒 ≈0.5（假随机）。
+            """
+            p = model.predict_proba(X)[:, 1] if hasattr(model, 'predict_proba') else model.predict(X)
             y = np.asarray(y)
             order = np.argsort(p, kind='stable')
             ranks = np.empty(len(p)); ranks[order] = np.arange(1, len(p) + 1)
@@ -3079,6 +3087,12 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             if train_objective == 'pairwise':
                 return _rank_score(model, X, y)
             return round(float(model.score(X, y)), 4)
+
+        def _pred_score(model, X):
+            """预测分统一入口：分类器取正类概率（predict 是 0/1 类标签，排序会全部并列）。"""
+            if hasattr(model, 'predict_proba'):
+                return model.predict_proba(X)[:, 1]
+            return model.predict(X)
         update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:0/{n_trials} 开始搜索')
 
         # ── 回测引擎（模块四：资金管理 + 持仓 + 止损 + T+1）──
@@ -3496,7 +3510,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             ldowns = df[mask]['_limit_down'].values
             for label, tname, hdays in TARGETS:
                 if label in best_models:
-                    y_pred = best_models[label].predict(df[mask][FEATURES])
+                    y_pred = _pred_score(best_models[label], df[mask][FEATURES].values)
                     bt = _backtest(df[mask][tname].values, y_pred, dates, codes, closes, vols,
                                    hdays, bt_ver=ver, bt_label=label,
                                    stop_loss=stop_loss, take_profit=stop_loss*2,
