@@ -101,6 +101,7 @@ def get_buy_signals(
                     "SELECT config FROM model_versions WHERE version=:v"), {"v": active_ver}).scalar()
                 _c = json.loads(_cfg) if isinstance(_cfg, str) else (_cfg or {})
                 predict_is_rank = (_c.get('label_transform') == 'rank')
+                predict_is_prob = (_c.get('label_transform') == 'top20')
             except Exception:
                 pass
         return {
@@ -109,6 +110,7 @@ def get_buy_signals(
             "total_signals": total,
             "top_n": top_n,
             "predict_is_rank": predict_is_rank,
+            "predict_is_prob": predict_is_prob,
             "signals": signals,
         }
     finally:

@@ -1791,7 +1791,10 @@ def dag_task_model_signal(trade_date=None, **kw):
                     # 强度：分位映射 0-3（与规则评分同量纲），SMALLINT 取整
                     strength = min(max(round(rank * 3), 0), 3)
                     _lt = (model_cfg_obj.get('label_transform') or 'none')
-                    if _lt == 'rank':
+                    if _lt == 'top20':
+                        reason = (f'入前20%概率{p*100:.0f}%(top{buy_top_pct*100:.0f}%档)'
+                                  if ml_mode == 'quantile' else f'入前20%概率{p*100:.0f}%(≥阈值{thr*100:.2f}%)')
+                    elif _lt == 'rank':
                         reason = (f'ML分位{p*100:.1f}%(top{buy_top_pct*100:.0f}%档)'
                                   if ml_mode == 'quantile' else f'ML分位{p*100:.1f}%(≥阈值{thr*100:.2f}%)')
                     else:
@@ -2963,6 +2966,11 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             for col in ['target_5d', 'target_10d', 'target_20d']:
                 df[col] = df.groupby('trade_date')[col].rank(pct=True)
             logger.info('[train] 标签已截面排名化（label_transform=rank）')
+        elif label_transform == 'top20':
+            # 二分类：名次进前 20% → 1。模型输出"入前20%概率"（有幅度、可比、可做仓位抓手）
+            for col in ['target_5d', 'target_10d', 'target_20d']:
+                df[col] = (df.groupby('trade_date')[col].rank(pct=True) >= 0.8).astype(int)
+            logger.info('[train] 标签已二值化（label_transform=top20，前20%为正类）')
 
         # ── 3. 标签 + 切分 ──
         update_node_progress(log_id=log_id, rows=3, detail='步骤3:标签计算')
@@ -3017,6 +3025,16 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
 
         def _fit_model(params, X, y, dates_of_X, X_es=None, y_es=None):
             """按 train_objective 训练单周期模型，返回 (model, score_on_val 用 .score 或另行计算)。"""
+            if train_objective == 'binary':
+                from xgboost import XGBClassifier
+                bp = dict(params); bp['objective'] = 'binary:logistic'
+                if X_es is not None:
+                    m = XGBClassifier(**bp, early_stopping_rounds=20, eval_metric='logloss')
+                    m.fit(X, y, eval_set=[(X_es, y_es)], verbose=False)
+                else:
+                    m = XGBClassifier(**bp)
+                    m.fit(X, y)
+                return m
             if train_objective == 'pairwise':
                 from xgboost import XGBRanker
                 import itertools as _it
@@ -3041,6 +3059,26 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             from scipy.stats import spearmanr
             p = model.predict(X)
             return round(float(spearmanr(p, y).statistic), 4)
+
+        def _auc_score(model, X, y):
+            """binary 标签下的评估：AUC（Mann-Whitney 秩公式，纯 numpy）。"""
+            p = model.predict(X)
+            y = np.asarray(y)
+            order = np.argsort(p, kind='stable')
+            ranks = np.empty(len(p)); ranks[order] = np.arange(1, len(p) + 1)
+            n_pos = int((y == 1).sum()); n_neg = int((y == 0).sum())
+            if n_pos == 0 or n_neg == 0:
+                return 0.0
+            auc = (ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+            return round(float(auc), 4)
+
+        def _val_score(model, X, y):
+            """按 train_objective 选评估指标：binary→AUC / pairwise→秩相关 / 回归→r2（字段沿用 r2 落库）。"""
+            if train_objective == 'binary':
+                return _auc_score(model, X, y)
+            if train_objective == 'pairwise':
+                return _rank_score(model, X, y)
+            return round(float(model.score(X, y)), 4)
         update_node_progress(log_id=log_id, rows=3, detail=f'Optuna实验:0/{n_trials} 开始搜索')
 
         # ── 回测引擎（模块四：资金管理 + 持仓 + 止损 + T+1）──
@@ -3385,10 +3423,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 for label, tname, hdays in TARGETS:
                     if train_objective == 'pairwise':
                         model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates)
-                        r2 = _rank_score(model, X_val, df[val_mask][tname])
                     else:
                         model = _fit_model(params, X_tr, Y_tr[tname], None, X_es, Y_es[tname])
-                        r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
+                    r2 = _val_score(model, X_val, df[val_mask][tname])
                     models[label] = {'model': model, 'r2': r2}
                     total_r2 += r2
                 avg_r2 = total_r2 / len(TARGETS)
@@ -3419,10 +3456,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             _tr_dates2 = df[train_mask]['trade_date'].values
             for label, tname, hdays in TARGETS:
                 model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates2)
-                if train_objective == 'pairwise':
-                    r2 = _rank_score(model, X_val, df[val_mask][tname])
-                else:
-                    r2 = round(float(model.score(X_val, df[val_mask][tname])), 4)
+                r2 = _val_score(model, X_val, df[val_mask][tname])
                 best_models[label] = model
                 best_params_store[label] = {'params': params, 'r2': r2}
             update_node_progress(log_id=log_id, rows=1, detail='训练完成(无Optuna)')
@@ -3470,10 +3504,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    limit_up=lups, limit_down=ldowns,
                                    gated_dates=regime_gates, dd_gate=pdd_gate,
                                    trailing=trail_val)
-                    if train_objective == 'pairwise':
-                        bt['r2'] = _rank_score(best_models[label], df[mask][FEATURES].values, df[mask][tname])
-                    else:
-                        bt['r2'] = round(float(best_models[label].score(df[mask][FEATURES], df[mask][tname])), 4)
+                    bt['r2'] = _val_score(best_models[label], df[mask][FEATURES].values, df[mask][tname])
                     res[label] = bt
             return res
 
