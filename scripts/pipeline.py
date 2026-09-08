@@ -1256,11 +1256,12 @@ def _paper_meta_from_model(db, ver, td):
     c = _json.loads(mcfg) if isinstance(mcfg, str) else (mcfg or {})
     risk = c.get('risk', {}) or {}
     stop = float(risk.get('stop_loss_pct', 8)) / 100.0
+    trail = float(risk.get('trailing_retracement') or 0)
     return {'initial_cash': c.get('initial_cash', 1_000_000),
             'max_positions': int(c.get('max_positions', 5)),
             'stop_loss': stop,
-            'take_profit': round(stop * 2, 4),
-            'trailing': 0.0,
+            'take_profit': 99.0 if trail else round(stop * 2, 4),  # trailing 启用时固定止盈关闭（防截断右尾）
+            'trailing': trail,
             'hold_days': int(risk.get('signal_timeout_days', 20)),
             'portfolio_gate_dd': (c.get('portfolio_gate') or {}).get('dd'),
             'model_version': ver, 'started': td}
@@ -3053,7 +3054,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         def _backtest(y_true, y_pred, dates, codes, close_prices, volumes, hold_days,
                        bt_ver='', bt_label='', stop_loss=None, take_profit=None,
                        commission=None, stamp_tax=None, slippage=None,
-                       limit_up=None, limit_down=None, gated_dates=None, dd_gate=None):
+                       limit_up=None, limit_down=None, gated_dates=None, dd_gate=None, trailing=None):
             """回测引擎：资金约束 + 流动性约束 + 整数手约束 + 涨跌停约束。
 
             Args:
@@ -3072,6 +3073,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 gated_dates: 空仓信号日集合（YYYY-MM-DD）——该日不开新仓，持仓仍按止损/到期退出
                 dd_gate: 组合熔断阈值（如 0.10）——净值较峰值回撤超阈值即停开仓，
                          直至回撤收敛回阈值内（以昨日收盘净值判定，无未来函数）
+                trailing: 移动止盈回撤（如 0.08）——启用后替代固定止盈：持仓从持有期
+                         峰值回撤超阈值即以峰值×(1-trailing) 退出，不封顶右尾
             """
             sl_val = stop_loss if stop_loss is not None else 0.08
             tp_val = take_profit if take_profit is not None else 0.15
@@ -3101,6 +3104,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             for di, d in enumerate(sorted_dates):
                 # ── 1. 平仓：到期或止损 ──
                 surviving = []
+                tr_val = trailing if trailing is not None else 0
                 for h in holdings:
                     hold_dur = (d - h['buy_date']).days
                     # 获取当前价（用最近一日价格近似）
@@ -3112,12 +3116,18 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                     sell_price = cur_price
                     should_sell = False
 
+                    # 移动止盈（trailing）：先更新峰值再判回撤；启用时固定止盈让位
+                    if tr_val:
+                        h['peak'] = max(h.get('peak', h['buy_price']), cur_price)
+                        if cur_price <= h['peak'] * (1 - tr_val):
+                            sell_price = h['peak'] * (1 - tr_val)
+                            should_sell = True
                     # 止损时卖价 ≈ 止损价
                     if cur_price <= h['buy_price'] * (1 - sl_val):
                         sell_price = h['buy_price'] * (1 - sl_val)
                         should_sell = True
-                    # 止盈
-                    if tp_val and cur_price >= h['buy_price'] * (1 + tp_val):
+                    # 固定止盈（trailing 启用时停用——两者并存时固定止盈会截断右尾）
+                    if tp_val and not tr_val and cur_price >= h['buy_price'] * (1 + tp_val):
                         sell_price = h['buy_price'] * (1 + tp_val)
                         should_sell = True
                     # 到期平仓
@@ -3435,6 +3445,7 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         # 空仓闸门（regime）+ 组合熔断（portfolio_gate）：训练评估与实盘信号同一规则
         _regime_cfg = cfg.get('regime') or {}
         pdd_gate = (cfg.get('portfolio_gate') or {}).get('dd')
+        trail_val = float((cfg.get('risk', {}) or {}).get('trailing_retracement') or 0)
         regime_gates = compute_regime_gates(db, df['trade_date'].unique(), _regime_cfg)
         if _regime_cfg.get('enabled'):
             update_node_progress(log_id=log_id, rows=4,
@@ -3457,7 +3468,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    stop_loss=stop_loss, take_profit=stop_loss*2,
                                    commission=commission, stamp_tax=stamp_tax, slippage=slippage,
                                    limit_up=lups, limit_down=ldowns,
-                                   gated_dates=regime_gates, dd_gate=pdd_gate)
+                                   gated_dates=regime_gates, dd_gate=pdd_gate,
+                                   trailing=trail_val)
                     if train_objective == 'pairwise':
                         bt['r2'] = _rank_score(best_models[label], df[mask][FEATURES].values, df[mask][tname])
                     else:
