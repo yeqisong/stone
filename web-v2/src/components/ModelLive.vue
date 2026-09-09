@@ -82,6 +82,37 @@
             </n-tag>
           </div>
         </div>
+        <div v-if="paper.trades?.length" style="margin-top:12px">
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">最近模拟成交（{{paper.trades.length}} 笔）</div>
+          <div style="max-height:240px;overflow-y:auto;border:1px solid var(--c-border);border-radius:8px">
+            <table style="width:100%;border-collapse:collapse;font-size:11px">
+              <thead>
+                <tr style="position:sticky;top:0;background:var(--c-card-bg);color:var(--c-text-dim);text-align:left">
+                  <th style="padding:6px 8px;font-weight:600">日期</th>
+                  <th style="padding:6px 8px;font-weight:600">方向</th>
+                  <th style="padding:6px 8px;font-weight:600">个股</th>
+                  <th style="padding:6px 8px;font-weight:600;text-align:right">价格</th>
+                  <th style="padding:6px 8px;font-weight:600;text-align:right">股数</th>
+                  <th style="padding:6px 8px;font-weight:600;text-align:right">金额</th>
+                  <th style="padding:6px 8px;font-weight:600;text-align:right">盈亏</th>
+                  <th style="padding:6px 8px;font-weight:600">原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(t,i) in paper.trades" :key="i" style="border-top:1px solid var(--c-border)">
+                  <td style="padding:5px 8px;color:var(--c-text-dim)">{{t.date?.slice(5)}}</td>
+                  <td :style="{padding:'5px 8px',color:t.action==='BUY'?'#ef4444':'#10b981',fontWeight:600}">{{t.action==='BUY'?'买入':'卖出'}}</td>
+                  <td style="padding:5px 8px;color:var(--c-text)">{{t.stock_code}} {{t.stock_name}}</td>
+                  <td style="padding:5px 8px;text-align:right;color:var(--c-text-dim)">{{t.price?.toFixed(2)}}</td>
+                  <td style="padding:5px 8px;text-align:right;color:var(--c-text-dim)">{{t.shares?.toLocaleString()}}</td>
+                  <td style="padding:5px 8px;text-align:right;color:var(--c-text-dim)">{{t.amount?.toLocaleString(undefined,{maximumFractionDigits:0})}}</td>
+                  <td :style="{padding:'5px 8px',textAlign:'right',color:t.pnl==null?'var(--c-text-faint)':(t.pnl>=0?'#ef4444':'#10b981')}">{{t.pnl==null?'—':(t.pnl>=0?'+':'')+t.pnl.toFixed(0)}}</td>
+                  <td style="padding:5px 8px;color:var(--c-text-dim)">{{reasonCn(t.reason)}}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </template>
     </div>
   </template>
@@ -106,6 +137,11 @@ const healthColor = computed(() => {
   const s = health.value?.health_status
   return { HEALTHY:'#10b981', CAUTION:'#f59e0b', WARNING:'#f97316', CRITICAL:'#ef4444' }[s] || '#6b7280'
 })
+
+// 卖出原因中文化（与 _paper_meta/风控 reason 枚举对应；未知值原样显示）
+const REASON_CN = { signal: '信号买入', stop_loss: '止损', take_profit: '止盈', trailing: '移动止盈',
+                    hold_expire: '持有到期', expire: '持有到期', regime: '空仓闸门' }
+const reasonCn = r => REASON_CN[r] || r || '—'
 
 onMounted(async () => {
   try {
