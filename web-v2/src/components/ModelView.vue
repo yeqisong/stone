@@ -303,17 +303,19 @@ const fcCols = [
 
 async function loadFeatureCheck(force) {
   if (!store.selectedId) return
+  const vid = store.selectedId
   fcLoading.value = true
   try {
     const params = force ? { force: 'true' } : {}
-    const r = await axios.get(window.location.origin + `/api/v1/models/${store.selectedId}/feature-check`, { params })
+    const r = await axios.get(window.location.origin + `/api/v1/models/${vid}/feature-check`, { params })
+    if (store.selectedId !== vid) return // 响应期间已切换模型 → 丢弃，防止旧响应覆盖新模型的预检
     fcResult.value = r.data
-  } catch(e) { fcResult.value = null }
-  fcLoading.value = false
+  } catch(e) { if (store.selectedId === vid) fcResult.value = null }
+  finally { if (store.selectedId === vid) fcLoading.value = false }
 }
 
-watch(() => store.selectedId, (id) => { if (id) { nav.modelVersion = store.selected?.version || ''; nav.syncHash() }; if (store.selected && store.detailTab === 'indicators') loadFeatureCheck(false) })
-watch(store.detailTab, (t) => { nav.modelTab = t; nav.syncHash() })
+watch(() => store.selectedId, (id) => { if (id) { nav.modelVersion = store.selected?.version || ''; nav.syncHash() }; fcResult.value = null; if (store.selected && store.detailTab === 'indicators') loadFeatureCheck(false) })
+watch(store.detailTab, (t) => { nav.modelTab = t; nav.syncHash(); if (t === 'indicators' && store.selected && fcResult.value === null) loadFeatureCheck(false) })
 const loading = ref(true)
 const showCreate = ref(false)
 const editMode = ref(false)
