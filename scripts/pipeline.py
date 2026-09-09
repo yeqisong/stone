@@ -2224,12 +2224,16 @@ def dag_task_model_health(trade_date=None, **kw):
         avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL AND model_version=:v"), {"v": ver}).scalar() or 0
 
         health = 'HEALTHY'
-        if win_rate < 0.3:
-            health = 'CRITICAL'
-        elif win_rate < 0.45:
-            health = 'WARNING'
-        elif win_rate < 0.5:
-            health = 'CAUTION'
+        # closed=0 时胜率无意义（未有任何信号到期定性，0/1=0% 会误报 CRITICAL），
+        # 不参与判级；IC 衰减仍可按其标准升级
+        win_meaningful = closed > 0
+        if win_meaningful:
+            if win_rate < 0.3:
+                health = 'CRITICAL'
+            elif win_rate < 0.45:
+                health = 'WARNING'
+            elif win_rate < 0.5:
+                health = 'CAUTION'
 
         # ── 4. IC 衰减监控（v3.6）：近窗滚动 RankIC，判级劣于胜率评估则升级 ──
         ic_stats = None
@@ -2309,8 +2313,9 @@ def dag_task_model_health(trade_date=None, **kw):
         # 已 commit 的成功节点误标 failed）；dict 本身非空，须单独判键
         ic_desc = (f" RankIC均值{ic_stats['rolling_mean']:.4f}({ic_status})"
                    if ic_stats and ic_stats.get('rolling_mean') is not None else " IC不可用")
+        wr_desc = f'胜率{win_rate:.0%}(已定性{closed})' if win_meaningful else f'暂无到期信号({total}条跟踪中)'
         write_node_log(log_id=log_id, status='success', rows=total,
-                       detail=f'{health}: 胜率{win_rate:.0%} {total}信号{ic_desc}')
+                       detail=f'{health}: {wr_desc}{ic_desc}')
         return total
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
