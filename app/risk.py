@@ -96,6 +96,7 @@ def evaluate_risk_rules(db, trade_date=None) -> list:
                 WHERE q.stock_code = p.stock_code AND q.close_hfq > 0
                 ORDER BY trade_date DESC LIMIT 1
             ) q ON true
+            WHERE p.model_version = (SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1)
         """)).fetchall()
         for code, buy, cur in rows:
             if not buy or not cur:
@@ -111,7 +112,7 @@ def evaluate_risk_rules(db, trade_date=None) -> list:
     if dd_pct > 0:
         nav_rows = db.execute(text(
             "SELECT trade_date, equity FROM paper_trades "
-            "WHERE equity IS NOT NULL ORDER BY trade_date"
+            "WHERE equity IS NOT NULL AND model_version = (SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1) ORDER BY trade_date"
         )).fetchall()
         if len(nav_rows) >= 2:
             equities = [float(r[1]) for r in nav_rows]
@@ -138,7 +139,8 @@ def evaluate_risk_rules(db, trade_date=None) -> list:
                 WHERE q.stock_code = p.stock_code AND q.close_hfq > 0
                 ORDER BY trade_date DESC LIMIT 1
             ) q ON true
-            WHERE q.close_hfq IS NOT NULL
+            WHERE p.model_version = (SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1)
+              AND q.close_hfq IS NOT NULL
             GROUP BY ind
         """)).fetchall()
         total_mv = sum(float(r[1]) for r in rows)
@@ -158,6 +160,7 @@ def evaluate_risk_rules(db, trade_date=None) -> list:
             FROM paper_positions p
             JOIN stock_share_float sf ON sf.stock_code = p.stock_code
               AND sf.float_date BETWEEN CURRENT_DATE AND CURRENT_DATE + :fd
+            WHERE p.model_version = (SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1)
         """), {"fd": fdays}).fetchall()
         for code, fdate, shares, ratio in rows:
             emit('share_float', 'warn',

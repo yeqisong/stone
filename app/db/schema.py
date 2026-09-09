@@ -910,7 +910,7 @@ CREATE TABLE IF NOT EXISTS backfill_ext_checked (
 
 CREATE_PAPER_POSITIONS = """
 CREATE TABLE IF NOT EXISTS paper_positions (
-    stock_code    VARCHAR(6) PRIMARY KEY,
+    stock_code    VARCHAR(6) NOT NULL,
     stock_name    VARCHAR(32),
     shares        INTEGER NOT NULL,
     buy_price     DECIMAL(10,4) NOT NULL,
@@ -918,8 +918,9 @@ CREATE TABLE IF NOT EXISTS paper_positions (
     buy_date      DATE NOT NULL,
     peak          DECIMAL(10,4),
     signal_id     INTEGER,
-    model_version VARCHAR(20),
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    model_version VARCHAR(20) NOT NULL DEFAULT 'legacy',
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (model_version, stock_code)
 );
 """
 

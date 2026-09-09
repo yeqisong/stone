@@ -1303,34 +1303,40 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
     try:
         db = get_sync_db()
         # ACTIVE 模型 + 纸面配置（首次自动从模型配置初始化）
-        ver = db.execute(text(
+        # _ver：手动引导非 ACTIVE 模型的账户（回放其自身信号历史），仅内部调用使用
+        _ver = kw.get('_ver')
+        ver = _ver or db.execute(text(
             "SELECT version FROM model_versions WHERE status='ACTIVE' "
             "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1")).scalar()
         if not ver:
             if log_id: write_node_log(log_id=log_id, status='success', rows=0, detail='无 ACTIVE 模型，跳过')
             db.close(); return 0
-        meta_row = db.execute(text(
-            "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
-        if meta_row:
-            meta = _json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
-            # 模型切换即刷新：旧配置冻结在上一任模型的风控（v8.0 止损5%/5仓），
-            # 新 ACTIVE 上线后若不刷新，纸面行为与该模型回测承诺完全脱节
-            if meta.get('model_version') != ver:
-                meta = _paper_meta_from_model(db, ver, td)
-                db.execute(text(
-                    "UPDATE strategy_config SET params=:p WHERE strategy_name='paper_portfolio'"),
-                    {"p": _json.dumps(meta, ensure_ascii=False)})
-                db.commit()
-                logger.info(f"[paper] 模型切换→{ver}，纸面风控已刷新: 止损{meta['stop_loss']:.0%} "
-                            f"{meta['max_positions']}仓 持有{meta['hold_days']}日")
-        else:
+        if _ver:
+            # 引导历史模型：用该模型自己的 config 构造纸面参数（不写全局 strategy_config）
             meta = _paper_meta_from_model(db, ver, td)
-            db.execute(text("""
-                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
-                VALUES ('paper_portfolio', '纸面组合（影子运行）', true, :p)
-                ON CONFLICT (strategy_name) DO NOTHING
-            """), {"p": _json.dumps(meta)})
-            db.commit()
+        else:
+            meta_row = db.execute(text(
+                "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
+            if meta_row:
+                meta = _json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
+                # 模型切换即刷新：旧配置冻结在上一任模型的风控（v8.0 止损5%/5仓），
+                # 新 ACTIVE 上线后若不刷新，纸面行为与该模型回测承诺完全脱节
+                if meta.get('model_version') != ver:
+                    meta = _paper_meta_from_model(db, ver, td)
+                    db.execute(text(
+                        "UPDATE strategy_config SET params=:p WHERE strategy_name='paper_portfolio'"),
+                        {"p": _json.dumps(meta, ensure_ascii=False)})
+                    db.commit()
+                    logger.info(f"[paper] 模型切换→{ver}，纸面风控已刷新: 止损{meta['stop_loss']:.0%} "
+                                f"{meta['max_positions']}仓 持有{meta['hold_days']}日")
+            else:
+                meta = _paper_meta_from_model(db, ver, td)
+                db.execute(text("""
+                    INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                    VALUES ('paper_portfolio', '纸面组合（影子运行）', true, :p)
+                    ON CONFLICT (strategy_name) DO NOTHING
+                """), {"p": _json.dumps(meta)})
+                db.commit()
         ecfg = TradeConfig(initial_cash=float(meta['initial_cash']),
                            max_positions=int(meta['max_positions']),
                            stop_loss=float(meta['stop_loss']),
@@ -1341,21 +1347,27 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
                            min_cost=0.0, settle_delay=False,
                            forbid_all_trade_at_limit=False, downsize_buy=False)
 
-        # 幂等：当日已有 EOD → 跳过
+        # 幂等：当日该模型账户已有 EOD → 跳过（按模型隔离）
         done = db.execute(text(
-            "SELECT COUNT(*) FROM paper_trades WHERE trade_date=:d AND action='EOD'"), {"d": td}).scalar()
+            "SELECT COUNT(*) FROM paper_trades WHERE trade_date=:d AND action='EOD' AND model_version=:v"),
+            {"d": td, "v": ver}).scalar()
         if done:
             if log_id: write_node_log(log_id=log_id, status='success', rows=0, detail=f'{td} 已步进过，跳过')
             db.close(); return 0
 
-        # 回放：组合为空且给了 start_date → 从信号历史逐日重建
-        pos_count = db.execute(text("SELECT COUNT(*) FROM paper_positions")).scalar()
-        replay = bool(start_date and pos_count == 0)
+        # 回放：该模型账户为空 → 从其自身首条信号日回放重建（新模型激活自动建账）
+        pos_count_v = db.execute(text(
+            "SELECT COUNT(*) FROM paper_positions WHERE model_version=:v"), {"v": ver}).scalar()
+        first_sig = db.execute(text(
+            "SELECT MIN(signal_date) FROM signal_history WHERE strategy_name='model_signal' "
+            "AND direction='buy' AND model_version=:v"), {"v": ver}).scalar()
+        _sd = start_date or (str(first_sig)[:10] if (pos_count_v == 0 and first_sig) else None)
+        replay = bool(_sd and pos_count_v == 0)
         if replay:
             trade_days = [str(r[0])[:10] for r in db.execute(text(
                 "SELECT DISTINCT trade_date FROM index_daily_quote WHERE index_code='000300' "
                 "AND trade_date >= :s AND trade_date <= :d ORDER BY trade_date"),
-                {"s": start_date, "d": td}).fetchall()]
+                {"s": _sd, "d": td}).fetchall()]
             if not trade_days:
                 if log_id: write_node_log(log_id=log_id, status='success', rows=0, detail='回放区间无交易日')
                 db.close(); return 0
@@ -1382,26 +1394,40 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
         if pdd:
             eod_all = db.execute(text(
                 "SELECT trade_date, equity FROM paper_trades WHERE action='EOD' AND trade_date < :d "
-                "ORDER BY trade_date"), {"d": range_start}).fetchall()
+                "AND model_version=:v ORDER BY trade_date"), {"d": range_start, "v": ver}).fetchall()
             if eod_all:
                 eq_hist = [float(r[1]) for r in eod_all]
                 if eq_hist and eq_hist[-1] < max(eq_hist) * (1 - float(pdd)):
                     sig_map = {(d_, c): v_ for (d_, c), v_ in sig_map.items() if d_ != td}
                     logger.info(f"[paper] 组合熔断生效（回撤 {(1 - eq_hist[-1]/max(eq_hist)):.1%} ≥ {pdd:.0%}），{td} 停止开仓")
 
-        # 既有持仓（单日步进时作为种子账户）
-        pos_rows = db.execute(text("SELECT * FROM paper_positions")).fetchall()
+        # 既有持仓（单日步进时作为种子账户，按模型隔离）
+        pos_rows = db.execute(text(
+            "SELECT * FROM paper_positions WHERE model_version=:v"), {"v": ver}).fetchall()
         positions = {r.stock_code: {'shares': r.shares, 'buy_price': float(r.buy_price),
                                     'cost_basis': float(r.cost_basis), 'buy_date': str(r.buy_date)[:10],
                                     'peak': float(r.peak) if r.peak else None, 'signal_id': r.signal_id,
                                     'stock_name': r.stock_name or ''} for r in pos_rows}
+        # 现金与净值恢复：只取该模型账户的最新 EOD；净值必须连同现金一起恢复——
+        # 无行情日（周末/数据未发布）若把净值初始化成现金，持仓会被按 0 计价，
+        # 净值瞬间腰斩（实测 -98.47% 事故：15312/1000000-1）
         cash = float(meta['initial_cash'])
-        last_eod = db.execute(text(
-            "SELECT cash FROM paper_trades WHERE action='EOD' ORDER BY trade_date DESC LIMIT 1")).scalar()
-        # 只要有 EOD 记录就沿用最新现金（清仓后空仓续跑不能重置为初始资金）；
-        # pos_count 仅用于 replay 判定，不参与现金恢复
-        if last_eod is not None:
-            cash = float(last_eod)
+        last_eq = cash
+        last_cash = cash
+        last_bm = None
+        _le = db.execute(text(
+            "SELECT cash, equity, detail FROM paper_trades WHERE action='EOD' AND model_version=:v "
+            "ORDER BY trade_date DESC LIMIT 1"), {"v": ver}).fetchone()
+        if _le:
+            cash = float(_le[0]) if _le[0] is not None else cash
+            last_cash = cash
+            last_eq = float(_le[1]) if _le[1] is not None else cash
+            try:
+                _ldet = _le[2] if isinstance(_le[2], dict) else (_json.loads(_le[2]) if _le[2] else {})
+                if _ldet.get('benchmark_close'):
+                    last_bm = float(_ldet['benchmark_close'])
+            except Exception:
+                pass
 
         # 行情 df：信号 ∪ 持仓代码；回放含区间前一日（涨跌停标记需要真实前收盘），
         # 单日步进取前一交易日 + 当日
@@ -1448,13 +1474,12 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
             "AND trade_date BETWEEN :s AND :d"), {"s": range_start, "d": td}).fetchall()}
 
         # 逐日落库：成交（含 signal_id/stock_name 追踪）+ EOD（无行情日延续净值，保逐日曲线）
+        # last_eq/last_cash 已从该模型上一 EOD 恢复（净值延续，非现金）
         pos_sig = {c: p.get('signal_id') for c, p in positions.items()}
         pos_name = {c: p.get('stock_name', '') for c, p in positions.items()}
         day_trades = {}
         for t in result.trades:
             day_trades.setdefault(t['date'], []).append(t)
-        last_eq = cash
-        last_cash = cash
         held_set = set(positions.keys()) if not replay else set()
         for day in trade_days:
             for t in day_trades.get(day, []):
@@ -1486,21 +1511,24 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
             else:
                 # 无行情日（空仓且无信号/全部停牌）：现金/仓位/净值延续上一记录日，保逐日 EOD 曲线
                 last_npos = len(held_set)
+            _bm = bm_map.get(day) or last_bm  # 指数数据缺失日基准延续（与净值延续同口径）
+            if bm_map.get(day):
+                last_bm = bm_map[day]
             db.execute(text("""
                 INSERT INTO paper_trades (trade_date, action, cash, equity, model_version, detail)
                 VALUES (:d, 'EOD', :c, :e, :v, :dt)
             """), {"d": day, "c": round(last_cash, 2), "e": round(last_eq, 2), "v": ver,
                    "dt": _json.dumps({'positions': last_npos,
-                                      'benchmark_close': bm_map.get(day)})})
+                                      'benchmark_close': _bm})})
 
-        # 持仓同步：终态 upsert + 已清仓删除
+        # 持仓同步：终态 upsert + 已清仓删除（按模型隔离）
         for code, p in facct.positions.items():
             db.execute(text("""
                 INSERT INTO paper_positions (stock_code, stock_name, shares, buy_price, cost_basis,
                     buy_date, peak, signal_id, model_version, updated_at)
                 VALUES (:stock_code, :stock_name, :shares, :buy_price, :cost_basis,
                     :bd, :peak, :signal_id, :v, CURRENT_TIMESTAMP)
-                ON CONFLICT (stock_code) DO UPDATE SET stock_name=:stock_name, shares=:shares,
+                ON CONFLICT (model_version, stock_code) DO UPDATE SET stock_name=:stock_name, shares=:shares,
                     buy_price=:buy_price, cost_basis=:cost_basis, buy_date=:bd, peak=:peak,
                     signal_id=:signal_id, model_version=:v, updated_at=CURRENT_TIMESTAMP
             """), {"stock_code": code, 'stock_name': pos_name.get(code, ''), 'shares': p.shares,
@@ -1509,10 +1537,13 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
                    'signal_id': pos_sig.get(code), 'v': ver})
         sold = {t['stock_code'] for t in result.trades if t['action'] == 'SELL'}
         for code in sold - set(facct.positions):
-            db.execute(text("DELETE FROM paper_positions WHERE stock_code=:c"), {"c": code})
+            db.execute(text("DELETE FROM paper_positions WHERE stock_code=:c AND model_version=:v"),
+                       {"c": code, "v": ver})
 
         db.commit()
-        n_tr = db.execute(text("SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL')")).scalar()
+        n_tr = db.execute(text(
+            "SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL') AND model_version=:v"),
+            {"v": ver}).scalar()
 
         # ── 风控规则评估（step3）：规则启用了才产出告警（risk_alerts 表 + WS 推送）──
         try:
@@ -2221,7 +2252,7 @@ def dag_task_model_health(trade_date=None, **kw):
         closed = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND status='closed' AND model_version=:v"), {"v": ver}).scalar() or 0
         wins = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND actual_return > 0 AND model_version=:v"), {"v": ver}).scalar() or 0
         win_rate = wins / max(closed, 1)
-        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL AND model_version=:v"), {"v": ver}).scalar() or 0
+        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL AND model_version=:v"), {"v": ver}).scalar()  # 无到期样本保持 None
 
         health = 'HEALTHY'
         # closed=0 时胜率无意义（未有任何信号到期定性，0/1=0% 会误报 CRITICAL），
@@ -2287,8 +2318,9 @@ def dag_task_model_health(trade_date=None, **kw):
                 ir=EXCLUDED.ir, alpha_annualized=EXCLUDED.alpha_annualized, beta=EXCLUDED.beta,
                 excess_annualized=EXCLUDED.excess_annualized, turnover_daily=EXCLUDED.turnover_daily
         """), {
-            "v": ver, "d": td, "h": health, "wr": round(win_rate, 4),
-            "sc": total, "af": round(float(avg_f5), 4) if avg_f5 else 0,
+            "v": ver, "d": td, "h": health,
+            "wr": round(win_rate, 4) if win_meaningful else None,  # 无了结样本存 NULL（非 0）
+            "sc": total, "af": round(float(avg_f5), 4) if avg_f5 is not None else None,
             "ric": ic_stats.get('rolling_mean') if ic_stats else None,
             "rir": ic_stats.get('rolling_icir') if ic_stats else None,
             "ir": perf.get('sum', {}).get('information_ratio') if perf else None,
@@ -2296,7 +2328,7 @@ def dag_task_model_health(trade_date=None, **kw):
             "beta": perf.get('excess', {}).get('beta') if perf else None,
             "exc": perf.get('excess', {}).get('annualized_return') if perf else None,
             "to": perf.get('turnover', {}).get('daily_avg') if perf else None,
-            "dt": _json.dumps({"closed": closed, "wins": wins, "forward_5d_avg": float(avg_f5) if avg_f5 else 0,
+            "dt": _json.dumps({"closed": closed, "wins": wins, "forward_5d_avg": float(avg_f5) if avg_f5 is not None else None,
                                "ic": detail_ic, "ic_status": ic_status,
                                "perf": perf if perf else None}),
         })

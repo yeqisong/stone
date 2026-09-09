@@ -140,18 +140,23 @@ def list_models(entity: str = Query("stock")):
 
 
 @router.get("/v1/models/paper-portfolio")
-def get_paper_portfolio(user: str = Depends(get_current_user)):
-    """纸面组合（影子运行）：净值曲线 vs 沪深300 + 当前持仓 + 最近模拟成交。"""
+def get_paper_portfolio(version: str = Query(None, description="模型版本；默认当前 ACTIVE"),
+                        user: str = Depends(get_current_user)):
+    """纸面组合（影子运行，按模型隔离）：净值曲线 vs 沪深300 + 当前持仓 + 最近模拟成交。"""
     db = get_sync_db()
     try:
+        ver = version or db.execute(text(
+            "SELECT version FROM model_versions WHERE status='ACTIVE' "
+            "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1")).scalar()
+
         meta_row = db.execute(text(
             "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
         meta = json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
 
         eod = db.execute(text("""
             SELECT trade_date, equity, cash, detail FROM paper_trades
-            WHERE action='EOD' ORDER BY trade_date
-        """)).fetchall()
+            WHERE action='EOD' AND model_version=:v ORDER BY trade_date
+        """), {"v": ver}).fetchall()
         equity = []
         base_bm = None
         initial = float(meta.get('initial_cash', 1_000_000))
@@ -169,8 +174,9 @@ def get_paper_portfolio(user: str = Depends(get_current_user)):
             SELECT p.stock_code, COALESCE(p.stock_name, sm.stock_name, '') AS sname, p.shares,
                    p.buy_price, p.cost_basis, p.buy_date, p.peak, p.model_version
             FROM paper_positions p LEFT JOIN stock_master sm ON sm.stock_code = p.stock_code
+            WHERE p.model_version = :v
             ORDER BY p.buy_date
-        """)).fetchall():
+        """), {"v": ver}).fetchall():
             positions.append({'stock_code': r[0], 'stock_name': r[1], 'shares': r[2],
                               'buy_price': float(r[3]), 'cost_basis': float(r[4]),
                               'buy_date': str(r[5]), 'peak': float(r[6]) if r[6] else None,
@@ -180,8 +186,8 @@ def get_paper_portfolio(user: str = Depends(get_current_user)):
         for r in db.execute(text("""
             SELECT trade_date, action, stock_code, stock_name, price, shares, amount,
                    commission, pnl, reason, equity FROM paper_trades
-            WHERE action IN ('BUY','SELL') ORDER BY trade_date DESC, id DESC LIMIT 50
-        """)).fetchall():
+            WHERE action IN ('BUY','SELL') AND model_version=:v ORDER BY trade_date DESC, id DESC LIMIT 50
+        """), {"v": ver}).fetchall():
             trades.append({'date': str(r[0]), 'action': r[1], 'stock_code': r[2], 'stock_name': r[3],
                            'price': float(r[4]) if r[4] is not None else None,
                            'shares': r[5], 'amount': float(r[6]) if r[6] is not None else None,
@@ -190,14 +196,17 @@ def get_paper_portfolio(user: str = Depends(get_current_user)):
                            'reason': r[9], 'equity': float(r[10]) if r[10] is not None else None})
 
         w = db.execute(text(
-            "SELECT COUNT(*) FILTER (WHERE pnl > 0), COUNT(*) FROM paper_trades WHERE action='SELL'")).fetchone()
+            "SELECT COUNT(*) FILTER (WHERE pnl > 0), COUNT(*) FROM paper_trades "
+            "WHERE action='SELL' AND model_version=:v"), {"v": ver}).fetchone()
         n_trades = db.execute(text(
-            "SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL')")).scalar()
+            "SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL') AND model_version=:v"),
+            {"v": ver}).scalar()
         win_rate = (w[0] / w[1]) if w[1] else None
         last_bm = equity[-1]['benchmark'] if equity and equity[-1]['benchmark'] else None
         db.close()
         return {
             'meta': meta,
+            'version': ver,
             'stats': {
                 'initial_cash': initial, 'equity': last_eq,
                 'total_return': round(last_eq / initial - 1, 4) if equity else None,
@@ -329,11 +338,11 @@ def get_model_health(version: str):
             FROM model_health WHERE version=:v ORDER BY check_date DESC LIMIT 1
         """), {"v": version}).fetchone()
         if not r:
-            return {"health_status": "HEALTHY", "live_win_rate": 0, "signal_count": 0,
-                    "avg_forward_5d": 0, "rank_ic": None, "rank_icir": None}
+            return {"health_status": "HEALTHY", "live_win_rate": None, "signal_count": 0,
+                    "avg_forward_5d": None, "rank_ic": None, "rank_icir": None}
         return {
-            "health_status": r[0], "live_win_rate": float(r[1]) if r[1] else 0,
-            "signal_count": r[2] or 0, "avg_forward_5d": float(r[3]) if r[3] else 0,
+            "health_status": r[0], "live_win_rate": float(r[1]) if r[1] is not None else None,
+            "signal_count": r[2] or 0, "avg_forward_5d": float(r[3]) if r[3] is not None else None,
             "detail": r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else {}),
             "check_date": str(r[5]) if r[5] else None,
             "rank_ic": float(r[6]) if r[6] is not None else None,

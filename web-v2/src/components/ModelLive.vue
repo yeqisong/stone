@@ -9,7 +9,7 @@
       </div>
       <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center">
         <div style="font-size:10px;color:var(--c-text-faint)">实盘胜率</div>
-        <div style="fontSize:20px;fontWeight:700;color:var(--c-text)">{{(health.live_win_rate*100).toFixed(0)}}%</div>
+        <div style="fontSize:20px;fontWeight:700;color:var(--c-text)">{{ health.live_win_rate==null?'—':(health.live_win_rate*100).toFixed(0)+'%' }}</div>
       </div>
       <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center">
         <div style="font-size:10px;color:var(--c-text-faint)">信号总数</div>
@@ -17,7 +17,7 @@
       </div>
       <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center">
         <div style="font-size:10px;color:var(--c-text-faint)">Avg Fwd 5D</div>
-        <div :style="{fontSize:'20px',fontWeight:700,color:health.avg_forward_5d>=0?'#10b981':'#ef4444'}">{{(health.avg_forward_5d*100).toFixed(2)}}%</div>
+        <div :style="{fontSize:'20px',fontWeight:700,color:health.avg_forward_5d==null?'var(--c-text-faint)':(health.avg_forward_5d>=0?'#10b981':'#ef4444')}">{{ health.avg_forward_5d==null?'—':(health.avg_forward_5d*100).toFixed(2)+'%' }}</div>
       </div>
       <div v-if="health.rank_ic!=null" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center"
            title="模型预测与实现收益的逐日截面 RankIC 均值（近 20 个已成熟截面，10 日前瞻）；<0 说明模型选股能力已衰减">
@@ -157,7 +157,9 @@ onMounted(async () => {
 
 async function loadPaper() {
   try {
-    const r = await axios.get(window.location.origin + '/api/v1/models/paper-portfolio')
+    // 按模型隔离：每个版本查看自己的影子账户（legacy=共享账户时代的存档）
+    const r = await axios.get(window.location.origin + '/api/v1/models/paper-portfolio',
+                              { params: { version: props.version?.version } })
     paper.value = r.data
     if (paper.value?.equity?.length) nextTick(() => renderPaper())
   } catch(e) { console.error(e) }
