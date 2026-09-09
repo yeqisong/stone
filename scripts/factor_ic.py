@@ -58,42 +58,74 @@ def traffic_light(rank_ic: float, icir: float, same_sign: float) -> str:
     return {3: 'green', 2: 'yellow'}.get(score, 'red')
 
 
-def fetch_ic_frame(db, feature_name: str, val_start: str, val_end: str,
-                   horizons, buffer_days: int = 60) -> pd.DataFrame:
-    """因子值 + 前瞻 N 日收益一次取回（所有 horizon 共用一次查询）。"""
+def fetch_shared_panel(db, val_start: str, val_end: str, horizons,
+                       buffer_days: int = 60) -> pd.DataFrame:
+    """共享前向收益面板（与因子无关，批量场景只拉一次）。
+
+    daily_quote 的 LEAD 前瞻价窗口是最重的一步（全市场 × 全区间排序窗口），
+    逐因子重算一遍是 factor_ic 节点耗时 100 分钟的主因；此处一次拉取后所有因子共用。
+    Returns: [trade_date, stock_code, close, fret_{h}...]
+    """
     from datetime import date as _d, timedelta as _td
     buf_end = (_d.fromisoformat(str(val_end)[:10]) + _td(days=buffer_days)).isoformat()
     leads = ",\n                   ".join(f"LEAD(close_hfq, {h}) OVER w AS fwd_{h}" for h in horizons)
     fwd_cols = ", ".join(f"q.fwd_{h}" for h in horizons)
     sql = f"""
-        WITH q AS (
-            SELECT stock_code, trade_date, close_hfq,
-                   {leads}
-            FROM daily_quote
-            WHERE trade_date BETWEEN :sd AND :buf AND close_hfq IS NOT NULL AND close_hfq > 0
-              AND exchange IN ('SSE','SZSE')
-            WINDOW w AS (PARTITION BY stock_code ORDER BY trade_date)
-        )
-        SELECT fv.trade_date, fv.stock_code, fv.value, q.close_hfq, {fwd_cols}
-        FROM feature_values fv
-        JOIN q ON q.stock_code = fv.stock_code AND q.trade_date = fv.trade_date
-        WHERE fv.feature_name = :fn AND fv.trade_date BETWEEN :sd AND :ed
-          AND fv.value IS NOT NULL
+        SELECT stock_code, trade_date, close_hfq,
+               {leads}
+        FROM daily_quote
+        WHERE trade_date BETWEEN :sd AND :buf AND close_hfq IS NOT NULL AND close_hfq > 0
+          AND exchange IN ('SSE','SZSE')
+        WINDOW w AS (PARTITION BY stock_code ORDER BY trade_date)
     """
-    rows = db.execute(text(sql), {"sd": str(val_start)[:10], "ed": str(val_end)[:10],
-                                  "buf": buf_end, "fn": feature_name}).fetchall()
-    cols = ['trade_date', 'stock_code', 'value', 'close'] + [f'fwd_{h}' for h in horizons]
-    df = pd.DataFrame(rows, columns=cols)
-    if df.empty:
-        return df
+    rows = db.execute(text(sql), {"sd": str(val_start)[:10], "buf": buf_end}).fetchall()
+    cols = ['stock_code', 'trade_date', 'close'] + [f'fwd_{h}' for h in horizons]
+    panel = pd.DataFrame(rows, columns=cols)
+    if panel.empty:
+        return panel
     for c in cols[2:]:
-        df[c] = pd.to_numeric(df[c], errors='coerce')  # SQL NUMERIC(Decimal) → float
+        panel[c] = pd.to_numeric(panel[c], errors='coerce')  # SQL NUMERIC(Decimal) → float
     for h in horizons:
-        df[f'fret_{h}'] = df[f'fwd_{h}'] / df['close'] - 1
-    # 脏数据兜底：除零/极端值产生的 inf 一律按缺失处理
+        panel[f'fret_{h}'] = panel[f'fwd_{h}'] / panel['close'] - 1
     fret_cols = [f'fret_{h}' for h in horizons]
-    df[fret_cols] = df[fret_cols].replace([np.inf, -np.inf], np.nan)
+    panel[fret_cols] = panel[fret_cols].replace([np.inf, -np.inf], np.nan)
+    return panel[['trade_date', 'stock_code', 'close'] + fret_cols]
+
+
+def _factor_slice(db, feature_name: str, val_start: str, val_end: str) -> pd.DataFrame:
+    """单因子的 feature_values 切片（不含行情，轻查询）。"""
+    rows = db.execute(text(
+        "SELECT trade_date, stock_code, value FROM feature_values "
+        "WHERE feature_name = :fn AND trade_date BETWEEN :sd AND :ed AND value IS NOT NULL"
+    ), {"fn": feature_name, "sd": str(val_start)[:10], "ed": str(val_end)[:10]}).fetchall()
+    df = pd.DataFrame(rows, columns=['trade_date', 'stock_code', 'value'])
+    if not df.empty:
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
     return df
+
+
+def _merge_panel(factor_df: pd.DataFrame, panel: pd.DataFrame,
+                 horizons) -> pd.DataFrame:
+    """因子切片 INNER JOIN 共享面板，产出与旧 fetch_ic_frame 相同形状的宽框。
+
+    （旧 SQL 为 JOIN q ON stock_code+trade_date，inner 语义一致；
+      close/前向收益已在面板算好，inf 兜底同旧版）
+    """
+    if factor_df.empty or panel.empty:
+        return pd.DataFrame()
+    df = factor_df.merge(panel, on=['trade_date', 'stock_code'], how='inner')
+    return df
+
+
+def fetch_ic_frame(db, feature_name: str, val_start: str, val_end: str,
+                   horizons, buffer_days: int = 60) -> pd.DataFrame:
+    """因子值 + 前瞻 N 日收益一次取回（所有 horizon 共用一次查询）。"""
+    horizons = sorted({int(h) for h in horizons})
+    panel = fetch_shared_panel(db, val_start, val_end, horizons, buffer_days)
+    if panel.empty:
+        return pd.DataFrame()
+    fv = _factor_slice(db, feature_name, val_start, val_end)
+    return _merge_panel(fv, panel, horizons)
 
 
 def _daily_ic(df: pd.DataFrame, horizon: int, min_names: int = 30):
@@ -143,17 +175,9 @@ def _layer_stats(df: pd.DataFrame, horizon: int, layers: int = 5) -> dict:
     }
 
 
-def compute_factor_ic(db, feature_name: str, val_start: str, val_end: str,
-                      horizons=(1, 5, 10, 20), layers: int = 5, min_names: int = 30) -> list:
-    """对单因子计算各 horizon 的 IC 检验并落库（UPSERT factor_ic_stats）。
-
-    Returns: 每个 horizon 一条结果 dict（含 traffic 红绿灯）；区间无数据抛 ValueError。
-    """
-    horizons = sorted({int(h) for h in horizons})
-    df = fetch_ic_frame(db, feature_name, val_start, val_end, horizons)
-    if df.empty:
-        raise ValueError(f'区间 {val_start}~{val_end} 内无有效因子值，请先完成特征计算')
-
+def _upsert_horizons(db, feature_name: str, df: pd.DataFrame, val_start: str, val_end: str,
+                     horizons, layers: int = 5, min_names: int = 30) -> list:
+    """对已合并好的因子宽框逐 horizon 计算 IC 并落库（compute_factor_ic 与批量版共用主体）。"""
     results = []
     for h in horizons:
         dates, ic_list, rank_list, n_list = _daily_ic(df, h, min_names)
@@ -207,3 +231,46 @@ def compute_factor_ic(db, feature_name: str, val_start: str, val_end: str,
         results.append(payload)
     db.commit()
     return results
+
+
+def compute_factor_ic(db, feature_name: str, val_start: str, val_end: str,
+                      horizons=(1, 5, 10, 20), layers: int = 5, min_names: int = 30) -> list:
+    """对单因子计算各 horizon 的 IC 检验并落库（UPSERT factor_ic_stats）。
+
+    Returns: 每个 horizon 一条结果 dict（含 traffic 红绿灯）；区间无数据抛 ValueError。
+    """
+    horizons = sorted({int(h) for h in horizons})
+    df = fetch_ic_frame(db, feature_name, val_start, val_end, horizons)
+    if df.empty:
+        raise ValueError(f'区间 {val_start}~{val_end} 内无有效因子值，请先完成特征计算')
+    return _upsert_horizons(db, feature_name, df, val_start, val_end, horizons, layers, min_names)
+
+
+def compute_factor_ic_batch(db, feature_names: list, val_start: str, val_end: str,
+                            horizons=(1, 5, 10, 20), layers: int = 5, min_names: int = 30,
+                            on_progress=None) -> dict:
+    """批量因子 IC：共享前向收益面板只拉一次，逐因子轻查询 + 同口径计算。
+
+    单因子失败不中断批（返回 error），on_progress(done, total, feature_name) 用于心跳。
+    Returns: {feature_name: results_list | {'error': str}}
+    """
+    horizons = sorted({int(h) for h in horizons})
+    panel = fetch_shared_panel(db, val_start, val_end, horizons)
+    if panel.empty:
+        raise ValueError(f'区间 {val_start}~{val_end} 行情面板为空')
+    out = {}
+    total = len(feature_names)
+    for i, fn in enumerate(feature_names, 1):
+        try:
+            fv = _factor_slice(db, fn, val_start, val_end)
+            df = _merge_panel(fv, panel, horizons)
+            if df.empty:
+                raise ValueError(f'区间 {val_start}~{val_end} 内无有效因子值，请先完成特征计算')
+            out[fn] = _upsert_horizons(db, fn, df, val_start, val_end, horizons, layers, min_names)
+        except Exception as e:
+            db.rollback()
+            out[fn] = {'error': str(e)[:160]}
+        if on_progress:
+            try: on_progress(i, total, fn)
+            except Exception: pass
+    return out

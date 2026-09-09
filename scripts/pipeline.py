@@ -4037,14 +4037,16 @@ def dag_task_stock_master(trade_date=None, **kw):
 
 
 def dag_task_factor_ic(trade_date=None, **kw):
-    """factor_ic 节点 — 已发布 stock 特征批量重算 IC（默认近 3 年，1/5/10/20 前瞻）。
+    """factor_ic 节点 — 已发布 stock 特征批量重算 IC（近 1 年，1/5/10/20 前瞻）。
 
+    共享前向收益面板一次拉取（逐因子重算 LEAD 窗口曾致节点 100 分钟），
+    逐因子心跳写 detail/rows（页面实时可见进度，不再冻结在起始文案）。
     只刷新 factor_ic_stats 数据，不覆盖 features.ic_status 用户决策。
     """
     from datetime import date as _date, timedelta as _td
     from app.db.connection import get_sync_db
     from sqlalchemy import text
-    from scripts.factor_ic import compute_factor_ic
+    from scripts.factor_ic import compute_factor_ic_batch
 
     rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('factor_ic')
@@ -4052,25 +4054,25 @@ def dag_task_factor_ic(trade_date=None, **kw):
     try:
         db = get_sync_db()
         val_end = str(trade_date or _date.today())[:10]
-        val_start = (_date.fromisoformat(val_end) - _td(days=3 * 365)).isoformat()
+        val_start = (_date.fromisoformat(val_end) - _td(days=365)).isoformat()
         feats = db.execute(text(
             "SELECT feature_name FROM features WHERE status='enabled' "
             "AND target_entity='stock' ORDER BY feature_name"
         )).fetchall()
-        ok, fail = 0, []
-        for (fn,) in feats:
-            try:
-                compute_factor_ic(db, fn, val_start, val_end)
-                ok += 1
-            except Exception as e:
-                db.rollback()
-                fail.append(f'{fn}: {str(e)[:80]}')
-                logger.warning(f'[factor_ic] {fn} 检验失败: {e}')
+        names = [fn for (fn,) in feats]
+
+        def _hb(done, total, fn):
+            update_node_progress(log_id=log_id, rows=done,
+                                 detail=f'IC检验 {done}/{total}: {fn}（近1年）')
+
+        results = compute_factor_ic_batch(db, names, val_start, val_end, on_progress=_hb)
         db.close()
-        detail = f'{ok}/{len(feats)} 个因子完成（{val_start}~{val_end}）'
+        ok = sum(1 for r in results.values() if 'error' not in r)
+        fail = [f'{fn}: {r["error"][:60]}' for fn, r in results.items() if 'error' in r]
+        detail = f'{ok}/{len(names)} 个因子完成（{val_start}~{val_end}）'
         if fail:
             detail += '；失败: ' + '、'.join(fail[:5])
-        write_node_log(log_id=log_id, status='success', detail=detail)
+        write_node_log(log_id=log_id, status='success', detail=detail, rows=ok)
         return True
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])

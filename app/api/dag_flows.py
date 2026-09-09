@@ -384,6 +384,20 @@ def _execute_flow_internal(flow_id: int, body: dict = {}) -> dict:
                             eexec._completed[nm] = _t.time()
                             ts2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             tm.update_node(tid, nm, status="success", finished_at=ts2)
+                            # 行数回填：TaskNode.rows 默认 0，节点真实处理行数在 dag_run_log
+                            # （前端 /api/dag/logs 内存任务分支直接读 TaskNode.rows）
+                            _lid = (ctx2.get("_node_log_ids", {}) or {}).get(nm)
+                            if _lid:
+                                try:
+                                    from app.db.connection import get_sync_db as _gsdb
+                                    from sqlalchemy import text as _txt
+                                    _ndb = _gsdb()
+                                    _nrows = _ndb.execute(_txt("SELECT rows FROM dag_run_log WHERE id=:i"),
+                                                          {"i": _lid}).scalar()
+                                    _ndb.close()
+                                    tm.update_node(tid, nm, rows=int(_nrows or 0))
+                                except Exception:
+                                    pass
                         except Exception as e:
                             logger.error(f"[flow] 节点 {nm} 失败: {e}")
                             ts2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
