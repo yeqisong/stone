@@ -26,9 +26,9 @@ def get_buy_signals(
         params = {"d": signal_date, "n": top_n}
         model_filter = ""
         if not include_stale:
-            # 只显示当前 ACTIVE 模型的信号，其他策略不受影响
+            # 只显示当前主模型（role=primary）的信号——备模型不上树图
             active_ver = db.execute(text(
-                "SELECT version FROM model_versions WHERE status='ACTIVE' "
+                "SELECT version FROM model_versions WHERE status='ACTIVE' AND role='primary' "
                 "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
             )).scalar()
             if active_ver:

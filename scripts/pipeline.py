@@ -1473,7 +1473,8 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
             "SELECT trade_date, close FROM index_daily_quote WHERE index_code='000300' "
             "AND trade_date BETWEEN :s AND :d"), {"s": range_start, "d": td}).fetchall()}
 
-        # 逐日落库：成交（含 signal_id/stock_name 追踪）+ EOD（无行情日延续净值，保逐日曲线）
+        # 逐日落库：成交（含 signal_id/stock_name 追踪 + 操作前后仓位/总资产快照）
+        # + EOD（无行情日延续净值，保逐日曲线）
         # last_eq/last_cash 已从该模型上一 EOD 恢复（净值延续，非现金）
         pos_sig = {c: p.get('signal_id') for c, p in positions.items()}
         pos_name = {c: p.get('stock_name', '') for c, p in positions.items()}
@@ -1481,32 +1482,60 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
         for t in result.trades:
             day_trades.setdefault(t['date'], []).append(t)
         held_set = set(positions.keys()) if not replay else set()
+        shares_held = {c: p['shares'] for c, p in positions.items()}
+        run_cash = cash  # 当日逐笔现金推演（日终以引擎 rec.cash 为准校正）
+        close_map = {(row.trade_date, row.stock_code): float(row.close)
+                     for row in df.itertuples(index=False)} if len(df) else {}
+        last_px = {}  # 各股最后已知收盘（停牌/缺行情日估值延续）
+
+        def _held_val(day_, held):
+            v = 0.0
+            for c in held:
+                px_ = close_map.get((day_, c), last_px.get(c))
+                if px_ is not None:
+                    v += shares_held.get(c, 0) * px_
+            return v
+
         for day in trade_days:
             for t in day_trades.get(day, []):
                 code = t['stock_code']
+                pre_npos, pre_equity = len(held_set), run_cash + _held_val(day, held_set)
                 if t['action'] == 'BUY':
                     sig = sig_map.get((day, code), {})
                     pos_sig[code] = sig.get('signal_id')
                     pos_name[code] = sig.get('stock_name', '')
                     held_set.add(code)
+                    shares_held[code] = t['shares']
+                    run_cash -= (t['amount'] or 0)  # BUY amount 已含费用（gross+fee）
                 else:
                     held_set.discard(code)
+                    shares_held.pop(code, None)
+                    run_cash += (t['amount'] or 0) - (t['fee'] or 0)  # SELL amount 为净额（不含费）
+                post_npos, post_equity = len(held_set), run_cash + _held_val(day, held_set)
+                for c in held_set:
+                    if (day, c) in close_map:
+                        last_px[c] = close_map[(day, c)]
                 db.execute(text("""
                     INSERT INTO paper_trades (trade_date, action, stock_code, stock_name, price, shares,
-                        amount, commission, pnl, cash, equity, reason, signal_id, model_version)
+                        amount, commission, pnl, cash, equity, reason, signal_id, model_version,
+                        pre_npos, pre_equity, post_npos, post_equity)
                     VALUES (:d, :action, :stock_code, :stock_name, :price, :shares,
-                        :amount, :commission, :pnl, :ca, :e, :reason, :signal_id, :v)
+                        :amount, :commission, :pnl, :ca, :e, :reason, :signal_id, :v,
+                        :pn, :pe, :qn, :qe)
                 """), {"d": day, 'action': t['action'], 'stock_code': code,
                        'stock_name': pos_name.get(code, ''), 'price': t['price'],
                        'shares': t['shares'], 'amount': t['amount'], 'commission': t['fee'],
                        'pnl': t.get('pnl'), 'ca': round(recs[day].cash, 2) if day in recs else None,
                        'e': round(recs[day].account, 2) if day in recs else None,
-                       'reason': t['reason'], 'signal_id': pos_sig.get(code), 'v': ver})
+                       'reason': t['reason'], 'signal_id': pos_sig.get(code), 'v': ver,
+                       'pn': pre_npos, 'pe': round(pre_equity, 2),
+                       'qn': post_npos, 'qe': round(post_equity, 2)})
             rec = recs.get(day)
             if rec:
-                # 当日有行情行：以引擎记录为准
+                # 当日有行情行：以引擎记录为准（并校正逐笔现金推演）
                 last_eq = rec.account
                 last_cash = rec.cash
+                run_cash = rec.cash
                 last_npos = len(held_set)
             else:
                 # 无行情日（空仓且无信号/全部停牌）：现金/仓位/净值延续上一记录日，保逐日 EOD 曲线
@@ -1582,8 +1611,8 @@ def dag_task_model_signal(trade_date=None, **kw):
 
     try:
         db = get_sync_db()
-        # 获取 ACTIVE 模型 + 全局偏好（多实体并存时取最近激活者，避免无 ORDER BY 的不确定行）
-        ver = db.execute(text(
+        # _ver：仅重算指定模型（信号页「生成」按钮）；缺省 = 全部主备模型（DAG 节点）
+        ver = kw.get('_ver') or db.execute(text(
             "SELECT version FROM model_versions WHERE status='ACTIVE' "
             "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
         )).scalar()
@@ -2133,7 +2162,7 @@ def dag_task_model_health(trade_date=None, **kw):
     try:
         db = get_sync_db()
         # 多实体并存时取最近激活的 ACTIVE（与 model_signal 同口径）
-        ver = db.execute(text(
+        ver = kw.get('_ver') or db.execute(text(
             "SELECT version FROM model_versions WHERE status='ACTIVE' "
             "ORDER BY activated_at DESC NULLS LAST, created_at DESC LIMIT 1"
         )).scalar()
@@ -4116,6 +4145,84 @@ def dag_task_factor_ic(trade_date=None, **kw):
         raise
 
 
+def _active_versions(db):
+    """全部上线模型（主在前，备按激活时间升序）——主备制的"在役集合"。"""
+    from sqlalchemy import text as _t
+    return [r[0] for r in db.execute(_t(
+        "SELECT version FROM model_versions WHERE status='ACTIVE' "
+        "ORDER BY (role='primary') DESC, activated_at ASC NULLS LAST")).fetchall()]
+
+
+def dag_task_model_signals_all(trade_date=None, **kw):
+    """model_signal 节点（主备制）：对全部上线模型按各自规则生产信号。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    vers = _active_versions(db)
+    db.close()
+    if not vers:
+        return dag_task_model_signal(trade_date=trade_date, **kw)
+    total, parts = 0, []
+    for v in vers:
+        try:
+            n = dag_task_model_signal(trade_date=trade_date, _ver=v, **kw)
+            total += (n or 0)
+            parts.append(f'{v}:{n or 0}条')
+        except Exception as e:
+            db.rollback() if not db.closed else None
+            logger.warning(f'[model_signal] {v} 信号生产失败: {e}')
+            parts.append(f'{v}:失败')
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('model_signal')
+    write_node_log(log_id=log_id, status='success', rows=total,
+                   detail=f'主备信号生产（{len(vers)} 模型）: ' + '、'.join(parts))
+    return total
+
+
+def dag_task_model_healths_all(trade_date=None, **kw):
+    """model_health 节点（主备制）：对全部上线模型各自健康检查。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    vers = _active_versions(db)
+    db.close()
+    if not vers:
+        return dag_task_model_health(trade_date=trade_date, **kw)
+    total, parts = 0, []
+    for v in vers:
+        try:
+            n = dag_task_model_health(trade_date=trade_date, _ver=v, **kw)
+            total += (n or 0)
+            parts.append(f'{v}:{n or 0}')
+        except Exception as e:
+            logger.warning(f'[model_health] {v} 健康检查失败: {e}')
+            parts.append(f'{v}:失败')
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('model_health')
+    write_node_log(log_id=log_id, status='success', rows=total,
+                   detail=f'主备健康检查（{len(vers)} 模型）: ' + '、'.join(parts))
+    return total
+
+
+def dag_task_paper_portfolio_all(trade_date=None, **kw):
+    """paper_portfolio 节点（主备制）：对全部上线模型各自账户步进（各自规则+隔离账本）。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    vers = _active_versions(db)
+    db.close()
+    if not vers:
+        return dag_task_paper_portfolio(trade_date=trade_date, **kw)
+    total, parts = 0, []
+    for v in vers:
+        try:
+            n = dag_task_paper_portfolio(trade_date=trade_date, _ver=v, **kw)
+            total += (n or 0)
+            parts.append(f'{v}:{n or 0}日')
+        except Exception as e:
+            logger.warning(f'[paper_portfolio] {v} 步进失败: {e}')
+            parts.append(f'{v}:失败')
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('paper_portfolio')
+    write_node_log(log_id=log_id, status='success', rows=total,
+                   detail=f'主备账户步进（{len(vers)} 模型）: ' + '、'.join(parts))
+    return total
+
+
 NODE_FN_MAP = {
     'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
     'kline':              dag_task_kline,
@@ -4125,13 +4232,13 @@ NODE_FN_MAP = {
     'treemap':            dag_task_treemap,
     'stats':              dag_task_stats,
     'daily_completeness': dag_task_completeness,
-    'model_signal':       dag_task_model_signal,
-    'model_health':       dag_task_model_health,
+    'model_signal':       dag_task_model_signals_all,
+    'model_health':       dag_task_model_healths_all,
     'feature_compute':    dag_task_feature_compute,
     'feature_backfill':  dag_task_feature_backfill,
     'entity_stats':      dag_task_entity_stats,
     'factor_ic':         dag_task_factor_ic,
-    'paper_portfolio':   dag_task_paper_portfolio,
+    'paper_portfolio':    dag_task_paper_portfolio_all,
     'moneyflow':         dag_task_moneyflow,
     'analyze':           dag_task_analyze,
     **{n: _make_ext_node(n, f'DAG 节点：{n} 拓展数据采集') for n in (

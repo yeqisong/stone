@@ -20,16 +20,23 @@
     <n-button size="tiny" :type="currentEntity==='index'?'primary':'default'" @click="switchEntity('index')"><AppIcon name="bar-chart-2" :size="13" />  指数</n-button>
     <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')"><AppIcon name="pie-chart" :size="13" />  ETF</n-button>
   </div>
-  <div v-for="v in store.versions" :key="v.version"
+          <div v-for="v in store.versions" :key="v.version"
             :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-border)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-card-bg-hover)':'transparent'}"
             @click="store.selectVersion(v.version)"
             @mouseenter="hoveredVersion = v.version" @mouseleave="hoveredVersion = null">
             <div style="display:flex;align-items:center;justify-content:space-between">
               <div style="display:flex;align-items:center;gap:8px">
                 <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
-                <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{store.statusLabel(v.status)}}</n-tag>
+                <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{roleLabel(v)}}</n-tag>
               </div>
-              <n-button v-if="!store.isMock && v.status !== 'ACTIVE' && hoveredVersion === v.version" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="trash" :size="13" /> </n-button>
+              <div v-if="!store.isMock && hoveredVersion === v.version" style="display:flex;gap:2px;flex-shrink:0">
+                <!-- 主备制：备模型 hover 出【切换】；主/备 hover 出【归档】；其余状态保留删除 -->
+                <n-button v-if="v.status==='ACTIVE' && v.role==='backup'" text size="tiny" type="primary" style="font-size:12px;padding:0 4px"
+                  title="切换为主模型" @click.stop="handlePromote(v)"><AppIcon name="zap" :size="13" />  切换</n-button>
+                <n-button v-if="v.status==='ACTIVE'" text size="tiny" type="warning" style="font-size:12px;padding:0 4px"
+                  title="归档下线模型" @click.stop="handleArchive(v)"><AppIcon name="download" :size="13" />  归档</n-button>
+                <n-button v-if="v.status!=='ACTIVE'" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="trash" :size="13" /> </n-button>
+              </div>
             </div>
             <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
             <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--c-text-faint)">
@@ -94,8 +101,9 @@
             <ModelTraining :version="store.selected" />
           </div>
           <div v-else-if="store.detailTab==='eval'">
-            <div v-if="store.selected.status==='PENDING'" style="margin-bottom:14px;display:flex;gap:8px">
-              <n-button type="success" @click="approveModel">审批通过</n-button>
+            <div v-if="store.selected.status==='PENDING'" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap">
+              <n-button type="success" @click="approveModel('primary')"><AppIcon name="zap" :size="13" />  发布为主模型</n-button>
+              <n-button type="info" secondary @click="approveModel('backup')">发布为备模型</n-button>
               <n-button type="error" @click="rejectModel">拒绝</n-button>
             </div>
             <ModelEval :version="store.selected" />
@@ -562,17 +570,20 @@ async function dostartTrain() {
     store.selected.status = 'TRAINING'
   } catch(e) { message.error(e.response?.data?.detail || '启动训练失败') }
 }
-async function approveModel() {
+async function approveModel(role) {
+  const isPrimary = role === 'primary'
   dialog.warning({
-    title: '确认审批上线？',
-    content: `版本 ${store.selected.version} 将置为 ACTIVE 并开始产生实盘信号，同实体旧 ACTIVE 版本转入 ARCHIVED。若最近一次 walk-forward 判定为 FAIL，本次审批将被拒绝。`,
-    positiveText: '审批上线', negativeText: '取消',
-    onPositiveClick: () => doApprove(),
+    title: isPrimary ? '发布为主模型？' : '发布为备模型？',
+    content: isPrimary
+      ? `版本 ${store.selected.version} 将成为主模型（原主模型自动转为备模型），立即按其规则生产信号与模拟交易。若最近一次 walk-forward 判定为 FAIL，本次审批将被拒绝。`
+      : `版本 ${store.selected.version} 将作为备模型上线（主模型不变），同步生产信号与模拟交易用于对比。`,
+    positiveText: isPrimary ? '发布为主模型' : '发布为备模型', negativeText: '取消',
+    onPositiveClick: () => doApprove(role),
   })
 }
-async function doApprove() {
+async function doApprove(role) {
   try {
-    await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`)
+    await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`, { role })
     await store.loadVersions(currentEntity.value)
   } catch(e) {
     message.error(e.response?.data?.detail || '审批失败')
@@ -598,6 +609,44 @@ async function handleDeleteClick(v) {
   } catch(e) {
     message.error(e.response?.data?.detail || '检查失败')
   }
+}
+
+// ── 主备制：角色徽标 + 切换/归档 ──
+const roleLabel = (v) => {
+  if (v.status === 'ACTIVE') return v.role === 'primary' ? '已上线 · 主' : '已上线 · 备'
+  return store.statusLabel(v.status)
+}
+async function handlePromote(v) {
+  dialog.error({
+    title: '切换主模型',
+    content: `要将该模型切换为主模型？`,
+    positiveText: '确认切换',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await axios.post(window.location.origin + `/api/v1/models/${v.version}/promote`)
+        message.success(`${v.version} 已切换为主模型`)
+        await store.loadVersions(currentEntity.value)
+        if (store.selectedId) store.selectVersion(store.selectedId)
+      } catch(e) { message.error(e.response?.data?.detail || '切换失败') }
+    }
+  })
+}
+async function handleArchive(v) {
+  dialog.warning({
+    title: '归档模型',
+    content: '归档模型后，不再维护信号信息！' + (v.role === 'primary' ? '（主模型归档后，创建最早的备模型将自动接任主模型）' : ''),
+    positiveText: '确认归档',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        const r = await axios.post(window.location.origin + `/api/v1/models/${v.version}/archive`)
+        message.success(r.data?.promoted_primary ? `${v.version} 已归档，${r.data.promoted_primary} 接任主模型` : `${v.version} 已归档`)
+        await store.loadVersions(currentEntity.value)
+        if (store.selectedId) store.selectVersion(store.selectedId)
+      } catch(e) { message.error(e.response?.data?.detail || '归档失败') }
+    }
+  })
 }
 async function confirmDelete() {
   if (!deleteTarget.value || !deleteInfo.value) return

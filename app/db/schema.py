@@ -941,6 +941,10 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     reason       VARCHAR(30),           -- signal/stop_loss/take_profit/trailing/hold_expire
     signal_id    INTEGER,
     model_version VARCHAR(20),
+    pre_npos     INTEGER,               -- 操作前仓位数
+    pre_equity   DECIMAL(14,2),         -- 操作前总资产
+    post_npos    INTEGER,               -- 操作后仓位数
+    post_equity  DECIMAL(14,2),         -- 操作后总资产
     detail       JSONB DEFAULT '{}',
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

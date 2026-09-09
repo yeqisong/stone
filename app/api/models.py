@@ -102,37 +102,39 @@ def list_models(entity: str = Query("stock")):
     try:
         try:
             rows = db.execute(text("""
-                SELECT version, model_name, status, config, best_params,
+                SELECT version, model_name, status, role, config, best_params,
                        evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
                        created_at, trained_at, activated_at
                 FROM model_versions
                 WHERE deleted_at IS NULL AND COALESCE(config->>'entity', 'stock') = :ent
-                ORDER BY created_at DESC
+                ORDER BY CASE WHEN status='ACTIVE' AND role='primary' THEN 0
+                              WHEN status='ACTIVE' THEN 1 ELSE 2 END, created_at DESC
             """), {"ent": entity}).fetchall()
         except Exception:
             db.rollback()
             # deleted_at 列未迁移时回退
             rows = db.execute(text("""
-                SELECT version, model_name, status, config, best_params,
+                SELECT version, model_name, status, role, config, best_params,
                        evaluation_report, sharpe, win_rate, max_drawdown, annual_return,
                        created_at, trained_at, activated_at
                 FROM model_versions
-                ORDER BY created_at DESC
+                ORDER BY CASE WHEN status='ACTIVE' AND role='primary' THEN 0
+                              WHEN status='ACTIVE' THEN 1 ELSE 2 END, created_at DESC
             """)).fetchall()
         versions = []
         for r in rows:
             versions.append({
-                "version": r[0], "model_name": r[1], "status": r[2],
-                "config": r[3] if isinstance(r[3], dict) else (json.loads(r[3]) if r[3] else {}),
-                "best_params": r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else None),
-                "evaluation_report": r[5] if isinstance(r[5], dict) else (json.loads(r[5]) if r[5] else None),
-                "sharpe": float(r[6]) if r[6] else None,
-                "win_rate": float(r[7]) if r[7] else None,
-                "max_drawdown": float(r[8]) if r[8] else None,
-                "annual_return": float(r[9]) if r[9] else None,
-                "created_at": str(r[10]) if r[10] else None,
-                "trained_at": str(r[11]) if r[11] else None,
-                "activated_at": str(r[12]) if r[12] else None,
+                "version": r[0], "model_name": r[1], "status": r[2], "role": r[3],
+                "config": r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else {}),
+                "best_params": r[5] if isinstance(r[5], dict) else (json.loads(r[5]) if r[5] else None),
+                "evaluation_report": r[6] if isinstance(r[6], dict) else (json.loads(r[6]) if r[6] else None),
+                "sharpe": float(r[7]) if r[7] else None,
+                "win_rate": float(r[8]) if r[8] else None,
+                "max_drawdown": float(r[9]) if r[9] else None,
+                "annual_return": float(r[10]) if r[10] else None,
+                "created_at": str(r[11]) if r[11] else None,
+                "trained_at": str(r[12]) if r[12] else None,
+                "activated_at": str(r[13]) if r[13] else None,
             })
         return {"versions": versions, "count": len(versions)}
     finally:
@@ -220,6 +222,107 @@ def get_paper_portfolio(version: str = Query(None, description="模型版本；�
         }
     finally:
         db.close()
+
+
+@router.get("/v1/models/{version}/paper-trades")
+def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=10, le=200),
+                     user: str = Depends(get_current_user)):
+    """模拟交易明细分页（按模型隔离，交易日期倒序）。
+
+    每笔带操作前/后仓位数与总资产（pre_/post_ 列，由纸面步进逐笔记录）；
+    买入行附浮动盈亏（仍在仓时按最新后复权收盘估算）。
+    """
+    db = get_sync_db()
+    try:
+        total = db.execute(text(
+            "SELECT COUNT(*) FROM paper_trades WHERE action IN ('BUY','SELL') AND model_version=:v"),
+            {"v": version}).scalar()
+        rows = db.execute(text("""
+            SELECT trade_date, action, stock_code, stock_name, price, shares, amount,
+                   commission, pnl, reason, pre_npos, pre_equity, post_npos, post_equity
+            FROM paper_trades
+            WHERE action IN ('BUY','SELL') AND model_version=:v
+            ORDER BY trade_date DESC, id DESC
+            LIMIT :lim OFFSET :off
+        """), {"v": version, "lim": page_size, "off": (page - 1) * page_size}).fetchall()
+        # 最新收盘（浮动盈亏估算，仅仍在仓的买入行）
+        pos_codes = [r[2] for r in rows if r[1] == 'BUY']
+        held = {}
+        if pos_codes:
+            for r in db.execute(text("""
+                SELECT stock_code, buy_price FROM paper_positions
+                WHERE model_version=:v AND stock_code = ANY(:c)
+            """), {"v": version, "c": pos_codes}).fetchall():
+                held[r[0]] = r[1]
+        px = {}
+        if held:
+            for r in db.execute(text("""
+                SELECT DISTINCT ON (stock_code) stock_code, close_hfq FROM daily_quote
+                WHERE stock_code = ANY(:c) AND close_hfq > 0 ORDER BY stock_code, trade_date DESC
+            """), {"c": list(held.keys())}).fetchall():
+                px[r[0]] = float(r[1])
+        trades = []
+        for r in rows:
+            float_pnl = None
+            if r[1] == 'BUY' and r[2] in held and r[2] in px and r[4]:
+                float_pnl = round((px[r[2]] - float(r[4])) * (r[5] or 0), 2)
+            trades.append({
+                "date": str(r[0]), "action": r[1], "stock_code": r[2], "stock_name": r[3],
+                "price": float(r[4]) if r[4] is not None else None,
+                "shares": r[5], "amount": float(r[6]) if r[6] is not None else None,
+                "commission": float(r[7]) if r[7] is not None else None,
+                "pnl": float(r[8]) if r[8] is not None else None,
+                "reason": r[9],
+                "pre_npos": r[10], "pre_equity": float(r[11]) if r[11] is not None else None,
+                "post_npos": r[12], "post_equity": float(r[13]) if r[13] is not None else None,
+                "float_pnl": float_pnl,
+            })
+        meta_row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
+        meta = json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
+        return {"trades": trades, "total": total, "page": page, "page_size": page_size,
+                "initial_cash": float(meta.get('initial_cash', 1_000_000))}
+    finally:
+        db.close()
+
+
+@router.post("/v1/models/{version}/regenerate-day")
+def regenerate_day(version: str, body: dict = None, user: str = Depends(get_current_user)):
+    """重新生成该模型当日全部隔离数据：信号生产 → 模拟交易 → 健康检查（后台线程）。"""
+    import threading as _th
+    td = ((body or {}).get('date') or _dt.today().isoformat())[:10]
+    r = get_sync_db()
+    row = r.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+    r.close()
+    if not row:
+        raise HTTPException(404, "版本不存在")
+    if row[0] != 'ACTIVE':
+        raise HTTPException(400, f"只有上线中的模型可重新生成，当前 {row[0]}")
+
+    def _run():
+        from scripts.pipeline import dag_task_model_signal, dag_task_paper_portfolio, dag_task_model_health
+        from loguru import logger as _mlog
+        try:
+            dag_task_model_signal(trade_date=td, _ver=version)
+        except Exception as e:
+            _mlog.error(f"[regen] {version} 信号重算失败: {e}")
+        try:
+            # 清当日账本后重步进（信号变了，模拟交易须跟着重算）
+            from app.db.connection import get_sync_db as _g
+            _db = _g()
+            _db.execute(text("DELETE FROM paper_trades WHERE trade_date=:d AND model_version=:v"),
+                       {"d": td, "v": version})
+            _db.commit(); _db.close()
+            dag_task_paper_portfolio(trade_date=td, _ver=version)
+        except Exception as e:
+            _mlog.error(f"[regen] {version} 模拟交易重算失败: {e}")
+        try:
+            dag_task_model_health(trade_date=td, _ver=version)
+        except Exception as e:
+            _mlog.error(f"[regen] {version} 健康检查重算失败: {e}")
+
+    _th.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "version": version, "date": td, "status": "regenerating"}
 
 
 @router.get("/v1/models/{version}")
@@ -407,25 +510,37 @@ def get_model_diagnosis(version: str):
 
 
 @router.get("/v1/models/{version}/signals")
-def get_model_signals(version: str):
-    """模型信号明细列表（最近 50 条）。"""
+def get_model_signals(version: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=10, le=500)):
+    """模型信号明细分页（按信号日期倒序，模型隔离）。"""
     db = get_sync_db()
     try:
+        total = db.execute(text(
+            "SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND model_version=:version"),
+            {"version": version}).scalar()
         rows = db.execute(text("""
-            SELECT id, signal_date, stock_code, stock_name, direction, strength, price
-            FROM signal_history
-            WHERE strategy_name = 'model_signal' AND model_version = :version
-            ORDER BY signal_date DESC LIMIT 50
-        """), {"version": version}).fetchall()
+            SELECT sh.id, sh.signal_date, sh.stock_code, sh.stock_name, sh.direction, sh.strength, sh.price,
+                   dq.close AS real_close,
+                   sh.predict_score, sh.predict_5d_return, sh.predict_10d_return, sh.predict_20d_return
+            FROM signal_history sh
+            LEFT JOIN daily_quote dq ON dq.stock_code = sh.stock_code AND dq.trade_date = sh.signal_date
+            WHERE sh.strategy_name = 'model_signal' AND sh.model_version = :version
+            ORDER BY sh.signal_date DESC, sh.predict_score DESC NULLS LAST
+            LIMIT :lim OFFSET :off
+        """), {"version": version, "lim": page_size, "off": (page - 1) * page_size}).fetchall()
         signals = []
         for r in rows:
             signals.append({
                 "id": r[0], "signal_date": str(r[1]) if r[1] else None,
                 "stock_code": r[2], "stock_name": r[3],
-                "direction": r[4], "strength": r[5],
+                "direction": r[4], "strength": float(r[5]) if r[5] is not None else None,
                 "price": float(r[6]) if r[6] else 0,
+                "real_close": float(r[7]) if r[7] is not None else None,
+                "predict_score": float(r[8]) if r[8] is not None else None,
+                "predict_5d": float(r[9]) if r[9] is not None else None,
+                "predict_10d": float(r[10]) if r[10] is not None else None,
+                "predict_20d": float(r[11]) if r[11] is not None else None,
             })
-        return {"signals": signals, "count": len(signals)}
+        return {"signals": signals, "count": len(signals), "total": total, "page": page, "page_size": page_size}
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"查询信号失败: {str(e)[:200]}")
@@ -674,9 +789,12 @@ def check_model_features(version: str, force: bool = Query(False)):
 
 
 @router.post("/v1/models/{version}/approve")
-def approve_model(version: str, force: bool = Query(False), user: str = Depends(get_current_user)):
-    """审批模型上线：旧 ACTIVE → ARCHIVED，新版本 → ACTIVE。
+def approve_model(version: str, body: dict = None, force: bool = Query(False), user: str = Depends(get_current_user)):
+    """审批模型上线（主备制）：发布为主模型或备模型。
 
+    body: {"role": "primary" | "backup"}（缺省 primary）。
+    - primary：原主模型自动降为备模型；
+    - backup：主模型不变，备模型最多 5 个。
     晋升门槛（v3.6）：最近一次 walk-forward 对比判定为 FAIL 且未传 force=true 时拒绝。
     """
     db = get_sync_db()
@@ -686,6 +804,9 @@ def approve_model(version: str, force: bool = Query(False), user: str = Depends(
             raise HTTPException(404, "版本不存在")
         if r[0] != 'PENDING':
             raise HTTPException(400, f"当前状态为 {r[0]}，只有 PENDING 状态可审批")
+        role = ((body or {}).get('role') or 'primary').lower()
+        if role not in ('primary', 'backup'):
+            raise HTTPException(400, f"role 只能是 primary/backup，收到 {role}")
         cfg = r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})
         entity = cfg.get("entity", "stock")
 
@@ -700,19 +821,90 @@ def approve_model(version: str, force: bool = Query(False), user: str = Depends(
                 raise HTTPException(400, f"晋升门槛未通过：{report.get('reason')}"
                                          f"（多窗口稳定性不足；如仍要上线请加 force=true）")
 
-        # 仅归档同主体的旧 ACTIVE
+        if role == 'backup':
+            n_backup = db.execute(text(
+                "SELECT COUNT(*) FROM model_versions WHERE status='ACTIVE' AND role='backup' "
+                "AND COALESCE(config->>'entity','stock')=:ent"), {"ent": entity}).scalar()
+            if n_backup >= 5:
+                raise HTTPException(400, "备模型最多 5 个（1 主 + 5 备），请先归档部分备模型")
+        else:
+            # 原主模型自动降为备模型（ACTIVE 保持上线，只换角色）
+            db.execute(text(
+                "UPDATE model_versions SET role='backup' "
+                "WHERE status='ACTIVE' AND role='primary' AND (config->>'entity') = :ent"),
+                {"ent": entity})
         db.execute(text(
-            "UPDATE model_versions SET status='ARCHIVED', archived_at=CURRENT_TIMESTAMP "
-            "WHERE status='ACTIVE' AND (config->>'entity') = :ent"
-        ), {"ent": entity})
-        db.execute(text("UPDATE model_versions SET status='ACTIVE', activated_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": version})
+            "UPDATE model_versions SET status='ACTIVE', role=:role, activated_at=CURRENT_TIMESTAMP WHERE version=:v"),
+            {"v": version, "role": role})
         db.commit()
-        return {"ok": True, "version": version, "status": "ACTIVE"}
+        return {"ok": True, "version": version, "status": "ACTIVE", "role": role}
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"审批失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
+@router.post("/v1/models/{version}/promote")
+def promote_model(version: str, user: str = Depends(get_current_user)):
+    """备模型切换为主模型：原主模型自动降为备模型。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status, role FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        if r[0] != 'ACTIVE' or r[1] != 'backup':
+            raise HTTPException(400, f"只有上线中的备模型可切换为主模型，当前 {r[0]}/{r[1]}")
+        cfg = db.execute(text("SELECT config->>'entity' FROM model_versions WHERE version=:v"), {"v": version}).scalar()
+        db.execute(text(
+            "UPDATE model_versions SET role='backup' "
+            "WHERE status='ACTIVE' AND role='primary' AND COALESCE(config->>'entity','stock')=:ent"),
+            {"ent": cfg or 'stock'})
+        db.execute(text("UPDATE model_versions SET role='primary' WHERE version=:v"), {"v": version})
+        db.commit()
+        return {"ok": True, "version": version, "role": "primary"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"切换失败: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
+@router.post("/v1/models/{version}/archive")
+def archive_model(version: str, user: str = Depends(get_current_user)):
+    """归档下线模型（主/备均可）。主模型归档时，创建最早的备模型自动接任主模型。"""
+    db = get_sync_db()
+    try:
+        r = db.execute(text("SELECT status, role FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        if not r:
+            raise HTTPException(404, "版本不存在")
+        if r[0] != 'ACTIVE':
+            raise HTTPException(400, f"只有上线中的模型可归档，当前 {r[0]}")
+        was_primary = r[1] == 'primary'
+        db.execute(text(
+            "UPDATE model_versions SET status='ARCHIVED', role='backup', archived_at=CURRENT_TIMESTAMP WHERE version=:v"),
+            {"v": version})
+        promoted = None
+        if was_primary:
+            entity = db.execute(text(
+                "SELECT COALESCE(config->>'entity','stock') FROM model_versions WHERE version=:v"), {"v": version}).scalar()
+            promoted = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='ACTIVE' AND role='backup' "
+                "AND COALESCE(config->>'entity','stock')=:ent ORDER BY created_at ASC LIMIT 1"),
+                {"ent": entity or 'stock'}).scalar()
+            if promoted:
+                db.execute(text("UPDATE model_versions SET role='primary' WHERE version=:v"), {"v": promoted})
+        db.commit()
+        return {"ok": True, "version": version, "status": "ARCHIVED", "promoted_primary": promoted}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"归档失败: {str(e)[:200]}")
     finally:
         db.close()
 

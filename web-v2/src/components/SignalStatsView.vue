@@ -6,7 +6,7 @@
   </div>
   <template v-else-if="stats">
     <!-- 版本筛选 -->
-    <n-space align="center" style="margin-bottom:8px" wrap>
+    <n-space v-if="!props.version" align="center" style="margin-bottom:8px" wrap>
       <span style="font-size:12px;color:var(--c-text-dim)">统计版本:</span>
       <n-select v-model:value="selVersion" :options="versionOptions" size="tiny" style="width:200px"
         @update:value="load" />
@@ -44,13 +44,14 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, watch, onMounted, nextTick } from 'vue'
 import { NSpin, NDataTable, NButton, NSpace, NSelect } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import StatStrip from './StatStrip.vue'
 
 const API = window.location.origin
+const props = defineProps({ version: String })  // 传入时（信号页 Tab）锁定该模型并隐藏内部选择器
 const loading = ref(true)
 const stats = ref(null)
 const loadError = ref(false)
@@ -72,17 +73,19 @@ const stkCols = [
 
 import { h } from 'vue'
 
-const selVersion = ref('active')
+const selVersion = ref(props.version || 'active')
 const versionOptions = ref([{ label: '当前 ACTIVE 模型', value: 'active' }, { label: '全部模型', value: 'all' }])
 
 // null=尚无到期/了结样本（渲染 —，不渲染 0 造成「0% 胜率」误读）
 const fmtPct = (v, digits = 2) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(digits) + '%'
 const floatColor = v => v == null ? 'var(--c-text-faint)' : (v >= 0 ? '#ef4444' : '#10b981')
 
+watch(() => props.version, (v) => { if (v && v !== selVersion.value) { selVersion.value = v; load() } })
+
 async function load() {
   loading.value = true
   try {
-    const r = await axios.get(API + '/api/signal/stats', { params: { days: 90, model_version: selVersion.value } })
+    const r = await axios.get(API + '/api/signal/stats', { params: { days: 90, model_version: props.version || selVersion.value } })
     stats.value = r.data
     const o = r.data.overview
     if (versionOptions.value.length <= 2) {
