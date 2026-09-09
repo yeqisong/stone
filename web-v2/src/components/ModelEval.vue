@@ -81,14 +81,14 @@
           <thead>
             <tr>
               <th class="sticky">#</th>
-              <th class="sticky">夏普</th>
+              <th class="sticky">{{ objLabel }}</th>
               <th class="sticky">参数</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="t in optunaTrials" :key="t.no">
               <td>{{t.no}}</td>
-              <td class="good">{{t.sharpe}}</td>
+              <td class="good">{{t.obj}}</td>
               <td class="file">{{t.params}}</td>
             </tr>
           </tbody>
@@ -622,9 +622,17 @@ function downloadTrades() {
   a.click(); URL.revokeObjectURL(url)
 }
 
+// Optuna 逐 trial 的目标值=验证集评分（r2 字段落库），具体语义由训练目标决定：
+// binary→AUC / pairwise→秩相关 / 回归→R²（rank 标签时是对排名标签的 R²）。夏普只在胜出参数的整段回测里才有。
+const objLabel = computed(() => {
+  const cfg = props.version?.config || {}
+  if (cfg.train_objective === 'binary') return 'AUC'
+  if (cfg.train_objective === 'pairwise') return '秩相关'
+  return 'r²'
+})
 const optunaTrials = computed(() => (rep.value.trials || []).slice(-10).reverse().map(t => ({
   no: t.trial,
-  sharpe: t.sharpe?.toFixed(3) || '—',
+  obj: t.r2 != null ? t.r2.toFixed(4) : '—',
   params: `lr=${t.params?.learning_rate?.toFixed(3)||'?'} d=${t.params?.max_depth||'?'} n=${t.params?.n_estimators||'?'}`,
 })))
 
