@@ -360,6 +360,47 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
         closed = overview.closed or 0
         wins = overview.wins or 0
 
+        # 跟踪中浮动：未了结信号按每只股票最新后复权收盘计算浮动收益
+        # （signal_history.price 与 daily_quote.close_hfq 同为后复权口径，比值即收益；
+        #   到期定性要等 5/10/20 交易日，浮动让用户在等待期内看到逐日进展）
+        float_rows = db.execute(text(f"""
+            WITH codes AS (
+                SELECT DISTINCT stock_code FROM signal_history
+                WHERE strategy_name='model_signal' AND status IS DISTINCT FROM 'closed'
+                  AND signal_date >= {min_date}{version_filter}),
+            lp AS (
+                SELECT DISTINCT ON (q.stock_code) q.stock_code, q.close_hfq AS last_px
+                FROM daily_quote q JOIN codes c ON c.stock_code = q.stock_code
+                ORDER BY q.stock_code, q.trade_date DESC)
+            SELECT sh.signal_date,
+                   AVG(lp.last_px / NULLIF(sh.price, 0) - 1) AS avg_float,
+                   COUNT(*) AS n_open
+            FROM signal_history sh JOIN lp ON lp.stock_code = sh.stock_code
+            WHERE sh.strategy_name='model_signal' AND sh.status IS DISTINCT FROM 'closed'
+              AND sh.signal_date >= {min_date}{version_filter}
+            GROUP BY sh.signal_date ORDER BY sh.signal_date
+        """), {**{"days": days}, **vparams}).fetchall()
+        # 总浮动 = 按未了结信号数加权的平均（避免逐日均值再平均的偏差）
+        _w = sum(r[2] or 0 for r in float_rows)
+        float_avg = (sum((r[1] or 0) * r[2] for r in float_rows) / _w) if _w else None
+        float_map = {str(r[0]): (round(float(r[1]), 4) if r[1] is not None else None) for r in float_rows}
+        # 浮动涨跌家数（未了结信号当前价 vs 信号价）
+        fud = db.execute(text(f"""
+            WITH codes AS (
+                SELECT DISTINCT stock_code FROM signal_history
+                WHERE strategy_name='model_signal' AND status IS DISTINCT FROM 'closed'
+                  AND signal_date >= {min_date}{version_filter}),
+            lp AS (
+                SELECT DISTINCT ON (q.stock_code) q.stock_code, q.close_hfq AS last_px
+                FROM daily_quote q JOIN codes c ON c.stock_code = q.stock_code
+                ORDER BY q.stock_code, q.trade_date DESC)
+            SELECT COUNT(*) FILTER (WHERE lp.last_px > sh.price),
+                   COUNT(*) FILTER (WHERE lp.last_px < sh.price)
+            FROM signal_history sh JOIN lp ON lp.stock_code = sh.stock_code
+            WHERE sh.strategy_name='model_signal' AND sh.status IS DISTINCT FROM 'closed'
+              AND sh.signal_date >= {min_date}{version_filter}
+        """), {**{"days": days}, **vparams}).fetchone()
+
         # 每日趋势
         daily = db.execute(text(f"""
             SELECT signal_date,
@@ -370,7 +411,9 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             WHERE strategy_name='model_signal' AND signal_date >= {min_date}{version_filter}
             GROUP BY signal_date ORDER BY signal_date
         """), {**{"days": days}, **vparams}).fetchall()
-        daily_trend = [{"date": str(r[0]), "signals": r[1], "win_rate": round(float(r[2]) if r[2] else 0, 3)} for r in daily]
+        daily_trend = [{"date": str(r[0]), "signals": r[1],
+                        "win_rate": round(float(r[2]), 3) if r[2] is not None else None,
+                        "avg_float": float_map.get(str(r[0]))} for r in daily]
 
         # 收益分布
         dist = db.execute(text(f"""
@@ -401,8 +444,8 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             ORDER BY signals DESC LIMIT 15
         """), {**{"days": days}, **vparams}).fetchall()
         by_industry = [{"industry": r[0] or "未分类", "signals": r[1],
-                        "win_rate": round(float(r[2]) if r[2] else 0, 3),
-                        "avg_return": round(float(r[3]) if r[3] else 0, 4)} for r in industry]
+                        "win_rate": round(float(r[2]), 3) if r[2] is not None else None,
+                        "avg_return": round(float(r[3]), 4) if r[3] is not None else None} for r in industry]
 
         # Top 个股
         top_stocks = db.execute(text(f"""
@@ -417,8 +460,8 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             ORDER BY signals DESC LIMIT 20
         """), {**{"days": days}, **vparams}).fetchall()
         top = [{"stock_code": r[0], "stock_name": r[1], "signals": r[2],
-                "win_rate": round(float(r[3]) if r[3] else 0, 3),
-                "avg_return": round(float(r[4]) if r[4] else 0, 4)} for r in top_stocks]
+                "win_rate": round(float(r[3]), 3) if r[3] is not None else None,
+                "avg_return": round(float(r[4]), 4) if r[4] is not None else None} for r in top_stocks]
 
         used_version = model_version
         if model_version == 'active':
@@ -431,11 +474,15 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             "overview": {
                 "total": total, "closed": closed, "open": overview.open_sigs or 0,
                 "wins": wins,
-                "win_rate": round(wins / max(closed, 1), 3),
-                "avg_return": round(float(overview.avg_ret) if overview.avg_ret else 0, 4),
-                "avg_forward_5d": round(float(overview.avg_f5d) if overview.avg_f5d else 0, 4),
-                "avg_forward_10d": round(float(overview.avg_f10d) if overview.avg_f10d else 0, 4),
-                "avg_forward_20d": round(float(overview.avg_f20d) if overview.avg_f20d else 0, 4),
+                # 无已了结/无到期样本时返回 null（前端渲染 —），
+                # 返回 0 会被误读为「0% 胜率 / 0 收益」
+                "win_rate": round(wins / closed, 3) if closed else None,
+                "avg_return": round(float(overview.avg_ret), 4) if overview.avg_ret is not None else None,
+                "avg_forward_5d": round(float(overview.avg_f5d), 4) if overview.avg_f5d is not None else None,
+                "avg_forward_10d": round(float(overview.avg_f10d), 4) if overview.avg_f10d is not None else None,
+                "avg_forward_20d": round(float(overview.avg_f20d), 4) if overview.avg_f20d is not None else None,
+                "avg_float_return": round(float(float_avg), 4) if float_avg is not None else None,
+                "float_up": fud[0] or 0, "float_down": fud[1] or 0,
             },
             "daily_trend": daily_trend,
             "return_distribution": distribution,

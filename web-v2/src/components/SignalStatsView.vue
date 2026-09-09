@@ -59,21 +59,25 @@ const overviews = ref([])
 const indCols = [
   { title:'行业', key:'industry', width:120, fixed:'left', ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:55 },
-  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
-  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
+  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 const stkCols = [
   { title:'代码', key:'stock_code', width:65, fixed:'left' },
   { title:'名称', key:'stock_name', width:72, ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:45 },
-  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
-  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
+  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 
 import { h } from 'vue'
 
 const selVersion = ref('active')
 const versionOptions = ref([{ label: '当前 ACTIVE 模型', value: 'active' }, { label: '全部模型', value: 'all' }])
+
+// null=尚无到期/了结样本（渲染 —，不渲染 0 造成「0% 胜率」误读）
+const fmtPct = (v, digits = 2) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(digits) + '%'
+const floatColor = v => v == null ? 'var(--c-text-faint)' : (v >= 0 ? '#ef4444' : '#10b981')
 
 async function load() {
   loading.value = true
@@ -91,10 +95,12 @@ async function load() {
     overviews.value = [
       { label:'累计信号', value: o.total, color: 'var(--c-text)' },
       { label:'已了结', value: o.closed, color: 'var(--c-text)' },
-      { label:'胜率', value: (o.win_rate*100).toFixed(1)+'%', color: o.win_rate>=0.5?'#10b981':'#ef4444' },
-      { label:'均收益', value: (o.avg_return>=0?'+':'')+(o.avg_return*100).toFixed(2)+'%', color: o.avg_return>=0?'#ef4444':'#10b981' },
-      { label:'前5日均', value: (o.avg_forward_5d>=0?'+':'')+(o.avg_forward_5d*100).toFixed(2)+'%', color: o.avg_forward_5d>=0?'#ef4444':'#10b981' },
-      { label:'前10日均', value: (o.avg_forward_10d>=0?'+':'')+(o.avg_forward_10d*100).toFixed(2)+'%', color: o.avg_forward_10d>=0?'#ef4444':'#10b981' },
+      { label:'跟踪中', value: o.open, color: 'var(--c-text)' },
+      { label:'浮动均收益', value: fmtPct(o.avg_float_return), color: floatColor(o.avg_float_return) },
+      { label:'胜率(已了结)', value: fmtPct(o.win_rate, 1), color: o.win_rate==null?'var(--c-text-faint)':o.win_rate>=0.5?'#10b981':'#ef4444' },
+      { label:'均收益(已了结)', value: fmtPct(o.avg_return), color: floatColor(o.avg_return) },
+      { label:'前5日均', value: fmtPct(o.avg_forward_5d), color: floatColor(o.avg_forward_5d) },
+      { label:'前10日均', value: fmtPct(o.avg_forward_10d), color: floatColor(o.avg_forward_10d) },
     ]
     loading.value = false
     await nextTick()
@@ -114,21 +120,25 @@ function makeChart(id, opt) {
 }
 
 function drawTrend() {
-  const dates = stats.value.daily_trend.map(d => d.date)
-  const signals = stats.value.daily_trend.map(d => d.signals)
-  const winRates = stats.value.daily_trend.map(d => (d.win_rate * 100).toFixed(1))
+  const t = stats.value.daily_trend
+  const dates = t.map(d => d.date)
+  const signals = t.map(d => d.signals)
+  // null=该批次尚无了结/样本（缺口不画，connectNulls 跨越）
+  const winRates = t.map(d => d.win_rate == null ? null : +(d.win_rate * 100).toFixed(1))
+  const floats = t.map(d => d.avg_float == null ? null : +(d.avg_float * 100).toFixed(2))
   makeChart('st-chart-trend', {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['信号数', '胜率%'], bottom: 0, textStyle: { fontSize: 10, color: 'var(--c-text-dim)' } },
+    tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : v },
+    legend: { data: ['信号数', '胜率%', '浮动均%'], bottom: 0, textStyle: { fontSize: 10, color: 'var(--c-text-dim)' } },
     grid: { left: '8%', right: '8%', top: 10, bottom: 30 },
     xAxis: { type: 'category', data: dates, axisLabel: { show: false } },
     yAxis: [
       { type: 'value', name: '信号数', splitLine: { lineStyle: { color: 'rgba(128,128,128,0.1)' } } },
-      { type: 'value', name: '胜率%', min: 0, max: 100, splitLine: { show: false } }
+      { type: 'value', name: '%', splitLine: { show: false } }
     ],
     series: [
       { name: '信号数', type: 'bar', data: signals, itemStyle: { color: 'rgba(32,128,240,0.3)' }, barWidth: '60%' },
-      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: '#10b981', width: 2 }, symbol: 'none', smooth: true }
+      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: '#10b981', width: 2 }, symbol: 'none', smooth: true, connectNulls: true },
+      { name: '浮动均%', type: 'line', yAxisIndex: 1, data: floats, lineStyle: { color: '#f59e0b', width: 1.5, type: 'dashed' }, symbol: 'none', smooth: true, connectNulls: true }
     ]
   })
 }
