@@ -8,17 +8,15 @@
     </n-button-group>
     <StockSuggestInput v-model:value="kw" size="tiny" width="180px" placeholder="搜索代码或名称..." @select="onSuggestPick" @enter="doSearch" />
     <n-button type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>
-    <span style="font-size:11px;color:var(--c-text-dim)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
   </n-space>
 
   <n-data-table class="fill-table" flex-height :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
-  <div style="display:flex;justify-content:center;margin-top:10px;flex-shrink:0">
-    <n-pagination v-if="totalPages>1" :page="page" :page-count="totalPages" @update:page="p=>goPage(p)" size="small" />
-  </div>
+  <ListPagination :total="total" :page="page" :page-size="50" @change="goPage" />
 </div>
 </template>
 <script setup>
 import AppIcon from './AppIcon.vue'
+import ListPagination from './ListPagination.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import { useViewport } from '../utils/viewport'
 const { isNarrow } = useViewport()

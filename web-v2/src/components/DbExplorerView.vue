@@ -77,11 +77,7 @@
           </template>
         </div>
 
-        <div class="dbx-pager">
-          <n-pagination v-if="totalRows > pageSize" :page="page" :page-size="pageSize"
-            :item-count="totalRows" @update:page="p => { page = p; loadData() }" size="small" />
-          <span v-else class="pager-hint">最多显示 {{ pageSize }} 行 / 页</span>
-        </div>
+        <ListPagination :total="totalRows" :page="page" :page-size="pageSize" @change="p => { page = p; loadData() }" />
       </template>
       <n-empty v-else description="点击左侧表查看数据" style="margin:auto" />
     </section>
@@ -99,6 +95,7 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
+import ListPagination from './ListPagination.vue'
 import { ref, computed, onMounted, h } from 'vue'
 import { useViewport } from '../utils/viewport'
 const { isNarrow } = useViewport()

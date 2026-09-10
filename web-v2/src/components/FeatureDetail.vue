@@ -114,8 +114,7 @@
         <n-spin v-if="previewLoading" style="padding:40px" />
         <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" scroll-x="500" />
         <div v-if="previewItems.length" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
-          <span>共 {{ previewTotal }} 条</span>
-          <n-pagination v-if="previewTotalPages > 1" :page="previewPage" :page-count="previewTotalPages" @update:page="p => { previewPage = p; loadPreview() }" size="small" />
+          <ListPagination :total="previewTotal" :page="previewPage" :page-size="50" @change="p => { previewPage = p; loadPreview() }" />
         </div>
         <n-empty v-else :description="previewEmptyReason || '暂无数据'" style="padding:20px" />
       </n-tab-pane>
@@ -288,6 +287,7 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
+import ListPagination from './ListPagination.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { NButton, NTag, NSpin, NTabs, NTabPane, NInput, NSelect, NDataTable, NEmpty, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, useMessage } from 'naive-ui'

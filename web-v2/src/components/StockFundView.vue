@@ -12,20 +12,19 @@
   <n-data-table class="fill-table" flex-height :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :scroll-x="3200" />
 
   <!-- Pagination -->
-  <div style="display:flex;justify-content:flex-end;padding:8px 0;flex-shrink:0">
-    <n-pagination :page="page" :page-count="pageCount" :page-size="pageSize" @update:page="loadData" />
-  </div>
+  <ListPagination :total="total" :page="page" :page-size="pageSize" @change="loadData" />
 
   <!-- History Modal -->
   <n-modal v-model:show="showHistModal" preset="card" :title="'基本面历史 — ' + histCode" style="width:800px;max-width:92vw" :segmented="{content:true}">
     <n-data-table :columns="histCols" :data="histItems" size="small" :bordered="false" :loading="histLoading" />
-    <n-pagination v-if="histTotal > histPageSize" :page="histPage" :page-count="Math.ceil(histTotal/histPageSize)" :page-size="histPageSize" size="small" style="margin-top:8px;justify-content:flex-end" @update:page="loadHist" />
+    <ListPagination :total="histTotal" :page="histPage" :page-size="histPageSize" @change="loadHist" />
   </n-modal>
 </div>
 </template>
 
 <script setup>
 import AppIcon from './AppIcon.vue'
+import ListPagination from './ListPagination.vue'
 import { ref, computed, h, onMounted } from 'vue'
 import { NButton, NDataTable, NInput, NSelect, NPagination, NModal, NTag } from 'naive-ui'
 import axios from 'axios'

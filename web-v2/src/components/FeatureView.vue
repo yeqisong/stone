@@ -18,10 +18,7 @@
   </div>
 
   <n-data-table class="fill-table" flex-height :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" scroll-x="1100" />
-  <div class="no-shrink" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:var(--c-text-dim)">
-    <span>共 {{ total }} 条</span>
-    <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
-  </div>
+  <ListPagination :total="total" :page="page" :page-size="50" @change="p => { page = p; loadData() }" />
 
   <!-- Create/Edit Modal -->
   <n-modal v-model:show="showCreate" preset="card" :title="editId ? '编辑特征' : '新增特征'" style="width:800px;max-width:95vw" :mask-closable="false">

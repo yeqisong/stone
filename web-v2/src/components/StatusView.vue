@@ -174,7 +174,7 @@
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" :max-height="360" scroll-x="860" />
       </div>
-      <n-pagination v-if="bfLogTotalPages>1" v-model:page="bfLogPage" :page-count="bfLogTotalPages" size="small" @update:page="(p) => { bfLogPage = p || 1; nav.bfLogPage = bfLogPage; nav.syncHash(); loadBfLogs() }" />
+      <ListPagination :total="bfLogTotal" :page="bfLogPage" :page-size="bfLogPageSize" @change="(p) => { bfLogPage = p || 1; nav.bfLogPage = bfLogPage; nav.syncHash(); loadBfLogs() }" />
     </n-space>
   </n-modal>
 
@@ -204,6 +204,7 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
+import ListPagination from './ListPagination.vue'
 import { ref, computed, onMounted, onUnmounted, h } from 'vue'
 import { NDataTable, NButton, NButtonGroup, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'

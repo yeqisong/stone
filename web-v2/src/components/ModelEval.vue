@@ -133,7 +133,7 @@
           </tbody>
         </table>
       </div>
-      <n-pagination v-if="tradeTotal > pageSize" :page="tradePage" :page-size="pageSize" :item-count="tradeTotal" :on-update:page="p=>tradePage=p" size="small" style="margin-top:8px;justify-content:center" />
+      <ListPagination v-if="tradeTotal > pageSize" :total="tradeTotal" :page="tradePage" :page-size="pageSize" @change="p=>tradePage=p" />
     </div>
 
     <!-- 策略扫描 -->
@@ -320,6 +320,7 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
+import ListPagination from './ListPagination.vue'
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { NEmpty, NButton, NPagination, NModal, NSpace, NCheckbox, NCheckboxGroup, NProgress, NSelect, useMessage } from 'naive-ui'
 import axios from 'axios'
