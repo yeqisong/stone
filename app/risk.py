@@ -14,6 +14,8 @@ from datetime import date
 
 from sqlalchemy import text
 
+from app.api.pricing import raw_price
+
 RULES_CONFIG_KEY = 'risk_rules'
 
 DEFAULT_RULES = {
@@ -87,25 +89,30 @@ def evaluate_risk_rules(db, trade_date=None) -> list:
     # ── 1. 单票止损：paper_positions 成本价 vs 最新收盘 ──
     stop_pct = float(rules.get('stop_loss_pct') or 0)
     if stop_pct > 0:
-        # 注意：paper 引擎全程用后复权价（close_hfq），成本比较必须同口径
+        # 注意：paper 引擎全程用后复权价（close_hfq），成本比较必须同口径；
+        # 告警文案里的价格是给人看的，换算成真实价（同比例缩放到未复权空间）
         rows = db.execute(text("""
-            SELECT p.stock_code, p.buy_price, q.close_hfq
+            SELECT p.stock_code, p.buy_price, q.close_hfq, q.close
             FROM paper_positions p
             LEFT JOIN LATERAL (
-                SELECT close_hfq FROM daily_quote q
+                SELECT close_hfq, close FROM daily_quote q
                 WHERE q.stock_code = p.stock_code AND q.close_hfq > 0
                 ORDER BY trade_date DESC LIMIT 1
             ) q ON true
             WHERE p.model_version = (SELECT version FROM model_versions WHERE status='ACTIVE' ORDER BY activated_at DESC NULLS LAST LIMIT 1)
         """)).fetchall()
-        for code, buy, cur in rows:
+        for code, buy, cur, cur_raw in rows:
             if not buy or not cur:
                 continue
             chg = float(cur) / float(buy) - 1
             if chg <= -abs(stop_pct):
-                emit('stop_loss', 'warn',
-                     f'止损告警 {code}',
-                     f'现价 {float(cur):.2f} 较成本 {float(buy):.2f} 回撤 {chg * 100:.1f}%（阈值 {stop_pct * 100:.0f}%）')
+                factor = (float(cur_raw) / float(cur)) if cur_raw else None
+                show_cur = raw_price(float(cur), factor)
+                show_buy = raw_price(float(buy), factor)
+                pct_txt = f'{show_cur:.2f} 较成本 {show_buy:.2f}' if show_cur and show_buy \
+                    else f'{float(cur):.2f} 较成本 {float(buy):.2f}（后复权口径）'
+                emit('stop_loss', 'warn', f'止损告警 {code}',
+                     f'现价 {pct_txt} 回撤 {chg * 100:.1f}%（阈值 {stop_pct * 100:.0f}%）')
 
     # ── 2. 组合回撤熔断：paper_trades.equity 序列自峰值回撤 ──
     dd_pct = float(rules.get('max_drawdown_pct') or 0)

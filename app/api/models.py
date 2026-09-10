@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from pydantic import BaseModel, Field
+from loguru import logger
 from typing import Optional
 import json
 import threading
@@ -9,6 +10,7 @@ from datetime import date as _dt, timedelta as _td
 
 from app.db.connection import get_sync_db
 from app.auth.auth import get_current_user
+from app.api.pricing import hfq_to_raw_factors, raw_price
 
 router = APIRouter(tags=["models"])
 
@@ -171,27 +173,39 @@ def get_paper_portfolio(version: str = Query(None, description="模型版本；�
                            'benchmark': round(initial * float(bm) / base_bm, 2) if bm and base_bm else None})
         last_eq = equity[-1]['equity'] if equity else initial
 
-        positions = []
-        for r in db.execute(text("""
+        pos_rows = db.execute(text("""
             SELECT p.stock_code, COALESCE(p.stock_name, sm.stock_name, '') AS sname, p.shares,
                    p.buy_price, p.cost_basis, p.buy_date, p.peak, p.model_version
             FROM paper_positions p LEFT JOIN stock_master sm ON sm.stock_code = p.stock_code
             WHERE p.model_version = :v
             ORDER BY p.buy_date
-        """), {"v": ver}).fetchall():
+        """), {"v": ver}).fetchall()
+        # 展示价换算（后复权 → 真实价，见 app/api/pricing.py）；成本/峰值为后复权口径
+        fac = hfq_to_raw_factors(db, [(r[0], r[5]) for r in pos_rows])
+        positions = []
+        for r in pos_rows:
+            buy_hfq = float(r[3])
             positions.append({'stock_code': r[0], 'stock_name': r[1], 'shares': r[2],
-                              'buy_price': float(r[3]), 'cost_basis': float(r[4]),
+                              'buy_price': raw_price(buy_hfq, fac.get((r[0], str(r[5])[:10]))),
+                              'buy_price_hfq': buy_hfq,
+                              'cost_basis': float(r[4]),
                               'buy_date': str(r[5]), 'peak': float(r[6]) if r[6] else None,
                               'model_version': r[7]})
+        if not fac and pos_rows:
+            logger.warning(f"[paper] {ver} 持仓缺同日行情，成交价无法换算为真实价（界面显示 —）")
 
-        trades = []
-        for r in db.execute(text("""
+        trd_rows = db.execute(text("""
             SELECT trade_date, action, stock_code, stock_name, price, shares, amount,
                    commission, pnl, reason, equity FROM paper_trades
             WHERE action IN ('BUY','SELL') AND model_version=:v ORDER BY trade_date DESC, id DESC LIMIT 50
-        """), {"v": ver}).fetchall():
+        """), {"v": ver}).fetchall()
+        fac_t = hfq_to_raw_factors(db, [(r[2], r[0]) for r in trd_rows])
+        trades = []
+        for r in trd_rows:
+            price_hfq = float(r[4]) if r[4] is not None else None
             trades.append({'date': str(r[0]), 'action': r[1], 'stock_code': r[2], 'stock_name': r[3],
-                           'price': float(r[4]) if r[4] is not None else None,
+                           'price': raw_price(price_hfq, fac_t.get((r[2], str(r[0])[:10]))),
+                           'price_hfq': price_hfq,
                            'shares': r[5], 'amount': float(r[6]) if r[6] is not None else None,
                            'commission': float(r[7]) if r[7] is not None else None,
                            'pnl': float(r[8]) if r[8] is not None else None,
@@ -231,6 +245,10 @@ def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = 
 
     每笔带操作前/后仓位数与总资产（pre_/post_ 列，由纸面步进逐笔记录）；
     买入行附浮动盈亏（仍在仓时按最新后复权收盘估算）。
+
+    价格口径：price=真实价（展示用），price_hfq=后复权价（供比率计算）——
+    纸面撮合全程在后复权空间，直接展示会把累计复权因子当成价格
+    （见 app/api/pricing.py）。shares/amount/盈亏/总资产为后复权模拟口径。
     """
     db = get_sync_db()
     try:
@@ -261,14 +279,18 @@ def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = 
                 WHERE stock_code = ANY(:c) AND close_hfq > 0 ORDER BY stock_code, trade_date DESC
             """), {"c": list(held.keys())}).fetchall():
                 px[r[0]] = float(r[1])
+        # 展示价换算：撮合价是后复权口径，按同交易日 close/close_hfq 缩放到真实价
+        fac = hfq_to_raw_factors(db, [(r[2], r[0]) for r in rows])
         trades = []
         for r in rows:
             float_pnl = None
             if r[1] == 'BUY' and r[2] in held and r[2] in px and r[4]:
                 float_pnl = round((px[r[2]] - float(r[4])) * (r[5] or 0), 2)
+            price_hfq = float(r[4]) if r[4] is not None else None
             trades.append({
                 "date": str(r[0]), "action": r[1], "stock_code": r[2], "stock_name": r[3],
-                "price": float(r[4]) if r[4] is not None else None,
+                "price": raw_price(price_hfq, fac.get((r[2], str(r[0])[:10]))),
+                "price_hfq": price_hfq,
                 "shares": r[5], "amount": float(r[6]) if r[6] is not None else None,
                 "commission": float(r[7]) if r[7] is not None else None,
                 "pnl": float(r[8]) if r[8] is not None else None,
@@ -511,7 +533,11 @@ def get_model_diagnosis(version: str):
 
 @router.get("/v1/models/{version}/signals")
 def get_model_signals(version: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=10, le=500)):
-    """模型信号明细分页（按信号日期倒序，模型隔离）。"""
+    """模型信号明细分页（按信号日期倒序，模型隔离）。
+
+    价格口径：price=真实价（展示用），price_hfq=后复权价（signal_history 原值，
+    供盈亏比率计算）；real_close 保留为同日真实收盘（与 price 同口径）。
+    """
     db = get_sync_db()
     try:
         total = db.execute(text(
@@ -528,12 +554,15 @@ def get_model_signals(version: str, page: int = Query(1, ge=1), page_size: int =
             LIMIT :lim OFFSET :off
         """), {"version": version, "lim": page_size, "off": (page - 1) * page_size}).fetchall()
         signals = []
+        fac = hfq_to_raw_factors(db, [(r[2], r[1]) for r in rows])
         for r in rows:
+            price_hfq = float(r[6]) if r[6] else None
             signals.append({
                 "id": r[0], "signal_date": str(r[1]) if r[1] else None,
                 "stock_code": r[2], "stock_name": r[3],
                 "direction": r[4], "strength": float(r[5]) if r[5] is not None else None,
-                "price": float(r[6]) if r[6] else 0,
+                "price": raw_price(price_hfq, fac.get((r[2], str(r[1])[:10]))),
+                "price_hfq": price_hfq,
                 "real_close": float(r[7]) if r[7] is not None else None,
                 "predict_score": float(r[8]) if r[8] is not None else None,
                 "predict_5d": float(r[9]) if r[9] is not None else None,

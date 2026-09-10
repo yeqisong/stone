@@ -26,6 +26,10 @@
     <div class="fill-table" style="display:flex;flex-direction:column">
       <n-data-table v-if="trd.trades" class="fill-table" flex-height :columns="trdColumns" :data="trd.trades" size="small" :scroll-x="1180" />
       <n-empty v-else description="暂无模拟成交" style="flex:1" />
+      <div class="no-shrink" style="font-size:10px;color:var(--c-text-faint);padding:4px 2px 0;line-height:1.7">
+        口径：成交单价为真实市价（撮合价除以同日复权因子）；股数/金额/盈亏/总资产为后复权模拟口径，
+        与初始资金同量级可比，比率类指标不受复权影响。
+      </div>
       <ListPagination :total="trd.total" :page="trdPage" :page-size="trdPageSize" @change="p=>{trdPage=p; loadTrades()}" />
     </div>
   </template>
@@ -129,7 +133,8 @@ const trdColumns = [
   { title:'操作后仓位', key:'post_npos', width:70, align:'right', render(r){ return r.post_npos==null?'—':r.post_npos } },
   { title:'操作后总资产', key:'post_equity', width:96, align:'right', render(r){ return r.post_equity==null?'—':r.post_equity.toLocaleString(undefined,{maximumFractionDigits:0}) } },
   { title:'了结盈亏额', key:'pnl', width:84, align:'right', render(r){ const v=r.pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
-  { title:'了结盈亏率', key:'pnl_pct', width:78, align:'right', render(r){ const p=r.pnl, s=r.shares, pr=r.price; if(p==null||!s||!pr) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=p/(pr*s); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtPctCol(v)) } },
+  // 了结盈亏率必须用后复权价：pnl/股数/金额同属后复权口径，混入真实价会算错倍数
+  { title:'了结盈亏率', key:'pnl_pct', width:78, align:'right', render(r){ const p=r.pnl, s=r.shares, pr=r.price_hfq; if(p==null||!s||!pr) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=p/(pr*s); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtPctCol(v)) } },
   { title:'浮动盈亏', key:'float_pnl', width:84, align:'right', render(r){ const v=r.float_pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
   { title:'了结后总资产盈亏额', key:'tot_pnl_amt', width:110, align:'right', render(r){ const e=r.post_equity; if(e==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=e-trd.initial_cash; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
   { title:'了结后总资产盈亏率', key:'tot_pnl_pct', width:110, align:'right', render(r){ const e=r.post_equity; if(e==null||!trd.initial_cash) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=e/trd.initial_cash-1; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtPctCol(v)) } },

@@ -77,7 +77,7 @@
         </div>
         <div ref="paperChart" style="width:100%;height:220px"></div>
         <div v-if="paper.positions.length" style="margin-top:10px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">影子持仓（{{paper.positions.length}}）</div>
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">影子持仓（{{paper.positions.length}}）<span style="font-weight:400;color:var(--c-text-faint);margin-left:8px">买价为真实市价；股数为后复权模拟口径</span></div>
           <div style="display:flex;flex-wrap:wrap;gap:4px">
             <n-tag v-for="p in paper.positions" :key="p.stock_code" size="small" :bordered="false">
               {{p.stock_code}} {{p.stock_name}} ×{{p.shares}} @{{p.buy_price?.toFixed(2)}}（{{p.buy_date?.slice(5)}}起）
@@ -113,6 +113,9 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div style="font-size:10px;color:var(--c-text-faint);margin-top:6px;line-height:1.7">
+            口径：价格为真实市价；股数/金额/盈亏为后复权模拟口径，与纸面初始资金同量级可比。
           </div>
         </div>
       </template>

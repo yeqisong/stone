@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS daily_quote (
     close             NUMERIC(10,2) NOT NULL,
     close_hfq         NUMERIC(10,3),
     close_qfq         NUMERIC(10,3),
+    -- 注意：以下两个因子列只有 DDL 默认值，每日 UPSERT（crawler/writers.py）不写它们，
+    -- 全仓唯一写入端是 crawler/backfill.py 的存量 UPDATE，实测普遍恒为 1.0。
+    -- 要把后复权价换算成真实价请用 close / close_hfq 的比值（app/api/pricing.py），勿用本列。
     adj_factor_hfq    NUMERIC(10,6) DEFAULT 1.000000,
     adj_factor_qfq    NUMERIC(10,6) DEFAULT 1.000000,
     is_ex_date        BOOLEAN DEFAULT false,

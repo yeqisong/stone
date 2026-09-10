@@ -301,7 +301,7 @@ function renderChart() {
           html += `<br/>趋势: ${detail.trend_up!==false?'↑':'↓'}`
           if (d._sig) html += `<br/><span style="color:#f59e0b">★ 信号强度${d._sig.strength||'?'} ${d._sig.reason||''}</span>`
           if (d._hold) html += `<br/><span style="color:#2080f0">◆ 实盘持仓 ${d._hold.qty} 股 / 成本 ¥${Number(d._hold.cost).toFixed(2)}</span>`
-          if (d._paper) html += `<br/><span style="color:#06b6d4">◇ 纸面持仓 ${d._paper.shares} 股 / 买价 ¥${Number(d._paper.buy_price).toFixed(2)}</span>`
+          if (d._paper) html += `<br/><span style="color:#06b6d4">◇ 纸面持仓 ${d._paper.shares} 股（模拟口径） / 买价 ¥${Number(d._paper.buy_price).toFixed(2)}</span>`
         } else {
           html += `<br/>${mLabel}: ${metric.value==='volume'?fmt(val)+'股':metric.value==='amount'?'¥'+(val/1e8).toFixed(1)+'亿':metric.value==='pe'?(100-(val||0)/100).toFixed(0)+'%':'¥'+(val/1e8).toFixed(1)+'亿'}`
           html += `<br/>涨跌: ${(d.chg_pct||0)>0?'+':''}${(d.chg_pct||0).toFixed(2)}%`
