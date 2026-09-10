@@ -1,6 +1,6 @@
 <template>
-<div style="padding:16px 8px">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+<div class="page-fill" style="padding:10px 8px 4px">
+  <div class="no-shrink" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">特征管理（Feature Registry）</div>
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openDepGraph"><AppIcon name="link" :size="13" />  依赖图</n-button>
@@ -9,7 +9,7 @@
     </div>
   </div>
 
-  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+  <div class="no-shrink" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <n-select v-model:value="filterEntity" :options="entityOptions" size="small" style="width:110px" placeholder="实体" clearable @update:value="loadData" />
     <n-select v-model:value="filterStatus" :options="statusOptions" size="small" style="width:130px" placeholder="状态" clearable @update:value="loadData" />
     <n-select v-model:value="filterIcStatus" :options="icStatusOptions" size="small" style="width:130px" placeholder="IC 决策" clearable @update:value="loadData" />
@@ -17,8 +17,8 @@
     <n-button size="small" @click="loadData">查询</n-button>
   </div>
 
-  <n-data-table :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" scroll-x="1100" />
-  <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
+  <n-data-table class="fill-table" flex-height :columns="columns" :data="items" :loading="loading" size="small" :row-props="rowProps" scroll-x="1100" />
+  <div class="no-shrink" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:var(--c-text-dim)">
     <span>共 {{ total }} 条</span>
     <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
   </div>

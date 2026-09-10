@@ -293,6 +293,12 @@ if (!showLogin.value) {
 .main-content { flex: 1; overflow-y: auto; padding: 6px 16px; display: flex; flex-direction: column; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .main-content.narrow { padding: 6px 10px calc(64px + env(safe-area-inset-bottom)); }
 
+/* 整页列表统一布局：根节点填满 main-content（自动随视口高度变化，无需 JS 重算），
+   筛选区/分页器固定，n-data-table 加 flex-height + .fill-table 内部滚动，分页器始终一屏可见 */
+.page-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.fill-table { flex: 1; min-height: 0; }
+.page-fill .no-shrink { flex-shrink: 0; }
+
 /* 弹窗统一宽度兜底：固定宽度卡片在窄屏不超出视口（可滚动查看） */
 @media (max-width: 768px) {
   .n-modal-container .n-card { max-width: 92vw !important; }

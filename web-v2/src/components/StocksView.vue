@@ -1,5 +1,5 @@
 <template>
-<div style="height:100%;display:flex;flex-direction:column;overflow:hidden">
+<div class="page-fill">
   <n-space align="center" style="margin-bottom:8px;flex-shrink:0" wrap>
     <n-button-group size="tiny">
       <n-button size="tiny" :type="cat==='stock'?'primary':'default'" @click="switchCat('stock')"><AppIcon name="filter" :size="13" />  个股</n-button>
@@ -11,9 +11,7 @@
     <span style="font-size:11px;color:var(--c-text-dim)">共 {{total}} 条 第 {{page}}/{{totalPages}} 页</span>
   </n-space>
 
-  <div style="flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch">
-    <n-data-table :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
-  </div>
+  <n-data-table class="fill-table" flex-height :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
   <div style="display:flex;justify-content:center;margin-top:10px;flex-shrink:0">
     <n-pagination v-if="totalPages>1" :page="page" :page-count="totalPages" @update:page="p=>goPage(p)" size="small" />
   </div>

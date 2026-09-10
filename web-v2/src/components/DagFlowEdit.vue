@@ -125,8 +125,8 @@
     </div>
   </div>
 
-  <div v-else style="flex:1;overflow-y:auto">
-    <n-data-table :columns="flowCols" :data="flows" size="small" :loading="loading" scroll-x="700" />
+  <div v-else class="fill-table" style="display:flex;flex-direction:column">
+    <n-data-table class="fill-table" flex-height :columns="flowCols" :data="flows" size="small" :loading="loading" scroll-x="700" />
     <n-empty v-if="!loading && !flows.length" description="暂无流程，点击「+ 新建」创建" style="padding:40px" />
   </div>
 

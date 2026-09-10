@@ -1,7 +1,7 @@
 <template>
-<div>
+<div class="page-fill">
   <!-- 筛选区：主备模型下拉 + 三 Tab（带 icon） + 生成按钮 -->
-  <n-space align="center" style="margin-bottom:10px" wrap>
+  <n-space align="center" class="no-shrink" style="margin-bottom:10px" wrap>
     <n-select v-model:value="selModel" :options="modelOptions" size="tiny" style="width:220px"
       placeholder="选择上线中的模型" @update:value="onModelChange" />
     <n-button-group size="tiny">
@@ -14,32 +14,32 @@
 
   <!-- Tab1: 信号列表（该模型全部信号，按日期倒序分页） -->
   <template v-if="tab==='list'">
-    <div v-if="sig.total!=null" style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">
-      累计 <b>{{sig.total}}</b> 条信号
+    <div class="fill-table" style="display:flex;flex-direction:column">
+      <div class="no-shrink" v-if="sig.total!=null" style="margin-bottom:6px;font-size:12px;color:var(--c-text-dim)">
+        累计 <b>{{sig.total}}</b> 条信号
+      </div>
+      <n-data-table v-if="sig.signals" class="fill-table" flex-height :columns="sigColumns" :data="sig.signals" size="small" :scroll-x="960" />
+      <n-empty v-else description="暂无信号" style="flex:1" />
+      <n-space justify="end" class="no-shrink" style="margin-top:8px">
+        <n-pagination v-if="(sig.total||0) > sigPageSize" :page="sigPage" :item-count="sig.total||0"
+          :page-size="sigPageSize" size="small" @update:page="p=>{sigPage=p; loadSignals()}" />
+      </n-space>
     </div>
-    <div v-if="sig.signals" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-      <n-data-table :columns="sigColumns" :data="sig.signals" size="small" :scroll-x="960" />
-    </div>
-    <n-empty v-else description="暂无信号" />
-    <n-space justify="end" style="margin-top:10px">
-      <n-pagination v-if="(sig.total||0) > sigPageSize" :page="sigPage" :item-count="sig.total||0"
-        :page-size="sigPageSize" size="small" @update:page="p=>{sigPage=p; loadSignals()}" />
-    </n-space>
   </template>
 
   <!-- Tab2: 模拟交易（该模型全部买卖操作，按交易日期倒序分页） -->
   <template v-else-if="tab==='trades'">
-    <div v-if="trd.total!=null" style="margin-bottom:8px;font-size:12px;color:var(--c-text-dim)">
-      累计 <b>{{trd.total}}</b> 笔模拟成交
+    <div class="fill-table" style="display:flex;flex-direction:column">
+      <div class="no-shrink" v-if="trd.total!=null" style="margin-bottom:6px;font-size:12px;color:var(--c-text-dim)">
+        累计 <b>{{trd.total}}</b> 笔模拟成交
+      </div>
+      <n-data-table v-if="trd.trades" class="fill-table" flex-height :columns="trdColumns" :data="trd.trades" size="small" :scroll-x="1180" />
+      <n-empty v-else description="暂无模拟成交" style="flex:1" />
+      <n-space justify="end" class="no-shrink" style="margin-top:8px">
+        <n-pagination v-if="(trd.total||0) > trdPageSize" :page="trdPage" :item-count="trd.total||0"
+          :page-size="trdPageSize" size="small" @update:page="p=>{trdPage=p; loadTrades()}" />
+      </n-space>
     </div>
-    <div v-if="trd.trades" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-      <n-data-table :columns="trdColumns" :data="trd.trades" size="small" :scroll-x="1180" />
-    </div>
-    <n-empty v-else description="暂无模拟成交" />
-    <n-space justify="end" style="margin-top:10px">
-      <n-pagination v-if="(trd.total||0) > trdPageSize" :page="trdPage" :item-count="trd.total||0"
-        :page-size="trdPageSize" size="small" @update:page="p=>{trdPage=p; loadTrades()}" />
-    </n-space>
   </template>
 
   <!-- Tab3: 效果追踪（跟随下拉选中的模型） -->

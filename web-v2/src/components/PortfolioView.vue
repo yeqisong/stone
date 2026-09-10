@@ -1,15 +1,13 @@
 <template>
-<div>
+<div class="page-fill">
   <StatStrip v-if="data.count" :items="statItems" />
 
-  <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin-bottom:6px">+ 新增持仓</n-button>
+  <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin:6px 0" class="no-shrink">+ 新增持仓</n-button>
 
   <n-spin v-if="loading" style="padding:40px" />
-  <div v-else>
-    <div style="overflow-x:auto">
-      <n-data-table v-if="data.positions&&data.positions.length" :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1000" />
-      <n-empty v-else description="暂无持仓" />
-    </div>
+  <div v-else class="fill-table" style="display:flex;flex-direction:column">
+    <n-data-table v-if="data.positions&&data.positions.length" class="fill-table" flex-height :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1000" />
+    <n-empty v-else description="暂无持仓" style="flex:1" />
   </div>
 </div>
 

@@ -8,10 +8,8 @@
     <n-input v-model:value="search" size="tiny" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
 
-  <!-- Table: 固定总宽 scroll-x，长文本列省略号，纵向单滚动 -->
-  <div style="flex:1;min-height:0;overflow:hidden">
-    <n-data-table :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :scroll-x="3200" :max-height="'100%'" />
-  </div>
+  <!-- Table: 固定总宽 scroll-x，长文本列省略号，纵向单滚动（flex-height 表头吸顶） -->
+  <n-data-table class="fill-table" flex-height :columns="cols" :data="items" size="small" :loading="loading" :bordered="false" :single-line="true" :scroll-x="3200" />
 
   <!-- Pagination -->
   <div style="display:flex;justify-content:flex-end;padding:8px 0;flex-shrink:0">

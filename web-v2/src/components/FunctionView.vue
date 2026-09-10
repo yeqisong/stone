@@ -1,6 +1,6 @@
 <template>
-<div style="padding:16px 8px">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+<div class="page-fill" style="padding:10px 8px 4px">
+  <div class="no-shrink" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
     <div style="font-size:18px;font-weight:700;color:var(--c-text)">函数管理（Operator Registry）</div>
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openFields">字段注册表</n-button>
@@ -8,16 +8,16 @@
     </div>
   </div>
 
-  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+  <div class="no-shrink" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <n-select v-model:value="filterCategory" :options="catOptions" size="small" style="width:110px" placeholder="分类" clearable @update:value="loadData" />
     <n-select v-model:value="filterStatus" :options="statusOptions" size="small" style="width:110px" placeholder="状态" clearable @update:value="loadData" />
     <n-input v-model:value="searchText" size="small" style="width:180px" placeholder="搜索名称" clearable @keyup.enter="loadData" />
     <n-button size="small" @click="loadData">查询</n-button>
   </div>
 
-  <n-data-table :columns="columns" :data="items" :loading="loading" size="small"
+  <n-data-table class="fill-table" flex-height :columns="columns" :data="items" :loading="loading" size="small"
     :row-props="rowProps" :expanded-row-keys="expandedKeys" @update:expanded-row-keys="onExpand" scroll-x="510" />
-  <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
+  <div class="no-shrink" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:var(--c-text-dim)">
     <span>共 {{ total }} 条</span>
     <n-pagination v-if="totalPages > 1" :page="page" :page-count="totalPages" @update:page="p => { page = p; loadData() }" size="small" />
   </div>
