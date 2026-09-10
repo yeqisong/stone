@@ -1053,10 +1053,13 @@ def compute_all_features(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     feature_names: Optional[List[str]] = None,
+    progress_cb=None,
 ) -> Dict:
     """批量计算所有已启用特征（或指定特征列表）并写入 feature_values。
 
     v2.1: 全量 OHLCV 只拉一次，各特征复用 DataFrame。
+    progress_cb: fn(done, total, feature_name, rows_so_far) —— 每个特征算完回调一次，
+                 用于 DAG 节点上报心跳（否则长跑期间 heartbeat_at 不更新会被看门狗误杀）。
     """
     rows = db.execute(text(
         "SELECT feature_name, formula FROM features WHERE target_entity = :ent AND status = 'enabled'"
@@ -1091,11 +1094,17 @@ def compute_all_features(
     df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, columns=sorted(_union))
 
     results = []
-    for r in rows:
+    total_features = len(rows)
+    for i, r in enumerate(rows, 1):
         fn, formula = r[0], r[1]
         # 跳过 DB commit（每特征单独 commit），由 compute_feature 内部处理
         res = compute_feature(db, fn, formula, target_entity, start_date, end_date, df=df)
         results.append({"feature": fn, **res})
+        if progress_cb:
+            try:
+                progress_cb(i, total_features, fn, sum(x.get("rows", 0) for x in results))
+            except Exception:
+                pass  # 进度上报失败绝不影响计算
 
     total_rows = sum(r.get("rows", 0) for r in results)
     errors = [r for r in results if not r.get("ok")]

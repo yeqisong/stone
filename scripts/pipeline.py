@@ -2690,7 +2690,16 @@ def dag_task_feature_compute(trade_date=None, **kw):
         # 增量：仅计算最近 10 天（首次运行可改为全量）；force 时全量重算
         force = (kw.get('_node_force', {}) or {}).get('feature_compute', kw.get('force', False))
         start = "2020-01-01" if force else (dt.today() - timedelta(days=10)).strftime("%Y-%m-%d")
-        result = compute_all_features(db, target_entity="stock", start_date=start, end_date=today)
+        # 进度心跳：本节点正常要跑 ~35 分钟，原先只在首尾写日志 → heartbeat_at 长时间不变，
+        # 会被 dag_status 的「10 分钟无更新判失败」看门狗误杀（2026-09-10 实跑撞到）。
+        # compute_all_features 支持 progress_cb，这里接上（批内每次处理完都会回调）。
+        def _hb(done, total, fname, rows):
+            update_node_progress(
+                log_id=log_id, rows=rows,
+                detail=f'特征计算 {done}/{total}: {fname}')
+
+        result = compute_all_features(db, target_entity="stock", start_date=start, end_date=today,
+                                      progress_cb=_hb)
         # 计算完成后回写特征统计（完整度/总格子/缺失格），与 API 触发的计算路径
         # 保持一致；否则 features 表诊断列停留在 0，页面完整度显示不准确
         from app.api.features import _update_feature_stats_after_compute
