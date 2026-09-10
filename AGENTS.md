@@ -48,7 +48,7 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
 - **`app/`** — FastAPI 后端
   - `app/main.py` — 入口，16 个 router + CORS + 前端静态 + lifespan（init_db→entity_stats→模型恢复→WS→cron）
   - `app/config.py` — 配置管理（Settings）
-  - `app/db/` — 数据库连接（connection.py 双引擎）+ 40 张表 DDL + init_db 幂等迁移（schema.py）
+  - `app/db/` — 数据库连接（connection.py 双引擎）+ 47 张表 DDL（feature_values 按年分区，库内实际 70 张）+ init_db 幂等迁移（schema.py）
   - `app/api/` — REST API 路由：
     - `portfolio.py` / `treemap.py` / `signals.py` / `stock.py` / `stocks.py` — 持仓/树图/信号/详情/列表
     - `risk.py` — 风控规则与告警查询（/api/risk/*）
@@ -107,7 +107,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
              飞书 Bot (DeepSeek AI 对话)
 ```
 
-### 关键数据表（SQL schema in `app/db/schema.py`, 40 张表）
+### 关键数据表（SQL schema in `app/db/schema.py`, 47 张 DDL / 库内含分区 70 张）
 - **行情**: `trade_calendar`, `stock_master`, `daily_quote`, `index_daily_quote`
 - **基本面**: `stock_fundamentals`(PK: code+trade_date), `stock_fundamentals_history`
 - **业务**: `portfolio`, `portfolio_history`, `signal_history`, `stock_treemap_cache`

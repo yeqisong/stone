@@ -234,7 +234,6 @@ function setPref(m) {
 const loading = ref(true)
 const overview = ref({total_rows:0,total_stocks:0,latest_date:'',exchanges:{}})
 const missingDates = ref([])
-const todayStrategy = ref(null)
 const dataTables = ref([])
 const statsTime = ref('')
 const statsLoading = ref(false)
@@ -375,7 +374,6 @@ async function loadDataStatus() {
     const data = r.data
     if(data.overview) overview.value = data.overview
     missingDates.value = data.missing_dates||[]
-    todayStrategy.value = data.today_strategy||null
     dataTables.value = data.data_tables||[]
     statsTime.value = data.stats_computed_at||''
     applyCalendar(data)

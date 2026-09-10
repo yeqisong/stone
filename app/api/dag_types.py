@@ -36,7 +36,6 @@ NODE_SUB_STEPS = {
     'stats': [
         {'name': '全库统计', 'desc': 'COUNT 各表行数 + 最新日期'},
         {'name': '生成 data_stats_cache', 'desc': 'JSON 写入缓存表'},
-        {'name': '更新 system_metrics', 'desc': '系统指标快照'},
     ],
     'daily_completeness': [
         {'name': '遍历数据表', 'desc': 'daily_quote/feature_values 等核心表'},

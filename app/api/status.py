@@ -134,16 +134,6 @@ def get_data_status(
             db.close()
             return {"calendar": calendar, "missing_dates": missing_dates}
 
-        # ── 今日策略 ──
-        row = db.execute(text("SELECT metric_value, status, detail, checked_at FROM system_metrics WHERE metric_name='daily_strategy' ORDER BY checked_at DESC LIMIT 1")).fetchone()
-        today_strategy = None
-        if row:
-            import json as _json
-            detail = {}
-            try: detail = _json.loads(row[2]) if row[2] else {}
-            except: pass
-            today_strategy = {"buy_signals": int(row[0]) if row[0] else 0, "status": row[1], "time": str(row[3])[:19] if row[3] else None, "total_signals": detail.get("total_signals", 0), "scanned": detail.get("scanned", 0), "elapsed_seconds": detail.get("elapsed_seconds", 0), "preference": detail.get("preference", ""), "strategy_date": str(row[3])[:10] if row[3] else None}
-
         # ── DAG 运行日志 ──
         # 取最新一次 run_id 的所有节点日志
         result = db.execute(text("""
@@ -189,7 +179,7 @@ def get_data_status(
 
         return {
             "overview": overview, "calendar": calendar, "missing_dates": missing_dates,
-            "download_log": download_log, "today_strategy": today_strategy, "data_tables": data_tables, "stats_computed_at": stats_computed_at,
+            "download_log": download_log, "data_tables": data_tables, "stats_computed_at": stats_computed_at,
         }
     finally:
         db.close()

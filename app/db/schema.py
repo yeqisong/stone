@@ -536,19 +536,6 @@ CREATE TABLE IF NOT EXISTS data_stats_cache (
 );
 """
 
-CREATE_SYSTEM_METRICS = """
-CREATE TABLE IF NOT EXISTS system_metrics (
-    id           SERIAL PRIMARY KEY,
-    metric_name  VARCHAR(30) NOT NULL,
-    metric_value NUMERIC NOT NULL,
-    status       VARCHAR(10) NOT NULL CHECK (status IN ('ok', 'warn', 'error')),
-    detail       TEXT,
-    checked_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_sm_name_time ON system_metrics (metric_name, checked_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sm_status ON system_metrics (status, checked_at DESC);
-"""
-
 CREATE_ENTITY_STATS = """
 CREATE TABLE IF NOT EXISTS entity_stats (
     entity_type  VARCHAR(10) NOT NULL PRIMARY KEY,  -- stock/index/etf/global
@@ -970,7 +957,6 @@ ALL_TABLES = [
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),
     ("dag_config", CREATE_DAG_CONFIG),
-    ("system_metrics", CREATE_SYSTEM_METRICS),
     ("model_versions", CREATE_MODEL_VERSIONS),
     ("training_trials", CREATE_MODEL_TRIALS),
     ("version_comparisons", CREATE_MODEL_COMPARISONS),
