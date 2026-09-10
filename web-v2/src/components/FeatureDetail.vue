@@ -112,10 +112,9 @@
           <n-button size="small" @click="doLoadPreview">查询</n-button>
         </div>
         <n-spin v-if="previewLoading" style="padding:40px" />
-        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" scroll-x="500" />
-        <div v-if="previewItems.length" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--c-text-dim)">
-          <ListPagination :total="previewTotal" :page="previewPage" :page-size="50" @change="p => { previewPage = p; loadPreview() }" />
-        </div>
+        <!-- Section 表：限高内滚（50 行/页全展开约 1400px 会把分页器顶出一屏），表头吸顶 -->
+        <n-data-table v-else-if="previewItems.length" :columns="previewCols" :data="previewItems" size="small" :max-height="460" scroll-x="500" />
+        <ListPagination v-if="previewItems.length" :total="previewTotal" :page="previewPage" :page-size="50" @change="p => { previewPage = p; loadPreview() }" />
         <n-empty v-else :description="previewEmptyReason || '暂无数据'" style="padding:20px" />
       </n-tab-pane>
 
