@@ -152,11 +152,13 @@ class TushareQuota:
         try:
             from sqlalchemy import text
             row = db.execute(text(
-                "SELECT calls_today, calls_limit, quota_exhausted FROM tushare_quota WHERE trade_date = :d"
+                "SELECT calls_today, calls_limit, quota_exhausted, last_call_at "
+                "FROM tushare_quota WHERE trade_date = :d"
             ), {"d": _bj_date()}).fetchone()
             if row:
                 self.calls_today = row[0] or 0
                 self.calls_limit = row[1] or CALLS_LIMIT_DAY
                 self.exhausted = bool(row[2])
+                self.last_call_at = row[3]  # 状态页「最后调用」展示（重启后不显示为空）
         except Exception:
             pass

@@ -74,6 +74,16 @@ async def lifespan(app: FastAPI):
                 logger.info(f"[startup] 恢复: {r.rowcount} 个模型 TRAINING→DRAFT")
         except Exception:
             pass
+
+        # tushare 配额计数恢复：内存单例随进程重启归零，会令补数预算/熔断判断
+        # （remaining() < 10 中止、≤reserve 收尾）误以为额度充足而超用当日限额
+        try:
+            from crawler.adapters.tushare_quota import TushareQuota
+            _q = TushareQuota.get()
+            _q.load(db)
+            logger.info(f"[startup] tushare 配额已恢复: 当日已用 {_q.calls_today}/{_q.calls_limit}")
+        except Exception as e:
+            logger.warning(f"[startup] tushare 配额恢复失败（非致命）: {e}")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
@@ -92,6 +102,17 @@ async def lifespan(app: FastAPI):
     yield
 
     broadcast_task.cancel()
+    # 关闭前落盘配额计数（否则本次进程的最后一段用量丢失）
+    try:
+        from crawler.adapters.tushare_quota import TushareQuota
+        from app.db.connection import SyncSessionLocal
+        _db = SyncSessionLocal()
+        try:
+            TushareQuota.get().persist(_db)
+        finally:
+            _db.close()
+    except Exception as e:
+        logger.warning(f"[shutdown] tushare 配额落盘失败: {e}")
     await async_engine.dispose()
     logger.info("Application shutdown complete")
 

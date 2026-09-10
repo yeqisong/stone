@@ -63,11 +63,22 @@ def start_cron_scheduler():
 
     def _loop():
         logger.info("[cron] 调度器已启动 (每 60 秒扫描)")
+        from crawler.adapters.tushare_quota import TushareQuota
+        from app.db.connection import get_sync_db
         while True:
             try:
                 _check_and_trigger()
             except Exception as e:
                 logger.error(f"[cron] 循环异常: {e}")
+            # 顺带落盘 tushare 配额（单行 upsert，开销可忽略）：进程重启后 load() 才能接上当日计数
+            try:
+                _qdb = get_sync_db()
+                try:
+                    TushareQuota.get().persist(_qdb)
+                finally:
+                    _qdb.close()
+            except Exception as e:
+                logger.warning(f"[cron] tushare 配额落盘失败: {e}")
             time.sleep(60)
 
     t = threading.Thread(target=_loop, daemon=True)
