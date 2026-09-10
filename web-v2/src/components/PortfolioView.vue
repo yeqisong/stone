@@ -53,7 +53,7 @@
       </div>
       <h4 style="margin:8px 0"><AppIcon name="file-text" :size="13" />  加减仓记录</h4>
       <div v-if="historyRecords.length" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <n-data-table :columns="historyColumns" :data="historyRecords" size="small" />
+        <n-data-table :columns="historyColumns" :data="historyRecords" size="small" :max-height="360" />
       </div>
       <n-empty v-else description="暂无历史记录" />
     </template>

@@ -16,7 +16,7 @@
 
   <!-- History Modal -->
   <n-modal v-model:show="showHistModal" preset="card" :title="'基本面历史 — ' + histCode" style="width:800px;max-width:92vw" :segmented="{content:true}">
-    <n-data-table :columns="histCols" :data="histItems" size="small" :bordered="false" :loading="histLoading" />
+    <n-data-table :columns="histCols" :data="histItems" size="small" :bordered="false" :loading="histLoading" :max-height="420" />
     <ListPagination :total="histTotal" :page="histPage" :page-size="histPageSize" @change="loadHist" />
   </n-modal>
 </div>
