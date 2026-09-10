@@ -35,6 +35,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock123}
       POSTGRES_DB: ${POSTGRES_DB:-stock_monitor}
       TZ: Asia/Shanghai
+    # /dev/shm 默认仅 64MB，并行 VACUUM / 大共享内存的并行查询会报
+    # "could not resize shared memory segment ... No space left on device"
+    # （2026-09-10 迁移后实测撞到）。给足 1GB。
+    # 注意：需重建容器才生效（docker compose up -d db），数据在 bind mount 中不受影响。
+    shm_size: 1g
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
     healthcheck:
