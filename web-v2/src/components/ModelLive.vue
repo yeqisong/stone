@@ -17,7 +17,7 @@
       </div>
       <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center">
         <div style="font-size:10px;color:var(--c-text-faint)">Avg Fwd 5D</div>
-        <div :style="{fontSize:'20px',fontWeight:700,color:health.avg_forward_5d==null?'var(--c-text-faint)':(health.avg_forward_5d>=0?'#10b981':'#ef4444')}">{{ health.avg_forward_5d==null?'—':(health.avg_forward_5d*100).toFixed(2)+'%' }}</div>
+        <div :style="{fontSize:'20px',fontWeight:700,color:health.avg_forward_5d==null?'var(--c-text-faint)':(health.avg_forward_5d>=0?'#ef4444':'#10b981')}">{{ health.avg_forward_5d==null?'—':(health.avg_forward_5d*100).toFixed(2)+'%' }}</div>
       </div>
       <div v-if="health.rank_ic!=null" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center"
            title="模型预测与实现收益的逐日截面 RankIC 均值（近 20 个已成熟截面，10 日前瞻）；<0 说明模型选股能力已衰减">
@@ -36,8 +36,8 @@
           <span :style="{color:s.direction==='buy'?'#ef4444':'#10b981',fontWeight:600,minWidth:30}">{{s.direction==='buy'?'买':'卖'}}</span>
           <span style="color:var(--c-text);min-width:70px">{{s.stock_code}}</span>
           <span style="color:var(--c-text-dim);min-width:50px">¥{{(s.price||0).toFixed(2)}}</span>
-          <span :style="{color:(s.forward_5d_return||0)>=0?'#10b981':'#ef4444',marginLeft:'auto'}">{{s.forward_5d_return ? (s.forward_5d_return*100).toFixed(2)+'%' : '—'}}</span>
-          <span :style="{color:(s.actual_return||0)>=0?'#10b981':'#ef4444'}">{{s.actual_return ? '实'+(s.actual_return*100).toFixed(1)+'%' : ''}}</span>
+          <span :style="{color:(s.forward_5d_return||0)>=0?'#ef4444':'#10b981',marginLeft:'auto'}">{{s.forward_5d_return ? (s.forward_5d_return*100).toFixed(2)+'%' : '—'}}</span>
+          <span :style="{color:(s.actual_return||0)>=0?'#ef4444':'#10b981'}">{{s.actual_return ? '实'+(s.actual_return*100).toFixed(1)+'%' : ''}}</span>
         </div>
       </div>
       <div v-else style="font-size:11px;color:var(--c-text-faint);text-align:center;padding:10px">暂无信号</div>
@@ -55,13 +55,15 @@
       <template v-else>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
+            <!-- 配色约定（全站统一）：涨跌类指标用「涨红跌绿」（A股惯例）；
+                 质量类指标（胜率/IC/IR/健康度）用「绿=好」，两者不可混用 -->
             <div style="font-size:9px;color:var(--c-text-faint)">影子收益</div>
-            <div :style="{fontSize:'18px',fontWeight:700,color:(paper.stats.total_return||0)>=0?'#10b981':'#ef4444'}">
+            <div :style="{fontSize:'18px',fontWeight:700,color:(paper.stats.total_return||0)>=0?'#ef4444':'#10b981'}">
               {{((paper.stats.total_return||0)*100).toFixed(2)}}%</div>
           </div>
           <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
             <div style="font-size:9px;color:var(--c-text-faint)">同期沪深300</div>
-            <div :style="{fontSize:'18px',fontWeight:700,color:(paper.stats.benchmark_return||0)>=0?'#10b981':'#ef4444'}">
+            <div :style="{fontSize:'18px',fontWeight:700,color:(paper.stats.benchmark_return||0)>=0?'#ef4444':'#10b981'}">
               {{paper.stats.benchmark_return!=null?((paper.stats.benchmark_return)*100).toFixed(2)+'%':'—'}}</div>
           </div>
           <div style="flex:1;min-width:100px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">

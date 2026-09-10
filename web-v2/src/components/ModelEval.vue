@@ -177,7 +177,7 @@
         <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.sum.information_ratio||0)>=0?'#10b981':'#ef4444'}">
           IR {{ attribution.risk.sum.information_ratio?.toFixed(2) }}</span>
         <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px">年化 {{ ((attribution.risk.product.annualized_return||0)*100).toFixed(1) }}%</span>
-        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.annualized_return||0)>=0?'#10b981':'#ef4444'}">
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.annualized_return||0)>=0?'#ef4444':'#10b981'}">
           超额年化 {{ ((attribution.risk.excess.annualized_return||0)*100).toFixed(1) }}%</span>
         <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">α {{ (attribution.risk.excess.alpha_annualized*100).toFixed(1) }}%</span>
         <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">β {{ attribution.risk.excess.beta?.toFixed(2) }}</span>
