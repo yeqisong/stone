@@ -45,16 +45,16 @@
 
         <!-- 主内容 -->
         <div class="main-content" :class="{ narrow: isNarrow }">
-          <div v-if="nav.tab==='p'"><PortfolioView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='p'" style="flex:1;min-height:0;display:flex;flex-direction:column"><PortfolioView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
-          <div v-if="nav.tab==='s'"><SignalsView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='l'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StocksView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='u'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
           <div v-if="nav.tab==='a'"><ModelView /></div>
-          <div v-if="nav.tab==='f'"><FunctionView /></div>
-          <div v-if="nav.tab==='e'"><FeatureView /></div>
+          <div v-if="nav.tab==='f'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FunctionView /></div>
+          <div v-if="nav.tab==='e'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FeatureView /></div>
           <div v-if="nav.tab==='w'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DbExplorerView /></div>
           <div v-if="nav.tab==='v'"><FeatureDetail :featureId="nav.fid" @back="nav.backFromFeatureDetail()" @edit="(id) => { nav.backFromFeatureDetail(); nav.pendingEditFeatureId = id }" /></div>
           <div v-if="nav.tab==='g'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" @show-log="(id) => { nav.flowId = parseInt(id); nav.tab = 'q' }" /></div>
