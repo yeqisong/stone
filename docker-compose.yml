@@ -35,11 +35,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock123}
       POSTGRES_DB: ${POSTGRES_DB:-stock_monitor}
       TZ: Asia/Shanghai
-    # /dev/shm 默认仅 64MB，并行 VACUUM / 大共享内存的并行查询会报
+    # /dev/shm 默认仅 64MB，并行 VACUUM 会报
     # "could not resize shared memory segment ... No space left on device"
-    # （2026-09-10 迁移后实测撞到）。给足 1GB。
+    # （2026-09-10 迁移后实测撞到）。
+    # 关键机制：并行 VACUUM 申请的共享内存段大小 ≈ maintenance_work_mem。
+    # 因此 shm_size 必须明显大于 maintenance_work_mem（当前 1GB），留 2 倍余量。
+    # 否则普通 VACUUM 与 autovacuum 都会失败。
     # 注意：需重建容器才生效（docker compose up -d db），数据在 bind mount 中不受影响。
-    shm_size: 1g
+    shm_size: 2g
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
     healthcheck:
