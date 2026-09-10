@@ -298,6 +298,9 @@ if (!showLogin.value) {
 .page-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .fill-table { flex: 1; min-height: 0; }
 .page-fill .no-shrink { flex-shrink: 0; }
+/* page-fill 是列向 flex，直接子元素默认被 align-items:stretch 拉成整条通栏：
+   行内控件（裸按钮/开关等）必须显式收起；工具行用 display:flex 的 div 包住则天然对齐 */
+.page-fill .self-start { align-self: flex-start; }
 
 /* 弹窗统一宽度兜底：固定宽度卡片在窄屏不超出视口（可滚动查看） */
 @media (max-width: 768px) {

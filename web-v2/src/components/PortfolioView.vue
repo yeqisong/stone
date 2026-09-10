@@ -2,7 +2,7 @@
 <div class="page-fill">
   <StatStrip v-if="data.count" :items="statItems" />
 
-  <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin:6px 0" class="no-shrink">+ 新增持仓</n-button>
+  <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin:6px 0" class="no-shrink self-start">+ 新增持仓</n-button>
 
   <n-spin v-if="loading" style="padding:40px" />
   <div v-else class="fill-table" style="display:flex;flex-direction:column">
