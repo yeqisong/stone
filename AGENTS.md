@@ -70,9 +70,11 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `writers.py` — 批量 UPSERT（kline/fundamentals）+ 市值补全 + 基本面 ROE 补充
 
 - **`scripts/`** — 调度与计算层
-  - `pipeline.py` — 全部 dag_task_* 节点函数 + NODE_FN_MAP（14 节点）+ 模型训练 + generate_stats
+  - `pipeline.py` — 全部 dag_task_* 节点函数 + NODE_FN_MAP（14 节点）+ 模型训练 + generate_stats；**模型评估链路已抽为模块级函数**（`prepare_model_frame` 预处理+标签 / `build_targets` 标签 / `run_training_backtest` 回测内核 / `pred_score` 预测入口），训练节点与复评脚本共用同一实现
   - `dag.py` — 轻量 DAG 调度器（DagExecutor + DagNode，计划-执行模型，并行拓扑执行）
   - `feature_compute.py` — KEPL→pandas 特征计算引擎（lookback 扩展、COPY 流式写入、截面函数）
+  - `eval_version.py` — 对**已训练**模型重跑评估（不重训），覆盖 backtest_records / backtest_daily_records / model_versions 指标；改引擎口径或修数据后想拿干净数字就用它，不必等 40 分钟重训
+  - `repair_zero_prices.py` — 存量零价停牌行修复（沿用上一收盘；默认试运行，`--apply` 执行）
   - `cron_scheduler.py` — cron 定时触发（last_run_at 幂等，60s 扫描）
   - `daily_crawl.sh` — 触发 dag_flows 已发布流程（不再直接调用采集）
 
@@ -112,7 +114,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **基本面**: `stock_fundamentals`(PK: code+trade_date), `stock_fundamentals_history`
 - **业务**: `portfolio`, `portfolio_history`, `signal_history`, `stock_treemap_cache`
 - **特征/函数**: `features`, `feature_values`, `functions`, `function_versions`
-- **模型**: `model_versions`, `training_trials`, `model_health`, `version_comparisons`, `backtest_records`, `backtest_trades`
+- **模型**: `model_versions`, `training_trials`, `model_health`, `version_comparisons`, `backtest_records`, `backtest_trades`, `backtest_daily_records`（逐日净值 + 持仓快照，伪回撤复盘用）
 - **DAG**: `dag_config`, `dag_run_log`, `dag_flows`, `dag_flow_versions`, `backfill_tasks`
 - **统计/系统**: `daily_completeness`, `data_stats_cache`, `entity_stats`, `system_metrics`, `strategy_config`, **`tushare_quota`**
 - **风控**: `risk_alerts`（规则引擎告警：止损/回撤熔断/行业上限，WS→Chrome 通知）
@@ -127,6 +129,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **测试**: pytest + pytest-asyncio；fixtures 提供模拟数据；`Test` 类 + `test_` 方法
 - **数据源**: tushare 主源（配额经 `TushareQuota.consume()`），baostock 补充器调用前先 `manager.supplement_healthy()` 检查；补数分批提交 + 可取消
 - **DAG**: 流程拓扑全部由 `dag_flows` 表动态编排；DAG 节点函数不做同步 baostock 补充（防阻塞）
+- **回测估值**: 停牌/缺行情日沿用最近有效价（`_mark_price` / `Account.mark_price`），**不得按 0 或成本价估值**（曾把 max_dd 从 10% 撑到 47%）；零价行不得进宽表或库（writers 丢弃非正收盘价）；无有效报价日不触发退出。模型评估链路（预处理/标签/回测）只允许走 `pipeline.py` 的四个模块级函数，训练与 `eval_version.py` 共用
 - **启动初始化**: lifespan 中 init_db + entity_stats 基线 + TRAINING→DRAFT 恢复 + WS 广播 + cron
 - **Docker**: Python 3.11-slim，阿里云镜像加速；docker-compose (app + PostgreSQL + Redis)
 - **环境变量**: `.env` + pydantic-settings；`APP_ENV=dev|prod`；TUSHARE_TOKEN 必须配置
