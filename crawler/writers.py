@@ -106,6 +106,17 @@ def batch_upsert_kline(db, rows: List[KlineRow], batch_size: int = 200) -> int:
     if not rows:
         return 0
 
+    # 零价/负价行一律丢弃：停牌日应"无行"而非写 0——写 0 会让回测估值把持仓
+    # 按 0 计价（伪回撤）、让涨跌幅/标签出现 ±100% 的假跳变（2026-09-11 定位）
+    bad = [r for r in rows if not (r.close is not None and r.close > 0)]
+    if bad:
+        logger.warning(f"[writers] 丢弃 {len(bad)} 行非正收盘价（如 {bad[0].stock_code} "
+                       f"{bad[0].trade_date} close={bad[0].close}）——停牌应为无行")
+        bad_ids = {id(r) for r in bad}
+        rows = [r for r in rows if id(r) not in bad_ids]
+    if not rows:
+        return 0
+
     _fill_names_from_master(db, rows)
 
     total = 0

@@ -37,13 +37,15 @@ class Account:
                 if p is None:
                     self.positions[f.order.stock_code] = Position(
                         code=f.order.stock_code, shares=f.shares, buy_price=f.price,
-                        buy_date=trade_date, cost_basis=f.gross + f.fee, peak=f.price)
+                        buy_date=trade_date, cost_basis=f.gross + f.fee, peak=f.price,
+                        last_price=f.price)
                 else:
                     # 加仓：合并成本（含新费用）
                     total_cost = p.cost_basis + f.gross + f.fee
                     p.shares += f.shares
                     p.buy_price = total_cost / p.shares
                     p.cost_basis = total_cost
+                    p.last_price = f.price
                 self.trades.append({'action': 'BUY', 'stock_code': f.order.stock_code,
                                     'date': trade_date, 'price': round(f.price, 4),
                                     'shares': f.shares, 'amount': round(f.gross + f.fee, 2),
@@ -76,18 +78,33 @@ class Account:
             p.count_days += 1
 
     # ── 估值 ──
+    def mark_price(self, p: Position, close_map: Dict[str, float]) -> float:
+        """当日估值价：有正报价则用当日价并刷新 last_price，否则沿用最近有效报价。
+
+        停牌/缺行情/零价行一律不可按 0 或按成本价估值——前者会把仓位凭空抹掉
+        （曾造成 -34%/+57% 的成对伪回撤，污染 max_dd），后者在浮盈浮亏大时同样失真。
+        """
+        px = close_map.get(p.code)
+        if px is not None and float(px) > 0:
+            p.last_price = float(px)
+        return p.last_price if p.last_price > 0 else p.buy_price
+
     def mark_to_market(self, close_map: Dict[str, float], trade_date: str,
                        day_amount: float = 0.0, day_cost: float = 0.0,
                        bench: Optional[float] = None) -> float:
         pos_val = 0.0
+        holdings = {}
         for code, p in self.positions.items():
-            cur = close_map.get(code, p.buy_price)
+            cur = self.mark_price(p, close_map)
             pos_val += p.shares * cur
             p.peak = max(p.peak, cur)
+            holdings[code] = {"shares": int(p.shares), "price": round(cur, 4),
+                              "buy_price": round(p.buy_price, 4)}
         equity = self.cash + self.cash_delay + pos_val
         self.records.append(DailyRecord(
             trade_date=trade_date, account=equity, cash=self.cash + self.cash_delay,
-            position_value=pos_val, turnover=day_amount, cost=day_cost, bench=bench))
+            position_value=pos_val, turnover=day_amount, cost=day_cost, bench=bench,
+            holdings=holdings))
         return equity
 
     def get_cash(self) -> float:

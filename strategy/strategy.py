@@ -53,6 +53,8 @@ class SignalStrategy(BaseStrategy):
                 continue
             r = sub.iloc[0]
             cur = float(r['close'])
+            if not (cur > 0):   # 含 NaN：停牌/零价行当日无有效报价，不触发退出
+                continue        # （估值由 account.mark_price 承接，勿用 buy_price 直接比）
             p.peak = max(p.peak, cur)
             sell_p = None
             reason = None
@@ -95,12 +97,11 @@ class SignalStrategy(BaseStrategy):
                         px = o.limit_price if o.limit_price else float(
                             day[day['stock_code'] == o.stock_code]['close'].iloc[0])
                         size_base += o.shares * px * (1 - self.cfg.comm - self.cfg.st_tax - self.cfg.slip)
+                    close_map = dict(zip(day['stock_code'], day['close']))
                     for code, p in account.positions.items():
                         if code in sold_codes:
                             continue
-                        sub = day[day['stock_code'] == code]
-                        px = float(sub['close'].iloc[0]) if not sub.empty else p.buy_price
-                        size_base += p.shares * px
+                        size_base += p.shares * account.mark_price(p, close_map)
                 else:
                     size_base = account.records[-1].account if account.records else self.cfg.initial_cash
                 for idx in picks:
@@ -147,6 +148,8 @@ class TopkDropoutStrategy(BaseStrategy):
                 continue
             r = sub.iloc[0]
             cur = float(r['close'])
+            if not (cur > 0):   # 含 NaN：停牌/零价行当日无有效报价，不触发退出
+                continue
             p.peak = max(p.peak, cur)
             sell_p, reason = None, None
             if cur <= p.buy_price * (1 - self.cfg.stop_loss):
@@ -173,8 +176,8 @@ class TopkDropoutStrategy(BaseStrategy):
 
         def _sellable(code) -> bool:
             sub = day[day['stock_code'] == code]
-            if sub.empty:
-                return False
+            if sub.empty or not (float(sub['close'].iloc[0]) > 0):
+                return False  # 无有效报价（停牌/零价/NaN 行）不可卖
             if bool(sub['_limit_down'].iloc[0]) or \
                     (self.cfg.forbid_all_trade_at_limit and bool(sub['_limit_up'].iloc[0])):
                 return False

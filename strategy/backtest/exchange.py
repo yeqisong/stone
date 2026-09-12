@@ -102,6 +102,8 @@ class Exchange:
 
         price = order.limit_price if (order.direction == 'SELL' and order.limit_price) \
             else self.deal_price(row, order.direction)
+        if price is None or pd.isna(price) or float(price) <= 0:
+            return Fill(order=order, rejected=True, reject_reason='成交价无效')
 
         if order.direction == 'BUY':
             shares = self.clip_buy_shares(order.shares, row.get('volume'))

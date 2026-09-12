@@ -348,6 +348,28 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
 CREATE INDEX IF NOT EXISTS idx_bt_version ON backtest_trades (version, trade_date);
 """
 
+# 回测逐日净值与持仓快照（2026-09-11 新增）：此前只把 equity 数组塞进
+# backtest_records.detail，出现伪回撤时无法回答"哪天、哪只持仓被估错"，
+# 只能靠反推净值比例定位。逐日落库后可直接对照持仓与前收盘复盘。
+CREATE_BACKTEST_DAILY_RECORDS = """
+CREATE TABLE IF NOT EXISTS backtest_daily_records (
+    id              BIGSERIAL PRIMARY KEY,
+    version         VARCHAR(20) NOT NULL,
+    label           VARCHAR(8) NOT NULL,          -- 5d/10d/20d
+    trade_date      DATE NOT NULL,
+    equity          NUMERIC(18,2) NOT NULL,
+    cash            NUMERIC(18,2),
+    position_value  NUMERIC(18,2),
+    turnover        NUMERIC(18,2) DEFAULT 0,
+    cost            NUMERIC(18,2) DEFAULT 0,
+    n_positions     INTEGER DEFAULT 0,
+    holdings        JSONB DEFAULT '{}'::jsonb,     -- {code: {shares, price, buy_price}}
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (version, label, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_btdaily_version ON backtest_daily_records (version, label, trade_date);
+"""
+
 # ── 下载历史（v2.0 重构 迭代 3.1）──
 
 
@@ -981,6 +1003,7 @@ ALL_TABLES = [
     ("paper_trades", CREATE_PAPER_TRADES),
     ("backtest_records", CREATE_BACKTEST_RECORDS),
     ("backtest_trades", CREATE_BACKTEST_TRADES),
+    ("backtest_daily_records", CREATE_BACKTEST_DAILY_RECORDS),
     ("feature_values", CREATE_FEATURE_VALUES),
     ("dag_flows", CREATE_DAG_FLOWS),
     ("dag_flow_versions", CREATE_DAG_FLOW_VERSIONS),

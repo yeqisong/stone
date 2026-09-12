@@ -53,7 +53,10 @@ class Fill:
 
 @dataclass
 class Position:
-    """持仓（count_days 由 Account 每日 +1，T+1 由 count>=1 保证）。"""
+    """持仓（count_days 由 Account 每日 +1，T+1 由 count>=1 保证）。
+
+    last_price：最近一次有效报价，停牌/缺行情日估值沿用（防零价把仓位估成 0）。
+    """
     code: str
     shares: int
     buy_price: float
@@ -61,11 +64,16 @@ class Position:
     cost_basis: float              # 含买入费用
     peak: float
     count_days: int = 0
+    last_price: float = 0.0        # 最近有效收盘（0 = 尚未有过有效报价）
 
 
 @dataclass
 class DailyRecord:
-    """逐日净值/换手/成本（对齐 Qlib PortfolioMetrics 列）。"""
+    """逐日净值/换手/成本（对齐 Qlib PortfolioMetrics 列）。
+
+    holdings：当日收盘持仓快照 {code: {shares, price, buy_price}}，只落库不参与
+    计算——用于事后定位估值异常（如伪回撤），缺了它只能靠反推。
+    """
     trade_date: str
     account: float                 # 账户总值（cash+cash_delay+持仓市值）
     cash: float
@@ -73,6 +81,7 @@ class DailyRecord:
     turnover: float                # 当日成交额（买卖合计）
     cost: float
     bench: Optional[float] = None  # 基准净值（沪深300 同期，由调用方填充）
+    holdings: Dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
