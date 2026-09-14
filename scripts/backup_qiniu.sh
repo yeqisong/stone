@@ -20,7 +20,7 @@ set -euo pipefail
 
 ENV_FILE="$HOME/.config/stone-backup/qiniu.env"
 RESTIC="$HOME/bin/restic"
-DUMP_DIR="${DUMP_DIR:-/mnt/c/stone-db-backup}"   # 本地暂存放 Windows 盘，避免撑大 WSL vhdx
+DUMP_DIR="${DUMP_DIR:-/home/bnbnyu/projects/stone/data/backups/db}"   # 本地暂存放 WSL ext4（9p 写 /mnt/c 多一层缓存易在内存吃紧时 ENOMEM，且更慢）
 CONTAINER=stock-db
 PG_USER=stock
 PG_DB=stock_monitor

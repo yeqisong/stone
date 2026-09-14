@@ -4320,7 +4320,9 @@ def dag_task_backup_qiniu(trade_date=None, **kw):
     write_node_log(log_id=log_id, status='running', detail='pg_dump 全量导出 + restic 上传…')
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backup_qiniu.sh')
     def _run():
+        import gc
         import subprocess
+        gc.collect()  # 前置重节点（factor_ic 等）宽表帧及时回收，降低 dump 期间内存顶格概率
         r = subprocess.run(['bash', script], capture_output=True, text=True, timeout=8 * 3600)
         out = (r.stdout or '') + (r.stderr or '')
         if r.returncode != 0:
