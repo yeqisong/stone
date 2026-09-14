@@ -21,6 +21,12 @@ NODE_SUB_STEPS = {
         {'name': '重写 close_hfq', 'desc': 'close × 官方因子，消除半修正窗口的跨界跳变'},
         {'name': '重算污染窗特征', 'desc': '受影响代码 × [边界, +90 天] 全部启用特征（DELETE 带代码过滤）'},
     ],
+    'rolling_retrain': [
+        {'name': '检查 ACTIVE 新鲜度', 'desc': 'trained_at 距今天数 vs 提醒/重训阈值'},
+        {'name': '陈旧告警', 'desc': '超 warn_days 写 risk_alerts → WS 推前端铃铛/Chrome 通知（同日去重）'},
+        {'name': '重训条件判定', 'desc': '无在途候选（TRAINING/待审 DRAFT）且不在冷却期'},
+        {'name': '克隆起训', 'desc': '克隆 ACTIVE 配置后台训练（/train 同一入口），只落 DRAFT 待人工激活'},
+    ],
     'index': [
         {'name': '拉取指数K线', 'desc': '从上证/深证/创业板等指数源下载日K线'},
         {'name': '写入 index_daily_quote', 'desc': '批量写入指数行情表'},

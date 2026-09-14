@@ -237,6 +237,16 @@ def check_and_heal(db, days=7, max_codes=200, reserve=500, recompute=True, progr
     feat_rows = 0
     if healed and recompute:
         feat_rows = recompute_features(db, [(c, by_code[c]) for c in healed], progress_cb=progress_cb)
+    # 血缘台账（旁路落账，失败不影响自愈结果）
+    try:
+        from app.lineage import log_event
+        log_event(db, 'factor_heal', 'daily_quote.close_hfq',
+                  scope=f"近{days}日检测 检出{len(codes)}只 边界{min(by_code.values())}~{max(by_code.values())}",
+                  detail={'detected': len(codes), 'healed': len(healed), 'failed': len(failed),
+                          'rows': sum(n for n in changed.values() if n > 0),
+                          'feature_rows': feat_rows, 'codes': healed[:20]})
+    except Exception:
+        pass
     return {'detected': len(codes), 'healed': len(healed), 'failed': len(failed),
             'rows': sum(n for n in changed.values() if n > 0), 'feature_rows': feat_rows,
             'codes': healed[:20]}
@@ -281,6 +291,17 @@ def main():
         if args.features:
             print('\n── 特征重算 ──')
             recompute_features(db, bd[['stock_code', 'trade_date']].values.tolist())
+        # 血缘台账（旁路落账）
+        try:
+            from app.lineage import log_event
+            log_event(db, 'factor_heal', 'daily_quote.close_hfq',
+                      scope=f"全量修复 {args.since} 起 {len(codes)} 只",
+                      detail={'mode': 'cli_full', 'since': args.since, 'codes': len(codes),
+                              'healed': n_ok, 'failed': n_fail,
+                              'rows': sum(v for v in changed.values() if v > 0),
+                              'features_recomputed': bool(args.features)})
+        except Exception:
+            pass
     finally:
         db.close()
 

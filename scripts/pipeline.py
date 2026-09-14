@@ -2976,7 +2976,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                           initial_cash=1_000_000, max_pos=5, bt_ver='', bt_label='',
                           stop_loss=None, take_profit=None, commission=None, stamp_tax=None,
                           slippage=None, limit_up=None, limit_down=None, gated_dates=None,
-                          dd_gate=None, trailing=None):
+                          dd_gate=None, trailing=None, exec_lag=0):
     import pandas as pd
     import numpy as np
     """回测引擎：资金约束 + 流动性约束 + 整数手约束 + 涨跌停约束。
@@ -2999,6 +2999,10 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                  直至回撤收敛回阈值内（以昨日收盘净值判定，无未来函数）
         trailing: 移动止盈回撤（如 0.08）——启用后替代固定止盈：持仓从持有期
                  峰值回撤超阈值即以峰值×(1-trailing) 退出，不封顶右尾
+        exec_lag: 成交时点延迟（0=信号日收盘成交【默认，与既有全部结果一致】；
+                 1=次日收盘成交——候选分数取该股前一交易日的预测，模拟
+                 "收盘后出信号、次日收盘才可成交"的真实可达性。退出仍在当日
+                 收盘（盘中破位 EOD 出场的近似），涨停/流动性约束按成交日判定）
     """
     sl_val = stop_loss if stop_loss is not None else 0.08
     tp_val = take_profit if take_profit is not None else 0.15
@@ -3013,6 +3017,10 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
         'limit_up': limit_up if limit_up is not None else False,
         'limit_down': limit_down if limit_down is not None else False,
     })
+    if exec_lag:
+        # 次日收盘成交：候选分数整体后移一个交易日（该股首日无分数自然不买）
+        val_df = val_df.sort_values(['code', 'date']).reset_index(drop=True)
+        val_df['pred'] = val_df.groupby('code')['pred'].shift(1)
     sorted_dates = sorted(val_df['date'].unique())
 
     def _mark_price(h, d):
@@ -3053,6 +3061,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
     trade_log = []  # M6-18: 记录每笔交易明细
     limit_up_blocked = 0   # 涨停拦截的买入候选数
     limit_down_blocked = 0 # 跌停拦截的卖出数
+    cost_accum = 0.0       # 累计交易成本（佣金+印花税+冲击成本，口径补齐用）
 
     for di, d in enumerate(sorted_dates):
         # ── 1. 平仓：到期或止损 ──
@@ -3100,6 +3109,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
             if should_sell:
                 gross = h['shares'] * sell_price
                 sell_cost = gross * (comm_val + st_val) + max(gross * slip_val, 0)
+                cost_accum += sell_cost
                 net_sell = max(gross - sell_cost, 0)
                 cash_before = cash
                 cash += net_sell
@@ -3208,6 +3218,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                 continue
             cash_before = cash
             cash -= total_cost
+            cost_accum += buy_cost   # 成交成立才计（资金不足被跳过的买单不计成本）
 
             trade_id = f"T{len(trade_log)+1:04d}"
             pos_value = total_cost
@@ -3275,7 +3286,10 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
         'sharpe': round(sharpe, 4), 'win_rate': round(win_rate, 4),
         'max_dd': round(max_dd, 4), 'total_return': round(total_return, 4),
         'total_trades': trade_count, 'equity_curve': [round(e, 2) for e in equity_curve],
-        'trades': trade_log, 'daily': daily_log
+        'trades': trade_log, 'daily': daily_log,
+        # 口径补齐：累计成本与相对本金的拖累（只读观测，不改变撮合逻辑）
+        'total_cost': round(cost_accum, 2),
+        'cost_pct': round(cost_accum / initial_cash, 4) if initial_cash > 0 else 0,
     }
 
 
@@ -3763,6 +3777,17 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             'win_rate_5d': test_results.get('5d', {}).get('win_rate', 0),
             'win_rate_10d': test_results.get('10d', {}).get('win_rate', 0),
             'win_rate_20d': test_results.get('20d', {}).get('win_rate', 0),
+            # 口径补齐：成本拖累 + 样本域（评估数字脱离口径没有可比性）
+            'cost_total': round(sum(test_results[l].get('total_cost', 0) for l in _labels), 2),
+            'cost_pct_avg': round(float(np.mean([test_results[l].get('cost_pct', 0) for l in _labels])), 4) if _labels else 0,
+            'sample_domain': {
+                'entity': cfg.get('entity', 'stock'),
+                'windows': {'train': [str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]],
+                            'val': [str(train_cut)[:10], str(test_cut)[:10]],
+                            'test': [str(test_cut)[:10], str(test_dates[-1])[:10] if len(test_dates) else None]},
+                'exec_timing': '收盘 T+0（信号日收盘成交）',
+                'costs': {'commission': commission, 'stamp_tax': stamp_tax, 'slippage': slippage},
+            },
         }
         avg_sharpe = float(np.mean([test_results[l]['sharpe'] for l in _labels])) if _labels else 0
         avg_win = float(np.mean([test_results[l]['win_rate'] for l in _labels])) if _labels else 0
@@ -3840,7 +3865,25 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             "md": round(abs(max_dd_avg), 4),
             "ar": round(annual_return, 4),
         })
-        db.commit(); db.close()
+        db.commit()
+        # 血缘台账：训练事件（模型 ↔ 数据窗快照绑定——训练后数据再被修复/重算时，
+        # /api/lineage/model/{ver} 可直接给出漂移清单）
+        try:
+            from app.lineage import log_event
+            log_event(db, 'train', ver,
+                      scope=f"{cfg.get('train_start','?')}~{str(test_end)[:10]} 训练{str(train_cut)[:10]}~{str(test_cut)[:10]}",
+                      detail={'train_start': cfg.get('train_start'),
+                              'train_cut': str(train_cut)[:10], 'test_cut': str(test_cut)[:10],
+                              'test_end': str(test_end)[:10],
+                              'n_features': len(FEATURES), 'n_rows': int(len(df)),
+                              'label_transform': cfg.get('label_transform', 'none'),
+                              'sharpe': round(float(avg_sharpe), 4),
+                              'max_dd': round(float(abs(max_dd_avg)), 4),
+                              'annual_return': round(float(annual_return), 4),
+                              'trials': len(trial_records)})
+        except Exception:
+            pass
+        db.close()
         write_node_log(log_id=log_id, status='success', detail=f'训练完成: sharpe={avg_sharpe:.3f} win={avg_win:.1%} trials={len(trial_records)}')
         return len(df)
 
@@ -3945,6 +3988,154 @@ def dag_task_factor_heal(trade_date=None, **kw):
         logger.warning(f'[factor_heal] 自愈异常（不阻断下游）: {e}')
         write_node_log(log_id=log_id, status='failed', detail=f'自愈异常: {str(e)[:150]}')
         return {'rows': 0, '_heal': {'error': str(e)[:200]}}
+
+
+def dag_task_rolling_retrain(trade_date=None, dry_run=False, **kw):
+    """DAG 节点：模型新鲜度守护（陈旧告警 + 滚动重训）。
+
+    背景：模型曾经 8 个月未重训且无人察觉（2026-09-11 评估缺陷之一），重训
+    全靠人想起来手动点。本节点每日随流程跑：
+    ① 陈旧告警——ACTIVE.trained_at 距今超 warn_days 写 risk_alerts
+       （kind='model_stale'）：复用风控告警通道，WS 轮询器自动推前端铃铛 +
+       Chrome 通知，同日同因去重。
+    ② 滚动重训——超 alert_days 且无在途候选（TRAINING / 更新的 DRAFT）、
+       且距上次自动重训超 cooldown_days 时：克隆 ACTIVE 配置建新版本并后台
+       起训（与 /train 端点同一入口 start_training_background，进度/停止
+       行为一致）。产物只落 DRAFT——激活永远走人工 promote 闸门，绝不自动
+       上线（v13/v16 的教训：未过人工评估的模型不能碰实盘信号）。
+    参数在 strategy_config.model_freshness：
+       {warn_days:21, alert_days:30, cooldown_days:14, retrain_enabled:true,
+        last_auto_at(内部记录，勿手改)}。
+    dry_run=True 只输出决策不落库不起训（自测用）。
+    **不阻断流程**：运维步骤，异常只记日志。
+    """
+    from datetime import date, datetime
+    import json as _json2
+    from sqlalchemy import text
+    from app.db.connection import get_sync_db
+    td = trade_date or str(date.today())
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('rolling_retrain')
+    if log_id:
+        write_node_log(log_id=log_id, status='running', detail='检查模型新鲜度')
+    db = get_sync_db()
+    try:
+        row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='model_freshness'"
+        )).fetchone()
+        cfg = (_json2.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+        warn_days = int(cfg.get('warn_days', 21))
+        alert_days = int(cfg.get('alert_days', 30))
+        cooldown = int(cfg.get('cooldown_days', 14))
+        retrain_enabled = bool(cfg.get('retrain_enabled', True))
+
+        act = db.execute(text(
+            "SELECT version, trained_at FROM model_versions WHERE status='ACTIVE'"
+        )).fetchone()
+        if not act:
+            detail = '无 ACTIVE 模型，跳过'
+            if log_id:
+                write_node_log(log_id=log_id, status='success', detail=detail)
+            return {'skip': detail}
+        ver, trained_at = act[0], act[1]
+        age = (datetime.now() - trained_at).days if trained_at else 9999
+
+        actions, blockers = [], []
+        # ① 陈旧告警（写 risk_alerts → 既有 WS 轮询推送，前端零改动）
+        if age >= warn_days:
+            level = 'critical' if age >= alert_days else 'warn'
+            title = f'模型陈旧：{ver} 已 {age} 天未重训'
+            body = (f'ACTIVE 模型 {ver} 训练于 {trained_at:%Y-%m-%d}，距今 {age} 天'
+                    f'（提醒阈值 {warn_days} 天 / 自动重训阈值 {alert_days} 天）。'
+                    f'排序模型会随市场风格漂移衰减，请到模型页评估新候选或手动重训。')
+            if dry_run:
+                actions.append(f'[dry] 将发告警「{title}」({level})')
+            else:
+                from app.risk import _insert_alert
+                if _insert_alert(db, td, 'model_stale', level, title, body):
+                    db.commit()
+                    actions.append('陈旧告警已发')
+                else:
+                    actions.append('今日告警已存在(去重)')
+        # ② 滚动重训判定
+        if age >= alert_days and retrain_enabled:
+            busy = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='TRAINING'"
+            )).fetchall()
+            if busy:
+                blockers.append(f'训练中({",".join(b[0] for b in busy)})')
+            newer = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='DRAFT' AND trained_at > :t"
+            ), {"t": trained_at}).fetchall()
+            if newer:
+                blockers.append(f'待审候选({",".join(b[0] for b in newer)})')
+            la = cfg.get('last_auto_at')
+            if la:
+                try:
+                    if (datetime.now() - datetime.fromisoformat(str(la))).days < cooldown:
+                        blockers.append(f'冷却中(上次自动重训 {str(la)[:10]}，周期 {cooldown} 天)')
+                except ValueError:
+                    pass
+            if not blockers and dry_run:
+                actions.append('[dry] 条件满足，将克隆 ACTIVE 自动起训')
+            elif not blockers:
+                # 克隆 ACTIVE 配置 → 新版本号（数值最大主版本 +1，字符串 MAX 会 v9>v10）
+                cfg_row = db.execute(text(
+                    "SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
+                src_cfg = cfg_row[0] if isinstance(cfg_row[0], dict) else _json2.loads(cfg_row[0])
+                majors = []
+                for (v,) in db.execute(text("SELECT version FROM model_versions")).fetchall():
+                    try:
+                        majors.append(int(str(v).lstrip('v').split('.')[0]))
+                    except (ValueError, IndexError):
+                        continue
+                new_ver = f"v{max(majors) + 1}.0" if majors else 'v1.0'
+                db.execute(text(
+                    "INSERT INTO model_versions (version, model_name, status, config) "
+                    "VALUES (:v, :n, 'DRAFT', :c)"),
+                    {"v": new_ver, "n": f'滚动重训·{ver}克隆',
+                     "c": _json2.dumps(src_cfg, ensure_ascii=False, default=str)})
+                # last_auto_at 记进配置行（冷却期判定依据；strategy_config 无唯一约束，删插）
+                cfg['last_auto_at'] = datetime.now().isoformat(timespec='seconds')
+                db.execute(text(
+                    "DELETE FROM strategy_config WHERE strategy_name='model_freshness'"))
+                db.execute(text(
+                    "INSERT INTO strategy_config (strategy_name, display_name, enabled, params) "
+                    "VALUES ('model_freshness', '模型新鲜度守护', true, :p)"),
+                    {"p": _json2.dumps(cfg, ensure_ascii=False)})
+                db.commit()
+                # 与 /train 端点同一入口：TaskManager 任务 + 后台线程 + WS 进度广播
+                from app.api.models import start_training_background
+                res = start_training_background(new_ver)
+                if res.get('ok'):
+                    actions.append(f'已触发自动重训 {new_ver}（任务 {str(res.get("task_id"))[:8]}…，'
+                                   f'完成后待人工评估激活）')
+                    logger.info(f'[rolling_retrain] 自动重训已触发: {new_ver} (克隆 {ver}, AGE={age}天)')
+                    try:
+                        from app.lineage import log_event
+                        log_event(db, 'rolling_retrain', new_ver,
+                                  scope=f'克隆 {ver}（ACTIVE 已训 {age} 天）',
+                                  detail={'clone_of': ver, 'age_days': age,
+                                          'task_id': res.get('task_id')})
+                    except Exception:
+                        pass
+                else:
+                    actions.append(f'起训失败: {res.get("error")}')
+        detail = f'ACTIVE {ver} 已训 {age} 天（阈值 提醒{warn_days}/重训{alert_days}）'
+        if actions:
+            detail += '；' + '；'.join(actions)
+        if blockers:
+            detail += '；重训跳过: ' + '；'.join(blockers)
+        if log_id:
+            write_node_log(log_id=log_id, status='success', detail=detail)
+        logger.info(f'[rolling_retrain] {detail}')
+        return {'version': ver, 'age': age, 'actions': actions, 'blockers': blockers}
+    except Exception as e:
+        logger.warning(f'[rolling_retrain] 异常（不阻断下游）: {e}')
+        if log_id:
+            write_node_log(log_id=log_id, status='failed', detail=f'异常: {str(e)[:150]}')
+        return {'error': str(e)[:200]}
+    finally:
+        db.close()
 
 
 def dag_task_moneyflow(trade_date=None, **kw):
@@ -4401,6 +4592,7 @@ NODE_FN_MAP = {
     'backup_qiniu':      dag_task_backup_qiniu,
     'kline':              dag_task_kline,
     'factor_heal':        dag_task_factor_heal,
+    'rolling_retrain':    dag_task_rolling_retrain,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
     'fund':               dag_task_fund,

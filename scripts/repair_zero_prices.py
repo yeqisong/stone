@@ -90,6 +90,13 @@ def main():
                 db.commit()
                 after = _count(db, f"SELECT count(*) FROM {table} WHERE close <= 0")
                 print(f'[{name}] 已修复 {res.rowcount} 行，剩余零价行 {after} 条')
+                # 血缘台账（旁路落账，失败不影响修复结果）
+                try:
+                    from app.lineage import log_event
+                    log_event(db, 'zero_price_repair', f'{table}.close',
+                              scope=f'全表 carry-forward 修复', detail={'rows': res.rowcount})
+                except Exception:
+                    pass
             else:
                 print(f'[{name}] 试运行模式，未改动（加 --apply 执行）')
     finally:

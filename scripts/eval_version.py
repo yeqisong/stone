@@ -47,7 +47,7 @@ def _annualize(bt):
     return 0
 
 
-def evaluate(db, ver, apply=False):
+def evaluate(db, ver, apply=False, exec_lag_check=False):
     row = db.execute(text("SELECT config, best_params FROM model_versions WHERE version=:v"),
                      {"v": ver}).fetchone()
     if not row:
@@ -99,7 +99,7 @@ def evaluate(db, ver, apply=False):
                   slippage=cfg.get('slippage', 0.001),
                   gated_dates=regime_gates, dd_gate=pdd_gate, trailing=trail_val)
 
-    def run_all(mask, mask_name):
+    def run_all(mask, mask_name, exec_lag=0):
         res, sub = {}, df[mask]
         for label, tname, hdays in TARGETS:
             if label not in models:
@@ -109,10 +109,11 @@ def evaluate(db, ver, apply=False):
                                        sub['stock_code'].values, sub['close'].values,
                                        sub['volume'].values, hdays, bt_label=label,
                                        limit_up=sub['_limit_up'].values,
-                                       limit_down=sub['_limit_down'].values, **common)
+                                       limit_down=sub['_limit_down'].values,
+                                       exec_lag=exec_lag, **common)
             res[label] = bt
-            logger.info(f'[eval] {label} {mask_name}: sharpe={bt["sharpe"]} dd={bt["max_dd"]} '
-                        f'ret={bt["total_return"]:.1%} 卖出{bt["total_trades"]}笔')
+            logger.info(f'[eval] {label} {mask_name}(T+{exec_lag}): sharpe={bt["sharpe"]} dd={bt["max_dd"]} '
+                        f'ret={bt["total_return"]:.1%} cost={bt["total_cost"]:.0f} 卖出{bt["total_trades"]}笔')
         return res
 
     val_results = run_all(val_mask, 'val')
@@ -165,13 +166,27 @@ def evaluate(db, ver, apply=False):
     top3 = sum(sorted(wins, reverse=True)[:3]) / sum(wins) * 100 if wins else 0
 
     # 与训练期同结构：evaluation_report 供 UI 读取；detail 存 label_detail/equity_tail
+    # 口径补齐（2026-09-14）：label_detail 增成本拖累；sample_domain 记录样本域三切分、
+    # 成交时点、成本参数——评估数字脱离口径就没有可比性
     report = {
         'labels': labels,
         'label_detail': {l: {'sharpe': test_results[l]['sharpe'], 'win_rate': test_results[l]['win_rate'],
-                             'total_return': test_results[l]['total_return'], 'max_dd': test_results[l]['max_dd']}
+                             'total_return': test_results[l]['total_return'], 'max_dd': test_results[l]['max_dd'],
+                             'total_cost': test_results[l].get('total_cost', 0),
+                             'cost_pct': test_results[l].get('cost_pct', 0)}
                          for l in labels},
         'equity_tail': equity_tail,
         'benchmark_return': round(benchmark_return, 4),
+        'sample_domain': {
+            'entity': cfg.get('entity', 'stock'),
+            'data_start': data_start, 'data_end': end_date,
+            'windows': {'train': [data_start, str(train_cut)[:10]],
+                        'val': [str(train_cut)[:10], str(test_cut)[:10]],
+                        'test': [str(test_cut)[:10], str(dates[-1])[:10]]},
+            'exec_timing': '收盘 T+0（信号日收盘成交）',
+            'costs': {'commission': common['commission'], 'stamp_tax': common['stamp_tax'],
+                      'slippage': common['slippage']},
+        },
         'evaluation_report': {
             'trials': [],   # 复评不重训，无 trial 记录
             'trades': all_trades,
@@ -194,17 +209,31 @@ def evaluate(db, ver, apply=False):
             'win_rate_20d': test_results.get('20d', {}).get('win_rate', 0),
         },
     }
-    print(f'\n══ {ver} 复评结果（当前数据口径）══')
+    print(f'\n══ {ver} 复评结果（当前数据口径，成交=收盘T+0）══')
     for l in labels:
         d = test_results[l]
         print(f'  {l:>3}: 夏普 {d["sharpe"]:>6}  回撤 {d["max_dd"]:>7.1%}  '
-              f'收益 {d["total_return"]:>7.1%}  胜率 {d["win_rate"]:>5.1%}  卖出 {d["total_trades"]:>4} 笔')
+              f'收益 {d["total_return"]:>7.1%}  胜率 {d["win_rate"]:>5.1%}  '
+              f'成本 {d.get("total_cost", 0):>8.0f}（{d.get("cost_pct", 0):.1%}本金）  卖出 {d["total_trades"]:>4} 笔')
     print(f'  合计: 夏普 {avg_sharpe:.3f}  回撤 {abs(max_dd_avg):.1%}  年化 {annual_return:.1%}  '
           f'基准 {benchmark_return:.1%}  逐日记录 {len(equity_tail)} 点')
     if val_results:
         print('  val（OOS 对照，写库不落 val 明细）: ' + '  '.join(
             f'{l}=夏普{d["sharpe"]} 收益{d["total_return"]:.0%} 卖出{d["total_trades"]}笔'
             for l, d in val_results.items()))
+
+    # 成交时点敏感性（T+1 次日收盘）：衡量"信号日收盘成交"口径的乐观偏差，
+    # 只诊断不落库——同一模型 T+0/T+1 的差值即执行时点的价值
+    if exec_lag_check:
+        lag_results = run_all(test_mask, 'test', exec_lag=1)
+        print('\n── 成交时点对照（test 段，T+0 信号日收盘 vs T+1 次日收盘）──')
+        for l in labels:
+            if l in lag_results:
+                a, b = test_results[l], lag_results[l]
+                print(f'  {l:>3}: 夏普 {a["sharpe"]:>7} → {b["sharpe"]:>7}   '
+                      f'收益 {a["total_return"]:>7.1%} → {b["total_return"]:>7.1%}   '
+                      f'回撤 {a["max_dd"]:>6.1%} → {b["max_dd"]:>6.1%}   '
+                      f'卖出 {a["total_trades"]} → {b["total_trades"]}')
 
     if not apply:
         print('\n（试运行：未写库。加 --apply 覆盖 backtest_records / model_versions / 逐日记录）')
@@ -223,7 +252,7 @@ def evaluate(db, ver, apply=False):
            "sh": round(avg_sharpe, 4), "wr": round(avg_win, 4),
            "md": round(abs(max_dd_avg), 4), "ar": round(annual_return, 4),
            "tt": len(all_trades), "wt": win_trades,
-           "dt": _json.dumps({k: report[k] for k in ('labels', 'label_detail', 'benchmark_return', 'equity_tail')},
+           "dt": _json.dumps({k: report[k] for k in ('labels', 'label_detail', 'benchmark_return', 'equity_tail', 'sample_domain')},
                              ensure_ascii=False)})
     for t in all_trades:
         is_buy = t.get('action') == 'BUY'
@@ -254,6 +283,18 @@ def evaluate(db, ver, apply=False):
            "md": round(abs(max_dd_avg), 4), "ar": round(annual_return, 4),
            "rep": _json.dumps(report['evaluation_report'], ensure_ascii=False)})
     db.commit()
+    # 血缘台账：复评覆盖事件（记录新口径的头条指标，与旧存档的差异可追溯）
+    try:
+        from app.lineage import log_event
+        log_event(db, 'eval_rerun', ver,
+                  scope=f'test {test_start}~{test_end}（当前数据口径复评）',
+                  detail={'sharpe': round(float(avg_sharpe), 4),
+                          'max_dd': round(float(abs(max_dd_avg)), 4),
+                          'annual_return': round(float(annual_return), 4),
+                          'win_rate': round(float(avg_win), 4),
+                          'label_detail': report['label_detail']})
+    except Exception:
+        pass
     print(f'\n已覆盖写库：backtest_records / backtest_trades / backtest_daily_records / model_versions({ver})')
     return report
 
@@ -262,10 +303,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('version', help='模型版本，如 v15.0')
     ap.add_argument('--apply', action='store_true', help='覆盖写库（默认只算不写）')
+    ap.add_argument('--exec-lag-check', action='store_true',
+                    help='附带 T+1 次日收盘成交对照（只打印，不落库）')
     args = ap.parse_args()
     db = get_sync_db()
     try:
-        evaluate(db, args.version, apply=args.apply)
+        evaluate(db, args.version, apply=args.apply, exec_lag_check=args.exec_lag_check)
     finally:
         db.close()
 

@@ -1145,13 +1145,12 @@ def stop_training(version: str, user: str = Depends(get_current_user)):
         db.close()
 
 
-@router.post("/v1/models/{version}/train")
-def train_model(version: str, user: str = Depends(get_current_user)):
-    """触发模型训练（通过 TaskManager 管理进度）。
+def start_training_background(version: str) -> dict:
+    """触发模型训练的统一入口（TaskManager 任务 + 后台线程）。
 
-    C1: 训练线程创建真实 dag_run_log（node_name='model_train'）并注入
-    _node_log_ids，训练函数内部 update_node_progress 的进度即可经 WS 广播
-    到前端；同时注入 _stop_event 供停止/删除联动（A4）。
+    /train 端点与 DAG 滚动重训节点（rolling_retrain）共用同一入口，保证两条
+    路径的 WS 进度广播、停止联动、失败回滚行为完全一致。返回
+    {ok, task_id, version} 或 {ok: False, error, code(HTTP)}。
     """
     from app.task import TaskManager
 
@@ -1164,15 +1163,13 @@ def train_model(version: str, user: str = Depends(get_current_user)):
     ]
     db = get_sync_db()
     try:
-        r = db.execute(text("SELECT status, config FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
+        r = db.execute(text("SELECT status FROM model_versions WHERE version=:v"), {"v": version}).fetchone()
         if not r:
-            raise HTTPException(404, "版本不存在")
+            return {"ok": False, "error": "版本不存在", "code": 404}
         if r[0] not in ('DRAFT', 'REJECTED'):
-            raise HTTPException(400, f"当前状态为 {r[0]}，只有 DRAFT/REJECTED 可训练")
+            return {"ok": False, "error": f"当前状态为 {r[0]}，只有 DRAFT/REJECTED 可训练", "code": 400}
         db.execute(text("UPDATE model_versions SET status='TRAINING', trained_at=CURRENT_TIMESTAMP WHERE version=:v"), {"v": version})
         db.commit()
-    except HTTPException:
-        raise
     finally:
         db.close()
 
@@ -1190,7 +1187,7 @@ def train_model(version: str, user: str = Depends(get_current_user)):
             db.rollback()
         finally:
             db.close()
-        return {"ok": False, "error": task.error}
+        return {"ok": False, "error": task.error, "code": 500}
 
     stop_event = threading.Event()
     with _train_events_lock:
@@ -1225,6 +1222,20 @@ def train_model(version: str, user: str = Depends(get_current_user)):
     thread = threading.Thread(target=_bg, args=(task.task_id, version, stop_event), daemon=True)
     thread.start()
     return {"ok": True, "task_id": task.task_id, "version": version, "status": "training started"}
+
+
+@router.post("/v1/models/{version}/train")
+def train_model(version: str, user: str = Depends(get_current_user)):
+    """触发模型训练（通过 TaskManager 管理进度）。
+
+    C1: 训练线程创建真实 dag_run_log（node_name='model_train'）并注入
+    _node_log_ids，训练函数内部 update_node_progress 的进度即可经 WS 广播
+    到前端；同时注入 _stop_event 供停止/删除联动（A4）。
+    """
+    res = start_training_background(version)
+    if not res.get("ok"):
+        raise HTTPException(res.get("code", 400), res["error"])
+    return res
 
 
 @router.post("/v1/models/{version}/retrain")
