@@ -270,7 +270,11 @@ function drawCharts(kd){
   // 默认显示最近 1 年（约 250 交易日；不足则全显示）
   const totalDays = dates.length
   const SHOW = totalDays <= 250 ? 0 : ((totalDays - 250) / totalDays * 100).toFixed(1)
-  const dz = [{type:'slider',xAxisIndex:0,start:SHOW,end:100,height:22,bottom:4,handleSize:8,
+  const dz = [
+    // 滚轮缩放时间窗（普通滚轮=以鼠标为中心缩放，Shift+滚轮=平移）；
+    // 五图同组（echarts.connect），任一图滚轮缩放全组同步
+    {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
+    {type:'slider', xAxisIndex:0, start:SHOW, end:100, height:22, bottom:4, handleSize:8,
     borderColor:'var(--c-input-bg)',
     backgroundColor:'var(--c-card-bg)',
     fillerColor:'rgba(96,165,250,0.15)',
@@ -395,7 +399,10 @@ function drawPeChart(){
       {type:'value',name:'PE',splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
     ],
-    dataZoom:[{type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
+    dataZoom:[
+      // PE 图时间轴与 K 线不同（财报日），不参与联动组，滚轮独立缩放
+      {type:'inside', zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
+      {type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
       borderColor:'var(--c-input-bg)',backgroundColor:'var(--c-card-bg)',
       fillerColor:'rgba(96,165,250,0.15)',
       handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},

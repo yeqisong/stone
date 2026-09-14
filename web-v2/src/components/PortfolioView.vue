@@ -6,7 +6,7 @@
 
   <n-spin v-if="loading" style="padding:40px" />
   <div v-else class="fill-table" style="display:flex;flex-direction:column">
-    <n-data-table v-if="data.positions&&data.positions.length" class="fill-table" flex-height :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1000" />
+    <n-data-table v-if="data.positions&&data.positions.length" class="fill-table" flex-height :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
     <n-empty v-else description="暂无持仓" style="flex:1" />
   </div>
 </div>
@@ -123,7 +123,7 @@ const columns = [
   { title:'成本', key:'cost_price', width:95, align:'right', render(r){return '¥'+(r.cost_price||0).toFixed(2)} },
   { title:'现价', key:'current_price', width:95, align:'right', render(r){return '¥'+(r.current_price||0).toFixed(2)} },
   { title:'市值', key:'market_value', width:105, align:'right', render(r){return '¥'+fmt(r.market_value)} },
-  { title:'盈亏', key:'pnl', width:110, align:'right', render(r){
+  { title:'盈亏', key:'pnl', width:130, align:'right', ellipsis:{tooltip:true}, render(r){
     const pnl=r.pnl||0, pct=(r.pnl_pct||0).toFixed(1)
     return h('span',{style:{color:pnl>=0?'#ef4444':'#10b981',whiteSpace:'nowrap'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
   }},
@@ -134,7 +134,8 @@ const columns = [
     return h('span',{style:{color:isBuy?'#ef4444':'#10b981',fontSize:'12px',whiteSpace:'nowrap'}},
       (isBuy?'买入':'卖出') + ' ★'.repeat(r.signal_strength||0) + ' ' + dateStr)
   }},
-  { title:'备注', key:'notes', minWidth:80, fixed:'right', render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
+  // 固定窄列 + 溢出 tooltip：原 minWidth 弹性列会吃光剩余宽度（空备注也占满），挤得盈亏列裁字
+  { title:'备注', key:'notes', width:120, fixed:'right', ellipsis:{tooltip:true}, render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
   { title:'操作', width:140, fixed:'right', render(row){return h('span',[
     h(NButton,{size:'tiny',onClick:()=>showHistory(row.stock_code)},{default:()=>'详情'}),
     h(NButton,{size:'tiny',onClick:()=>{isAdding.value=false;editForm.code=row.stock_code;editForm.qty=row.quantity;editForm.cost=row.cost_price;editForm.date=null;editForm.note=row.notes||'';showEdit.value=true}},{default:()=>'编辑'}),

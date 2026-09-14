@@ -165,11 +165,27 @@ cd web-v2 && npm run dev
 # 或直接（无需 npm 包装）：node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3000
 ```
 
+### 分支策略（2026-09-14 起强制）
+
+**禁止直接在 `main` 上改动。** 每项工作开独立分支（`feat/xxx`、`fix/xxx`），完成后合回 `main`；`main` 只接受合并与用户明确要求的收口提交。
+
+```bash
+git checkout -b fix/factor-heal      # 开工先建分支
+git add <只列自己改的文件> && git commit -m "..."
+git push -u origin fix/factor-heal   # 远程：git@github.com:yeqisong/stone.git
+```
+
+**多会话并行是本仓库的常态**（曾出现两个会话同时改 `scripts/pipeline.py`）。因此：
+
+1. 动手前必查 `git status` + `git log --oneline -3`：确认工作区有没有他人在途改动、有没有不是自己的新提交。
+2. **只 `git add` 自己改的文件**，禁止 `git add -A` / `git commit -a` 扫入他人未提交的工作。
+3. 高冲突文件（`scripts/pipeline.py`、`scripts/feature_compute.py`、`web-v2/src/components/*.vue`、`AGENTS.md`）改动前先看 `git status`；Edit 报"文件已被修改"时必须重新 Read 再改，不可用旧快照回写。
+4. 发现工作区有他人改动时：不要提交、不要回滚，在回复里说明并继续自己的部分。
+
 ### 版本管理（现行）
 
 ```bash
-git add -A && git commit -m "vX.Y: ..."
-git tag vX.Y    # 无远程仓库，本地 tag 即发布
+git tag vX.Y     # 语义化：特性里程碑进次版本号，纯修复进补丁号；本地 tag + push --tags
 ```
 
 ### 部署流程（历史存档，服务器已拆除，勿再执行）

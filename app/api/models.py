@@ -302,8 +302,139 @@ def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = 
         meta_row = db.execute(text(
             "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
         meta = json.loads(meta_row) if isinstance(meta_row, str) else (meta_row or {})
+        # 统计区：最新 EOD 资产 + 已实现/浮动盈亏（后复权口径，与列表一致；
+        # 浮动用 cost_basis 含买入费用，与 equity 现金推演对账吻合）
+        rules = _effective_paper_rules(db, version)
+        initial = float(rules.get('initial_cash') or meta.get('initial_cash') or 1_000_000)
+        eod = db.execute(text(
+            "SELECT trade_date, cash, equity FROM paper_trades "
+            "WHERE model_version=:v AND action='EOD' ORDER BY trade_date DESC LIMIT 1"
+        ), {"v": version}).fetchone()
+        sells = db.execute(text(
+            "SELECT COUNT(*), COUNT(*) FILTER (WHERE pnl > 0), COALESCE(SUM(pnl), 0) "
+            "FROM paper_trades WHERE model_version=:v AND action='SELL'"
+        ), {"v": version}).fetchone()
+        floating = db.execute(text("""
+            WITH pos AS (SELECT stock_code, shares, cost_basis FROM paper_positions WHERE model_version=:v),
+            lp AS (SELECT DISTINCT ON (stock_code) stock_code, close_hfq FROM daily_quote
+                   WHERE stock_code IN (SELECT stock_code FROM pos) AND close_hfq > 0
+                   ORDER BY stock_code, trade_date DESC)
+            SELECT COALESCE(SUM(lp.close_hfq * pos.shares - pos.cost_basis), 0)
+            FROM pos JOIN lp USING (stock_code)
+        """), {"v": version}).scalar()
+        npos = db.execute(text(
+            "SELECT COUNT(*) FROM paper_positions WHERE model_version=:v"), {"v": version}).scalar() or 0
+        equity = float(eod[2]) if eod and eod[2] is not None else initial
+        cash_v = float(eod[1]) if eod and eod[1] is not None else initial
+        stats = {
+            "as_of": str(eod[0])[:10] if eod else None,
+            "initial_cash": initial, "equity": equity, "cash": cash_v,
+            "positions_value": round(equity - cash_v, 2),
+            "realized_pnl": float(sells[2] or 0),
+            "floating_pnl": round(float(floating or 0), 2),
+            "return_pct": round(equity / initial - 1, 4) if initial else None,
+            "sell_count": sells[0] or 0, "win_count": sells[1] or 0,
+            "win_rate": round(sells[1] / sells[0], 3) if sells[0] else None,
+            "npos": npos, "max_positions": rules.get('max_positions'),
+        }
         return {"trades": trades, "total": total, "page": page, "page_size": page_size,
-                "initial_cash": float(meta.get('initial_cash', 1_000_000))}
+                "initial_cash": initial, "stats": stats}
+    finally:
+        db.close()
+
+
+def _effective_paper_rules(db, version):
+    """纸面组合实际生效规则：strategy_config 记录当前运行模型时优先取它（运行时可调），
+    否则按模型 config.risk 推导（与 pipeline._paper_meta_from_model 同口径）。"""
+    params = None
+    try:
+        row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='paper_portfolio'")).scalar()
+        params = json.loads(row) if isinstance(row, str) else row
+    except Exception:
+        params = None
+    cfg = db.execute(text(
+        "SELECT config FROM model_versions WHERE version=:v"), {"v": version}).scalar()
+    c = json.loads(cfg) if isinstance(cfg, str) else (cfg or {})
+    risk = c.get('risk', {}) or {}
+    trail = float(risk.get('trailing_retracement') or 0)
+    stop = float(risk.get('stop_loss_pct', 8)) / 100.0
+    derived = {'initial_cash': c.get('initial_cash', 1_000_000),
+               'max_positions': int(c.get('max_positions', 5)),
+               'stop_loss': stop,
+               'take_profit': 99.0 if trail else round(stop * 2, 4),  # trailing 启用时固定止盈关闭
+               'trailing': trail,
+               'hold_days': int(risk.get('signal_timeout_days', 20)),
+               'portfolio_gate_dd': (c.get('portfolio_gate') or {}).get('dd'),
+               'source': 'model_config'}
+    if params and params.get('model_version') == version:
+        merged = dict(derived)
+        merged.update({k: params[k] for k in (
+            'initial_cash', 'max_positions', 'stop_loss', 'take_profit',
+            'trailing', 'hold_days', 'portfolio_gate_dd') if k in params})
+        merged['source'] = 'strategy_config'
+        return merged
+    return derived
+
+
+@router.get("/v1/models/{version}/trade-rules")
+def get_trade_rules(version: str):
+    """交易规则速览（信号/纸面页脚注数据源）。
+
+    数值取自运行时真实出处：config.signal / config.regime / global_preference /
+    strategy_config(paper_portfolio)，不再读训练链路已不使用的 trading_rules.risk_management。
+    了结线与 model_health 节点的 sp_map+镜像止盈同式（stop_loss + 0.07），改动需两处同步。
+    """
+    db = get_sync_db()
+    try:
+        cfg = db.execute(text(
+            "SELECT config FROM model_versions WHERE version=:v"), {"v": version}).scalar()
+        if cfg is None:
+            raise HTTPException(404, f"模型 {version} 不存在")
+        c = json.loads(cfg) if isinstance(cfg, str) else (cfg or {})
+        sig_cfg = c.get('signal', {}) or {}
+        pref_row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='global_preference'")).scalar()
+        try:
+            pref_mode = (json.loads(pref_row) if isinstance(pref_row, str) else (pref_row or {})) \
+                .get('mode', 'balanced')
+        except Exception:
+            pref_mode = 'balanced'
+        paper = _effective_paper_rules(db, version)
+        sp_map = {'left': 0.10, 'balanced': 0.08, 'right': 0.05}
+        stop = sp_map.get(pref_mode, 0.08)
+        regime = c.get('regime') or {}
+        allow_limit_up = (c.get('trading_rules', {}) or {}) \
+            .get('signal_filter', {}).get('allow_limit_up', False)
+        # 与 model_signal 节点 A3 判定一致：≥2 个周期模型才启用 ML 预测
+        bp = db.execute(text(
+            "SELECT best_params FROM model_versions WHERE version=:v"), {"v": version}).scalar()
+        n_models = 0
+        try:
+            bpo = json.loads(bp) if isinstance(bp, str) else (bp or {})
+            n_models = sum(1 for h in ('5d', '10d', '20d')
+                           if isinstance(bpo.get(h), dict) and bpo[h].get('model_path'))
+        except Exception:
+            pass
+        return {
+            "version": version,
+            "signal_rules": {
+                "ml_enabled": bool(c.get('ml_enabled')) and n_models >= 2,
+                "mode": sig_cfg.get('threshold_mode', 'quantile'),
+                "buy_top_pct": sig_cfg.get('buy_top_pct', 0.05),
+                "abs_threshold": sig_cfg.get('ml_confidence_threshold', 0.5),
+                "label_transform": c.get('label_transform') or 'none',
+                "preference": pref_mode,
+                "limit_up_blocked": not allow_limit_up,
+                "regime": {"enabled": bool(regime.get('enabled')),
+                           "index_code": regime.get('index_code', '000300'),
+                           "ma_window": regime.get('ma_window', 20),
+                           "max_skip_days": regime.get('max_skip_days', 2)},
+            },
+            "closure_rules": {"stop_loss": stop, "take_profit": round(stop + 0.07, 4),
+                              "timeout_days": paper['hold_days']},
+            "paper_rules": paper,
+        }
     finally:
         db.close()
 
@@ -532,24 +663,36 @@ def get_model_diagnosis(version: str):
 
 
 @router.get("/v1/models/{version}/signals")
-def get_model_signals(version: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=10, le=500)):
+def get_model_signals(version: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=10, le=500),
+                      status: str = Query('all', description="all=全部 / closed=已了结 / open=跟踪中")):
     """模型信号明细分页（按信号日期倒序，模型隔离）。
 
     价格口径：price=真实价（展示用），price_hfq=后复权价（signal_history 原值，
     供盈亏比率计算）；real_close 保留为同日真实收盘（与 price 同口径）。
+    status/actual_return/close_reason：信号了结状态与效果收益率（model_health 节点定性）。
     """
     db = get_sync_db()
     try:
+        # 状态筛选（白名单拼接，非用户原文）
+        status_filter = ""
+        sh_status_filter = ""
+        if status == 'closed':
+            status_filter = " AND status = 'closed'"
+            sh_status_filter = " AND sh.status = 'closed'"
+        elif status == 'open':
+            status_filter = " AND status IS DISTINCT FROM 'closed'"
+            sh_status_filter = " AND sh.status IS DISTINCT FROM 'closed'"
         total = db.execute(text(
-            "SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND model_version=:version"),
-            {"version": version}).scalar()
-        rows = db.execute(text("""
+            f"SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND model_version=:version{status_filter}"
+        ), {"version": version}).scalar()
+        rows = db.execute(text(f"""
             SELECT sh.id, sh.signal_date, sh.stock_code, sh.stock_name, sh.direction, sh.strength, sh.price,
                    dq.close AS real_close,
-                   sh.predict_score, sh.predict_5d_return, sh.predict_10d_return, sh.predict_20d_return
+                   sh.predict_score, sh.predict_5d_return, sh.predict_10d_return, sh.predict_20d_return,
+                   sh.status, sh.actual_return, sh.close_reason, sh.reason
             FROM signal_history sh
             LEFT JOIN daily_quote dq ON dq.stock_code = sh.stock_code AND dq.trade_date = sh.signal_date
-            WHERE sh.strategy_name = 'model_signal' AND sh.model_version = :version
+            WHERE sh.strategy_name = 'model_signal' AND sh.model_version = :version{sh_status_filter}
             ORDER BY sh.signal_date DESC, sh.predict_score DESC NULLS LAST
             LIMIT :lim OFFSET :off
         """), {"version": version, "lim": page_size, "off": (page - 1) * page_size}).fetchall()
@@ -568,6 +711,10 @@ def get_model_signals(version: str, page: int = Query(1, ge=1), page_size: int =
                 "predict_5d": float(r[9]) if r[9] is not None else None,
                 "predict_10d": float(r[10]) if r[10] is not None else None,
                 "predict_20d": float(r[11]) if r[11] is not None else None,
+                "status": r[12],
+                "actual_return": float(r[13]) if r[13] is not None else None,
+                "close_reason": r[14],
+                "reason": r[15],
             })
         return {"signals": signals, "count": len(signals), "total": total, "page": page, "page_size": page_size}
     except Exception as e:

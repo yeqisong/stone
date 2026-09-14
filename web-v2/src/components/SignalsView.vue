@@ -9,14 +9,17 @@
       <n-button size="tiny" :type="tab==='trades'?'primary':'default'" @click="tab='trades'; loadTrades()"><AppIcon name="bar-chart-2" :size="13" />  模拟交易</n-button>
       <n-button size="tiny" :type="tab==='stats'?'primary':'default'" @click="tab='stats'"><AppIcon name="trending-up" :size="13" />  效果追踪</n-button>
     </n-button-group>
+    <n-select v-if="tab==='list'" v-model:value="sigStatus" :options="sigStatusOptions" size="tiny" style="width:104px"
+      @update:value="onStatusChange" />
     <n-button size="tiny" type="warning" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" />  生成</n-button>
   </n-space>
 
   <!-- Tab1: 信号列表（该模型全部信号，按日期倒序分页） -->
   <template v-if="tab==='list'">
     <div class="fill-table" style="display:flex;flex-direction:column">
-      <n-data-table v-if="sig.signals" class="fill-table" flex-height :columns="sigColumns" :data="sig.signals" size="small" :scroll-x="960" />
+      <n-data-table v-if="sig.signals" class="fill-table" flex-height :columns="sigColumns" :data="sig.signals" size="small" :scroll-x="1080" />
       <n-empty v-else description="暂无信号" style="flex:1" />
+      <TradeRulesNote :version="selModel" />
       <ListPagination :total="sig.total" :page="sigPage" :page-size="sigPageSize" @change="p=>{sigPage=p; loadSignals()}" />
     </div>
   </template>
@@ -24,12 +27,14 @@
   <!-- Tab2: 模拟交易（该模型全部买卖操作，按交易日期倒序分页） -->
   <template v-else-if="tab==='trades'">
     <div class="fill-table" style="display:flex;flex-direction:column">
+      <StatStrip v-if="trdStats.length" :items="trdStats" />
       <n-data-table v-if="trd.trades" class="fill-table" flex-height :columns="trdColumns" :data="trd.trades" size="small" :scroll-x="1180" />
       <n-empty v-else description="暂无模拟成交" style="flex:1" />
       <div class="no-shrink" style="font-size:10px;color:var(--c-text-faint);padding:4px 2px 0;line-height:1.7">
         口径：成交单价为真实市价（撮合价除以同日复权因子）；股数/金额/盈亏/总资产为后复权模拟口径，
         与初始资金同量级可比，比率类指标不受复权影响。
       </div>
+      <TradeRulesNote :version="selModel" />
       <ListPagination :total="trd.total" :page="trdPage" :page-size="trdPageSize" @change="p=>{trdPage=p; loadTrades()}" />
     </div>
   </template>
@@ -59,6 +64,8 @@ import { ref, reactive, h, computed, onMounted } from 'vue'
 import { NDataTable, NButton, NButtonGroup, NSpace, NTag, NEmpty, NModal, NPagination, NSelect, useMessage } from 'naive-ui'
 import axios from 'axios'
 import SignalStatsView from './SignalStatsView.vue'
+import TradeRulesNote from './TradeRulesNote.vue'
+import StatStrip from './StatStrip.vue'
 import ListPagination from './ListPagination.vue'
 import { useViewport } from '../utils/viewport'
 import { bjDateStr } from '../utils/date.js'
@@ -76,6 +83,14 @@ const tab = ref('list')
 const sig = reactive({signals:null, total:null})
 const sigPage = ref(1)
 const sigPageSize = 50
+// 了结状态筛选：效果追踪的"已了结"计数对应这里的 closed 过滤结果
+const sigStatus = ref('all')
+const sigStatusOptions = [
+  { label: '全部信号', value: 'all' },
+  { label: '跟踪中', value: 'open' },
+  { label: '已了结', value: 'closed' },
+]
+function onStatusChange() { sigPage.value = 1; loadSignals() }
 // 预测列渲染格式由该模型 label_transform 决定（rank=分位 P52 / top20=概率 31%↑）
 const predictFmt = reactive({rank:false, prob:false})
 
@@ -95,6 +110,16 @@ const sigColumns = computed(() => {
     { title:'名称', key:'stock_name', width:100, fixed:'left', render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
     { title:'现价', key:'real_close', width:95, align:'right', render(r){ return r.real_close!=null ? '¥'+r.real_close.toFixed(2) : '—' } },
     { title:'方向', key:'direction', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
+    // 了结状态：止盈红/止损绿（A股红涨绿跌），跟踪中为普通灰字避免整屏标签噪音
+    { title:'状态', key:'status', width:80, render(r){
+        if (r.status === 'closed') {
+          const m = { take_profit:['止盈了结','error'], stop_loss:['止损了结','success'] }[r.close_reason] || ['到期了结','default']
+          return h(NTag,{type:m[1],size:'small',bordered:false},{default:()=>m[0]})
+        }
+        return h('span',{style:{color:'var(--c-text-faint)',fontSize:'11px'}},'跟踪中')
+      } },
+    { title:'效果收益率', key:'actual_return', width:86, align:'right', render(r){ const v=r.actual_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') } },
+    { title:'触发条件', key:'reason', width:118, ellipsis:{tooltip:true}, render(r){ return h('span',{style:{fontSize:'10px',color:'var(--c-text-dim)'}}, r.reason || '—') } },
     { title:'预测5d', key:'predict_5d', width:70, align:'right', render: predRender('predict_5d') },
   ]
   if (isNarrow.value) return base
@@ -108,7 +133,7 @@ const sigColumns = computed(() => {
 async function loadSignals() {
   if (!selModel.value) return
   try {
-    const r = await axios.get(API + `/api/v1/models/${selModel.value}/signals`, { params: { page: sigPage.value, page_size: sigPageSize } })
+    const r = await axios.get(API + `/api/v1/models/${selModel.value}/signals`, { params: { page: sigPage.value, page_size: sigPageSize, status: sigStatus.value } })
     Object.assign(sig, r.data)
   } catch(e) { console.error(e) }
 }
@@ -117,6 +142,26 @@ async function loadSignals() {
 const trd = reactive({trades:null, total:null, initial_cash:1000000})
 const trdPage = ref(1)
 const trdPageSize = 50
+// 统计区（后端 stats：最新 EOD 资产 + 已实现/浮动盈亏，后复权模拟口径）
+const trdStatsRaw = ref(null)
+const wan = v => v == null ? '—' : (v / 1e4).toFixed(2) + '万'
+const wanSigned = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v / 1e4).toFixed(2) + '万'
+const trdStats = computed(() => {
+  const s = trdStatsRaw.value
+  if (!s) return []
+  const pnlColor = v => v == null ? 'var(--c-text)' : (v >= 0 ? '#ef4444' : '#10b981')
+  const asOf = s.as_of ? `（截至${s.as_of.slice(5)}）` : ''
+  return [
+    { label: '初始资金', value: wan(s.initial_cash) },
+    { label: `总资产${asOf}`, value: wan(s.equity) },
+    { label: '总收益率', value: s.return_pct == null ? '—' : (s.return_pct * 100).toFixed(2) + '%', color: pnlColor(s.return_pct) },
+    { label: '已实现盈亏', value: wanSigned(s.realized_pnl), color: pnlColor(s.realized_pnl) },
+    { label: '浮动盈亏', value: wanSigned(s.floating_pnl), color: pnlColor(s.floating_pnl) },
+    { label: '胜率', value: s.win_rate == null ? '—' : `${(s.win_rate * 100).toFixed(0)}% (${s.win_count}/${s.sell_count})`,
+      color: s.win_rate == null ? 'var(--c-text)' : (s.win_rate >= 0.5 ? '#10b981' : '#ef4444') },
+    { label: '持仓', value: `${s.npos}/${s.max_positions ?? '—'}` },
+  ]
+})
 const REASON_CN = { signal: '信号买入', stop_loss: '止损', take_profit: '止盈', trailing: '移动止盈',
                     hold_expire: '持有到期', expire: '持有到期', regime: '空仓闸门' }
 const fmtAmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(0)
@@ -146,6 +191,7 @@ async function loadTrades() {
   try {
     const r = await axios.get(API + `/api/v1/models/${selModel.value}/paper-trades`, { params: { page: trdPage.value, page_size: trdPageSize } })
     Object.assign(trd, r.data)
+    trdStatsRaw.value = r.data.stats || null
   } catch(e) { console.error(e) }
 }
 

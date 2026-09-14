@@ -60,6 +60,7 @@ const overviews = ref([])
 const indCols = [
   { title:'行业', key:'industry', width:120, fixed:'left', ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:55 },
+  { title:'已了结', key:'closed_i', width:58, render(r){ return r.closed ? r.closed : h('span',{style:{color:'var(--c-text-faint)'}},'0') } },
   { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
   { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
@@ -67,6 +68,7 @@ const stkCols = [
   { title:'代码', key:'stock_code', width:65, fixed:'left' },
   { title:'名称', key:'stock_name', width:72, ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:45 },
+  { title:'已了结', key:'closed_s', width:58, render(r){ return r.closed ? r.closed : h('span',{style:{color:'var(--c-text-faint)'}},'0') } },
   { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
   { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
@@ -157,7 +159,8 @@ function drawDist() {
     yAxis: { splitLine: { lineStyle: { color: 'rgba(128,128,128,0.1)' } } },
     series: [{
       type: 'bar', data: d.counts,
-      itemStyle: { color: p => p.value > d.counts[5] ? '#ef4444' : '#10b981' },
+      // 按桶位置着色：index>=5（0% 桶覆盖 [0,+3%) 及以上）为正收益→红，负收益桶→绿（A股红涨绿跌）
+      itemStyle: { color: p => p.dataIndex >= 5 ? '#ef4444' : '#10b981' },
       barWidth: '80%'
     }]
   })

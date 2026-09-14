@@ -434,6 +434,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
         industry = db.execute(text(f"""
             SELECT sm.industry_l2,
                    COUNT(*) as signals,
+                   COUNT(*) FILTER (WHERE sh.status='closed') as closed_n,
                    COUNT(*) FILTER (WHERE sh.status='closed' AND sh.actual_return > 0) * 1.0 /
                      NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
@@ -443,14 +444,16 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             GROUP BY sm.industry_l2 HAVING COUNT(*) >= 5
             ORDER BY signals DESC LIMIT 15
         """), {**{"days": days}, **vparams}).fetchall()
-        by_industry = [{"industry": r[0] or "未分类", "signals": r[1],
-                        "win_rate": round(float(r[2]), 3) if r[2] is not None else None,
-                        "avg_return": round(float(r[3]), 4) if r[3] is not None else None} for r in industry]
+        # closed=已了结样本数：胜率/均收益只算了结信号，单样本时 100% 胜率需有了结数才不被误读
+        by_industry = [{"industry": r[0] or "未分类", "signals": r[1], "closed": r[2],
+                        "win_rate": round(float(r[3]), 3) if r[3] is not None else None,
+                        "avg_return": round(float(r[4]), 4) if r[4] is not None else None} for r in industry]
 
         # Top 个股
         top_stocks = db.execute(text(f"""
             SELECT sh.stock_code, sh.stock_name,
                    COUNT(*) as signals,
+                   COUNT(*) FILTER (WHERE sh.status='closed') as closed_n,
                    COUNT(*) FILTER (WHERE sh.status='closed' AND sh.actual_return > 0) * 1.0 /
                      NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
@@ -459,9 +462,9 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             GROUP BY sh.stock_code, sh.stock_name HAVING COUNT(*) >= 3
             ORDER BY signals DESC LIMIT 20
         """), {**{"days": days}, **vparams}).fetchall()
-        top = [{"stock_code": r[0], "stock_name": r[1], "signals": r[2],
-                "win_rate": round(float(r[3]), 3) if r[3] is not None else None,
-                "avg_return": round(float(r[4]), 4) if r[4] is not None else None} for r in top_stocks]
+        top = [{"stock_code": r[0], "stock_name": r[1], "signals": r[2], "closed": r[3],
+                "win_rate": round(float(r[4]), 3) if r[4] is not None else None,
+                "avg_return": round(float(r[5]), 4) if r[5] is not None else None} for r in top_stocks]
 
         used_version = model_version
         if model_version == 'active':

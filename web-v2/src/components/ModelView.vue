@@ -78,18 +78,7 @@
             <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px">
               <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">配置详情</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
-                <div><span style="color:var(--c-text-faint)">特征: </span><span style="color:var(--c-text)">{{((cfg.feature_names || cfg.features)||[]).length ? ((cfg.feature_names || cfg.features)||[]).slice(0,8).join(', ') + (((cfg.feature_names || cfg.features)||[]).length>8?'...':'') : '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">数据范围: </span><span style="color:var(--c-text)">{{cfg.train_start || '—'}} ~ 前天（自动60/20/20切分）</span></div>
-                <div><span style="color:var(--c-text-faint)">Optuna轮数: </span><span style="color:var(--c-text)">{{cfg.optuna_trials || 50}}</span></div>
-                <div><span style="color:var(--c-text-faint)">初始资金: </span><span style="color:var(--c-text)">{{(cfg.initial_cash || 1000000).toLocaleString()}}元</span></div>
-                <div><span style="color:var(--c-text-faint)">最大持仓: </span><span style="color:var(--c-text)">{{cfg.max_positions || 5}}只</span></div>
-                <div><span style="color:var(--c-text-faint)">成本: </span><span style="color:var(--c-text)">佣{{((tr.cost_model?.commission_rate ?? 0.0015)*100).toFixed(2)}}% 滑{{((tr.cost_model?.slippage_rate ?? 0.001)*100).toFixed(1)}}% 印{{((tr.cost_model?.stamp_duty ?? 0.0005)*100).toFixed(2)}}%</span></div>
-                <div><span style="color:var(--c-text-faint)">止损/止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.stop_loss ? (tr.risk_management.stop_loss*100).toFixed(0)+'%' : '—'}} / {{tr.risk_management?.take_profit ? (tr.risk_management.take_profit*100).toFixed(0)+'%' : '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">移动止盈: </span><span style="color:var(--c-text)">{{tr.risk_management?.trailing_retracement ? (tr.risk_management.trailing_retracement*100).toFixed(0)+'%' : '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">仓位上限: </span><span style="color:var(--c-text)">{{tr.position_sizing?.max_single_position ? (tr.position_sizing.max_single_position*100).toFixed(0)+'%' : '—'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">大盘择时: </span><span style="color:var(--c-text)">{{tr.market_filter?.require_market_above_ma ? 'MA'+tr.market_filter.market_ma_period+'以上开仓' : '不限'}}</span></div>
-                <div><span style="color:var(--c-text-faint)">成本: </span><span style="color:var(--c-text)">佣{{((tr.cost_model?.commission_rate ?? 0.0015)*100).toFixed(2)}}% 滑{{((tr.cost_model?.slippage_rate ?? 0.001)*100).toFixed(1)}}% 印{{((tr.cost_model?.stamp_duty ?? 0.0005)*100).toFixed(2)}}%</span></div>
-                <div><span style="color:var(--c-text-faint)">执行模型: </span><span style="color:var(--c-text)">{{tr.execution?.price_type || 'next_day_open'}} T+{{tr.execution?.delay_days || 1}}</span></div>
+                <div v-for="row in cfgRows" :key="row[0]"><span style="color:var(--c-text-faint)">{{row[0]}}: </span><span style="color:var(--c-text)">{{row[1]}}</span></div>
               </div>
             </div>
 
@@ -525,7 +514,38 @@ const tabs = [
 ]
 
 const cfg = computed(() => store.selected?.config || {})
-const tr = computed(() => cfg.value.trading_rules || createForm.trading_rules || {})
+// 配置详情行：全部取自 config 真实出处（risk/signal/regime/成本键），
+// 训练回测与纸面链路实际读的就是这些键；旧 trading_rules.risk_management 已无人写入，弃用
+const cfgRows = computed(() => {
+  const c = cfg.value
+  const risk = c.risk || {}
+  const sig = c.signal || {}
+  const reg = c.regime || {}
+  const trail = risk.trailing_retracement || 0
+  const stop = risk.stop_loss_pct ?? 8
+  const feats = (c.feature_names || c.features) || []
+  const trigger = c.ml_enabled
+    ? (sig.threshold_mode === 'quantile'
+        ? `预测分位 top${((sig.buy_top_pct ?? 0.05) * 100).toFixed(0)}%`
+        : `预测 ≥ ${((sig.ml_confidence_threshold ?? 0.5) * 100).toFixed(2)}%`)
+    : '规则评分（BOLL/RSI/MACD）'
+  return [
+    ['特征', feats.length ? feats.slice(0, 8).join(', ') + (feats.length > 8 ? '...' : '') : '—'],
+    ['数据范围', (c.train_start || '—') + ' ~ 前天（自动60/20/20切分）'],
+    ['Optuna轮数', c.optuna_trials || 50],
+    ['初始资金', (c.initial_cash || 1000000).toLocaleString() + '元'],
+    ['最大持仓', (c.max_positions || 5) + '只'],
+    ['成本', `佣${((c.commission ?? 0.00025) * 100).toFixed(3)}% 滑${((c.slippage ?? 0.001) * 100).toFixed(1)}% 印${((c.stamp_tax ?? 0.001) * 100).toFixed(1)}%`],
+    ['止损', stop + '%'],
+    ['止盈', trail > 0 ? '关闭（移动止盈接管）' : (stop * 2) + '%'],
+    ['移动止盈', trail > 0 ? (trail * 100).toFixed(0) + '%' : '关闭'],
+    ['持有到期', (risk.signal_timeout_days ?? 20) + '个交易日'],
+    ['买入触发', trigger],
+    ['大盘择时', reg.enabled ? `沪深300<MA${reg.ma_window ?? 20}空仓（${reg.max_skip_days ?? 2}天后放行）` : '不限'],
+    ['组合闸门', (c.portfolio_gate?.dd ?? 0) > 0 ? `组合回撤${(c.portfolio_gate.dd * 100).toFixed(0)}%停止开仓` : '关闭'],
+    ['执行', '信号日收盘撮合 · 卖出T+1'],
+  ]
+})
 const basicMetrics = computed(() => {
   const s = store.selected
   if (!s) return []
