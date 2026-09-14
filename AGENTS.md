@@ -75,6 +75,7 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `feature_compute.py` — KEPL→pandas 特征计算引擎（lookback 扩展、COPY 流式写入、截面函数）
   - `eval_version.py` — 对**已训练**模型重跑评估（不重训），覆盖 backtest_records / backtest_daily_records / model_versions 指标；改引擎口径或修数据后想拿干净数字就用它，不必等 40 分钟重训
   - `repair_zero_prices.py` — 存量零价停牌行修复（沿用上一收盘；默认试运行，`--apply` 执行）
+  - `repair_adj_factor.py` — 复权因子一致性自愈（tushare 回溯性重定基 → 半修正窗口造成跨界假跳变；`--check` 体检、`--apply` 重写 close_hfq、`--apply --features` 连特征重算）。日常由 DAG 节点 `factor_heal` 自动跑（kline 之后、feature_compute 之前）
   - `cron_scheduler.py` — cron 定时触发（last_run_at 幂等，60s 扫描）
   - `daily_crawl.sh` — 触发 dag_flows 已发布流程（不再直接调用采集）
 
@@ -99,6 +100,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
                                       │
                     DAG flows 动态流程（dag_flows 表编排）
                       ├─ kline/index/etf/fund/stock_master（tushare 主源）
+                      ├─ factor_heal（复权因子一致性自愈：假跳变检测→重写 close_hfq→重算污染窗特征）
                       ├─ Baostock 补充器（ROE/ETF复权，补数场景分批）
                       ├─ treemap/stats/completeness/entity_stats（统计表缓存）
                       ├─ feature_compute（KEPL → feature_values）
