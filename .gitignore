@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
 dist/
 build/
 venv/
@@ -37,15 +38,12 @@ logs/
 .DS_Store
 Thumbs.db
 
-# 项目配置
+# 项目配置（本地工具会话）
 .claude/
+.zcode/
 
 # Docker
 docker-compose.override.yml
-
-# 环境配置（含密码）
-.env
-.env.prod
 
 # Git
 *.patch
@@ -61,3 +59,8 @@ data/
 
 # 运行时进度（防 a158 重跑标记，勿入库）
 .a158_full_progress.json
+
+# 数据文件兜底（防散落到 data/ 之外：库备份/模型产物/内存转储）
+*.sql.gz
+*.pkl
+*.dump
