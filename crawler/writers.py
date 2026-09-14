@@ -217,6 +217,16 @@ def batch_upsert_index_kline(db, rows: List[IndexKlineRow], batch_size: int = 20
     if not rows:
         return 0
 
+    # 与个股同一守卫：非正收盘价丢弃（指数表零价行会污染基准与完整度口径）
+    bad = [r for r in rows if not (r.close is not None and r.close > 0)]
+    if bad:
+        logger.warning(f"[writers] 指数丢弃 {len(bad)} 行非正收盘价（如 {bad[0].index_code} "
+                       f"{bad[0].trade_date} close={bad[0].close}）")
+        bad_ids = {id(r) for r in bad}
+        rows = [r for r in rows if id(r) not in bad_ids]
+    if not rows:
+        return 0
+
     _fill_index_names(db, rows)
 
     total = 0

@@ -49,9 +49,35 @@ FROM d WHERE h_prev > 0 AND c_prev > 0 AND trade_date - pd <= 5
 # 特征污染窗：边界后 60 个交易日（滚动窗口最长 60d）≈ 90 自然日
 _FEATURE_WINDOW_DAYS = 90
 
+# 每日自愈用的近期检测：只扫最近若干日，用 LATERAL 走 (stock_code, trade_date) 索引
+# 逐行取前收盘，避免全表窗口排序（全量 detect() 留给人工审计）
+_RECENT_SQL = """
+SELECT r.stock_code, r.trade_date
+FROM daily_quote r
+JOIN LATERAL (
+    SELECT p.close, p.close_hfq, p.trade_date AS pd
+    FROM daily_quote p
+    WHERE p.stock_code = r.stock_code AND p.trade_date < r.trade_date
+      AND p.close > 0 AND p.close_hfq > 0
+    ORDER BY p.trade_date DESC LIMIT 1
+) p ON true
+WHERE r.trade_date >= :since AND r.close > 0 AND r.close_hfq > 0
+  AND r.stock_code ~ '^(60|68|00|30)'
+  AND r.trade_date - p.pd <= 10
+  AND abs(r.close_hfq / p.close_hfq - 1) > 0.25
+  AND abs(r.close / p.close - 1) < 0.11
+"""
+
 
 def code_to_exchange(code: str) -> str:
     return 'SH' if code.startswith(('6', '9', '5')) else 'SZ'
+
+
+def detect_recent(db, days=7):
+    """近期假跳变检测（每日自愈入口）：返回 [(code, boundary_date), ...]。"""
+    since = (date.today() - timedelta(days=days)).isoformat()
+    rows = db.execute(text(_RECENT_SQL), {"since": since}).fetchall()
+    return [(r[0], r[1]) for r in rows]
 
 
 def detect(db, since):
@@ -168,15 +194,61 @@ def recompute_features(db, boundaries):
     return total
 
 
+def check_and_heal(db, days=7, max_codes=200, reserve=500, recompute=True):
+    """每日自愈入口（挂 kline 节点）：近期假跳变 → 重写因子 → 重算污染窗特征。
+
+    因子重写每只股票 1 次 tushare 调用；超出 max_codes 只或配额低于 reserve 时
+    只报不改（避免饿死当日采集链路），剩余部分下次运行继续（检测幂等，已修的不再命中）。
+
+    返回摘要 dict；任何异常都在调用方吞掉，绝不阻断每日流程。
+    """
+    from crawler.adapters.tushare_quota import TushareQuota
+    hits = detect_recent(db, days=days)
+    if not hits:
+        return {'detected': 0}
+
+    by_code = {}
+    for code, boundary in hits:
+        by_code[code] = min(by_code.get(code, boundary), boundary)
+    codes = sorted(by_code)
+    quota_left = TushareQuota.get().remaining()
+    if len(codes) > max_codes or quota_left < reserve + len(codes):
+        logger.warning(f'[heal] 检出 {len(codes)} 只假跳变（配额余 {quota_left}），'
+                       f'超过本次处理上限 {max_codes}/预留 {reserve}，仅告警不自动修')
+        return {'detected': len(codes), 'healed': 0, 'skipped_quota': True}
+
+    changed = apply_fix(db, codes)
+    healed = [c for c, n in changed.items() if n > 0]
+    failed = [c for c, n in changed.items() if n < 0]
+    logger.warning(f'[heal] 因子自愈：检出 {len(codes)} 只，改写 {len(healed)} 只'
+                   f'（{sum(n for n in changed.values() if n > 0):,} 行），失败 {len(failed)} 只')
+    feat_rows = 0
+    if healed and recompute:
+        feat_rows = recompute_features(db, [(c, by_code[c]) for c in healed])
+    return {'detected': len(codes), 'healed': len(healed), 'failed': len(failed),
+            'rows': sum(n for n in changed.values() if n > 0), 'feature_rows': feat_rows,
+            'codes': healed[:20]}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--since', default='2024-01-01', help='检测起点（默认 2024-01-01）')
     ap.add_argument('--apply', action='store_true', help='重写 close_hfq（默认只体检）')
     ap.add_argument('--features', action='store_true', help='--apply 后连特征一起重算')
+    ap.add_argument('--check', action='store_true', help='只跑每日自愈检测（最近 7 日），不改数据')
     args = ap.parse_args()
 
     db = get_sync_db()
     try:
+        if args.check:
+            hits = detect_recent(db, days=7)
+            if not hits:
+                print('近期无假跳变')
+            else:
+                print(f'近期检出 {len(hits)} 行 / {len(set(c for c, _ in hits))} 只：')
+                for c, d in hits[:20]:
+                    print(f'  {c} {d}')
+            return
         bd = detect(db, args.since)
         if bd.empty:
             print('无需修复')
