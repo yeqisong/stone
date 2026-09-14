@@ -4308,8 +4308,37 @@ def dag_task_paper_portfolio_all(trade_date=None, **kw):
     return total
 
 
+def dag_task_backup_qiniu(trade_date=None, **kw):
+    """DAG 节点：数据库全量备份 → 七牛云 Kodo（restic 增量去重上传）。
+
+    调 scripts/backup_qiniu.sh（pg_dump -Fc 全量 + restic 内容分块去重上传）。
+    幂等性：脚本 flock 防并发重叠、暂存文件成功后原子替换、restic 快照不可变，
+    任意重跑安全；全量快照自包含，某天流程失败无需回补——下一天的成功快照
+    已覆盖全部数据，仅当天的还原点缺失。未配置 ~/.config/stone-backup/qiniu.env
+    时脚本自动跳过并视为成功（新环境不阻塞流程）。"""
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('backup_qiniu')
+    write_node_log(log_id=log_id, status='running', detail='pg_dump 全量导出 + restic 上传…')
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backup_qiniu.sh')
+    def _run():
+        import subprocess
+        r = subprocess.run(['bash', script], capture_output=True, text=True, timeout=8 * 3600)
+        out = (r.stdout or '') + (r.stderr or '')
+        if r.returncode != 0:
+            raise RuntimeError('backup_qiniu.sh 失败: ' + out[-400:])
+        return {'skipped': '跳过' in out, 'tail': out[-300:]}
+    try:
+        r = _with_hb(log_id, _rid(kw), _run)
+        detail = '备份跳过（未配置 ~/.config/stone-backup/qiniu.env）' if r.get('skipped') else '已上传最新全量快照'
+        write_node_log(log_id=log_id, status='success', detail=detail)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e))
+        raise
+
+
 NODE_FN_MAP = {
     'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
+    'backup_qiniu':      dag_task_backup_qiniu,
     'kline':              dag_task_kline,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
