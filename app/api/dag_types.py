@@ -209,6 +209,12 @@ NODE_SUB_STEPS = {
         {'name': '拉取 daily_basic', 'desc': 'tushare daily_basic 批量100只'},
         {'name': 'UPSERT stock_fundamentals', 'desc': '按 stock_code+trade_date 去重'},
     ],
+    'backup_qiniu': [
+        {'name': '护栏与互斥', 'desc': 'flock 防并发重叠 + 检查暂存盘剩余空间'},
+        {'name': 'pg_dump 全量导出', 'desc': 'docker exec pg_dump -Fc 一致性快照（不停库）'},
+        {'name': 'restic 增量上传', 'desc': '内容分块去重，只传变化块到七牛 Kodo'},
+        {'name': '保留策略', 'desc': '每周日 forget --prune 保留最近 30 个每日快照'},
+    ],
 }
 
 

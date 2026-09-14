@@ -511,7 +511,8 @@ INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
     ('model_signal', 'feature_compute', '模型信号', 13),
     ('model_health', 'model_signal', '模型健康', 14),
     ('feature_compute', 'kline', '特征计算', 15),
-    ('feature_backfill', '', '特征补数', 16)
+    ('feature_backfill', '', '特征补数', 16),
+    ('backup_qiniu', '', '☁️ 云备份', 94)
 ON CONFLICT (node_name) DO NOTHING;
 """
 
