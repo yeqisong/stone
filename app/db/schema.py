@@ -1149,6 +1149,23 @@ def init_db(sync_session) -> None:
     except Exception:
         sync_session.rollback()
 
+    # 迁移：因子一致性自愈节点（2026-09-14）——tushare 回溯性重定基 adj_factor
+    # 会在半修正窗口拉数时造成跨界假跳变，静默污染标签/IC/回测，故每日自愈
+    try:
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('factor_heal', 'kline', '因子一致性自愈', 3)
+            ON CONFLICT (node_name) DO UPDATE SET deps='kline', label='因子一致性自愈', sort_order=3
+        """))
+        # feature_compute 需等自愈结束：否则两者并发写 feature_values（自愈按代码 DELETE+COPY）
+        sync_session.execute(text("""
+            UPDATE dag_config SET deps = deps || ',factor_heal'
+            WHERE node_name='feature_compute' AND deps NOT LIKE '%factor_heal%'
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
     # 迁移：entity_stats 表 + dag_config 节点（v2.8 entity_stats 增量）
     try:
         sync_session.execute(text("""

@@ -15,6 +15,12 @@ NODE_SUB_STEPS = {
         {'name': '拉取行情', 'desc': 'tushare/baostock 下载日K线'},
         {'name': '写入 daily_quote', 'desc': '批量 INSERT ... ON CONFLICT UPDATE'},
     ],
+    'factor_heal': [
+        {'name': '近 7 日假跳变检测', 'desc': '后复权收益越界而原始价正常（真除权时原始价会同步下移）'},
+        {'name': '按代码拉官方因子', 'desc': 'tushare adj_factor(ts_code) 全历史，1 配额/只'},
+        {'name': '重写 close_hfq', 'desc': 'close × 官方因子，消除半修正窗口的跨界跳变'},
+        {'name': '重算污染窗特征', 'desc': '受影响代码 × [边界, +90 天] 全部启用特征（DELETE 带代码过滤）'},
+    ],
     'index': [
         {'name': '拉取指数K线', 'desc': '从上证/深证/创业板等指数源下载日K线'},
         {'name': '写入 index_daily_quote', 'desc': '批量写入指数行情表'},

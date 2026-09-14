@@ -493,24 +493,8 @@ def dag_task_kline(trade_date=None, **kw):
         db = get_sync_db()
         rows = source.fetch_stock_kline([], td, td)
         saved = batch_upsert_kline(db, rows)
-        # 因子一致性自愈：tushare 会回溯性重定基 adj_factor 且分批落地，半修正窗口拉数
-        # 会造成跨界假跳变，静默污染标签/IC/回测（2026-07-01 批次制造过 +19.5% 假收益）。
-        # 写在采集后立即做：此刻配额基本未动，当天即可自愈而非两个月后被人工发现。
-        heal_note = ''
-        try:
-            from scripts.repair_adj_factor import check_and_heal
-            h = check_and_heal(db, days=7)
-            if h.get('detected'):
-                heal_note = (f" | 因子自愈: 检出{h['detected']}只 改写{h.get('healed', 0)}只"
-                             f" 特征{h.get('feature_rows', 0):,}行")
-                if h.get('skipped_quota'):
-                    heal_note += '（超限/配额不足未自动修，需人工跑 repair_adj_factor.py）'
-                logger.warning(f'[kline] 因子一致性自愈{heal_note}')
-        except Exception as e:
-            heal_note = f' | 因子自愈跳过({str(e)[:60]})'
-            logger.warning(f'[kline] 因子自愈失败（不影响采集）: {e}')
         db.close()
-        return {'rows': saved, '_source': source.name, '_heal': heal_note}
+        return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
@@ -519,8 +503,7 @@ def dag_task_kline(trade_date=None, **kw):
         if fatal:
             write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
         else:
-            write_node_log(log_id=log_id, status='success', rows=rows,
-                           detail=f'完成 {rows} 行 (来源:{src}){r.get("_heal", "")}')
+            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 行 (来源:{src})')
         return r
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -3906,6 +3889,64 @@ def dag_task_analyze(trade_date=None, **kw):
         raise
 
 
+def dag_task_factor_heal(trade_date=None, **kw):
+    """DAG 节点：复权因子一致性自愈（tushare 半修正快照 → 假跳变 → 静默污染）。
+
+    tushare 会**回溯性重定基** adj_factor 且分批落地：采集恰逢半修正窗口时，边界前
+    存旧基准、边界后存新基准，跨界产生 ×1.2~×3 假后复权跳变（原始价不动）。
+    2026-07-01 批次有 911 只，曾在回测里制造单日 +19.5% 假收益并触发假止损。
+
+    流程：近 7 日检测（hfq 收益越界而原始价正常）→ 按代码拉官方当前因子重写
+    close_hfq → 重算污染窗 [边界, +90 天] 特征。跑在 kline 之后（配额基本未动）、
+    feature_compute 之前（避免两边并发写 feature_values）。
+
+    **设计上不阻断流程**：这是数据卫生步骤，不是当日数据生产步骤；异常只记录并
+    在节点 detail 里可见，不让下游因为一次自愈失败而整条跳过。超限/配额不足时
+    只告警不改（剩余部分下次运行继续，检测幂等）。
+    """
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('factor_heal')
+    write_node_log(log_id=log_id, status='running', detail='检测因子一致性')
+
+    def _run():
+        from app.db.connection import get_sync_db
+        from scripts.repair_adj_factor import check_and_heal
+        db = get_sync_db()
+
+        def _hb(done, total, note):
+            update_node_progress(log_id=log_id, rows=done, detail=f'因子自愈 {done}/{total}: {note}')
+
+        try:
+            h = check_and_heal(db, days=7, progress_cb=_hb)
+        finally:
+            db.close()
+        return {'_heal': h}
+
+    try:
+        r = _with_hb(log_id, rid, _run)
+        fatal = r.get('fatal', '')
+        h = r.get('_heal') or {}
+        if fatal:
+            write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
+        elif not h.get('detected'):
+            write_node_log(log_id=log_id, status='success', rows=0, detail='无假跳变，跳过')
+        elif h.get('skipped_quota'):
+            write_node_log(log_id=log_id, status='success', rows=h.get('detected', 0),
+                           detail=f"检出 {h['detected']} 只但超限/配额不足，未自动修"
+                                  f"（人工跑 scripts/repair_adj_factor.py）")
+        else:
+            write_node_log(log_id=log_id, status='success', rows=h.get('rows', 0),
+                           detail=f"自愈完成: 检出{h['detected']}只 改写{h.get('healed', 0)}只"
+                                  f" 特征{h.get('feature_rows', 0):,}行"
+                                  + (f" 失败{h['failed']}只" if h.get('failed') else ''))
+        return r
+    except Exception as e:
+        # 卫生步骤不阻断流程：记日志 + 节点标记失败便于发现，但不 raise
+        logger.warning(f'[factor_heal] 自愈异常（不阻断下游）: {e}')
+        write_node_log(log_id=log_id, status='failed', detail=f'自愈异常: {str(e)[:150]}')
+        return {'rows': 0, '_heal': {'error': str(e)[:200]}}
+
+
 def dag_task_moneyflow(trade_date=None, **kw):
     """DAG 节点：资金流向（tushare moneyflow 全市场，写 stock_moneyflow）。"""
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
@@ -4359,6 +4400,7 @@ NODE_FN_MAP = {
     'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
     'backup_qiniu':      dag_task_backup_qiniu,
     'kline':              dag_task_kline,
+    'factor_heal':        dag_task_factor_heal,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
     'fund':               dag_task_fund,
