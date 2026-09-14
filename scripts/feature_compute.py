@@ -160,12 +160,14 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
 
 # ── 批量写入（参数化）──
 
-def _batch_insert(db, feature_name: str, df: pd.DataFrame):
+def _batch_insert(db, feature_name: str, df: pd.DataFrame, stock_codes=None):
     """将 df[["trade_date","stock_code","_value"]] 批量写入 feature_values。
 
     使用独立的 raw connection + COPY FROM STDIN，自管理 DELETE + COPY + COMMIT。
     COPY 流式写入不构建 SQL，任意行数不 OOM。
     db 参数仅用于获取 engine（不参与事务）。
+    stock_codes: 限定代码集时 DELETE 同步带代码过滤——否则按代码重算会清掉
+    窗口内其它股票的同特征数据（2026-09-12 修复因子污染重算时发现）。
     """
     from io import StringIO
 
@@ -195,10 +197,17 @@ def _batch_insert(db, feature_name: str, df: pd.DataFrame):
     raw_conn = db.get_bind().raw_connection()
     cursor = raw_conn.cursor()
     try:
-        cursor.execute(
-            "DELETE FROM feature_values WHERE feature_name = %s AND trade_date >= %s AND trade_date <= %s",
-            (feature_name, min_date, max_date)
-        )
+        if stock_codes:
+            cursor.execute(
+                "DELETE FROM feature_values WHERE feature_name = %s AND trade_date >= %s AND trade_date <= %s "
+                "AND stock_code = ANY(%s)",
+                (feature_name, min_date, max_date, list(stock_codes))
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM feature_values WHERE feature_name = %s AND trade_date >= %s AND trade_date <= %s",
+                (feature_name, min_date, max_date)
+            )
         cursor.copy_expert(
             "COPY feature_values (feature_name, stock_code, trade_date, value) FROM STDIN WITH CSV",
             buf
@@ -375,7 +384,7 @@ def compute_feature(
                         (df_chunk["trade_date"] <= pd.Timestamp(ce))
                     ]
 
-                    rows = _batch_insert(db, feature_name, df_chunk)
+                    rows = _batch_insert(db, feature_name, df_chunk, stock_codes=stock_codes)
                     total_rows += rows
 
                     if progress_cb:
@@ -411,7 +420,7 @@ def compute_feature(
         if end_date:
             df = df[df["trade_date"] <= pd.Timestamp(end_date)]
 
-        total_rows = _batch_insert(db, feature_name, df)
+        total_rows = _batch_insert(db, feature_name, df, stock_codes=stock_codes)
         db.rollback()
 
         if progress_cb:
