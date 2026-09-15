@@ -2853,6 +2853,176 @@ def pred_score(model, X):
     return model.predict(X)
 
 
+class SeedEnsemble:
+    """多种子平均集成（回归）：predict=成员预测均值、score=均值预测的 r²。
+
+    同一最优超参换 random_state 拟合 N 个成员取均值——单模型的种子噪声被
+    平均掉，val-test 差距中的方差成分收窄。duck-typing 兼容 xgboost 接口，
+    对 pred_score / val_score / 信号链路（pkl 载入）完全透明。
+    注意：**不定义** predict_proba——回归成员没有概率接口，定义了会让
+    pred_score 的 hasattr 探测误走概率分支（XGBRegressor 曾在此炸掉）；
+    分类集成用 ProbaSeedEnsemble。
+    """
+
+    def __init__(self, models):
+        self.models = models
+
+    def predict(self, X):
+        import numpy as np
+        return np.mean([m.predict(X) for m in self.models], axis=0)
+
+    def score(self, X, y):
+        import numpy as np
+        pred = self.predict(X)
+        y = np.asarray(y, dtype=float)
+        ss_res = float(np.sum((y - pred) ** 2))
+        ss_tot = float(np.sum((y - y.mean()) ** 2))
+        return round(1 - ss_res / ss_tot, 4) if ss_tot > 0 else 0.0
+
+
+class ProbaSeedEnsemble(SeedEnsemble):
+    """多种子平均集成（分类）：predict_proba=成员概率均值（pred_score 取 [:,1] 正类概率）。"""
+
+    def predict_proba(self, X):
+        import numpy as np
+        return np.mean([m.predict_proba(X) for m in self.models], axis=0)
+
+
+def seed_ensemble(models):
+    """按成员类型选集成类：全体有 predict_proba 才走概率版。"""
+    if all(hasattr(m, 'predict_proba') for m in models):
+        return ProbaSeedEnsemble(models)
+    return SeedEnsemble(models)
+
+
+def cross_sectional_rank_ic(pred, target, dates):
+    """逐日截面 Spearman 秩相关均值（RankIC）——模型侧纯度量，不含成交/组合。
+
+    与组合夏普差距解耦的原因：2026-09-15 实测 v15.0 出现 test RankIC 最高
+    （20d +0.086）而回测最差（-1.08）的周期——夏普差距主体在环境/成本。
+    向量化实现（组内 rank 后按日期聚合协方差），避免逐日 apply 的性能陷阱。
+    """
+    import numpy as np
+    import pandas as pd
+    t = pd.DataFrame({'d': pd.Series(dates).astype(str).values,
+                      'p': np.asarray(pred, dtype=float),
+                      'r': np.asarray(target, dtype=float)}).dropna()
+    if len(t) < 10:
+        return 0.0
+    t['pr'] = t.groupby('d')['p'].rank()
+    t['rr'] = t.groupby('d')['r'].rank()
+    g = t.groupby('d')
+    n = g['pr'].count()
+    mp = g['pr'].transform('mean')
+    mr = g['rr'].transform('mean')
+    cov = ((t['pr'] - mp) * (t['rr'] - mr)).groupby(t['d']).sum() / (n - 1).clip(lower=1)
+    sp = g['pr'].std()
+    sr = g['rr'].std()
+    ic = (cov / (sp * sr).replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).dropna()
+    return round(float(ic.mean()), 4) if len(ic) else 0.0
+
+
+def benchmark_window_stats(db, windows, index_code='000300'):
+    """各时间窗基准（默认沪深300）区间收益与年化——差距分解的环境成分。
+
+    windows: {name: (start, end)}；返回 {name: {'days','total_return','annual'}}。
+    2026-09-15 实测：v15 三窗基准年化 train +0.9% / val +37.2% / test -8.1%，
+    val-test 夏普差距的大头是环境切换而非模型退化。
+    """
+    from sqlalchemy import text
+    out = {}
+    for name, (s, e) in windows.items():
+        rows = db.execute(text(
+            "SELECT close FROM index_daily_quote WHERE index_code=:c AND trade_date BETWEEN :s AND :e"
+            " AND close IS NOT NULL ORDER BY trade_date"),
+            {"c": index_code, "s": s, "e": e}).fetchall()
+        if len(rows) >= 2 and float(rows[0][0]) > 0:
+            ret = float(rows[-1][0]) / float(rows[0][0]) - 1
+            out[name] = {'days': len(rows), 'total_return': round(ret, 4),
+                         'annual': round((1 + ret) ** (252 / len(rows)) - 1, 4)}
+        else:
+            out[name] = {'days': len(rows), 'total_return': 0.0, 'annual': 0.0}
+    return out
+
+
+def compute_gap_decomposition(val_t0, test_t0, test_t1=None, val_t1=None,
+                              rank_ic=None, regime=None):
+    """val-test 夏普差距三分解：执行口径 / 市场环境 / 模型排序力。
+
+    背景（2026-09-15 v15.0 实测）：Val-Test=2.50 里模型退化只占小头——10d
+    差距在 T+1 口径下消失（1.82→-0.27），train 段回测反而是最差窗口（平市
+    +成本），RankIC val≈test 无退化。单一 gap 数字无法回答「该改模型还是该
+    改口径」，此函数把三块拆开供评估报告/UI 呈现。
+
+    Args:
+        val_t0/test_t0: {label: bt dict}（T+0 信号日收盘成交）
+        val_t1/test_t1: 同结构（T+1 次日收盘成交，可空）
+        rank_ic: {label: {'train','val','test'}}（cross_sectional_rank_ic 产出，可空）
+        regime: benchmark_window_stats 产出（可空）
+    """
+    import numpy as np
+    labels = [l for l in ('5d', '10d', '20d') if l in (test_t0 or {})]
+
+    def _ms(d):
+        if not d:
+            return None
+        xs = [d[l]['sharpe'] for l in labels if l in d and d[l].get('sharpe') is not None]
+        return round(float(np.mean(xs)), 4) if xs else None
+
+    def _g(a, b):
+        return round(a - b, 4) if (a is not None and b is not None) else None
+
+    val_s, test_s = _ms(val_t0), _ms(test_t0)
+    val1_s, test1_s = _ms(val_t1), _ms(test_t1)
+    per_label = []
+    for l in labels:
+        g0 = _g((val_t0 or {}).get(l, {}).get('sharpe'), (test_t0 or {}).get(l, {}).get('sharpe'))
+        g1 = _g((val_t1 or {}).get(l, {}).get('sharpe'), (test_t1 or {}).get(l, {}).get('sharpe'))
+        ic = (rank_ic or {}).get(l, {})
+        ic_val, ic_test = ic.get('val'), ic.get('test')
+        # 结论归因：T+1 下差距收敛 → 执行口径伪影；RankIC 平移 → 环境主导；否则模型退化
+        if g1 is not None and g0 is not None and g1 < max(0.5, g0 * 0.3):
+            cause = '执行口径'
+        elif ic_val is not None and ic_test is not None and abs(ic_val - ic_test) < 0.015:
+            cause = '环境主导'
+        else:
+            cause = '模型退化'
+        per_label.append({'label': l, 'gap_t0': g0, 'gap_t1': g1,
+                          'ic_val': ic_val, 'ic_test': ic_test, 'cause': cause})
+    return {
+        'sharpe_gap_val_test_t0': _g(val_s, test_s),
+        'sharpe_gap_val_test_t1': _g(val1_s, test1_s),
+        'exec_caliber': {
+            't0': {l: (test_t0 or {}).get(l, {}).get('sharpe') for l in labels},
+            't1': {l: (test_t1 or {}).get(l, {}).get('sharpe') for l in labels} if test_t1 else None,
+        },
+        'exec_optimism': {'val': _g(val_s, val1_s), 'test': _g(test_s, test1_s)},
+        'regime': regime or {},
+        'rank_ic': rank_ic or {},
+        'per_label': per_label,
+    }
+
+
+def _purged_time_folds(dates_sorted, folds=4, embargo=25):
+    """时间序连续折 + 折前 purge/embargo（按交易日计）。返回 [(fold集, train集)]。
+
+    折 k 的训练侧剔除折开始前 embargo 个交易日——标签最长前瞻 20 交易日，
+    不剔除则「右边界样本的标签窗口伸进折内」，折外得分被未来信息污染
+    （purged CV 的标准做法，López de Prado 2018）。纯函数供单测。
+    """
+    ds = list(dates_sorted)
+    n = len(ds)
+    folds = max(2, min(int(folds), n // 4))
+    edges = [i * n // folds for i in range(folds + 1)]
+    out = []
+    for k in range(folds):
+        lo, hi = edges[k], edges[k + 1]
+        fold = set(ds[lo:hi])
+        train = set(ds[:max(0, lo - int(embargo))]) | set(ds[hi:])
+        out.append((fold, train))
+    return out
+
+
 def build_targets(db, df, cfg):
     """构建 5/10/20 日前瞻标签（winsorize + label_transform）。
 
@@ -3552,6 +3722,30 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         val_volume = df[val_mask]['volume'].values
         TARGETS = [('5d','target_5d',5), ('10d','target_10d',10), ('20d','target_20d',20)]
 
+        # ── 超参选择协议（v3.9.2 可配）──
+        # purged CV：折外均值替代单 val 得分——消除「N 组在 val 上选最优」的赢者
+        # 诅咒（v13/v16 同协议旁证约 0.3-0.5 的 gap 通胀）；启用后 val 完全不参与
+        # 选择，成为诚实 OOS。折按交易日连续切，折前 embargo ≥ 标签最长前瞻。
+        _cv_cfg = cfg.get('selection_cv') or {}
+        _use_cv = bool(_cv_cfg.get('enabled')) and int(_cv_cfg.get('folds', 4)) >= 2
+        _cv_folds = []
+        _tr_dates_all = df[train_mask]['trade_date'].values
+        train_n = int(len(X_train) * 0.9)
+        X_tr_h, X_es_h = X_train[:train_n], X_train[train_n:]
+        if _use_cv:
+            _fold_pairs = _purged_time_folds(sorted(set(_tr_dates_all)),
+                                             folds=_cv_cfg.get('folds', 4),
+                                             embargo=_cv_cfg.get('embargo_days', 25))
+            for fold_dates, tr_dates in _fold_pairs:
+                _cv_folds.append((np.where(np.isin(_tr_dates_all, list(fold_dates)))[0],
+                                  np.where(np.isin(_tr_dates_all, list(tr_dates)))[0]))
+            if n_trials > 30:
+                logger.warning(f'[train] purged CV ×{len(_cv_folds)} 折已启用，{n_trials} trials '
+                               f'拟合次数约 ×{len(_cv_folds)}，建议 optuna_trials ≤ 20')
+            update_node_progress(log_id=log_id, rows=1,
+                                 detail=f'超参选择：purged CV {len(_cv_folds)} 折'
+                                        f'（embargo {_cv_cfg.get("embargo_days", 25)} 日），val 不参与选择')
+
         try:
             import optuna
             from optuna.samplers import TPESampler
@@ -3586,12 +3780,25 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 total_r2 = 0
                 _tr_dates = df[train_mask]['trade_date'].values
                 for label, tname, hdays in TARGETS:
-                    if train_objective == 'pairwise':
-                        model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates)
+                    if _use_cv:
+                        # 折外均值：每折在剔除泄漏窗（折前 embargo 日）的剩余训练数据上
+                        # 拟合、折内打分；模型不在此落——选出最优超参后统一重拟合
+                        y_all = df[train_mask][tname].values
+                        fold_r2 = []
+                        for fold_idx, tr_idx in _cv_folds:
+                            # X_train 是 DataFrame（非连续行集必须 .iloc，方括号会变成列查找）
+                            fm = _fit_model(params, X_train.iloc[tr_idx], y_all[tr_idx],
+                                            _tr_dates[tr_idx] if train_objective == 'pairwise' else None)
+                            fold_r2.append(val_score(fm, X_train.iloc[fold_idx], y_all[fold_idx], train_objective))
+                        r2 = float(np.mean(fold_r2))
+                        models[label] = {'model': None, 'r2': r2}
                     else:
-                        model = _fit_model(params, X_tr, Y_tr[tname], None, X_es, Y_es[tname])
-                    r2 = val_score(model, X_val, df[val_mask][tname], train_objective)
-                    models[label] = {'model': model, 'r2': r2}
+                        if train_objective == 'pairwise':
+                            model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates)
+                        else:
+                            model = _fit_model(params, X_tr, Y_tr[tname], None, X_es, Y_es[tname])
+                        r2 = val_score(model, X_val, df[val_mask][tname], train_objective)
+                        models[label] = {'model': model, 'r2': r2}
                     total_r2 += r2
                 avg_r2 = total_r2 / len(TARGETS)
                 trial_records.append({'trial': len(trial_records)+1, 'params': params, 'r2': round(avg_r2, 4)})
@@ -3633,6 +3840,44 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             _abort('训练未产生有效模型（所有 trial 失败或已终止）')
             return 0
 
+        # ── CV 模式：最优超参在完整训练窗统一重拟合（trial 内只拟合折模型）──
+        if _use_cv and best_params_store:
+            update_node_progress(log_id=log_id, rows=3, detail='CV 选出超参，全训练窗重拟合')
+            for label, tname, hdays in TARGETS:
+                if label not in best_params_store:
+                    continue
+                p = dict(best_params_store[label]['params'])
+                if train_objective == 'pairwise':
+                    model = _fit_model(p, X_train, df[train_mask][tname], _tr_dates_all)
+                else:
+                    model = _fit_model(p, X_tr_h, df[train_mask][tname].values[:train_n], None,
+                                       X_es_h, df[train_mask][tname].values[train_n:])
+                best_models[label] = model
+
+        # ── 多种子集成（可选，cfg.ensemble.seeds>1）：同一最优超参 × N 个
+        #    random_state 拟合、预测取均值——单模型种子噪声被平均，val-test
+        #    差距的方差成分收窄。SeedEnsemble 对 pred_score/信号链路透明，
+        #    pkl 仍是一个文件。──
+        _n_seeds = int((cfg.get('ensemble') or {}).get('seeds') or 1)
+        if _n_seeds > 1 and best_models:
+            update_node_progress(log_id=log_id, rows=3, detail=f'种子集成拟合 ×{_n_seeds}')
+            for label, tname, hdays in TARGETS:
+                if label not in best_params_store or label not in best_models:
+                    continue
+                base = dict(best_params_store[label]['params'])
+                members = []
+                for s in range(_n_seeds):
+                    p = {**base, 'random_state': 42 + s}
+                    if train_objective == 'pairwise':
+                        members.append(_fit_model(p, X_train, df[train_mask][tname], _tr_dates_all))
+                    else:
+                        members.append(_fit_model(p, X_tr_h, df[train_mask][tname].values[:train_n],
+                                                  None, X_es_h, df[train_mask][tname].values[train_n:]))
+                best_models[label] = seed_ensemble(members)
+                best_params_store[label]['ensemble_seeds'] = _n_seeds
+                best_params_store[label]['r2'] = val_score(
+                    best_models[label], X_val, df[val_mask][tname], train_objective)
+
         # ── 最终评估：val + test 集回测（val 用于过拟合对比，test 为最终成绩）──
         update_node_progress(log_id=log_id, rows=4, detail='回测评估 (val+test)…')
         test_dates = df[test_mask]['trade_date'].values
@@ -3650,8 +3895,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             update_node_progress(log_id=log_id, rows=4,
                                  detail=f'空仓闸门已启用（指数<{_regime_cfg.get("ma_window", 20)}日线不开新仓，{len(regime_gates)} 个风险日）')
 
-        def _run_backtests(mask):
-            """对给定切分跑全部周期的回测，附带 test R²。"""
+        def _run_backtests(mask, exec_lag=0, with_r2=True):
+            """对给定切分跑全部周期的回测（exec_lag=1 为次日收盘成交口径），附带 test R²。"""
             res = {}
             dates = df[mask]['trade_date'].values
             codes = df[mask]['stock_code'].values
@@ -3669,8 +3914,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    commission=commission, stamp_tax=stamp_tax, slippage=slippage,
                                    limit_up=lups, limit_down=ldowns,
                                    gated_dates=regime_gates, dd_gate=pdd_gate,
-                                   trailing=trail_val)
-                    bt['r2'] = val_score(best_models[label], df[mask][FEATURES].values, df[mask][tname], train_objective)
+                                   trailing=trail_val, exec_lag=exec_lag)
+                    if with_r2:
+                        bt['r2'] = val_score(best_models[label], df[mask][FEATURES].values, df[mask][tname], train_objective)
                     res[label] = bt
             return res
 
@@ -3686,6 +3932,34 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             _abort('训练已终止')
             return 0
         test_results = _run_backtests(test_mask)
+
+        # ── 差距分解（v3.9.2）：T+1 双口径 + RankIC 三窗 + 基准环境 ──
+        # 让 overfit_gap 可回答「多少是口径、多少是环境、多少是模型」——单一
+        # gap 数字曾把 2.50 的测量伪影误读成模型过拟合（2026-09-15 定位）。
+        # cfg.report.exec_lag=false 可关（省 ~2/5 评估时长）。
+        _report_lag = (cfg.get('report') or {}).get('exec_lag', True)
+        test_results_t1 = _run_backtests(test_mask, exec_lag=1, with_r2=False) if _report_lag else None
+        val_results_t1 = _run_backtests(val_mask, exec_lag=1, with_r2=False) if _report_lag else None
+        update_node_progress(log_id=log_id, rows=4, detail='差距分解（RankIC + 环境）…')
+        _rank_ic = {}
+        for label, tname, hdays in TARGETS:
+            if label in best_models:
+                _p_full = pred_score(best_models[label], df[FEATURES].values)
+                _rank_ic[label] = {
+                    'train': cross_sectional_rank_ic(_p_full[train_mask.values], df[train_mask][tname].values, _tr_dates_all),
+                    'val': cross_sectional_rank_ic(_p_full[val_mask.values], df[val_mask][tname].values, df[val_mask]['trade_date'].values),
+                    'test': cross_sectional_rank_ic(_p_full[test_mask.values], df[test_mask][tname].values, df[test_mask]['trade_date'].values),
+                }
+        _bench = benchmark_window_stats(db, {
+            'train': (str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]),
+            'val': (str(train_cut)[:10], str(test_cut)[:10]),
+            'test': (str(test_cut)[:10], str(dates[-1])[:10]),
+        })
+        _gap = compute_gap_decomposition(val_results, test_results, test_results_t1,
+                                         val_results_t1, _rank_ic, _bench)
+        logger.info(f'[train] 差距分解: gap(T+0)={_gap["sharpe_gap_val_test_t0"]} '
+                    f'gap(T+1)={_gap["sharpe_gap_val_test_t1"]} '
+                    + ' '.join(f"{p['label']}:{p['cause']}" for p in _gap['per_label']))
 
         # ── 存储最优模型文件 ──
         update_node_progress(log_id=log_id, rows=5, detail='存储最优模型')
@@ -3780,6 +4054,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             # 口径补齐：成本拖累 + 样本域（评估数字脱离口径没有可比性）
             'cost_total': round(sum(test_results[l].get('total_cost', 0) for l in _labels), 2),
             'cost_pct_avg': round(float(np.mean([test_results[l].get('cost_pct', 0) for l in _labels])), 4) if _labels else 0,
+            # 差距分解（v3.9.2）：口径/环境/模型三成分 + T+1 口径 gap
+            'gap_decomposition': _gap,
+            'overfit_gap_t1': _gap.get('sharpe_gap_val_test_t1'),
             'sample_domain': {
                 'entity': cfg.get('entity', 'stock'),
                 'windows': {'train': [str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]],
