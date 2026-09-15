@@ -213,6 +213,46 @@ const priceChg = ref(null)
 const priceColor = ref('#fff')
 const hoverInfo = ref(null)  // crosshair hover 时动态更新的行情数据
 
+// ── K线组 ↔ PE图 日历窗口联动 ──────────────────────────────────────
+// PE 序列是全历史财报日（跨度远大于 K 线窗口），echarts.connect 的百分比
+// 联动会把两图对到不同日历时段——所以 PE 不进 connect 组，改按「可见日期
+// 区间」双向翻译：主图缩放→日期窗→PE 轴索引→派发 dataZoom（反向亦然）。
+let klineDates = []        // 当前 K 线日期轴（drawCharts 每次刷新）
+let klineMainChart = null  // c1：派发给它一个，connect 组全员同步
+let syncingAx = false      // 派发中标志，切断 事件→派发→事件 回环
+const pctIdx = (arr, pct) => Math.min(arr.length - 1, Math.max(0, Math.round((arr.length - 1) * pct / 100)))
+// 有序日期数组中找 [>=d0 的首索引, <=d1 的末索引]（窗口越界向内夹）
+const dateSpanIdx = (arr, d0, d1) => {
+  let i0 = 0, i1 = arr.length - 1
+  while (i0 < arr.length && arr[i0] < d0) i0++
+  i0 = Math.min(i0, arr.length - 1)   // 窗口整体在对方数据之后时夹到末位，防 start>end
+  while (i1 > i0 && arr[i1] > d1) i1--
+  return [i0, i1]
+}
+function syncPeFromKline(){
+  const peEl = document.getElementById('c5'); const c5 = peEl && peEl._echart
+  if (!c5 || !klineDates.length || !peData.value.length) return
+  const dz = klineMainChart?.getOption()?.dataZoom?.[0]
+  if (!dz || peData.value.length < 2) return
+  const [a, b] = [pctIdx(klineDates, dz.start ?? 0), pctIdx(klineDates, dz.end ?? 100)]
+  const [i0, i1] = dateSpanIdx(peData.value.map(d => d.date), klineDates[a], klineDates[b])
+  const n = peData.value.length
+  syncingAx = true
+  try { c5.dispatchAction({ type: 'dataZoom', start: i0 / (n - 1) * 100, end: i1 / (n - 1) * 100 }) } finally { setTimeout(() => { syncingAx = false }) }
+}
+function syncKlineFromPe(){
+  const peEl = document.getElementById('c5'); const c5 = peEl && peEl._echart
+  if (!c5 || !klineMainChart || !klineDates.length || !peData.value.length) return
+  const dz = c5.getOption()?.dataZoom?.[0]
+  if (!dz || klineDates.length < 2) return
+  const peDates = peData.value.map(d => d.date)
+  const [a, b] = [pctIdx(peDates, dz.start ?? 0), pctIdx(peDates, dz.end ?? 100)]
+  const [i0, i1] = dateSpanIdx(klineDates, peDates[a], peDates[b])
+  const n = klineDates.length
+  syncingAx = true
+  try { klineMainChart.dispatchAction({ type: 'dataZoom', start: i0 / (n - 1) * 100, end: i1 / (n - 1) * 100 }) } finally { setTimeout(() => { syncingAx = false }) }
+}
+
 function calcPriceChange(kd){
   if(!kd||!kd.kline||kd.kline.length<2) { priceChg.value=null; priceColor.value='#fff'; return }
   const kl = kd.kline
@@ -398,10 +438,13 @@ function drawCharts(kd){
     })
     c1.on('mouseout', ()=>{ hoverInfo.value = null })
   }
-  // 均线图（MA5/10/20/60，与 K 线联动 zoom/十字线）
+  // 均线图（MA5~MA180，与 K 线联动 zoom/十字线；图例可点选显隐——七条线
+  // 仅靠颜色难辨，2026-09-15 用户反馈补）
   const c6 = make('c6', {
     tooltip: tt,
-    grid:{left:'8%',right:'3%',top:18,bottom:30},
+    legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
+            textStyle:{fontSize:9, color:'#9ca3af'}},
+    grid:{left:'8%',right:'3%',top:26,bottom:30},
     xAxis: { ...xA, axisLabel: { show: true, fontSize: 9, interval: 'auto' } },
     yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
@@ -417,6 +460,21 @@ function drawCharts(kd){
   })
   const charts = [c1,c2,c3,c4,c6].filter(Boolean)
   if(charts.length){charts.forEach(c=>c.group='s');echarts.connect('s')}
+  // K线组 ↔ PE图 日历联动（正向）：监听任一成员缩放（connect 会同步到 c1 的
+  // dataZoom），节流后翻译日期窗给 PE 图；重绘（range/period/复权切换）后立即对齐一次
+  klineDates = dates
+  klineMainChart = c1 || charts[0] || null
+  if (klineMainChart) {
+    let _axLast = 0
+    klineMainChart.off('datazoom')   // drawCharts 每次重绘都会走到，避免处理器累积
+    klineMainChart.on('datazoom', () => {
+      const now = Date.now()
+      if (syncingAx || now - _axLast < 120) return
+      _axLast = now
+      syncPeFromKline()
+    })
+    syncPeFromKline()
+  }
 }
 
 function drawPeChart(){
@@ -438,7 +496,8 @@ function drawPeChart(){
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
     ],
     dataZoom:[
-      // PE 图时间轴与 K 线不同（财报日），不参与联动组，滚轮独立缩放
+      // 滚轮独立缩放保留；窗口与 K 线组经「日历翻译」双向联动（见 syncPe/syncKline），
+      // 不直接进 connect 组——两轴日期集不同，百分比联动会对到不同日历时段
       {type:'inside', zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
       {type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
       borderColor:'var(--c-input-bg)',backgroundColor:'var(--c-card-bg)',
@@ -452,6 +511,10 @@ function drawPeChart(){
       {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none',smooth:true}
     ]
   })
+  // 反向联动：拖 PE 滑块 → 日历窗翻译 → K 线组；绘制完成即按当前 K 线窗口对齐一次
+  c5.off('datazoom')
+  c5.on('datazoom', () => { if (!syncingAx) syncKlineFromPe() })
+  syncPeFromKline()
 }
 
 async function reloadChart(){
