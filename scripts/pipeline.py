@@ -4853,7 +4853,7 @@ def dag_task_paper_portfolio_all(trade_date=None, **kw):
 def dag_task_backup_qiniu(trade_date=None, **kw):
     """DAG 节点：数据库全量备份 → 七牛云 Kodo（restic 增量去重上传）。
 
-    调 scripts/backup_qiniu.sh（pg_dump -Fc 全量 + restic 内容分块去重上传）。
+    调 scripts/backup_qiniu.sh（pg_dump -Fd 目录格式全量 + restic 内容分块去重上传）。
     幂等性：脚本 flock 防并发重叠、暂存文件成功后原子替换、restic 快照不可变，
     任意重跑安全；全量快照自包含，某天流程失败无需回补——下一天的成功快照
     已覆盖全部数据，仅当天的还原点缺失。未配置 ~/.config/stone-backup/qiniu.env
