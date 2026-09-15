@@ -95,6 +95,12 @@ class CreateModel(BaseModel):
     # 风险控制
     stop_loss_pct: float = 8.0
     signal_timeout_days: int = 20
+    # 训练协议（v3.9.2 反过拟合，默认开——不依赖人记）：purged CV 折外选择超参
+    # （val 退出选择成为诚实 OOS）+ 多种子集成降方差。旧模型 config 无键时
+    # 训练端按关闭兼容（cfg.get 判空），新建/克隆一律默认带新协议。
+    selection_cv_enabled: bool = True
+    cv_folds: int = 4
+    ensemble_seeds: int = 3
 
 
 @router.get("/v1/models")
@@ -572,6 +578,12 @@ def create_model(body: CreateModel, user: str = Depends(get_current_user)):
                 "stop_loss_pct": body.stop_loss_pct,
                 "signal_timeout_days": body.signal_timeout_days,
             },
+            "selection_cv": {
+                "enabled": body.selection_cv_enabled,
+                "folds": body.cv_folds,
+                "embargo_days": 25,   # ≥ 标签最长前瞻 20 交易日，防折边界泄漏
+            },
+            "ensemble": {"seeds": body.ensemble_seeds},
         }
         db.execute(text("""
             INSERT INTO model_versions (version, model_name, status, config)

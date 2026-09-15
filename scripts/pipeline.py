@@ -2895,6 +2895,19 @@ def seed_ensemble(models):
     return SeedEnsemble(models)
 
 
+def with_training_protocol_defaults(cfg):
+    """补训练协议默认键（purged CV + 多种子集成）——克隆/旧配置升级用。
+
+    只在缺键时补（显式 enabled:false / seeds:1 的选择不被覆盖）。
+    v3.9.2 前的模型 config 无这些键，训练端按关闭兼容；rolling_retrain 克隆
+    ACTIVE 时经此函数带上新协议——「默认用上」靠机制不靠人记。
+    """
+    out = dict(cfg or {})
+    out.setdefault('selection_cv', {'enabled': True, 'folds': 4, 'embargo_days': 25})
+    out.setdefault('ensemble', {'seeds': 3})
+    return out
+
+
 def cross_sectional_rank_ic(pred, target, dates):
     """逐日截面 Spearman 秩相关均值（RankIC）——模型侧纯度量，不含成交/组合。
 
@@ -4359,6 +4372,9 @@ def dag_task_rolling_retrain(trade_date=None, dry_run=False, **kw):
                 cfg_row = db.execute(text(
                     "SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
                 src_cfg = cfg_row[0] if isinstance(cfg_row[0], dict) else _json2.loads(cfg_row[0])
+                # 旧 ACTIVE（v3.9.2 前）无训练协议键 → 补默认（purged CV + 集成），
+                # 滚动重训自动用新协议；显式关闭的配置不被覆盖
+                src_cfg = with_training_protocol_defaults(src_cfg)
                 majors = []
                 for (v,) in db.execute(text("SELECT version FROM model_versions")).fetchall():
                     try:

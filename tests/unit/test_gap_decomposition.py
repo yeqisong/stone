@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from scripts.pipeline import (ProbaSeedEnsemble, SeedEnsemble, _purged_time_folds,
                               compute_gap_decomposition, cross_sectional_rank_ic,
-                              pred_score, seed_ensemble)
+                              pred_score, seed_ensemble,
+                              with_training_protocol_defaults)
 
 
 class TestRankIC(unittest.TestCase):
@@ -140,6 +141,26 @@ class TestGapDecomposition(unittest.TestCase):
         ric = {'5d': {'train': 0.09, 'val': 0.09, 'test': 0.02}}
         g = compute_gap_decomposition(val0, test0, test1, val1, rank_ic=ric)
         self.assertEqual(g['per_label'][0]['cause'], '模型退化')
+
+
+class TestProtocolDefaults(unittest.TestCase):
+    """克隆/旧配置升级：缺键补默认，显式选择不被覆盖。"""
+
+    def test_missing_keys_get_defaults(self):
+        out = with_training_protocol_defaults({'train_start': '2023-01-01'})
+        self.assertEqual(out['selection_cv'], {'enabled': True, 'folds': 4, 'embargo_days': 25})
+        self.assertEqual(out['ensemble'], {'seeds': 3})
+        self.assertEqual(out['train_start'], '2023-01-01')   # 原键不动
+
+    def test_explicit_off_not_overridden(self):
+        out = with_training_protocol_defaults(
+            {'selection_cv': {'enabled': False}, 'ensemble': {'seeds': 1}})
+        self.assertEqual(out['selection_cv'], {'enabled': False})
+        self.assertEqual(out['ensemble'], {'seeds': 1})
+
+    def test_none_and_empty(self):
+        self.assertEqual(with_training_protocol_defaults(None)['ensemble']['seeds'], 3)
+        self.assertTrue(with_training_protocol_defaults({})['selection_cv']['enabled'])
 
 
 class TestPurgedFolds(unittest.TestCase):
