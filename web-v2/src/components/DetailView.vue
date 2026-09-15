@@ -325,12 +325,50 @@ function drawCharts(kd){
       {name:'下轨',type:'line',data:blo,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true}
     ]
   })
+  // 成交量分位线（P20/P50/P80）：基于**当前显示窗口**计算——回答"今天的天量/
+  // 地量在这段行情里处于什么位置"。窗口随 dataZoom（滑块/滚轮/五图联动）变化
+  // 时重算；分位用线性插值（对齐 numpy.percentile），零量日（停牌）剔除。
+  const quantile = (arr, q) => {
+    if (!arr.length) return 0
+    const s = [...arr].sort((a, b) => a - b)
+    const pos = (s.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+  }
+  const volMarkLines = (i0, i1) => {
+    const w = vols.slice(i0, i1 + 1).filter(v => v > 0)
+    const mk = (q, name, color) => {
+      const v = quantile(w, q)
+      return { yAxis: v, label: { formatter: `${name} ${(v / 1e6).toFixed(1)}M`, position: 'insideEndTop', fontSize: 9, color },
+               lineStyle: { color, type: 'dashed', width: 1 } }
+    }
+    return { silent: true, symbol: 'none', animation: false,
+             data: [mk(0.2, 'P20', 'rgba(156,163,175,0.8)'), mk(0.5, 'P50', '#60a5fa'), mk(0.8, 'P80', 'rgba(156,163,175,0.8)')] }
+  }
+  const initI0 = Math.max(0, Math.round((totalDays - 1) * (parseFloat(SHOW) || 0) / 100))
+
   const c2 = make('c2', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
     dataZoom:dz,
-    series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]}}]
+    series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]},
+      markLine: volMarkLines(initI0, totalDays - 1)}]
   })
+  // 缩放跟随：五图 connect 联动时任何一图缩放都会改 c2 的窗口，节流后按可见区间重算
+  if (c2) {
+    let _vqLast = 0
+    c2.on('datazoom', () => {
+      const now = Date.now()
+      if (now - _vqLast < 120) return
+      _vqLast = now
+      try {
+        const d = c2.getOption().dataZoom?.[0]
+        if (!d) return
+        const i0 = Math.max(0, Math.round((totalDays - 1) * (d.start ?? 0) / 100))
+        const i1 = Math.min(totalDays - 1, Math.round((totalDays - 1) * (d.end ?? 100) / 100))
+        c2.setOption({ series: [{ markLine: volMarkLines(i0, i1) }] })
+      } catch (e) { /* 分位线是增强信息，异常静默不影响主图 */ }
+    })
+  }
   const c3 = make('c3', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{splitLine:gl},
