@@ -68,13 +68,16 @@ fi
 
 LATEST="$DUMP_DIR/latest"
 PART="$LATEST.part"
-rm -rf "$PART"
+# latest/latest.part 都是容器内产物（docker exec 默认 root，pg_dump 还把目录建成 0700），
+# 宿主 bnbnyu 对其无写权限——宿主侧 rm/mv 轮换必踩 Permission denied（2026-09-15 实测）。
+# 删除与轮换一律放容器内以 root 执行，宿主只负责读（restic 上传）。
+docker exec "$CONTAINER" rm -rf "$CONT_DIR/latest.part"
 
 log "开始 pg_dump 全量导出（Fd 目录格式 4 并行，容器内直写 bind mount，不停库）..."
 docker exec "$CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" -Fd -j 4 -f "$CONT_DIR/latest.part"
-docker exec "$CONTAINER" chmod -R a+rX "$CONT_DIR/latest.part"
-rm -rf "$LATEST"
-mv "$PART" "$LATEST"
+# a+rwX：读给宿主 restic；写是保险，将来若再有宿主侧清理动作不再被权限卡死
+docker exec "$CONTAINER" chmod -R a+rwX "$CONT_DIR/latest.part"
+docker exec "$CONTAINER" sh -c "rm -rf '$CONT_DIR/latest' && mv '$CONT_DIR/latest.part' '$CONT_DIR/latest'"
 log "导出完成（$(du -sh "$LATEST" | cut -f1)，$(ls "$LATEST" | wc -l) 个文件），开始 restic 上传（逐表去重，只传变化的表）..."
 
 "$RESTIC" backup "$LATEST" --tag db-nightly
