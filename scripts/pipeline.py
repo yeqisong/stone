@@ -4464,13 +4464,40 @@ def _ext_moneyflow(source, db, td):
     from crawler.writers import batch_upsert_moneyflow
     return batch_upsert_moneyflow(db, source.fetch_moneyflow(td))
 
+def _ext_backfill_recent(source, db, td, table, fetch, writer, lookback=20):
+    """盘后晚发布数据的自愈采集：当日拉空则回看近 lookback 个自然日补缺失日。
+
+    背景（2026-09-16 定位）：两融/龙虎榜 tushare 盘后 ~17:30 才发布当日，
+    每日流程 17:00 跑时天天拉空，且从不回捞——margin_detail 从 09-03 起、
+    top_list 从 09-10 起连续空窗。幂等：已有数据的日子直接跳过（0 配额），
+    当日总是尝试（upsert 幂等）；非交易日接口返回空，无害。
+    """
+    from datetime import date as _d, timedelta as _td
+    from sqlalchemy import text as _t
+    try:
+        base = _d.fromisoformat(str(td)[:10])
+    except ValueError:
+        base = _d.today()
+    total = 0
+    for k in range(lookback + 1):
+        d = (base - _td(days=k)).isoformat()
+        if k > 0:
+            if db.execute(_t(f"SELECT 1 FROM {table} WHERE trade_date=:d LIMIT 1"),
+                          {"d": d}).fetchone():
+                continue
+        total += writer(db, fetch(d))
+    return total
+
+
 def _ext_top_list(source, db, td):
     from crawler.writers import batch_upsert_top_list
-    return batch_upsert_top_list(db, source.fetch_top_list(td))
+    return _ext_backfill_recent(source, db, td, 'stock_top_list',
+                                source.fetch_top_list, batch_upsert_top_list)
 
 def _ext_margin_detail(source, db, td):
     from crawler.writers import batch_upsert_margin_detail
-    return batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(td))
+    return _ext_backfill_recent(source, db, td, 'stock_margin_detail',
+                                source.fetch_margin_detail_ext, batch_upsert_margin_detail)
 
 def _ext_moneyflow_hsgt(source, db, td):
     from crawler.writers import batch_upsert_moneyflow_hsgt

@@ -63,14 +63,6 @@
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
-        <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
-          <div :id="'c5'" style="width:100%;height:160px"></div>
-        </div>
-        <div v-if="mfData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
-          <div :id="'c7'" style="width:100%;height:160px"></div>
-        </div>
         <div v-if="benchData.length" style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
           <div :id="'c8'" style="width:100%;height:160px"></div>
@@ -82,6 +74,15 @@
         <div v-if="marginData.length > 2" style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
           <div :id="'c10'" style="width:100%;height:140px"></div>
+        </div>
+        <!-- 带右侧 Y 轴的图统一殿后（PE分位%/资金流累计/ATR%），避免中段双轴观感错乱 -->
+        <div style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
+          <div :id="'c5'" style="width:100%;height:160px"></div>
+        </div>
+        <div v-if="mfData.length" style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
+          <div :id="'c7'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
@@ -116,7 +117,7 @@
           </table>
         </div>
         <div v-if="chipData && chipData.buckets && chipData.buckets.length">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">现价口径</span></h4>
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
           <div v-if="chipData.profit_ratio!=null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px">
             现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#10b981':'#ef4444',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>
@@ -773,8 +774,9 @@ function drawPeChart(){
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
             textStyle:{fontSize:9, color:'#9ca3af'}},
-    grid:{left:'8%',right:'3%',top:26,bottom:50},
-    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30,interval:'auto'},splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
+    grid:{left:'8%',right:'3%',top:26,bottom:30},
+    xAxis:{type:'category',data:peDates,axisLabel:{show:false},
+      axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},axisTick:{show:false}},
     yAxis:[
       {type:'value',name:'PE',splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}

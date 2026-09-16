@@ -637,17 +637,18 @@ def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
     db = get_sync_db()
     try:
         rows = db.execute(text("""
-            SELECT close, close_hfq, volume FROM daily_quote
+            SELECT trade_date, close, close_hfq, volume FROM daily_quote
             WHERE stock_code=:c AND close > 0 AND close_hfq > 0 AND volume > 0
             ORDER BY trade_date DESC LIMIT :days
         """), {"c": code, "days": days}).fetchall()
         rows.reverse()
         if len(rows) < 30:
             return {"buckets": [], "current": None, "profit_ratio": None}
-        last_close, last_hfq = float(rows[-1][0]), float(rows[-1][1])
+        date_from, date_to = str(rows[0][0])[:10], str(rows[-1][0])[:10]
+        last_close, last_hfq = float(rows[-1][1]), float(rows[-1][2])
         scale = last_close / last_hfq
-        prices = [float(r[1]) * scale for r in rows]
-        vols = [float(r[2]) for r in rows]
+        prices = [float(r[2]) * scale for r in rows]
+        vols = [float(r[3]) for r in rows]
         lo, hi = min(prices), max(prices)
         width = (hi - lo) / buckets or 1.0
         agg = [0.0] * buckets
@@ -661,6 +662,8 @@ def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
                         for i in range(buckets)],
             "current": round(last_close, 2),
             "profit_ratio": round(below / sum(vols), 4),
+            "date_from": date_from,
+            "date_to": date_to,
         }
     finally:
         db.close()
