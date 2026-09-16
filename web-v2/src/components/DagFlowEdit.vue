@@ -433,6 +433,14 @@ async function doValidate() {
   catch(e) { validation.value = { ok: false, errors: [e.response?.data?.detail || e.message] } }
 }
 function doSave() {
+  // 新建流程必须先命名：名字输入框在侧栏「流程属性」（点 cron 节点弹出），
+  // 空名直接提交会被后端 ≥2 字符校验打回（曾让用户对着 422 一头雾水）
+  if (!selectedFlow.value && (!flowName.value || flowName.value.trim().length < 2)) {
+    message.warning('请先填写流程名：点击画布上的 ⏰ cron 节点，在右侧「流程属性」里输入')
+    sidebarMode.value = 'flow'
+    nextTick(() => document.querySelector('.dfe-sidebar input')?.focus())
+    return
+  }
   confirmTitle.value = '保存流程'; confirmMsg.value = `即将保存「${flowName.value || '新流程'}」`; confirmChangelog.value = '手动编辑'
   confirmCallback.value = async () => {
     saving.value = true; const data = getFlowData()
