@@ -27,6 +27,11 @@ NODE_SUB_STEPS = {
         {'name': '重训条件判定', 'desc': '无在途候选（TRAINING/待审 DRAFT）且不在冷却期'},
         {'name': '克隆起训', 'desc': '克隆 ACTIVE 配置后台训练（/train 同一入口），只落 DRAFT 待人工激活'},
     ],
+    'margin_daily': [
+        {'name': '缺失日扫描', 'desc': 'trade_calendar 对齐找 [start_date, 当日] 全部缺失交易日'},
+        {'name': '最旧优先补数', 'desc': 'tushare margin_detail 按日全市场 1 次调用，断点续跑'},
+        {'name': '配额护栏', 'desc': '余量 ≤ reserve 即收工；单次上限 max_days_per_run'},
+    ],
     'index': [
         {'name': '拉取指数K线', 'desc': '从上证/深证/创业板等指数源下载日K线'},
         {'name': '写入 index_daily_quote', 'desc': '批量写入指数行情表'},

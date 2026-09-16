@@ -627,17 +627,20 @@ def get_stock_toplist(code: str, days: int = Query(3650, ge=30, le=7300)):
 
 @router.get("/stock/{code}/chip")
 def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
-                   buckets: int = Query(36, ge=10, le=120)):
+                   buckets: int = Query(36, ge=10, le=120),
+                   decay: bool = Query(True, description="按换手率每日折旧（真实筹码近似）；false=纯成交量分布")):
     """成交量价格分布（筹码近似）：价格按前复权口径（close_hfq × 现价/最新close_hfq）
-    把历史成交映射到现价尺度，跨除权可比；纯成交量直方图（不做换手衰减）。
+    把历史成交映射到现价尺度，跨除权可比。
 
-    返回分桶 + 现价 + 获利盘占比（现价之下成交量占比）。价格口径铁律：展示
-    尺度是「现价口径的前复权价」，不是原始历史价。
+    decay=true（默认）：逐日 残留量×(1-换手率) + 当日成交量入桶——越久远的
+    成交权重越低，更接近真实持仓成本分布；decay=false 为无衰减的纯成交量
+    分布（历史成交同权重）。返回分桶 + 现价 + 获利盘占比（现价之下占比）。
+    价格口径铁律：展示尺度是「现价口径的前复权价」，不是原始历史价。
     """
     db = get_sync_db()
     try:
         rows = db.execute(text("""
-            SELECT trade_date, close, close_hfq, volume FROM daily_quote
+            SELECT trade_date, close, close_hfq, volume, turnover FROM daily_quote
             WHERE stock_code=:c AND close > 0 AND close_hfq > 0 AND volume > 0
             ORDER BY trade_date DESC LIMIT :days
         """), {"c": code, "days": days}).fetchall()
@@ -651,19 +654,30 @@ def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
         vols = [float(r[3]) for r in rows]
         lo, hi = min(prices), max(prices)
         width = (hi - lo) / buckets or 1.0
+        bidx = [min(buckets - 1, int((p - lo) / width)) for p in prices]
         agg = [0.0] * buckets
-        for p, v in zip(prices, vols):
-            idx = min(buckets - 1, int((p - lo) / width))
-            agg[idx] += v
+        if decay:
+            # 换手衰减：每日存量 ×(1-当日换手率)，再注入当日量——换手 100% 时
+            # 旧筹码全部换手（按 [0,0.99] 截断防负）；turnover 库存为百分数
+            for i, r in enumerate(rows):
+                tr = min(max(float(r[4] or 0) / 100.0, 0.0), 0.99)
+                keep = 1.0 - tr
+                agg = [a * keep for a in agg]
+                agg[bidx[i]] += vols[i]
+        else:
+            for i in range(len(rows)):
+                agg[bidx[i]] += vols[i]
         total = sum(agg) or 1.0
-        below = sum(v for p, v in zip(prices, vols) if p <= last_close)
+        below = sum(agg[j] for j in range(buckets)
+                    if lo + (j + 0.5) * width <= last_close)
         return {
-            "buckets": [{"price": round(lo + (i + 0.5) * width, 2), "vol": agg[i]}
+            "buckets": [{"price": round(lo + (i + 0.5) * width, 2), "vol": round(agg[i], 0)}
                         for i in range(buckets)],
             "current": round(last_close, 2),
-            "profit_ratio": round(below / sum(vols), 4),
+            "profit_ratio": round(below / total, 4),
             "date_from": date_from,
             "date_to": date_to,
+            "decay": bool(decay),
         }
     finally:
         db.close()

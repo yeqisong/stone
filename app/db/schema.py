@@ -1199,6 +1199,24 @@ def init_db(sync_session) -> None:
                    '{"warn_days": 21, "alert_days": 30, "cooldown_days": 14, "retrain_enabled": true}'
             WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='model_freshness')
         """))
+        # 迁移：两融独立采集节点（2026-09-16）——盘后 ~17:30 发布，主流程 17:00 拉不到，
+        # 用户将以独立流程 18:00 触发；节点自带 trade_calendar 对齐的历史补数
+        try:
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('margin_daily', '', '💰 两融采集/补数', 96)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='💰 两融采集/补数', sort_order=96
+            """))
+            sync_session.execute(text("""
+                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                SELECT 'margin_collect', '两融采集', true,
+                       '{"start_date": "2014-01-01", "reserve": 1500, "max_days_per_run": 2500}'
+                WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='margin_collect')
+            """))
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
+
         # 每日流程（id=1 已发布）插入节点：挂在 model_signal 之后（叶子，无下游）
         frow = sync_session.execute(text(
             "SELECT nodes, edges FROM dag_flows WHERE id=1 AND status='published'"

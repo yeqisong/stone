@@ -4431,6 +4431,91 @@ def dag_task_rolling_retrain(trade_date=None, dry_run=False, **kw):
         db.close()
 
 
+def dag_task_margin_daily(trade_date=None, **kw):
+    """DAG 节点：两融余额采集 + 历史对齐补数（独立流程专用，建议 18:00 触发）。
+
+    tushare margin_detail 按交易日全市场、1 次调用/天；盘后 ~17:30 才发布当日
+    ——主流程 17:00 拉不到，曾致 09-03 起连续空窗且节点静默 success 0 行
+    （2026-09-16 定位）。本节点不依赖任何上游（特征未引用两融字段）：
+
+    ① 对齐补数：按 trade_calendar 找 [start_date, 当日] 全部缺失交易日，
+       最旧优先补齐——与其它数据时间线对齐，天然断点续跑（缺失驱动、幂等）
+    ② 配额护栏：余量 ≤ reserve 即收工，剩余次日继续
+    ③ 单次上限 max_days_per_run（防一次跑干配额）
+    参数在 strategy_config.margin_collect：
+       {start_date:'2014-01-01', reserve:1500, max_days_per_run:2500}
+    长跑有进度心跳（每 25 天上报），不会触发看门狗误杀。
+    """
+    from datetime import date; td = str(trade_date or date.today())[:10]; rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('margin_daily')
+    write_node_log(log_id=log_id, status='running', detail='检查缺失交易日')
+
+    def _run():
+        import json as _json2
+        from sqlalchemy import text as _t2
+        from app.db.connection import get_sync_db
+        from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import TushareQuota
+        from crawler.writers import batch_upsert_margin_detail
+        db = get_sync_db()
+        try:
+            row = db.execute(_t2(
+                "SELECT params FROM strategy_config WHERE strategy_name='margin_collect'"
+            )).fetchone()
+            cfg = (_json2.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+            start = str(cfg.get('start_date', '2014-01-01'))[:10]
+            reserve = int(cfg.get('reserve', 1500))
+            max_days = int(cfg.get('max_days_per_run', 2500))
+            missing = [str(r[0])[:10] for r in db.execute(_t2("""
+                SELECT cal_date FROM trade_calendar tc
+                WHERE tc.is_trade_day AND tc.cal_date BETWEEN :s AND :e
+                  AND NOT EXISTS (SELECT 1 FROM stock_margin_detail m
+                                  WHERE m.trade_date = tc.cal_date)
+                ORDER BY cal_date
+            """), {"s": start, "e": td}).fetchall()]
+            # 当日可能不在日历（未同步）——只要缺就补上
+            if td not in missing and not db.execute(
+                    _t2("SELECT 1 FROM stock_margin_detail WHERE trade_date=:d LIMIT 1"),
+                    {"d": td}).fetchone():
+                missing.append(td)
+            if not missing:
+                return {'done': 0, 'saved': 0, 'missing': 0, 'stop': ''}
+            quota = TushareQuota.get()
+            source = get_data_source_manager().get_source()
+            done = saved = 0
+            stop = ''
+            for d in missing:
+                if done >= max_days:
+                    stop = f'达单次上限 {max_days} 天'
+                    break
+                if quota.remaining() <= reserve:
+                    stop = f'配额余 {quota.remaining()} ≤ 保留 {reserve}'
+                    break
+                saved += batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(d))
+                done += 1
+                if done % 25 == 0:
+                    update_node_progress(log_id=log_id, rows=done,
+                                         detail=f'两融补数 {done}/{len(missing)} 天（至 {d}）')
+            return {'done': done, 'saved': saved, 'missing': len(missing), 'stop': stop}
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run)
+        fatal = r.get('fatal', '')
+        if fatal:
+            write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
+        else:
+            note = f"补数 {r.get('done', 0)}/{r.get('missing', 0)} 天 {r.get('saved', 0):,} 行"
+            if r.get('stop'):
+                note += f"（{r['stop']}，剩余次日继续）"
+            write_node_log(log_id=log_id, status='success', rows=r.get('done', 0), detail=note)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150])
+        raise
+
+
 def dag_task_moneyflow(trade_date=None, **kw):
     """DAG 节点：资金流向（tushare moneyflow 全市场，写 stock_moneyflow）。"""
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
@@ -4913,6 +4998,7 @@ NODE_FN_MAP = {
     'kline':              dag_task_kline,
     'factor_heal':        dag_task_factor_heal,
     'rolling_retrain':    dag_task_rolling_retrain,
+    'margin_daily':       dag_task_margin_daily,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
     'fund':               dag_task_fund,
