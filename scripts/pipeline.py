@@ -382,7 +382,7 @@ def _rid(kw): return kw.get('run_id', '')
 import threading as _t
 import time as _time
 
-def _hb_thread(log_id, rid, stop, start_time):
+def _hb_thread(log_id, rid, stop, start_time, td='', nn=''):
     """心跳线程：每 25 秒更新 heartbeat + 已运行时长。超时 5 分钟无进展则标记失败。
 
     进展判定看 rows 和 detail 双指标：读库先于写入自身心跳 detail，心跳自身
@@ -413,7 +413,8 @@ def _hb_thread(log_id, rid, stop, start_time):
         except:
             rows_count = None
             detail_seen = None
-        update_node_progress(log_id=log_id, rows=rows_count, detail=detail)
+        update_node_progress(log_id=log_id, rows=rows_count, detail=detail,
+                             trade_date=td, node_name=nn, run_id=rid)
         # detail 比较：排除心跳自身写入的 '采集中…'（其时长后缀每轮必变，会把
         # 无进展永久掩盖）。节点写入的其他 detail 变化均视为进展。
         own_detail = detail_seen is not None and detail_seen.startswith('采集中')
@@ -452,7 +453,7 @@ def _node_stopped(rid, log_id=None):
         return bool(ev and ev.is_set())
     return False
 
-def _with_hb(log_id, rid, fn):
+def _with_hb(log_id, rid, fn, td='', nn=''):
     """带心跳保护执行函数。
 
     stop 事件注册到 app.signal：心跳线程因看门狗超时或用户终止 set 时，
@@ -465,7 +466,7 @@ def _with_hb(log_id, rid, fn):
     key = f"{rid}:{log_id}" if rid else None
     if key:
         set_stop_event(key, stop)
-    hb = _t.Thread(target=_hb_thread, args=(log_id, rid, stop, start_time), daemon=True)
+    hb = _t.Thread(target=_hb_thread, args=(log_id, rid, stop, start_time, td, nn), daemon=True)
     hb.start()
     try:
         return fn()
@@ -4448,7 +4449,8 @@ def dag_task_margin_daily(trade_date=None, **kw):
     """
     from datetime import date; td = str(trade_date or date.today())[:10]; rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('margin_daily')
-    write_node_log(log_id=log_id, status='running', detail='检查缺失交易日')
+    write_node_log(log_id=log_id, status='running', detail='检查缺失交易日',
+                   trade_date=td, node_name='margin_daily', run_id=rid)
 
     def _run():
         import json as _json2
@@ -4483,6 +4485,7 @@ def dag_task_margin_daily(trade_date=None, **kw):
             quota = TushareQuota.get()
             source = get_data_source_manager().get_source()
             done = saved = 0
+            today_got = 0
             stop = ''
             for d in missing:
                 if done >= max_days:
@@ -4491,17 +4494,21 @@ def dag_task_margin_daily(trade_date=None, **kw):
                 if quota.remaining() <= reserve:
                     stop = f'配额余 {quota.remaining()} ≤ 保留 {reserve}'
                     break
-                saved += batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(d))
+                n = batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(d))
+                saved += n
                 done += 1
+                if d == td:
+                    today_got = n
                 if done % 25 == 0:
                     update_node_progress(log_id=log_id, rows=done,
                                          detail=f'两融补数 {done}/{len(missing)} 天（至 {d}）')
-            return {'done': done, 'saved': saved, 'missing': len(missing), 'stop': stop}
+            return {'done': done, 'saved': saved, 'missing': len(missing),
+                    'stop': stop, 'today_got': today_got}
         finally:
             db.close()
 
     try:
-        r = _with_hb(log_id, rid, _run)
+        r = _with_hb(log_id, rid, _run, td=td, nn='margin_daily')
         fatal = r.get('fatal', '')
         if fatal:
             write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
@@ -4509,10 +4516,18 @@ def dag_task_margin_daily(trade_date=None, **kw):
             note = f"补数 {r.get('done', 0)}/{r.get('missing', 0)} 天 {r.get('saved', 0):,} 行"
             if r.get('stop'):
                 note += f"（{r['stop']}，剩余次日继续）"
-            write_node_log(log_id=log_id, status='success', rows=r.get('done', 0), detail=note)
+            # rows 记数据行数（此前误记天数：2500 天显示成"行数 2500"）；当日
+            # tushare 尚未发布（today_got=0 且今日在缺失清单里）时明确说明——
+            # 是时序不是故障，下次运行自动回补
+            if r.get('done', 0) and not r.get('today_got'):
+                note += '；当日 tushare 尚未发布，下次运行自动回补'
+            write_node_log(log_id=log_id, status='success',
+                           rows=r.get('saved', 0), detail=note,
+                           trade_date=td, node_name='margin_daily', run_id=rid)
         return r
     except Exception as e:
-        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150])
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150],
+                       trade_date=td, node_name='margin_daily', run_id=rid)
         raise
 
 
@@ -4556,6 +4571,8 @@ def _ext_backfill_recent(source, db, td, table, fetch, writer, lookback=20):
     每日流程 17:00 跑时天天拉空，且从不回捞——margin_detail 从 09-03 起、
     top_list 从 09-10 起连续空窗。幂等：已有数据的日子直接跳过（0 配额），
     当日总是尝试（upsert 幂等）；非交易日接口返回空，无害。
+    返回 (总写入行数, 当日是否拉到数据)——当日空是正常时序（次日回补），
+    调用方需要区分「无事可做」和「当日暂缺」。
     """
     from datetime import date as _d, timedelta as _td
     from sqlalchemy import text as _t
@@ -4564,25 +4581,29 @@ def _ext_backfill_recent(source, db, td, table, fetch, writer, lookback=20):
     except ValueError:
         base = _d.today()
     total = 0
+    today_fetched = 0
     for k in range(lookback + 1):
         d = (base - _td(days=k)).isoformat()
         if k > 0:
             if db.execute(_t(f"SELECT 1 FROM {table} WHERE trade_date=:d LIMIT 1"),
                           {"d": d}).fetchone():
                 continue
-        total += writer(db, fetch(d))
-    return total
+        n = writer(db, fetch(d))
+        total += n
+        if k == 0:
+            today_fetched = n
+    return total, today_fetched
 
 
 def _ext_top_list(source, db, td):
     from crawler.writers import batch_upsert_top_list
     return _ext_backfill_recent(source, db, td, 'stock_top_list',
-                                source.fetch_top_list, batch_upsert_top_list)
+                                source.fetch_top_list, batch_upsert_top_list)[0]
 
 def _ext_margin_detail(source, db, td):
     from crawler.writers import batch_upsert_margin_detail
     return _ext_backfill_recent(source, db, td, 'stock_margin_detail',
-                                source.fetch_margin_detail_ext, batch_upsert_margin_detail)
+                                source.fetch_margin_detail_ext, batch_upsert_margin_detail)[0]
 
 def _ext_moneyflow_hsgt(source, db, td):
     from crawler.writers import batch_upsert_moneyflow_hsgt
