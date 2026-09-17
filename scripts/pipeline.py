@@ -264,6 +264,22 @@ def generate_stats(*args, **kwargs):
             try: db.rollback()
             except: pass
             stats.append({'label': label, 'rows': -1, 'items': 0})
+    # 特征因子卡片：行数/起止为精确查询（14.9 亿行 seq scan 实测 ~90s，仅后台统计节点承受）；
+    # 特征数量走 features 注册表（COUNT(DISTINCT feature_name) 实测 9 分钟，不可用）
+    try:
+        n_features = q("SELECT COUNT(*) FROM features") or 0
+        s = {'label': '特征因子', 'rows': q("SELECT COUNT(*) FROM feature_values") or 0,
+             'sub': f'{n_features} 个特征'}
+        sr = q("SELECT MIN(trade_date)::text FROM feature_values")
+        er = q("SELECT MAX(trade_date)::text FROM feature_values")
+        if sr: s['start'] = str(sr)[:10]
+        if er: s['end'] = str(er)[:10]
+        stats.append(s)
+    except Exception as e:
+        logger.warning(f"[pipeline] 统计 特征因子 失败: {e}")
+        try: db.rollback()
+        except: pass
+        stats.append({'label': '特征因子', 'rows': -1})
     sig_buy = q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0
     sig_sell = q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0
     for s in stats:

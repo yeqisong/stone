@@ -52,7 +52,7 @@
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-size:14px;font-weight:700;color:var(--c-text)"><span v-if="dt.detail" style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} · </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
-          <div v-if="dt.start" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{dt.start}} ~ {{dt.end}}</div>
+          <div v-if="dt.start" style="font-size:10px;color:var(--c-text-faint);white-space:nowrap"><span v-if="dt.sub">{{dt.sub}} · </span>{{dt.start}} ~ {{dt.end}}</div>
           <div v-else style="font-size:10px;color:var(--c-text-faint)">暂无数据</div>
         </div>
       </div>
@@ -259,10 +259,14 @@ const monthLabel = computed(() => {
 
 const fmt = v => v!=null?Number(v).toLocaleString():'0'
 
+// 数据明细全部卡片行数之和（rows=-1 为统计失败，不计入）
+const dtRowsSum = computed(() => dataTables.value.reduce((s, dt) => s + (dt.rows > 0 ? dt.rows : 0), 0))
+
 const overviewItems = computed(() => [
   { label: '行情总条数', value: fmt(overview.value.total_rows) },
   { label: '股票数', value: overview.value.total_stocks },
   { label: '最新数据', value: overview.value.latest_date || '-' },
+  { label: '数据明细', value: fmt(dtRowsSum.value) },
   { label: '漏数据日期', value: missingDates.value.length, color: missingDates.value.length > 0 ? '#f59e0b' : undefined },
 ])
 
@@ -287,6 +291,7 @@ function calTitle(d) {
 }
 
 function goStockFundList(dt) {
+  if (dt.label === '特征因子') { nav.tab = 'e'; return }
   const typeMap = {'上交所A股':'stock','深交所A股':'stock','北交所':'stock','指数日K线':'index','ETF日K线':'etf'}
   const t = typeMap[dt.label]
   if (t) { nav.stockFundType = t; nav.tab = 'u' }
