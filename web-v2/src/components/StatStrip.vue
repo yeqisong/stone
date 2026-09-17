@@ -27,7 +27,11 @@ const DUR = 900              // 单项滚动时长 ms
 const STAGGER = 70           // 逐项错峰 ms（封顶 350，避免尾部等待过久）
 
 function parseNum(v) {
-  if (typeof v === 'number') return Number.isFinite(v) ? { prefix: '', num: v, plus: false, suffix: '', dec: 0, group: false } : null
+  // 裸数字统一按千分位展示（如股票数 5223 → 5,223），小数位数原样保留
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return null
+    return { prefix: '', num: v, plus: false, suffix: '', dec: Number.isInteger(v) ? 0 : (String(v).split('.')[1] || '').length, group: true }
+  }
   if (typeof v !== 'string') return null
   const m = NUM_RE.exec(v.trim())
   if (!m) return null
@@ -54,8 +58,10 @@ function fmtCur(v, p) {
 function animate(it, idx) {
   const p = parseNum(it.value)
   if (!p) { delete texts[it.label]; return }
+  // 数字项收尾统一为千分位格式（与其余卡片观感一致）；字符串项收尾渲染原始字符串保证逐字符一致
+  const finalText = typeof it.value === 'number' ? fmtCur(p.num, p) : it.value
   const from = parseNum(texts[it.label])?.num ?? 0
-  if (reduced || p.num === from) { texts[it.label] = it.value; return }
+  if (reduced || p.num === from) { texts[it.label] = finalText; return }
   cancelAnimationFrame(rafs.get(it.label))
   clearTimeout(timers.get(it.label))
   texts[it.label] = fmtCur(from, p)
@@ -65,7 +71,7 @@ function animate(it, idx) {
     const step = now => {
       const t = Math.min((now - t0) / DUR, 1)
       const e = 1 - Math.pow(1 - t, 3)   // easeOutCubic
-      texts[it.label] = t < 1 ? fmtCur(from + (p.num - from) * e, p) : it.value
+      texts[it.label] = t < 1 ? fmtCur(from + (p.num - from) * e, p) : finalText
       if (t < 1) rafs.set(it.label, requestAnimationFrame(step))
     }
     rafs.set(it.label, requestAnimationFrame(step))
