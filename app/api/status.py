@@ -174,6 +174,9 @@ def get_data_status(
                 {'label':'基本面','rows':q("SELECT COUNT(*) FROM stock_fundamentals_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM stock_fundamentals_history"),'start':q("SELECT MIN(report_date)::text FROM stock_fundamentals_history"),'end':q("SELECT MAX(report_date)::text FROM stock_fundamentals_history")},
                 {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
                 {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
+                # 特征因子：14.9 亿行级精确 COUNT/MIN/MAX 实测 ~90s，仅缓存全空的一次性回退可承受
+                {'label':'特征因子','rows':q("SELECT COUNT(*) FROM feature_values"),'start':q("SELECT MIN(trade_date)::text FROM feature_values"),'end':q("SELECT MAX(trade_date)::text FROM feature_values"),
+                 'sub':str(q("SELECT COUNT(*) FROM features") or 0) + ' 个特征'},
             ]
             stats_computed_at = None
 
