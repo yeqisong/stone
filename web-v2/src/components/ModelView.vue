@@ -166,6 +166,17 @@
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">Optuna</span><n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="flex:1" size="small" /></div>
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">初始资金</span><n-input-number v-model:value="createForm.initial_cash" :min="100000" :step="100000" style="flex:1" size="small" /></div>
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">最大持仓</span><n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" style="flex:1" size="small" /></div>
+            <div style="display:flex;align-items:center;gap:6px" title="purged CV：训练窗内按时间连续切 N 折（折前隔离 25 交易日 ≥ 标签前瞻），折外均值选超参——val 退出选择成为诚实 OOS。每 trial 拟合 ×折数，trials 建议 ≤20">
+              <span style="color:var(--c-text-dim);min-width:55px">CV选择</span>
+              <n-switch v-model:value="createForm.selection_cv" size="small">
+                <template #checked>purged</template><template #unchecked>单val</template>
+              </n-switch>
+              <n-input-number v-model:value="createForm.cv_folds" :min="2" :max="6" :disabled="!createForm.selection_cv" size="small" style="width:64px" />
+            </div>
+            <div style="display:flex;align-items:center;gap:6px" title="多种子集成：同一最优超参 × N 个随机种子取预测均值，压单模型种子噪声（1=关闭）。产物仍是单个 pkl，信号链路无感">
+              <span style="color:var(--c-text-dim);min-width:55px">种子集成</span>
+              <n-input-number v-model:value="createForm.ensemble_seeds" :min="1" :max="5" size="small" style="width:64px" />
+            </div>
           </div>
           <n-divider style="margin:4px 0">ML 买入阈值</n-divider>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
@@ -337,6 +348,8 @@ const createForm = reactive({
   // v3.5 方法论：excess=超额收益标签（相对沪深300）；cs_rank=特征逐日截面排名
   label_mode: 'excess', feature_norm: 'cs_rank', label_transform: 'none', train_objective: 'regression',
   feature_neut: false,
+  // 训练协议（v3.9.2 反过拟合默认开）：purged CV 折外选超参（val 退出选择）+ 多种子集成
+  selection_cv: true, cv_folds: 4, ensemble_seeds: 3,
   // ML 买入阈值：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
   signal_threshold_mode: 'quantile', buy_top_pct: 0.05, ml_confidence_threshold: 0.02,
   // 六层策略配置默认值（策略扫描时搜索最优）
@@ -431,6 +444,10 @@ function startEditConfig() {
   createForm.train_objective = cfg.train_objective || 'regression'
   createForm.feature_norm = cfg.feature_norm || 'none'
   createForm.feature_neut = cfg.feature_neut || false
+  // v3.9.2 训练协议：旧模型无键时默认开（训练协议只在训练时消费，保存不影响已训产物）
+  createForm.selection_cv = cfg.selection_cv?.enabled ?? true
+  createForm.cv_folds = cfg.selection_cv?.folds ?? 4
+  createForm.ensemble_seeds = cfg.ensemble?.seeds ?? 3
   showCreate.value = true
 }
 
@@ -451,6 +468,8 @@ async function doSaveConfig() {
       train_objective: createForm.train_objective,
       feature_norm: createForm.feature_norm,
       feature_neut: createForm.feature_neut,
+      selection_cv: { enabled: createForm.selection_cv, folds: createForm.cv_folds, embargo_days: 25 },
+      ensemble: { seeds: createForm.ensemble_seeds },
       risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
       signal: {
         threshold_mode: createForm.signal_threshold_mode,
@@ -495,6 +514,9 @@ async function doCreate() {
       train_objective: createForm.train_objective,
       feature_norm: createForm.feature_norm,
       feature_neut: createForm.feature_neut,
+      selection_cv_enabled: createForm.selection_cv,
+      cv_folds: createForm.cv_folds,
+      ensemble_seeds: createForm.ensemble_seeds,
     })
     showCreate.value = false
     createName.value = ''

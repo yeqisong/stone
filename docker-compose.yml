@@ -7,7 +7,8 @@ services:
       - "127.0.0.1:8000:8000"
     env_file: .env
     environment:
-      REDIS_URL: redis://stock-redis:6379/0
+      # 2026-09-17: redis 容器已停用（见下方 redis 服务注释），URL 保留备查
+      # REDIS_URL: redis://stock-redis:6379/0
       TZ: Asia/Shanghai
     deploy:
       resources:
@@ -21,8 +22,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      # 2026-09-17: redis 停用，随服务一并注释
+      # redis:
+      #   condition: service_healthy
     networks:
       - stock-net
 
@@ -45,6 +47,9 @@ services:
     shm_size: 2g
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
+      # 备份专用：pg_dump -Fd 在容器内直写宿主 ext4（绕开 docker exec 的 stdout 管道，
+      # 那层在内存吃紧时会 ENOMEM；scripts/backup_qiniu.sh 依赖此挂载）
+      - ./data/backups/db:/dbbackup
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock}"]
       interval: 10s
@@ -53,20 +58,24 @@ services:
     networks:
       - stock-net
 
-  redis:
-    image: redis:7-alpine
-    container_name: stock-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - ./data/redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - stock-net
+  # 2026-09-17: redis 停用——全代码库唯一引用是飞书对话历史且仅 APP_ENV=prod 走
+  # Redis（生产已拆除，本地 dev 用内存实现）；单用户系统无读缓存需求，热聚合
+  # 走 Postgres 物化表（treemap/stats/entity_stats cache，事务一致无失效问题）。
+  # 若未来启用（如 tushare 配额跨进程原子计数），取消注释并 docker compose up -d redis。
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: stock-redis
+  #   restart: unless-stopped
+  #   command: redis-server --appendonly yes
+  #   volumes:
+  #     - ./data/redis:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks:
+  #     - stock-net
 
   # nginx 由宿主机提供，反代到 app:8000
   # 宿主机 nginx 配置文件见 nginx/host-nginx.conf

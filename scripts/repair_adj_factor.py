@@ -116,8 +116,12 @@ def fetch_factors(pro, quota, ts_code, start, end):
             time.sleep(2)
 
 
-def apply_fix(db, codes, dry_run_label=''):
-    """逐代码重写 close_hfq = close × 官方因子。返回 {code: 改写行数}。"""
+def apply_fix(db, codes, progress_cb=None):
+    """逐代码重写 close_hfq = close × 官方因子。返回 {code: 改写行数}。
+
+    progress_cb(done, total, note)：每只完成后回调，供 DAG 节点上报进度——
+    批量重写（数百只 × 1 次配额调用）耗时数分钟，不上报会被 5 分钟无进展看门狗误杀。
+    """
     import tushare as ts
     from crawler.adapters.tushare_quota import TushareQuota
     pro = ts.pro_api(settings.TUSHARE_TOKEN)
@@ -153,12 +157,15 @@ def apply_fix(db, codes, dry_run_label=''):
                 [{"v": u[0], "c": u[1], "d": u[2]} for u in updates])
             db.commit()
         changed[code] = len(updates)
-        if i % 100 == 0:
-            print(f'  进度 {i}/{len(codes)}（累计改写 {sum(v for v in changed.values() if v > 0)} 行）')
+        if progress_cb:
+            try:
+                progress_cb(i, len(codes), f'{code} 改写 {len(updates)} 行')
+            except Exception:
+                pass
     return changed
 
 
-def recompute_features(db, boundaries):
+def recompute_features(db, boundaries, progress_cb=None):
     """对受影响代码 × 污染窗重算全部启用特征（DELETE 带代码过滤，不动其它股票）。"""
     from scripts.feature_compute import compute_feature
     feats = db.execute(text(
@@ -182,19 +189,24 @@ def recompute_features(db, boundaries):
         codes = [m[0] for m in members]
         lo = min(m[1] for m in members)
         hi = max(m[2] for m in members)
-        for fn, formula in feats:
+        for k, (fn, formula) in enumerate(feats, 1):
             try:
                 res = compute_feature(db, fn, formula, 'stock', start_date=lo, end_date=hi,
                                       stock_codes=codes)
                 total += res.get('rows', 0)
             except Exception as e:
                 logger.warning(f'[repair] 特征 {fn} 重算失败（{lo}~{hi}）: {e}')
+            if progress_cb:
+                try:
+                    progress_cb(k, len(feats), f'{fn}（{len(codes)} 只）')
+                except Exception:
+                    pass
         print(f'  组 {gname}（{len(codes)} 只，{lo}~{hi}）完成')
     print(f'特征重算合计 {total:,} 行')
     return total
 
 
-def check_and_heal(db, days=7, max_codes=200, reserve=500, recompute=True):
+def check_and_heal(db, days=7, max_codes=200, reserve=500, recompute=True, progress_cb=None):
     """每日自愈入口（挂 kline 节点）：近期假跳变 → 重写因子 → 重算污染窗特征。
 
     因子重写每只股票 1 次 tushare 调用；超出 max_codes 只或配额低于 reserve 时
@@ -217,14 +229,24 @@ def check_and_heal(db, days=7, max_codes=200, reserve=500, recompute=True):
                        f'超过本次处理上限 {max_codes}/预留 {reserve}，仅告警不自动修')
         return {'detected': len(codes), 'healed': 0, 'skipped_quota': True}
 
-    changed = apply_fix(db, codes)
+    changed = apply_fix(db, codes, progress_cb=progress_cb)
     healed = [c for c, n in changed.items() if n > 0]
     failed = [c for c, n in changed.items() if n < 0]
     logger.warning(f'[heal] 因子自愈：检出 {len(codes)} 只，改写 {len(healed)} 只'
                    f'（{sum(n for n in changed.values() if n > 0):,} 行），失败 {len(failed)} 只')
     feat_rows = 0
     if healed and recompute:
-        feat_rows = recompute_features(db, [(c, by_code[c]) for c in healed])
+        feat_rows = recompute_features(db, [(c, by_code[c]) for c in healed], progress_cb=progress_cb)
+    # 血缘台账（旁路落账，失败不影响自愈结果）
+    try:
+        from app.lineage import log_event
+        log_event(db, 'factor_heal', 'daily_quote.close_hfq',
+                  scope=f"近{days}日检测 检出{len(codes)}只 边界{min(by_code.values())}~{max(by_code.values())}",
+                  detail={'detected': len(codes), 'healed': len(healed), 'failed': len(failed),
+                          'rows': sum(n for n in changed.values() if n > 0),
+                          'feature_rows': feat_rows, 'codes': healed[:20]})
+    except Exception:
+        pass
     return {'detected': len(codes), 'healed': len(healed), 'failed': len(failed),
             'rows': sum(n for n in changed.values() if n > 0), 'feature_rows': feat_rows,
             'codes': healed[:20]}
@@ -257,7 +279,7 @@ def main():
             print('\n（试运行：未改动。加 --apply 重写 close_hfq，--apply --features 连特征重算）')
             return
         codes = sorted(bd.stock_code.unique())
-        changed = apply_fix(db, codes)
+        changed = apply_fix(db, codes, progress_cb=progress_cb)
         n_ok = sum(1 for v in changed.values() if v > 0)
         n_zero = sum(1 for v in changed.values() if v == 0)
         n_fail = sum(1 for v in changed.values() if v < 0)
@@ -269,6 +291,17 @@ def main():
         if args.features:
             print('\n── 特征重算 ──')
             recompute_features(db, bd[['stock_code', 'trade_date']].values.tolist())
+        # 血缘台账（旁路落账）
+        try:
+            from app.lineage import log_event
+            log_event(db, 'factor_heal', 'daily_quote.close_hfq',
+                      scope=f"全量修复 {args.since} 起 {len(codes)} 只",
+                      detail={'mode': 'cli_full', 'since': args.since, 'codes': len(codes),
+                              'healed': n_ok, 'failed': n_fail,
+                              'rows': sum(v for v in changed.values() if v > 0),
+                              'features_recomputed': bool(args.features)})
+        except Exception:
+            pass
     finally:
         db.close()
 

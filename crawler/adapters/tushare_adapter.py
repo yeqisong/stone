@@ -686,10 +686,17 @@ class TuShareAdapter(DataSourceAdapter):
                 "trade_date": "trade_date", "stock_code": "ts_code", "stock_name": "name",
                 "fin_amount": "rzye", "fin_buy_amount": "rzmre",
                 "sec_amount": "rqye", "sec_sell_amount": "rqmcl", "total_amount": "rzrqye"})
+            clean = []
             for r in rows:
+                code = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                if len(code) > 6:
+                    # 表 stock_code 是 VARCHAR(6)：tushare 偶发混入超长脏行，
+                    # 一条就能把整天批量 INSERT 炸掉（2026-09-16 历史补数撞过）
+                    continue
                 r["trade_date"] = td
-                r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
-            return rows
+                r["stock_code"] = code
+                clean.append(r)
+            return clean
         except QuotaExhausted:
             raise
         except Exception as e:

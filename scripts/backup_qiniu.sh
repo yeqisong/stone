@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # 数据库每日全量备份 → 七牛云 Kodo（restic 增量去重上传）
 #
-# 原理：pg_dump -Fc 全量逻辑备份（MVCC 一致性快照，不停库不阻塞读），
-# restic 按"内容定义分块"去重上传——首次全量上传，之后每天只传变化的数据块；
+# 原理：pg_dump -Fd 目录格式（每表一个独立文件，MVCC 一致性快照，不停库不阻塞读），
+# restic 按"内容定义分块"去重上传——没变的表字节级不变，每晚只传变化的表的增量块；
 # 保留最近 30 个每日还原点，每周日自动清理过期块。不需要"删昨天、传今天"。
+# 注意：-Fc 单文件字节流不稳定（头部时间戳/TOC 偏移导致分块错位），实测两次全量间
+# 去重失效；-Fd 逐表文件才让"全量备份+增量上传"真正成立。
 #
 # 一次性配置：
 #   1. 创建 ~/.config/stone-backup/qiniu.env（chmod 600），内容：
@@ -20,7 +22,8 @@ set -euo pipefail
 
 ENV_FILE="$HOME/.config/stone-backup/qiniu.env"
 RESTIC="$HOME/bin/restic"
-DUMP_DIR="${DUMP_DIR:-/home/bnbnyu/projects/stone/data/backups/db}"   # 本地暂存放 WSL ext4（9p 写 /mnt/c 多一层缓存易在内存吃紧时 ENOMEM，且更慢）
+DUMP_DIR="${DUMP_DIR:-/home/bnbnyu/projects/stone/data/backups/db}"   # WSL ext4（9p 写 /mnt/c 多一层缓存易在内存吃紧时 ENOMEM，且更慢）
+CONT_DIR=/dbbackup        # 容器内路径，与 docker-compose.yml 的 ./data/backups/db:/dbbackup 对应
 CONTAINER=stock-db
 PG_USER=stock
 PG_DB=stock_monitor
@@ -63,17 +66,21 @@ if [ "$AVAIL_GB" -lt 120 ]; then
     exit 1
 fi
 
-DUMP="$DUMP_DIR/stock_monitor_latest.dump"
-TMP="$DUMP.part"
-trap 'rm -f "$TMP"' EXIT
+LATEST="$DUMP_DIR/latest"
+PART="$LATEST.part"
+# latest/latest.part 都是容器内产物（docker exec 默认 root，pg_dump 还把目录建成 0700），
+# 宿主 bnbnyu 对其无写权限——宿主侧 rm/mv 轮换必踩 Permission denied（2026-09-15 实测）。
+# 删除与轮换一律放容器内以 root 执行，宿主只负责读（restic 上传）。
+docker exec "$CONTAINER" rm -rf "$CONT_DIR/latest.part"
 
-log "开始 pg_dump 全量导出（Fc 压缩，不停库）..."
-docker exec "$CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" -Fc > "$TMP"
-mv -f "$TMP" "$DUMP"
-trap - EXIT
-log "导出完成（$(du -h "$DUMP" | cut -f1)），开始 restic 上传（自动只传变化块）..."
+log "开始 pg_dump 全量导出（Fd 目录格式 4 并行，容器内直写 bind mount，不停库）..."
+docker exec "$CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" -Fd -j 4 -f "$CONT_DIR/latest.part"
+# a+rwX：读给宿主 restic；写是保险，将来若再有宿主侧清理动作不再被权限卡死
+docker exec "$CONTAINER" chmod -R a+rwX "$CONT_DIR/latest.part"
+docker exec "$CONTAINER" sh -c "rm -rf '$CONT_DIR/latest' && mv '$CONT_DIR/latest.part' '$CONT_DIR/latest'"
+log "导出完成（$(du -sh "$LATEST" | cut -f1)，$(ls "$LATEST" | wc -l) 个文件），开始 restic 上传（逐表去重，只传变化的表）..."
 
-"$RESTIC" backup "$DUMP" --tag db-nightly
+"$RESTIC" backup "$LATEST" --tag db-nightly
 
 # 每周日执行保留策略：保留最近 30 个每日快照，清理过期数据块
 if [ "$(date +%u)" = "7" ]; then

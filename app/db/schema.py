@@ -370,6 +370,22 @@ CREATE TABLE IF NOT EXISTS backtest_daily_records (
 CREATE INDEX IF NOT EXISTS idx_btdaily_version ON backtest_daily_records (version, label, trade_date);
 """
 
+# ── 数据血缘台账（v3.9.1）──
+# 只存元数据（谁/何时/改了什么/多大范围），一年几百行、MB 级——回答
+# 「模型训练后数据又被改过吗」这类追溯问题，不存数据本身。
+CREATE_DATA_LINEAGE = """
+CREATE TABLE IF NOT EXISTS data_lineage (
+    id          BIGSERIAL PRIMARY KEY,
+    event_type  VARCHAR(32) NOT NULL,    -- factor_heal/zero_price_repair/feature_recompute/eval_rerun/train/rolling_retrain/backfill
+    target      VARCHAR(128) NOT NULL,   -- 作用对象：表.列 / 模型版本 / 特征名
+    scope       TEXT,                    -- 范围摘要：日期窗 / 代码集合摘要
+    detail      JSONB DEFAULT '{}'::jsonb,  -- 结构化明细：行数/边界/指标头条等
+    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lineage_type_time ON data_lineage (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lineage_target ON data_lineage (target, created_at DESC);
+"""
+
 # ── 下载历史（v2.0 重构 迭代 3.1）──
 
 
@@ -1005,6 +1021,7 @@ ALL_TABLES = [
     ("backtest_records", CREATE_BACKTEST_RECORDS),
     ("backtest_trades", CREATE_BACKTEST_TRADES),
     ("backtest_daily_records", CREATE_BACKTEST_DAILY_RECORDS),
+    ("data_lineage", CREATE_DATA_LINEAGE),
     ("feature_values", CREATE_FEATURE_VALUES),
     ("dag_flows", CREATE_DAG_FLOWS),
     ("dag_flow_versions", CREATE_DAG_FLOW_VERSIONS),
@@ -1146,6 +1163,81 @@ def init_db(sync_session) -> None:
     # 迁移：daily_completeness 新增拓展表当日行数（JSONB，v3.8 完整度拓展）
     try:
         sync_session.execute(text("ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS ext_stats JSONB"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：因子一致性自愈节点（2026-09-14）——tushare 回溯性重定基 adj_factor
+    # 会在半修正窗口拉数时造成跨界假跳变，静默污染标签/IC/回测，故每日自愈
+    try:
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('factor_heal', 'kline', '因子一致性自愈', 3)
+            ON CONFLICT (node_name) DO UPDATE SET deps='kline', label='因子一致性自愈', sort_order=3
+        """))
+        # feature_compute 需等自愈结束：否则两者并发写 feature_values（自愈按代码 DELETE+COPY）
+        sync_session.execute(text("""
+            UPDATE dag_config SET deps = deps || ',factor_heal'
+            WHERE node_name='feature_compute' AND deps NOT LIKE '%factor_heal%'
+        """))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：模型新鲜度守护节点（2026-09-14）——陈旧告警（risk_alerts kind='model_stale'
+    # 走既有 WS/Chrome 通知通道）+ 滚动重训（克隆 ACTIVE 自动起训，只落 DRAFT 待人工激活）。
+    # 背景：模型曾 8 个月未重训无人察觉（2026-09-11 评估缺陷之一）。
+    try:
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('rolling_retrain', 'model_signal', '🧬 模型新鲜度守护', 95)
+            ON CONFLICT (node_name) DO UPDATE SET deps='model_signal', label='🧬 模型新鲜度守护', sort_order=95
+        """))
+        # strategy_config 无唯一约束：仅缺失时补种默认参数（已存在不覆盖，用户可改）
+        sync_session.execute(text("""
+            INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+            SELECT 'model_freshness', '模型新鲜度守护', true,
+                   '{"warn_days": 21, "alert_days": 30, "cooldown_days": 14, "retrain_enabled": true}'
+            WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='model_freshness')
+        """))
+        # 迁移：两融独立采集节点（2026-09-16）——盘后 ~17:30 发布，主流程 17:00 拉不到，
+        # 用户将以独立流程 18:00 触发；节点自带 trade_calendar 对齐的历史补数
+        try:
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('margin_daily', '', '💰 两融采集/补数', 96)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='💰 两融采集/补数', sort_order=96
+            """))
+            sync_session.execute(text("""
+                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                SELECT 'margin_collect', '两融采集', true,
+                       '{"start_date": "2014-01-01", "reserve": 1500, "max_days_per_run": 2500}'
+                WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='margin_collect')
+            """))
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
+
+        # 每日流程（id=1 已发布）插入节点：挂在 model_signal 之后（叶子，无下游）
+        frow = sync_session.execute(text(
+            "SELECT nodes, edges FROM dag_flows WHERE id=1 AND status='published'"
+        )).fetchone()
+        if frow and frow[0]:
+            import json as _json
+            nodes = _json.loads(frow[0]) if isinstance(frow[0], str) else (frow[0] or [])
+            edges = _json.loads(frow[1]) if isinstance(frow[1], str) else (frow[1] or [])
+            if not any(n.get('node_name') == 'rolling_retrain' for n in nodes):
+                # 画布位置：贴着 model_signal 右侧摆放
+                ms = next((n for n in nodes if n.get('node_name') == 'model_signal'), None)
+                pos = ({**ms['position'], 'x': ms['position'].get('x', 1400) + 220}
+                       if ms and isinstance(ms.get('position'), dict) else {'x': 1620, 'y': 460})
+                nodes.append({"deps": ["model_signal"], "position": pos,
+                              "node_name": "rolling_retrain"})
+                edges.append({"source": "model_signal", "target": "rolling_retrain"})
+                sync_session.execute(text(
+                    "UPDATE dag_flows SET nodes=:n, edges=:e WHERE id=1"),
+                    {"n": _json.dumps(nodes, ensure_ascii=False),
+                     "e": _json.dumps(edges, ensure_ascii=False)})
+        sync_session.commit()
     except Exception:
         sync_session.rollback()
 

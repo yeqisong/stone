@@ -535,3 +535,149 @@ def get_stock_pe_history(code: str):
         return {"stock_code": code, "data": all_data}
     finally:
         db.close()
+
+
+@router.get("/stock/{code}/moneyflow")
+def get_stock_moneyflow(code: str, days: int = Query(7000, ge=20, le=7000)):
+    """主力资金流（元）：net_main=超大单+大单净流入，net_total=全单净额。
+
+    详情页资金流图数据源；stock_moneyflow 2010 起全量（v3.8 回补）。
+    """
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT trade_date,
+                   (COALESCE(buy_elg_amt,0) - COALESCE(sell_elg_amt,0))
+                 + (COALESCE(buy_lg_amt,0)  - COALESCE(sell_lg_amt,0)) AS net_main,
+                   COALESCE(net_mf_amt, 0) AS net_total
+            FROM stock_moneyflow WHERE stock_code=:c
+            ORDER BY trade_date DESC LIMIT :days
+        """), {"c": code, "days": days}).fetchall()
+        rows.reverse()
+        return {"data": [{"date": str(r[0]), "net_main": float(r[1] or 0),
+                          "net_total": float(r[2] or 0)} for r in rows]}
+    finally:
+        db.close()
+
+
+@router.get("/stock/{code}/signals")
+def get_stock_signals(code: str, days: int = Query(1095, ge=30, le=3650)):
+    """该股模型信号史（signal_history 已存前瞻收益），供 K 线信号回看叠加。"""
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT signal_date, direction, price, predict_score,
+                   predict_10d_return, forward_5d_return, forward_10d_return,
+                   forward_20d_return, status, close_reason, model_version
+            FROM signal_history
+            WHERE stock_code=:c AND strategy_name='model_signal'
+              AND signal_date >= CURRENT_DATE - :days * INTERVAL '1 day'
+            ORDER BY signal_date DESC
+        """), {"c": code, "days": days}).fetchall()
+        return {"data": [{
+            "date": str(r[0]), "direction": r[1], "price": float(r[2]) if r[2] else None,
+            "score": float(r[3]) if r[3] is not None else None,
+            "pred_10d": float(r[4]) if r[4] is not None else None,
+            "f5d": float(r[5]) if r[5] is not None else None,
+            "f10d": float(r[6]) if r[6] is not None else None,
+            "f20d": float(r[7]) if r[7] is not None else None,
+            "status": r[8], "close_reason": r[9], "model": r[10],
+        } for r in rows]}
+    finally:
+        db.close()
+
+
+@router.get("/stock/{code}/margin")
+def get_stock_margin(code: str, days: int = Query(7000, ge=20, le=7000)):
+    """两融余额（元）：fin=融资余额，total=两融合计。供详情页两融趋势图。"""
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT trade_date, fin_amount, total_amount
+            FROM stock_margin_detail WHERE stock_code=:c
+            ORDER BY trade_date DESC LIMIT :days
+        """), {"c": code, "days": days}).fetchall()
+        rows.reverse()
+        return {"data": [{"date": str(r[0]), "fin": float(r[1] or 0),
+                          "total": float(r[2] or 0)} for r in rows]}
+    finally:
+        db.close()
+
+
+@router.get("/stock/{code}/top_list")
+def get_stock_toplist(code: str, days: int = Query(3650, ge=30, le=7300)):
+    """龙虎榜上榜史（2014 起），供 K 线标记叠加。net_amount 单位元。"""
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT trade_date, reason, net_amount, pct_chg, close
+            FROM stock_top_list WHERE stock_code=:c
+              AND trade_date >= CURRENT_DATE - :days * INTERVAL '1 day'
+            ORDER BY trade_date DESC
+        """), {"c": code, "days": days}).fetchall()
+        return {"data": [{
+            "date": str(r[0]), "reason": r[1] or '',
+            "net": float(r[2]) if r[2] is not None else None,
+            "pct": float(r[3]) if r[3] is not None else None,
+            "close": float(r[4]) if r[4] is not None else None,
+        } for r in rows]}
+    finally:
+        db.close()
+
+
+@router.get("/stock/{code}/chip")
+def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
+                   buckets: int = Query(36, ge=10, le=120),
+                   decay: bool = Query(True, description="按换手率每日折旧（真实筹码近似）；false=纯成交量分布")):
+    """成交量价格分布（筹码近似）：价格按前复权口径（close_hfq × 现价/最新close_hfq）
+    把历史成交映射到现价尺度，跨除权可比。
+
+    decay=true（默认）：逐日 残留量×(1-换手率) + 当日成交量入桶——越久远的
+    成交权重越低，更接近真实持仓成本分布；decay=false 为无衰减的纯成交量
+    分布（历史成交同权重）。返回分桶 + 现价 + 获利盘占比（现价之下占比）。
+    价格口径铁律：展示尺度是「现价口径的前复权价」，不是原始历史价。
+    """
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT trade_date, close, close_hfq, volume, turnover FROM daily_quote
+            WHERE stock_code=:c AND close > 0 AND close_hfq > 0 AND volume > 0
+            ORDER BY trade_date DESC LIMIT :days
+        """), {"c": code, "days": days}).fetchall()
+        rows.reverse()
+        if len(rows) < 30:
+            return {"buckets": [], "current": None, "profit_ratio": None}
+        date_from, date_to = str(rows[0][0])[:10], str(rows[-1][0])[:10]
+        last_close, last_hfq = float(rows[-1][1]), float(rows[-1][2])
+        scale = last_close / last_hfq
+        prices = [float(r[2]) * scale for r in rows]
+        vols = [float(r[3]) for r in rows]
+        lo, hi = min(prices), max(prices)
+        width = (hi - lo) / buckets or 1.0
+        bidx = [min(buckets - 1, int((p - lo) / width)) for p in prices]
+        agg = [0.0] * buckets
+        if decay:
+            # 换手衰减：每日存量 ×(1-当日换手率)，再注入当日量——换手 100% 时
+            # 旧筹码全部换手（按 [0,0.99] 截断防负）；turnover 库存为百分数
+            for i, r in enumerate(rows):
+                tr = min(max(float(r[4] or 0) / 100.0, 0.0), 0.99)
+                keep = 1.0 - tr
+                agg = [a * keep for a in agg]
+                agg[bidx[i]] += vols[i]
+        else:
+            for i in range(len(rows)):
+                agg[bidx[i]] += vols[i]
+        total = sum(agg) or 1.0
+        below = sum(agg[j] for j in range(buckets)
+                    if lo + (j + 0.5) * width <= last_close)
+        return {
+            "buckets": [{"price": round(lo + (i + 0.5) * width, 2), "vol": round(agg[i], 0)}
+                        for i in range(buckets)],
+            "current": round(last_close, 2),
+            "profit_ratio": round(below / total, 4),
+            "date_from": date_from,
+            "date_to": date_to,
+            "decay": bool(decay),
+        }
+    finally:
+        db.close()

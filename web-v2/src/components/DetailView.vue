@@ -63,9 +63,30 @@
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
+        <div v-if="benchData.length" style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
+          <div :id="'c8'" style="width:100%;height:160px"></div>
+        </div>
+        <div style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 换手率 <span style="font-size:11px;color:var(--c-text-dim)">%（含分位线）</span></h4>
+          <div :id="'c9'" style="width:100%;height:140px"></div>
+        </div>
+        <div v-if="marginData.length > 2" style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
+          <div :id="'c10'" style="width:100%;height:140px"></div>
+        </div>
+        <!-- 带右侧 Y 轴的图统一殿后（PE分位%/资金流累计/ATR%），避免中段双轴观感错乱 -->
         <div style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
+        </div>
+        <div v-if="mfData.length" style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
+          <div :id="'c7'" style="width:100%;height:160px"></div>
+        </div>
+        <div style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
+          <div :id="'c11'" style="width:100%;height:140px"></div>
         </div>
       </div>
 
@@ -94,6 +115,22 @@
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交额</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
           </table>
+        </div>
+        <div v-if="chipData && chipData.buckets && chipData.buckets.length">
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
+          <div :id="'c12'" style="width:100%;height:280px"></div>
+          <div v-if="chipData.profit_ratio!=null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px">
+            现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#10b981':'#ef4444',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>
+          </div>
+        </div>
+        <div v-if="sigStats">
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 信号回看</h4>
+          <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim)">
+            近{{sigStats.years}}年 <b style="color:var(--c-text)">{{sigStats.n}}</b> 条信号（buy {{sigStats.buys}}/sell {{sigStats.sells}}）<br/>
+            平均前瞻：5d <span :style="{color:sigStats.f5>=0?'#ef4444':'#10b981'}">{{(sigStats.f5*100).toFixed(1)}}%</span> ·
+            10d <span :style="{color:sigStats.f10>=0?'#ef4444':'#10b981'}">{{(sigStats.f10*100).toFixed(1)}}%</span> ·
+            20d <span :style="{color:sigStats.f20>=0?'#ef4444':'#10b981'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
+          </div>
         </div>
       </div>
     </div>
@@ -213,6 +250,66 @@ const priceChg = ref(null)
 const priceColor = ref('#fff')
 const hoverInfo = ref(null)  // crosshair hover 时动态更新的行情数据
 
+// ── 详情页扩展图数据（best-effort：失败隐藏卡片不影响主图）──
+const mfData = ref([])       // 资金流（万元）
+const benchData = ref([])    // 沪深300 同窗 K 线（相对强弱基准）
+const marginData = ref([])   // 两融余额（元）
+const toplistData = ref([])  // 龙虎榜上榜记录
+const chipData = ref(null)   // 筹码分布（现价口径）
+const sigData = ref([])      // 模型信号史（含前瞻收益）
+const sigStats = ref(null)   // 信号摘要（侧栏）
+const mfCum = ref([])        // 主力净流入累计（与 mfData 同长）
+
+// ── K线组 ↔ PE图 日历窗口联动 ──────────────────────────────────────
+// PE 序列是全历史财报日（跨度远大于 K 线窗口），echarts.connect 的百分比
+// 联动会把两图对到不同日历时段——所以 PE 不进 connect 组，改按「可见日期
+// 区间」双向翻译：主图缩放→日期窗→PE 轴索引→派发 dataZoom（反向亦然）。
+let klineDates = []        // 当前 K 线日期轴（drawCharts 每次刷新）
+let klineMainChart = null  // c1：派发给它一个，connect 组全员同步
+let syncingAx = false      // 派发中标志，切断 事件→派发→事件 回环
+const pctIdx = (arr, pct) => Math.min(arr.length - 1, Math.max(0, Math.round((arr.length - 1) * pct / 100)))
+// 有序日期数组中找 [>=d0 的首索引, <=d1 的末索引]（窗口越界向内夹）
+const dateSpanIdx = (arr, d0, d1) => {
+  let i0 = 0, i1 = arr.length - 1
+  while (i0 < arr.length && arr[i0] < d0) i0++
+  i0 = Math.min(i0, arr.length - 1)   // 窗口整体在对方数据之后时夹到末位，防 start>end
+  while (i1 > i0 && arr[i1] > d1) i1--
+  return [i0, i1]
+}
+function syncPeFromKline(){
+  const peEl = document.getElementById('c5'); const c5 = peEl && peEl._echart
+  if (!c5 || !klineDates.length || !peData.value.length) return
+  const dz = klineMainChart?.getOption()?.dataZoom?.[0]
+  if (!dz || peData.value.length < 2) return
+  const [a, b] = [pctIdx(klineDates, dz.start ?? 0), pctIdx(klineDates, dz.end ?? 100)]
+  const [i0, i1] = dateSpanIdx(peData.value.map(d => d.date), klineDates[a], klineDates[b])
+  const n = peData.value.length
+  syncingAx = true
+  try { c5.dispatchAction({ type: 'dataZoom', start: i0 / (n - 1) * 100, end: i1 / (n - 1) * 100 }) } finally { setTimeout(() => { syncingAx = false }) }
+}
+function syncKlineFromPe(){
+  const peEl = document.getElementById('c5'); const c5 = peEl && peEl._echart
+  if (!c5 || !klineMainChart || !klineDates.length || !peData.value.length) return
+  const dz = c5.getOption()?.dataZoom?.[0]
+  if (!dz || klineDates.length < 2) return
+  const peDates = peData.value.map(d => d.date)
+  const [a, b] = [pctIdx(peDates, dz.start ?? 0), pctIdx(peDates, dz.end ?? 100)]
+  const [i0, i1] = dateSpanIdx(klineDates, peDates[a], peDates[b])
+  const n = klineDates.length
+  syncingAx = true
+  try { klineMainChart.dispatchAction({ type: 'dataZoom', start: i0 / (n - 1) * 100, end: i1 / (n - 1) * 100 }) } finally { setTimeout(() => { syncingAx = false }) }
+}
+
+// 实例复用：已存在则 setOption 更新（notMerge=true 全量重置 / false 按 series id 合并）
+function makeChart(id, opt, notMerge = true){
+  const el = document.getElementById(id)
+  if(!el) return null
+  let c = el._echart
+  if(!c){ c = echarts.init(el); el._echart = c }
+  c.setOption(opt, { notMerge })
+  return c
+}
+
 function calcPriceChange(kd){
   if(!kd||!kd.kline||kd.kline.length<2) { priceChg.value=null; priceColor.value='#fff'; return }
   const kl = kd.kline
@@ -246,7 +343,28 @@ async function load(){
   try{
     const r=await axios.get(API+'/api/stock/'+code.value+'/pe_history')
     if(r.data.data&&r.data.data.length){peData.value=r.data.data;nextTick(()=>drawPeChart())}
-  }catch(e){} 
+  }catch(e){}
+  // ── 扩展图数据（全部 best-effort：空数据隐藏卡片，异常不影响主图）──
+  await Promise.allSettled([
+    axios.get(API+'/api/stock/'+code.value+'/moneyflow?days=7000').then(r=>{
+      mfData.value = r.data.data||[]
+      const cum=[]; let s=0
+      mfData.value.forEach(d=>{s+=d.net_main; cum.push(+s.toFixed(0))})
+      mfCum.value = cum
+    }),
+    // 基准与 K 线同窗同周期：相对强弱两条线起点才可比
+    axios.get(API+'/api/stock/000300/kline?days='+range.value+'&period='+period.value+'&adjust=none&type=index').then(r=>{
+      benchData.value = r.data.kline||[]
+    }),
+    axios.get(API+'/api/stock/'+code.value+'/margin?days=7000').then(r=>{ marginData.value = r.data.data||[] }),
+    axios.get(API+'/api/stock/'+code.value+'/top_list?days=3650').then(r=>{ toplistData.value = r.data.data||[] }),
+    axios.get(API+'/api/stock/'+code.value+'/chip').then(r=>{ chipData.value = r.data }),
+    axios.get(API+'/api/stock/'+code.value+'/signals?days=1095').then(r=>{ sigData.value = r.data.data||[] }),
+  ])
+  computeSigStats()
+  await nextTick()
+  drawAuxCharts(lastKline)
+  drawChip()
 }
 
 function drawCharts(kd){
@@ -305,12 +423,19 @@ function drawCharts(kd){
     const chg = o[1] && ohlc[idx-1] ? ((o[1]-ohlc[idx-1][1])/ohlc[idx-1][1]*100).toFixed(2) : '—'
     const color = chg>=0?'#ef4444':'#10b981'
     const mid = bmid[idx], up = bup[idx], lo = blo[idx]
+    // 信号/龙虎榜叠加信息（数据晚于主图到达也不怕：formatter 每次悬停现查 ref）
+    const s = sigData.value.find(x=>x.date===dates[idx])
+    const t = toplistData.value.find(x=>x.date===dates[idx])
+    let extra = ''
+    if(s) extra += `<br/><span style="color:${s.direction==='buy'?'#ef4444':'#10b981'}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} @¥${s.price!=null?s.price.toFixed(2):'—'}</span>`
+      + (s.f10d!=null ? ` <span style="font-size:10px">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
+    if(t) extra += `<br/><span style="color:#f59e0b">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
     return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
       开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
       高: ${o[3].toFixed(2)}  低: ${o[2].toFixed(2)}  量: ${(vols[idx]/1e6).toFixed(1)}M<br/>
       <span style="color:#f59e0b">BOLL上轨: ${up!=null?up.toFixed(2):'—'}</span>
       <span style="color:#60a5fa"> 中轨: ${mid!=null?mid.toFixed(2):'—'}</span>
-      <span style="color:#f59e0b"> 下轨: ${lo!=null?lo.toFixed(2):'—'}</span></div>`
+      <span style="color:#f59e0b"> 下轨: ${lo!=null?lo.toFixed(2):'—'}</span>${extra}</div>`
   }
 
   const c1 = make('c1', {
@@ -325,12 +450,50 @@ function drawCharts(kd){
       {name:'下轨',type:'line',data:blo,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true}
     ]
   })
+  // 成交量分位线（P20/P50/P80）：基于**当前显示窗口**计算——回答"今天的天量/
+  // 地量在这段行情里处于什么位置"。窗口随 dataZoom（滑块/滚轮/五图联动）变化
+  // 时重算；分位用线性插值（对齐 numpy.percentile），零量日（停牌）剔除。
+  const quantile = (arr, q) => {
+    if (!arr.length) return 0
+    const s = [...arr].sort((a, b) => a - b)
+    const pos = (s.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+  }
+  const volMarkLines = (i0, i1) => {
+    const w = vols.slice(i0, i1 + 1).filter(v => v > 0)
+    const mk = (q, name, color) => {
+      const v = quantile(w, q)
+      return { yAxis: v, label: { formatter: `${name} ${(v / 1e6).toFixed(1)}M`, position: 'insideEndTop', fontSize: 9, color },
+               lineStyle: { color, type: 'dashed', width: 1 } }
+    }
+    return { silent: true, symbol: 'none', animation: false,
+             data: [mk(0.2, 'P20', 'rgba(156,163,175,0.8)'), mk(0.5, 'P50', '#60a5fa'), mk(0.8, 'P80', 'rgba(156,163,175,0.8)')] }
+  }
+  const initI0 = Math.max(0, Math.round((totalDays - 1) * (parseFloat(SHOW) || 0) / 100))
+
   const c2 = make('c2', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
     dataZoom:dz,
-    series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]}}]
+    series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]},
+      markLine: volMarkLines(initI0, totalDays - 1)}]
   })
+  // 缩放跟随：五图 connect 联动时任何一图缩放都会改 c2 的窗口，节流后按可见区间重算
+  if (c2) {
+    let _vqLast = 0
+    c2.on('datazoom', () => {
+      const now = Date.now()
+      if (now - _vqLast < 120) return
+      _vqLast = now
+      try {
+        const d = c2.getOption().dataZoom?.[0]
+        if (!d) return
+        const i0 = Math.max(0, Math.round((totalDays - 1) * (d.start ?? 0) / 100))
+        const i1 = Math.min(totalDays - 1, Math.round((totalDays - 1) * (d.end ?? 100) / 100))
+        c2.setOption({ series: [{ markLine: volMarkLines(i0, i1) }] })
+      } catch (e) { /* 分位线是增强信息，异常静默不影响主图 */ }
+    })
+  }
   const c3 = make('c3', {
     tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
     xAxis:xA, yAxis:{splitLine:gl},
@@ -360,10 +523,13 @@ function drawCharts(kd){
     })
     c1.on('mouseout', ()=>{ hoverInfo.value = null })
   }
-  // 均线图（MA5/10/20/60，与 K 线联动 zoom/十字线）
+  // 均线图（MA5~MA180，与 K 线联动 zoom/十字线；图例可点选显隐——七条线
+  // 仅靠颜色难辨，2026-09-15 用户反馈补）
   const c6 = make('c6', {
     tooltip: tt,
-    grid:{left:'8%',right:'3%',top:18,bottom:30},
+    legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
+            textStyle:{fontSize:9, color:'#9ca3af'}},
+    grid:{left:'8%',right:'3%',top:26,bottom:30},
     xAxis: { ...xA, axisLabel: { show: true, fontSize: 9, interval: 'auto' } },
     yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
@@ -379,6 +545,218 @@ function drawCharts(kd){
   })
   const charts = [c1,c2,c3,c4,c6].filter(Boolean)
   if(charts.length){charts.forEach(c=>c.group='s');echarts.connect('s')}
+  // K线组 ↔ PE图 日历联动（正向）：监听任一成员缩放（connect 会同步到 c1 的
+  // dataZoom），节流后翻译日期窗给 PE 图；重绘（range/period/复权切换）后立即对齐一次
+  klineDates = dates
+  klineMainChart = c1 || charts[0] || null
+  if (klineMainChart) {
+    let _axLast = 0
+    klineMainChart.off('datazoom')   // drawCharts 每次重绘都会走到，避免处理器累积
+    klineMainChart.on('datazoom', () => {
+      const now = Date.now()
+      if (syncingAx || now - _axLast < 120) return
+      _axLast = now
+      syncPeFromKline()
+    })
+    syncPeFromKline()
+  }
+}
+
+// ── 扩展图（资金流/相对强弱/换手率/两融/ATR + K线信号/龙虎榜叠加）──
+// 与主五图共用交易日轴（辅助序列 reindex 到 K 线日期，缺失日 null 断开），
+// 进同一 connect 组：任一图缩放全组同步。数据晚于主图到达/换窗重绘均安全。
+function drawAuxCharts(kd){
+  if(!kd||!kd.kline||!kd.kline.length) return
+  const dates = kd.kline.map(d=>d.trade_date)
+  const closes = kd.kline.map(d=>d.close)
+  const ohlc = kd.kline.map(d=>[d.open,d.close,d.low,d.high])
+  const trns = kd.kline.map(d=>d.turnover)
+  const idxOf = new Map(dates.map((d,i)=>[d,i]))
+  const reindex = (arr, key) => { const m=new Map(arr.map(x=>[x.date,x[key]])); return dates.map(d=>m.has(d)?m.get(d):null) }
+  const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
+  const totalDays = dates.length
+  const SHOW = totalDays<=250?0:((totalDays-250)/totalDays*100).toFixed(1)
+  const dz = [
+    {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
+    {type:'slider', xAxisIndex:0, start:SHOW, end:100, height:18, bottom:4, handleSize:8,
+    borderColor:'var(--c-input-bg)', backgroundColor:'var(--c-card-bg)',
+    fillerColor:'rgba(96,165,250,0.15)',
+    handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},
+    textStyle:{color:'var(--c-text-faint)',fontSize:9}, labelStyle:{color:'transparent'},
+    moveHandleStyle:{color:'var(--c-card-bg-hover)'}}
+  ]
+  const xA = {type:'category',data:dates,axisLabel:{show:false},
+    axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}}, axisTick:{show:false}}
+  const tt = {trigger:'axis',axisPointer:{type:'cross'}}
+  const newCharts = []
+
+  // c7 资金流：主力净流入柱（万元→亿）+ 累计线（右轴）
+  if (mfData.value.length) {
+    const nm = reindex(mfData.value, 'net_main')
+    const cum = reindex(mfCum.value.map((v,i)=>({date:mfData.value[i].date, v})), 'v')
+    const c7 = makeChart('c7', {
+      tooltip:tt, grid:{left:'8%',right:'10%',top:8,bottom:30},
+      xAxis:xA, yAxis:[
+        {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(1)+'亿'},splitLine:gl},
+        {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(0)+'亿'},splitLine:{show:false}}],
+      dataZoom:dz,
+      series:[
+        {name:'主力净流入',type:'bar',data:nm,itemStyle:{color:p=>(nm[p.dataIndex]??0)>=0?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)'}},
+        {name:'累计(右轴)',type:'line',yAxisIndex:1,data:cum,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none'}
+      ]
+    })
+    if(c7) newCharts.push(c7)
+  }
+
+  // c8 相对强弱：个股 vs 沪深300 归一化（窗口内首个两者皆有数据处=1）+ 超额差
+  if (benchData.value.length) {
+    const bc = reindex(benchData.value, 'close')
+    // 基准缺口前向填充（停牌日个股无行、指数有行 → reindex null）
+    let last = null
+    for(let i=0;i<bc.length;i++){ if(bc[i]!=null) last=bc[i]; else if(last!=null) bc[i]=last }
+    let i0 = 0
+    while(i0<dates.length && (closes[i0]==null||bc[i0]==null)) i0++
+    if (i0 < dates.length) {
+      const b0 = closes[i0], m0 = bc[i0]
+      const rel = closes.map(c=>c!=null?+(c/b0).toFixed(4):null)
+      const ben = bc.map(c=>c!=null?+(c/m0).toFixed(4):null)
+      const exc = rel.map((v,i)=>v!=null&&ben[i]!=null?+(v-ben[i]).toFixed(4):null)
+      const c8 = makeChart('c8', {
+        tooltip:tt, grid:{left:'8%',right:'3%',top:18,bottom:30},
+        legend:{show:true,top:0,itemWidth:14,itemHeight:8,itemGap:6,textStyle:{fontSize:9,color:'#9ca3af'}},
+        xAxis:xA, yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize:9}},
+        dataZoom:dz,
+        series:[
+          {name:'个股',type:'line',data:rel,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none'},
+          {name:'沪深300',type:'line',data:ben,lineStyle:{color:'#94a3b8',width:1},symbol:'none'},
+          {name:'超额',type:'line',data:exc,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'}
+        ]
+      })
+      if(c8) newCharts.push(c8)
+    }
+  }
+
+  // c9 换手率：柱 + P20/50/80 分位线（与成交量图同思路，缩放跟随重算）
+  {
+    const pctl = (arr,q)=>{ const s=arr.filter(v=>v!=null&&v>0).sort((a,b)=>a-b); if(!s.length) return 0
+      const pos=(s.length-1)*q, lo=Math.floor(pos), hi=Math.ceil(pos); return s[lo]+(s[hi]-s[lo])*(pos-lo) }
+    const marks = (i0,i1)=>{ const w=trns.slice(i0,i1+1); return {silent:true,symbol:'none',animation:false,
+      data:[{yAxis:pctl(w,0.2),label:{formatter:`P20 ${pctl(w,0.2).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'rgba(156,163,175,0.8)'},lineStyle:{color:'rgba(156,163,175,0.8)',type:'dashed',width:1}},
+            {yAxis:pctl(w,0.5),label:{formatter:`P50 ${pctl(w,0.5).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'#60a5fa'},lineStyle:{color:'#60a5fa',type:'dashed',width:1}},
+            {yAxis:pctl(w,0.8),label:{formatter:`P80 ${pctl(w,0.8).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'rgba(156,163,175,0.8)'},lineStyle:{color:'rgba(156,163,175,0.8)',type:'dashed',width:1}}]} }
+    const initI0 = Math.max(0, Math.round((totalDays-1)*(parseFloat(SHOW)||0)/100))
+    const c9 = makeChart('c9', {
+      tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+      xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:'{value}%'},splitLine:gl},
+      dataZoom:dz,
+      series:[{name:'换手率',type:'bar',data:trns,itemStyle:{color:'rgba(96,165,250,0.6)'},markLine:marks(initI0,totalDays-1)}]
+    })
+    if(c9){
+      newCharts.push(c9)
+      let _tLast = 0
+      c9.off('datazoom')
+      c9.on('datazoom', ()=>{
+        const now=Date.now(); if(now-_tLast<120) return; _tLast=now
+        try{
+          const d=c9.getOption().dataZoom?.[0]; if(!d) return
+          const a=Math.max(0,Math.round((totalDays-1)*(d.start??0)/100)), b=Math.min(totalDays-1,Math.round((totalDays-1)*(d.end??100)/100))
+          c9.setOption({series:[{markLine:marks(a,b)}]})
+        }catch(e){}
+      })
+    }
+  }
+
+  // c10 两融余额：融资/合计（元→亿），数据稀疏处 connect:'none' 断开不假连线
+  if (marginData.value.length > 2) {
+    const fin = reindex(marginData.value,'fin'), tot = reindex(marginData.value,'total')
+    const c10 = makeChart('c10', {
+      tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+      xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e8).toFixed(0)+'亿'},splitLine:gl},
+      dataZoom:dz,
+      series:[
+        {name:'融资余额',type:'line',data:fin,lineStyle:{color:'#f59e0b',width:1.5},symbol:'none',connect:'none'},
+        {name:'两融合计',type:'line',data:tot,lineStyle:{color:'#8b5cf6',width:1},symbol:'none',connect:'none'}
+      ]
+    })
+    if(c10) newCharts.push(c10)
+  }
+
+  // c11 ATR(14)：真实波幅均线 + 占价比%（右轴）——仓位管理视角
+  {
+    const tr = ohlc.map((o,i)=>{ if(i===0||!o||!ohlc[i-1]) return null
+      const pc=ohlc[i-1][1], h=o[3], l=o[2]
+      return Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)) })
+    const atr = tr.map((_,i)=>{ if(i<14) return null; let s=0; for(let j=i-13;j<=i;j++) s+=tr[j]; return +(s/14).toFixed(3) })
+    const atrPct = atr.map((v,i)=>v!=null&&closes[i]?+(v/closes[i]*100).toFixed(2):null)
+    const c11 = makeChart('c11', {
+      tooltip:tt, grid:{left:'8%',right:'9%',top:8,bottom:30},
+      xAxis:xA, yAxis:[
+        {axisLabel:{fontSize:9},splitLine:gl,scale:true},
+        {axisLabel:{fontSize:9,formatter:'{value}%'},splitLine:{show:false}}],
+      dataZoom:dz,
+      series:[
+        {name:'ATR14',type:'line',data:atr,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none'},
+        {name:'占价比(右轴)',type:'line',yAxisIndex:1,data:atrPct,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'}
+      ]
+    })
+    if(c11) newCharts.push(c11)
+  }
+
+  // c1 叠加层：模型信号（▲买/▼卖，挂当日低/高点附近——与复权口径无关）+ 龙虎榜（◆橙）
+  const c1El = document.getElementById('c1'); const c1 = c1El && c1El._echart
+  if (c1) {
+    const sigPts = sigData.value.map(s=>{
+      const i = idxOf.get(s.date); if(i==null) return null
+      const y = s.direction==='buy' ? ohlc[i][2]*0.985 : ohlc[i][3]*1.015
+      return {value:[i,y], symbolRotate: s.direction==='buy'?0:180,
+              itemStyle:{color: s.direction==='buy'?'#ef4444':'#10b981'}}
+    }).filter(Boolean)
+    const topPts = toplistData.value.map(t=>{
+      const i = idxOf.get(t.date); if(i==null) return null
+      return {value:[i, ohlc[i][2]*0.96], itemStyle:{color:'#f59e0b'}}
+    }).filter(Boolean)
+    // 按 id 合并追加（notMerge=false）：不触碰 K 线/BOLL 既有系列，重绘时按 id 原位替换
+    c1.setOption({series:[
+      {id:'sig_marks', name:'信号', type:'scatter', data:sigPts, symbol:'triangle', symbolSize:9, z:5, tooltip:{show:false}},
+      {id:'top_marks', name:'龙虎榜', type:'scatter', data:topPts, symbol:'diamond', symbolSize:7, z:5, tooltip:{show:false}}
+    ]}, {notMerge:false})
+  }
+
+  // 入联动组（connect 组按组名广播，重复 connect 安全）
+  if (newCharts.length) { newCharts.forEach(c=>c.group='s'); echarts.connect('s') }
+}
+
+// 侧栏筹码分布（现价口径的前复权价，非时间轴图、不进联动组）
+function drawChip(){
+  const el = document.getElementById('c12'); const d = chipData.value
+  if(!el || !d || !d.buckets || !d.buckets.length) return
+  let c = el._echart
+  if(!c){ c = echarts.init(el); el._echart = c }
+  const prices = d.buckets.map(b=>b.price)
+  const vols = d.buckets.map(b=>b.vol/1e8)   // 亿股
+  const nearest = prices.reduce((best,p,i)=>Math.abs(p-d.current)<Math.abs(prices[best]-d.current)?i:best,0)
+  c.setOption({
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},textStyle:{fontSize:10},
+      formatter: ps=>{ const p=ps[0]; return `¥${p.name}<br/>成交 ${p.value} 亿股` }},
+    grid:{left:6,right:34,top:6,bottom:20,containLabel:true},
+    xAxis:{type:'value',axisLabel:{fontSize:9,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
+    yAxis:{type:'category',data:prices.map(p=>p.toFixed(2)),axisLabel:{fontSize:9}},
+    series:[{type:'bar',barWidth:'72%',
+      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?'rgba(16,185,129,0.7)':'rgba(239,68,68,0.45)'}})),
+      markLine:{silent:true,symbol:'none',
+        data:[{yAxis:nearest,label:{formatter:'现价',fontSize:9,color:'#60a5fa'},lineStyle:{color:'#60a5fa',type:'dashed',width:1}}]}}
+    ]
+  }, {notMerge:true})
+}
+
+// 侧栏信号摘要（近 3 年）
+function computeSigStats(){
+  const d = sigData.value
+  if(!d.length){ sigStats.value=null; return }
+  const avg = k=>{ const xs=d.filter(x=>x[k]!=null).map(x=>x[k]); return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0 }
+  sigStats.value = { n:d.length, years:3,
+    buys:d.filter(x=>x.direction==='buy').length, sells:d.filter(x=>x.direction==='sell').length,
+    f5:avg('f5d'), f10:avg('f10d'), f20:avg('f20d') }
 }
 
 function drawPeChart(){
@@ -389,18 +767,23 @@ function drawPeChart(){
   if(!c5){ c5 = echarts.init(peEl); peEl._echart = c5 }
   const peDates = peData.value.map(d=>d.date)
   const peVals = peData.value.map(d=>d.pe_ttm)
+  const pbVals = peData.value.map(d=>d.pb_mrq)
   const pctl = peData.value.map(d=>d.pe_percentile)
   peRange.value = peDates[0]+' ~ '+peDates[peDates.length-1]
   c5.setOption({
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
-    grid:{left:'8%',right:'3%',top:8,bottom:50},
-    xAxis:{type:'category',data:peDates,axisLabel:{fontSize:9,rotate:30,interval:'auto'},splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
+    legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
+            textStyle:{fontSize:9, color:'#9ca3af'}},
+    grid:{left:'8%',right:'3%',top:26,bottom:30},
+    xAxis:{type:'category',data:peDates,axisLabel:{show:false},
+      axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},axisTick:{show:false}},
     yAxis:[
       {type:'value',name:'PE',splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
     ],
     dataZoom:[
-      // PE 图时间轴与 K 线不同（财报日），不参与联动组，滚轮独立缩放
+      // 滚轮独立缩放保留；窗口与 K 线组经「日历翻译」双向联动（见 syncPe/syncKline），
+      // 不直接进 connect 组——两轴日期集不同，百分比联动会对到不同日历时段
       {type:'inside', zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
       {type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
       borderColor:'var(--c-input-bg)',backgroundColor:'var(--c-card-bg)',
@@ -411,9 +794,17 @@ function drawPeChart(){
     }],
     series:[
       {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
-      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none',smooth:true}
+      {name:'PB',type:'line',data:pbVals,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
+      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none',smooth:true,
+        markLine:{silent:true,symbol:'none',data:[
+          {yAxis:30,label:{formatter:'低估30',fontSize:9,position:'insideEndTop',color:'#10b981'},lineStyle:{color:'#10b981',type:'dashed',width:1}},
+          {yAxis:70,label:{formatter:'高估70',fontSize:9,position:'insideEndBottom',color:'#ef4444'},lineStyle:{color:'#ef4444',type:'dashed',width:1}}]}}
     ]
   })
+  // 反向联动：拖 PE 滑块 → 日历窗翻译 → K 线组；绘制完成即按当前 K 线窗口对齐一次
+  c5.off('datazoom')
+  c5.on('datazoom', () => { if (!syncingAx) syncKlineFromPe() })
+  syncPeFromKline()
 }
 
 async function reloadChart(){
@@ -421,11 +812,18 @@ async function reloadChart(){
   try{
     const r = await axios.get(API+'/api/stock/'+code.value+'/kline?days='+range.value+'&period='+period.value+'&adjust='+adj.value)
     if(r.data.kline) lastKline = r.data
-  }catch(e){} finally { if(lastKline){ await nextTick(); drawCharts(lastKline) } }
+    // 相对强弱的基准与 K 线同窗同周期，换窗必须重取（其余扩展序列是长窗 reindex）
+    try{
+      const rb = await axios.get(API+'/api/stock/000300/kline?days='+range.value+'&period='+period.value+'&adjust=none&type=index')
+      benchData.value = rb.data.kline||[]
+    }catch(e){}
+  }catch(e){} finally {
+    if(lastKline){ await nextTick(); drawCharts(lastKline); drawAuxCharts(lastKline); drawChip() }
+  }
 }
 
 // 窗口 resize 时自适应所有图表
-function resizeAll(){ ['c1','c2','c3','c4','c5','c6'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
+function resizeAll(){ ['c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
 let _resizeHandler = null
 onMounted(() => {
   _resizeHandler = window.addEventListener ? window.addEventListener('resize', resizeAll) : null

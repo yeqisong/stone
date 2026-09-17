@@ -25,10 +25,10 @@
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin-bottom:10px">质量诊断</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;font-size:11px">
-        <div style="padding:8px;text-align:center" title="验证集与测试集夏普差值：正=过拟合, 负=欠拟合">
+        <div style="padding:8px;text-align:center" title="验证集与测试集夏普差值：正=过拟合, 负=欠拟合；有分解数据时按 T+1 次日收盘口径判读（诚实口径）">
           <div style="color:var(--c-text-faint)">拟合度</div>
           <div style="font-weight:700;margin-top:2px" :style="{color:overfitColor}">{{overfitLabel}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">Val-Test={{rep.overfit_gap?.toFixed(2)}}</div>
+          <div style="color:var(--c-text-faint);font-size:9px">Val-Test={{rep.overfit_gap?.toFixed(2)}}<template v-if="gd.sharpe_gap_val_test_t1!=null"> / 次日{{gd.sharpe_gap_val_test_t1.toFixed(2)}}</template></div>
         </div>
         <div style="padding:8px;text-align:center" title="综合夏普+盈亏比评级：A优秀 B良好 C一般 D较差">
           <div style="color:var(--c-text-faint)">收益能力</div>
@@ -45,6 +45,33 @@
           <div style="font-weight:700;margin-top:2px" :style="{color:modelReturn!=null?(modelReturn>rep.benchmark_return?'#ef4444':'#10b981'):'var(--c-text-dim)'}">{{modelReturn!=null?(modelReturn>rep.benchmark_return?'跑赢':'跑输'):'—'}}</div>
           <div style="color:var(--c-text-faint);font-size:9px">模型{{modelReturn!=null?(modelReturn*100).toFixed(1)+'%':'—'}} vs 基准{{rep.benchmark_return!=null?(rep.benchmark_return*100).toFixed(1)+'%':'—'}}</div>
         </div>
+      </div>
+    </div>
+
+    <!-- 差距分解：Val-Test gap 的三块成分（v3.9.2 起评估报告携带；旧报告无此卡自动隐藏） -->
+    <div v-if="rep.gap_decomposition" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin-bottom:10px">差距分解（口径 / 环境 / 模型）</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;font-size:11px">
+        <div style="padding:8px;text-align:center" title="T+0 与 T+1 口径的夏普差：同日收盘成交的乐观性成分">
+          <div style="color:var(--c-text-faint)">执行口径</div>
+          <div style="font-weight:700;margin-top:2px">val {{fmtNum(gd.exec_optimism?.val)}} / test {{fmtNum(gd.exec_optimism?.test)}}</div>
+          <div style="color:var(--c-text-faint);font-size:9px">夏普 T+0−T+1（正=同日收盘虚高）</div>
+        </div>
+        <div style="padding:8px;text-align:center" title="各窗口沪深300年化：val/test 环境差异成分">
+          <div style="color:var(--c-text-faint)">市场环境</div>
+          <div style="font-weight:700;margin-top:2px">val {{pct(gd.regime?.val?.annual)}} / test {{pct(gd.regime?.test?.annual)}}</div>
+          <div style="color:var(--c-text-faint);font-size:9px">基准年化（val 窗 vs test 窗）</div>
+        </div>
+        <div style="padding:8px;text-align:center" title="逐日截面秩相关均值：模型排序力是否跨窗口退化（与组合夏普解耦）">
+          <div style="color:var(--c-text-faint)">模型排序力</div>
+          <div style="font-weight:700;margin-top:2px">val {{icAvg('val')}} / test {{icAvg('test')}}</div>
+          <div style="color:var(--c-text-faint);font-size:9px">RankIC 均值（val≈test=未退化）</div>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:10px;color:var(--c-text-dim)">
+        <span v-for="p in gd.per_label||[]" :key="p.label" style="margin-right:12px">
+          {{p.label}}: {{p.cause}}<template v-if="p.gap_t1!=null">（gap {{p.gap_t0}}→{{p.gap_t1}}）</template>
+        </span>
       </div>
     </div>
 
@@ -331,6 +358,16 @@ const props = defineProps({ version: Object })
 
 const rep = computed(() => props.version?.evaluation_report || {})
 const bp = computed(() => props.version?.best_params || {})
+const gd = computed(() => rep.value.gap_decomposition || {})
+
+const fmtNum = v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2)
+const pct = v => v == null ? '—' : (v * 100).toFixed(1) + '%'
+// RankIC 按周期取均值（train/val/test 三窗侧）
+const icAvg = side => {
+  const ric = gd.value.rank_ic || {}
+  const xs = Object.values(ric).map(w => w?.[side]).filter(v => v != null)
+  return xs.length ? (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : '—'
+}
 
 const metrics = computed(() => [
   { label:'夏普比率', value: props.version?.sharpe?.toFixed(2) || '—', color:'#ef4444' },
@@ -342,7 +379,8 @@ const metrics = computed(() => [
 ])
 
 const overfitLabel = computed(() => {
-  const gap = rep.value.overfit_gap
+  // 有分解数据时按 T+1 次日收盘口径判读（诚实口径）；旧报告回退 T+0
+  const gap = gd.value.sharpe_gap_val_test_t1 ?? rep.value.overfit_gap
   if (gap == null) return '—'
   if (gap > 0.5) return '过拟合'
   if (gap < -0.3) return '欠拟合'
@@ -350,7 +388,7 @@ const overfitLabel = computed(() => {
 })
 
 const overfitColor = computed(() => {
-  const gap = rep.value.overfit_gap
+  const gap = gd.value.sharpe_gap_val_test_t1 ?? rep.value.overfit_gap
   if (gap == null) return 'var(--c-text-dim)'
   if (gap > 0.5) return '#f59e0b'
   if (gap < -0.3) return '#ef4444'

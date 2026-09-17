@@ -32,9 +32,10 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.db.connection import get_sync_db
-from scripts.pipeline import (build_feature_wide_table, compute_regime_gates,
-                              pred_score, prepare_model_frame, run_training_backtest,
-                              val_score)
+from scripts.pipeline import (benchmark_window_stats, build_feature_wide_table,
+                              compute_gap_decomposition, compute_regime_gates,
+                              cross_sectional_rank_ic, pred_score, prepare_model_frame,
+                              run_training_backtest, val_score)
 
 TARGETS = [('5d', 'target_5d', 5), ('10d', 'target_10d', 10), ('20d', 'target_20d', 20)]
 
@@ -47,7 +48,7 @@ def _annualize(bt):
     return 0
 
 
-def evaluate(db, ver, apply=False):
+def evaluate(db, ver, apply=False, end_date=None):
     row = db.execute(text("SELECT config, best_params FROM model_versions WHERE version=:v"),
                      {"v": ver}).fetchone()
     if not row:
@@ -69,7 +70,9 @@ def evaluate(db, ver, apply=False):
     logger.info(f'[eval] {ver} 载入模型: {sorted(models)}')
 
     data_start = cfg.get('train_start', '2024-01-01')
-    end_date = (_date.today() - _td(days=2)).isoformat()
+    # end 默认 today-2；可 --end 钉死窗口（复现历史存档做逐位对照时必需——
+    # 窗口随日历前移会让切分日漂移，数字自然微动，不是代码回归）
+    end_date = end_date or (_date.today() - _td(days=2)).isoformat()
     df = build_feature_wide_table(db, feature_names, data_start, end_date, 'stock')
     if len(df) < 5000:
         raise SystemExit(f'特征数据不足({len(df)} 行)，请先执行特征计算')
@@ -79,6 +82,7 @@ def evaluate(db, ver, apply=False):
     dates = sorted(df['trade_date'].unique())
     n = len(dates)
     train_cut, test_cut = dates[int(n * 0.6)], dates[int(n * 0.8)]
+    train_mask = df['trade_date'] < train_cut
     val_mask = (df['trade_date'] >= train_cut) & (df['trade_date'] < test_cut)
     test_mask = df['trade_date'] >= test_cut
     logger.info(f'[eval] val {str(train_cut)[:10]}~{str(test_cut)[:10]} / test {str(test_cut)[:10]}~')
@@ -99,7 +103,7 @@ def evaluate(db, ver, apply=False):
                   slippage=cfg.get('slippage', 0.001),
                   gated_dates=regime_gates, dd_gate=pdd_gate, trailing=trail_val)
 
-    def run_all(mask, mask_name):
+    def run_all(mask, mask_name, exec_lag=0):
         res, sub = {}, df[mask]
         for label, tname, hdays in TARGETS:
             if label not in models:
@@ -109,16 +113,43 @@ def evaluate(db, ver, apply=False):
                                        sub['stock_code'].values, sub['close'].values,
                                        sub['volume'].values, hdays, bt_label=label,
                                        limit_up=sub['_limit_up'].values,
-                                       limit_down=sub['_limit_down'].values, **common)
+                                       limit_down=sub['_limit_down'].values,
+                                       exec_lag=exec_lag, **common)
             res[label] = bt
-            logger.info(f'[eval] {label} {mask_name}: sharpe={bt["sharpe"]} dd={bt["max_dd"]} '
-                        f'ret={bt["total_return"]:.1%} 卖出{bt["total_trades"]}笔')
+            logger.info(f'[eval] {label} {mask_name}(T+{exec_lag}): sharpe={bt["sharpe"]} dd={bt["max_dd"]} '
+                        f'ret={bt["total_return"]:.1%} cost={bt["total_cost"]:.0f} 卖出{bt["total_trades"]}笔')
         return res
 
     val_results = run_all(val_mask, 'val')
     test_results = run_all(test_mask, 'test')
     if not test_results:
         raise SystemExit('回测无结果')
+
+    # ── 差距分解（v3.9.2）：T+1 双口径 + RankIC 三窗 + 基准环境 ──
+    # 让 Val-Test gap 可回答「多少是执行口径、多少是环境、多少是模型」。
+    # 2026-09-15 实测 v15.0：gap 2.50 中 10d 周期在 T+1 下消失（1.82→-0.27），
+    # RankIC val≈test 无退化——主体是测量伪影与环境，不是模型过拟合。
+    test_results_t1 = run_all(test_mask, 'test', exec_lag=1)
+    val_results_t1 = run_all(val_mask, 'val', exec_lag=1)
+    rank_ic = {}
+    for label, tname, _ in TARGETS:
+        if label not in models:
+            continue
+        p_full = pred_score(models[label], df[FEATURES].values)
+        rank_ic[label] = {
+            'train': cross_sectional_rank_ic(p_full[train_mask.values], df[train_mask][tname].values, df[train_mask]['trade_date'].values),
+            'val': cross_sectional_rank_ic(p_full[val_mask.values], df[val_mask][tname].values, df[val_mask]['trade_date'].values),
+            'test': cross_sectional_rank_ic(p_full[test_mask.values], df[test_mask][tname].values, df[test_mask]['trade_date'].values),
+        }
+        logger.info(f'[eval] RankIC {label}: train={rank_ic[label]["train"]} '
+                    f'val={rank_ic[label]["val"]} test={rank_ic[label]["test"]}')
+    bench = benchmark_window_stats(db, {
+        'train': (data_start, str(train_cut)[:10]),
+        'val': (str(train_cut)[:10], str(test_cut)[:10]),
+        'test': (str(test_cut)[:10], str(dates[-1])[:10]),
+    })
+    gap = compute_gap_decomposition(val_results, test_results, test_results_t1,
+                                    val_results_t1, rank_ic, bench)
 
     labels = [l for l in ['5d', '10d', '20d'] if l in test_results]
     avg_sharpe = float(np.mean([test_results[l]['sharpe'] for l in labels]))
@@ -165,13 +196,27 @@ def evaluate(db, ver, apply=False):
     top3 = sum(sorted(wins, reverse=True)[:3]) / sum(wins) * 100 if wins else 0
 
     # 与训练期同结构：evaluation_report 供 UI 读取；detail 存 label_detail/equity_tail
+    # 口径补齐（2026-09-14）：label_detail 增成本拖累；sample_domain 记录样本域三切分、
+    # 成交时点、成本参数——评估数字脱离口径就没有可比性
     report = {
         'labels': labels,
         'label_detail': {l: {'sharpe': test_results[l]['sharpe'], 'win_rate': test_results[l]['win_rate'],
-                             'total_return': test_results[l]['total_return'], 'max_dd': test_results[l]['max_dd']}
+                             'total_return': test_results[l]['total_return'], 'max_dd': test_results[l]['max_dd'],
+                             'total_cost': test_results[l].get('total_cost', 0),
+                             'cost_pct': test_results[l].get('cost_pct', 0)}
                          for l in labels},
         'equity_tail': equity_tail,
         'benchmark_return': round(benchmark_return, 4),
+        'sample_domain': {
+            'entity': cfg.get('entity', 'stock'),
+            'data_start': data_start, 'data_end': end_date,
+            'windows': {'train': [data_start, str(train_cut)[:10]],
+                        'val': [str(train_cut)[:10], str(test_cut)[:10]],
+                        'test': [str(test_cut)[:10], str(dates[-1])[:10]]},
+            'exec_timing': '收盘 T+0（信号日收盘成交）',
+            'costs': {'commission': common['commission'], 'stamp_tax': common['stamp_tax'],
+                      'slippage': common['slippage']},
+        },
         'evaluation_report': {
             'trials': [],   # 复评不重训，无 trial 记录
             'trades': all_trades,
@@ -192,19 +237,38 @@ def evaluate(db, ver, apply=False):
             'win_rate_5d': test_results.get('5d', {}).get('win_rate', 0),
             'win_rate_10d': test_results.get('10d', {}).get('win_rate', 0),
             'win_rate_20d': test_results.get('20d', {}).get('win_rate', 0),
+            # 差距分解（v3.9.2）：overfit_gap 保持 T+0 口径兼容旧读法，
+            # overfit_gap_t1 为次日收盘成交口径的诚实差距
+            'overfit_gap_t1': gap.get('sharpe_gap_val_test_t1'),
+            'gap_decomposition': gap,
         },
     }
-    print(f'\n══ {ver} 复评结果（当前数据口径）══')
+    print(f'\n══ {ver} 复评结果（当前数据口径，成交=收盘T+0）══')
     for l in labels:
         d = test_results[l]
         print(f'  {l:>3}: 夏普 {d["sharpe"]:>6}  回撤 {d["max_dd"]:>7.1%}  '
-              f'收益 {d["total_return"]:>7.1%}  胜率 {d["win_rate"]:>5.1%}  卖出 {d["total_trades"]:>4} 笔')
+              f'收益 {d["total_return"]:>7.1%}  胜率 {d["win_rate"]:>5.1%}  '
+              f'成本 {d.get("total_cost", 0):>8.0f}（{d.get("cost_pct", 0):.1%}本金）  卖出 {d["total_trades"]:>4} 笔')
     print(f'  合计: 夏普 {avg_sharpe:.3f}  回撤 {abs(max_dd_avg):.1%}  年化 {annual_return:.1%}  '
           f'基准 {benchmark_return:.1%}  逐日记录 {len(equity_tail)} 点')
     if val_results:
         print('  val（OOS 对照，写库不落 val 明细）: ' + '  '.join(
             f'{l}=夏普{d["sharpe"]} 收益{d["total_return"]:.0%} 卖出{d["total_trades"]}笔'
             for l, d in val_results.items()))
+
+    # 差距分解表（人读版；结构化结果已随报告落库 evaluation_report.gap_decomposition）
+    print('\n── 差距分解：Val-Test gap 的三块成分 ──')
+    print(f'  gap(T+0 收盘成交) = {gap["sharpe_gap_val_test_t0"]}    '
+          f'gap(T+1 次日收盘) = {gap["sharpe_gap_val_test_t1"]}')
+    for w in ('train', 'val', 'test'):
+        b = (bench or {}).get(w, {})
+        if b:
+            print(f'  环境 {w:<5}: 基准年化 {b["annual"]:>7.1%}（{b["days"]} 天）')
+    for l, ic in rank_ic.items():
+        print(f'  RankIC {l:>3}: train={ic["train"]:+.4f}  val={ic["val"]:+.4f}  test={ic["test"]:+.4f}')
+    for p in gap['per_label']:
+        print(f'  {p["label"]:>3}: gap {p["gap_t0"]} → {p["gap_t1"]}（T+1）  '
+              f'IC val={p["ic_val"]} test={p["ic_test"]}  → {p["cause"]}')
 
     if not apply:
         print('\n（试运行：未写库。加 --apply 覆盖 backtest_records / model_versions / 逐日记录）')
@@ -223,7 +287,7 @@ def evaluate(db, ver, apply=False):
            "sh": round(avg_sharpe, 4), "wr": round(avg_win, 4),
            "md": round(abs(max_dd_avg), 4), "ar": round(annual_return, 4),
            "tt": len(all_trades), "wt": win_trades,
-           "dt": _json.dumps({k: report[k] for k in ('labels', 'label_detail', 'benchmark_return', 'equity_tail')},
+           "dt": _json.dumps({k: report[k] for k in ('labels', 'label_detail', 'benchmark_return', 'equity_tail', 'sample_domain')},
                              ensure_ascii=False)})
     for t in all_trades:
         is_buy = t.get('action') == 'BUY'
@@ -254,6 +318,18 @@ def evaluate(db, ver, apply=False):
            "md": round(abs(max_dd_avg), 4), "ar": round(annual_return, 4),
            "rep": _json.dumps(report['evaluation_report'], ensure_ascii=False)})
     db.commit()
+    # 血缘台账：复评覆盖事件（记录新口径的头条指标，与旧存档的差异可追溯）
+    try:
+        from app.lineage import log_event
+        log_event(db, 'eval_rerun', ver,
+                  scope=f'test {test_start}~{test_end}（当前数据口径复评）',
+                  detail={'sharpe': round(float(avg_sharpe), 4),
+                          'max_dd': round(float(abs(max_dd_avg)), 4),
+                          'annual_return': round(float(annual_return), 4),
+                          'win_rate': round(float(avg_win), 4),
+                          'label_detail': report['label_detail']})
+    except Exception:
+        pass
     print(f'\n已覆盖写库：backtest_records / backtest_trades / backtest_daily_records / model_versions({ver})')
     return report
 
@@ -262,10 +338,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('version', help='模型版本，如 v15.0')
     ap.add_argument('--apply', action='store_true', help='覆盖写库（默认只算不写）')
+    ap.add_argument('--end', default=None, help='数据窗截止日 YYYY-MM-DD（默认 today-2；复现对照用）')
     args = ap.parse_args()
     db = get_sync_db()
     try:
-        evaluate(db, args.version, apply=args.apply)
+        evaluate(db, args.version, apply=args.apply, end_date=args.end)
     finally:
         db.close()
 

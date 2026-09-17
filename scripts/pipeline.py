@@ -398,7 +398,7 @@ def _rid(kw): return kw.get('run_id', '')
 import threading as _t
 import time as _time
 
-def _hb_thread(log_id, rid, stop, start_time):
+def _hb_thread(log_id, rid, stop, start_time, td='', nn=''):
     """心跳线程：每 25 秒更新 heartbeat + 已运行时长。超时 5 分钟无进展则标记失败。
 
     进展判定看 rows 和 detail 双指标：读库先于写入自身心跳 detail，心跳自身
@@ -429,7 +429,8 @@ def _hb_thread(log_id, rid, stop, start_time):
         except:
             rows_count = None
             detail_seen = None
-        update_node_progress(log_id=log_id, rows=rows_count, detail=detail)
+        update_node_progress(log_id=log_id, rows=rows_count, detail=detail,
+                             trade_date=td, node_name=nn, run_id=rid)
         # detail 比较：排除心跳自身写入的 '采集中…'（其时长后缀每轮必变，会把
         # 无进展永久掩盖）。节点写入的其他 detail 变化均视为进展。
         own_detail = detail_seen is not None and detail_seen.startswith('采集中')
@@ -468,7 +469,7 @@ def _node_stopped(rid, log_id=None):
         return bool(ev and ev.is_set())
     return False
 
-def _with_hb(log_id, rid, fn):
+def _with_hb(log_id, rid, fn, td='', nn=''):
     """带心跳保护执行函数。
 
     stop 事件注册到 app.signal：心跳线程因看门狗超时或用户终止 set 时，
@@ -481,7 +482,7 @@ def _with_hb(log_id, rid, fn):
     key = f"{rid}:{log_id}" if rid else None
     if key:
         set_stop_event(key, stop)
-    hb = _t.Thread(target=_hb_thread, args=(log_id, rid, stop, start_time), daemon=True)
+    hb = _t.Thread(target=_hb_thread, args=(log_id, rid, stop, start_time, td, nn), daemon=True)
     hb.start()
     try:
         return fn()
@@ -509,24 +510,8 @@ def dag_task_kline(trade_date=None, **kw):
         db = get_sync_db()
         rows = source.fetch_stock_kline([], td, td)
         saved = batch_upsert_kline(db, rows)
-        # 因子一致性自愈：tushare 会回溯性重定基 adj_factor 且分批落地，半修正窗口拉数
-        # 会造成跨界假跳变，静默污染标签/IC/回测（2026-07-01 批次制造过 +19.5% 假收益）。
-        # 写在采集后立即做：此刻配额基本未动，当天即可自愈而非两个月后被人工发现。
-        heal_note = ''
-        try:
-            from scripts.repair_adj_factor import check_and_heal
-            h = check_and_heal(db, days=7)
-            if h.get('detected'):
-                heal_note = (f" | 因子自愈: 检出{h['detected']}只 改写{h.get('healed', 0)}只"
-                             f" 特征{h.get('feature_rows', 0):,}行")
-                if h.get('skipped_quota'):
-                    heal_note += '（超限/配额不足未自动修，需人工跑 repair_adj_factor.py）'
-                logger.warning(f'[kline] 因子一致性自愈{heal_note}')
-        except Exception as e:
-            heal_note = f' | 因子自愈跳过({str(e)[:60]})'
-            logger.warning(f'[kline] 因子自愈失败（不影响采集）: {e}')
         db.close()
-        return {'rows': saved, '_source': source.name, '_heal': heal_note}
+        return {'rows': saved, '_source': source.name}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
@@ -535,8 +520,7 @@ def dag_task_kline(trade_date=None, **kw):
         if fatal:
             write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
         else:
-            write_node_log(log_id=log_id, status='success', rows=rows,
-                           detail=f'完成 {rows} 行 (来源:{src}){r.get("_heal", "")}')
+            write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 行 (来源:{src})')
         return r
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e))
@@ -2886,6 +2870,189 @@ def pred_score(model, X):
     return model.predict(X)
 
 
+class SeedEnsemble:
+    """多种子平均集成（回归）：predict=成员预测均值、score=均值预测的 r²。
+
+    同一最优超参换 random_state 拟合 N 个成员取均值——单模型的种子噪声被
+    平均掉，val-test 差距中的方差成分收窄。duck-typing 兼容 xgboost 接口，
+    对 pred_score / val_score / 信号链路（pkl 载入）完全透明。
+    注意：**不定义** predict_proba——回归成员没有概率接口，定义了会让
+    pred_score 的 hasattr 探测误走概率分支（XGBRegressor 曾在此炸掉）；
+    分类集成用 ProbaSeedEnsemble。
+    """
+
+    def __init__(self, models):
+        self.models = models
+
+    def predict(self, X):
+        import numpy as np
+        return np.mean([m.predict(X) for m in self.models], axis=0)
+
+    def score(self, X, y):
+        import numpy as np
+        pred = self.predict(X)
+        y = np.asarray(y, dtype=float)
+        ss_res = float(np.sum((y - pred) ** 2))
+        ss_tot = float(np.sum((y - y.mean()) ** 2))
+        return round(1 - ss_res / ss_tot, 4) if ss_tot > 0 else 0.0
+
+
+class ProbaSeedEnsemble(SeedEnsemble):
+    """多种子平均集成（分类）：predict_proba=成员概率均值（pred_score 取 [:,1] 正类概率）。"""
+
+    def predict_proba(self, X):
+        import numpy as np
+        return np.mean([m.predict_proba(X) for m in self.models], axis=0)
+
+
+def seed_ensemble(models):
+    """按成员类型选集成类：全体有 predict_proba 才走概率版。"""
+    if all(hasattr(m, 'predict_proba') for m in models):
+        return ProbaSeedEnsemble(models)
+    return SeedEnsemble(models)
+
+
+def with_training_protocol_defaults(cfg):
+    """补训练协议默认键（purged CV + 多种子集成）——克隆/旧配置升级用。
+
+    只在缺键时补（显式 enabled:false / seeds:1 的选择不被覆盖）。
+    v3.9.2 前的模型 config 无这些键，训练端按关闭兼容；rolling_retrain 克隆
+    ACTIVE 时经此函数带上新协议——「默认用上」靠机制不靠人记。
+    """
+    out = dict(cfg or {})
+    out.setdefault('selection_cv', {'enabled': True, 'folds': 4, 'embargo_days': 25})
+    out.setdefault('ensemble', {'seeds': 3})
+    return out
+
+
+def cross_sectional_rank_ic(pred, target, dates):
+    """逐日截面 Spearman 秩相关均值（RankIC）——模型侧纯度量，不含成交/组合。
+
+    与组合夏普差距解耦的原因：2026-09-15 实测 v15.0 出现 test RankIC 最高
+    （20d +0.086）而回测最差（-1.08）的周期——夏普差距主体在环境/成本。
+    向量化实现（组内 rank 后按日期聚合协方差），避免逐日 apply 的性能陷阱。
+    """
+    import numpy as np
+    import pandas as pd
+    t = pd.DataFrame({'d': pd.Series(dates).astype(str).values,
+                      'p': np.asarray(pred, dtype=float),
+                      'r': np.asarray(target, dtype=float)}).dropna()
+    if len(t) < 10:
+        return 0.0
+    t['pr'] = t.groupby('d')['p'].rank()
+    t['rr'] = t.groupby('d')['r'].rank()
+    g = t.groupby('d')
+    n = g['pr'].count()
+    mp = g['pr'].transform('mean')
+    mr = g['rr'].transform('mean')
+    cov = ((t['pr'] - mp) * (t['rr'] - mr)).groupby(t['d']).sum() / (n - 1).clip(lower=1)
+    sp = g['pr'].std()
+    sr = g['rr'].std()
+    ic = (cov / (sp * sr).replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).dropna()
+    return round(float(ic.mean()), 4) if len(ic) else 0.0
+
+
+def benchmark_window_stats(db, windows, index_code='000300'):
+    """各时间窗基准（默认沪深300）区间收益与年化——差距分解的环境成分。
+
+    windows: {name: (start, end)}；返回 {name: {'days','total_return','annual'}}。
+    2026-09-15 实测：v15 三窗基准年化 train +0.9% / val +37.2% / test -8.1%，
+    val-test 夏普差距的大头是环境切换而非模型退化。
+    """
+    from sqlalchemy import text
+    out = {}
+    for name, (s, e) in windows.items():
+        rows = db.execute(text(
+            "SELECT close FROM index_daily_quote WHERE index_code=:c AND trade_date BETWEEN :s AND :e"
+            " AND close IS NOT NULL ORDER BY trade_date"),
+            {"c": index_code, "s": s, "e": e}).fetchall()
+        if len(rows) >= 2 and float(rows[0][0]) > 0:
+            ret = float(rows[-1][0]) / float(rows[0][0]) - 1
+            out[name] = {'days': len(rows), 'total_return': round(ret, 4),
+                         'annual': round((1 + ret) ** (252 / len(rows)) - 1, 4)}
+        else:
+            out[name] = {'days': len(rows), 'total_return': 0.0, 'annual': 0.0}
+    return out
+
+
+def compute_gap_decomposition(val_t0, test_t0, test_t1=None, val_t1=None,
+                              rank_ic=None, regime=None):
+    """val-test 夏普差距三分解：执行口径 / 市场环境 / 模型排序力。
+
+    背景（2026-09-15 v15.0 实测）：Val-Test=2.50 里模型退化只占小头——10d
+    差距在 T+1 口径下消失（1.82→-0.27），train 段回测反而是最差窗口（平市
+    +成本），RankIC val≈test 无退化。单一 gap 数字无法回答「该改模型还是该
+    改口径」，此函数把三块拆开供评估报告/UI 呈现。
+
+    Args:
+        val_t0/test_t0: {label: bt dict}（T+0 信号日收盘成交）
+        val_t1/test_t1: 同结构（T+1 次日收盘成交，可空）
+        rank_ic: {label: {'train','val','test'}}（cross_sectional_rank_ic 产出，可空）
+        regime: benchmark_window_stats 产出（可空）
+    """
+    import numpy as np
+    labels = [l for l in ('5d', '10d', '20d') if l in (test_t0 or {})]
+
+    def _ms(d):
+        if not d:
+            return None
+        xs = [d[l]['sharpe'] for l in labels if l in d and d[l].get('sharpe') is not None]
+        return round(float(np.mean(xs)), 4) if xs else None
+
+    def _g(a, b):
+        return round(a - b, 4) if (a is not None and b is not None) else None
+
+    val_s, test_s = _ms(val_t0), _ms(test_t0)
+    val1_s, test1_s = _ms(val_t1), _ms(test_t1)
+    per_label = []
+    for l in labels:
+        g0 = _g((val_t0 or {}).get(l, {}).get('sharpe'), (test_t0 or {}).get(l, {}).get('sharpe'))
+        g1 = _g((val_t1 or {}).get(l, {}).get('sharpe'), (test_t1 or {}).get(l, {}).get('sharpe'))
+        ic = (rank_ic or {}).get(l, {})
+        ic_val, ic_test = ic.get('val'), ic.get('test')
+        # 结论归因：T+1 下差距收敛 → 执行口径伪影；RankIC 平移 → 环境主导；否则模型退化
+        if g1 is not None and g0 is not None and g1 < max(0.5, g0 * 0.3):
+            cause = '执行口径'
+        elif ic_val is not None and ic_test is not None and abs(ic_val - ic_test) < 0.015:
+            cause = '环境主导'
+        else:
+            cause = '模型退化'
+        per_label.append({'label': l, 'gap_t0': g0, 'gap_t1': g1,
+                          'ic_val': ic_val, 'ic_test': ic_test, 'cause': cause})
+    return {
+        'sharpe_gap_val_test_t0': _g(val_s, test_s),
+        'sharpe_gap_val_test_t1': _g(val1_s, test1_s),
+        'exec_caliber': {
+            't0': {l: (test_t0 or {}).get(l, {}).get('sharpe') for l in labels},
+            't1': {l: (test_t1 or {}).get(l, {}).get('sharpe') for l in labels} if test_t1 else None,
+        },
+        'exec_optimism': {'val': _g(val_s, val1_s), 'test': _g(test_s, test1_s)},
+        'regime': regime or {},
+        'rank_ic': rank_ic or {},
+        'per_label': per_label,
+    }
+
+
+def _purged_time_folds(dates_sorted, folds=4, embargo=25):
+    """时间序连续折 + 折前 purge/embargo（按交易日计）。返回 [(fold集, train集)]。
+
+    折 k 的训练侧剔除折开始前 embargo 个交易日——标签最长前瞻 20 交易日，
+    不剔除则「右边界样本的标签窗口伸进折内」，折外得分被未来信息污染
+    （purged CV 的标准做法，López de Prado 2018）。纯函数供单测。
+    """
+    ds = list(dates_sorted)
+    n = len(ds)
+    folds = max(2, min(int(folds), n // 4))
+    edges = [i * n // folds for i in range(folds + 1)]
+    out = []
+    for k in range(folds):
+        lo, hi = edges[k], edges[k + 1]
+        fold = set(ds[lo:hi])
+        train = set(ds[:max(0, lo - int(embargo))]) | set(ds[hi:])
+        out.append((fold, train))
+    return out
+
+
 def build_targets(db, df, cfg):
     """构建 5/10/20 日前瞻标签（winsorize + label_transform）。
 
@@ -3009,7 +3176,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                           initial_cash=1_000_000, max_pos=5, bt_ver='', bt_label='',
                           stop_loss=None, take_profit=None, commission=None, stamp_tax=None,
                           slippage=None, limit_up=None, limit_down=None, gated_dates=None,
-                          dd_gate=None, trailing=None):
+                          dd_gate=None, trailing=None, exec_lag=0):
     import pandas as pd
     import numpy as np
     """回测引擎：资金约束 + 流动性约束 + 整数手约束 + 涨跌停约束。
@@ -3032,6 +3199,10 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                  直至回撤收敛回阈值内（以昨日收盘净值判定，无未来函数）
         trailing: 移动止盈回撤（如 0.08）——启用后替代固定止盈：持仓从持有期
                  峰值回撤超阈值即以峰值×(1-trailing) 退出，不封顶右尾
+        exec_lag: 成交时点延迟（0=信号日收盘成交【默认，与既有全部结果一致】；
+                 1=次日收盘成交——候选分数取该股前一交易日的预测，模拟
+                 "收盘后出信号、次日收盘才可成交"的真实可达性。退出仍在当日
+                 收盘（盘中破位 EOD 出场的近似），涨停/流动性约束按成交日判定）
     """
     sl_val = stop_loss if stop_loss is not None else 0.08
     tp_val = take_profit if take_profit is not None else 0.15
@@ -3046,6 +3217,10 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
         'limit_up': limit_up if limit_up is not None else False,
         'limit_down': limit_down if limit_down is not None else False,
     })
+    if exec_lag:
+        # 次日收盘成交：候选分数整体后移一个交易日（该股首日无分数自然不买）
+        val_df = val_df.sort_values(['code', 'date']).reset_index(drop=True)
+        val_df['pred'] = val_df.groupby('code')['pred'].shift(1)
     sorted_dates = sorted(val_df['date'].unique())
 
     def _mark_price(h, d):
@@ -3086,6 +3261,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
     trade_log = []  # M6-18: 记录每笔交易明细
     limit_up_blocked = 0   # 涨停拦截的买入候选数
     limit_down_blocked = 0 # 跌停拦截的卖出数
+    cost_accum = 0.0       # 累计交易成本（佣金+印花税+冲击成本，口径补齐用）
 
     for di, d in enumerate(sorted_dates):
         # ── 1. 平仓：到期或止损 ──
@@ -3133,6 +3309,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
             if should_sell:
                 gross = h['shares'] * sell_price
                 sell_cost = gross * (comm_val + st_val) + max(gross * slip_val, 0)
+                cost_accum += sell_cost
                 net_sell = max(gross - sell_cost, 0)
                 cash_before = cash
                 cash += net_sell
@@ -3241,6 +3418,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                 continue
             cash_before = cash
             cash -= total_cost
+            cost_accum += buy_cost   # 成交成立才计（资金不足被跳过的买单不计成本）
 
             trade_id = f"T{len(trade_log)+1:04d}"
             pos_value = total_cost
@@ -3308,7 +3486,10 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
         'sharpe': round(sharpe, 4), 'win_rate': round(win_rate, 4),
         'max_dd': round(max_dd, 4), 'total_return': round(total_return, 4),
         'total_trades': trade_count, 'equity_curve': [round(e, 2) for e in equity_curve],
-        'trades': trade_log, 'daily': daily_log
+        'trades': trade_log, 'daily': daily_log,
+        # 口径补齐：累计成本与相对本金的拖累（只读观测，不改变撮合逻辑）
+        'total_cost': round(cost_accum, 2),
+        'cost_pct': round(cost_accum / initial_cash, 4) if initial_cash > 0 else 0,
     }
 
 
@@ -3571,6 +3752,30 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         val_volume = df[val_mask]['volume'].values
         TARGETS = [('5d','target_5d',5), ('10d','target_10d',10), ('20d','target_20d',20)]
 
+        # ── 超参选择协议（v3.9.2 可配）──
+        # purged CV：折外均值替代单 val 得分——消除「N 组在 val 上选最优」的赢者
+        # 诅咒（v13/v16 同协议旁证约 0.3-0.5 的 gap 通胀）；启用后 val 完全不参与
+        # 选择，成为诚实 OOS。折按交易日连续切，折前 embargo ≥ 标签最长前瞻。
+        _cv_cfg = cfg.get('selection_cv') or {}
+        _use_cv = bool(_cv_cfg.get('enabled')) and int(_cv_cfg.get('folds', 4)) >= 2
+        _cv_folds = []
+        _tr_dates_all = df[train_mask]['trade_date'].values
+        train_n = int(len(X_train) * 0.9)
+        X_tr_h, X_es_h = X_train[:train_n], X_train[train_n:]
+        if _use_cv:
+            _fold_pairs = _purged_time_folds(sorted(set(_tr_dates_all)),
+                                             folds=_cv_cfg.get('folds', 4),
+                                             embargo=_cv_cfg.get('embargo_days', 25))
+            for fold_dates, tr_dates in _fold_pairs:
+                _cv_folds.append((np.where(np.isin(_tr_dates_all, list(fold_dates)))[0],
+                                  np.where(np.isin(_tr_dates_all, list(tr_dates)))[0]))
+            if n_trials > 30:
+                logger.warning(f'[train] purged CV ×{len(_cv_folds)} 折已启用，{n_trials} trials '
+                               f'拟合次数约 ×{len(_cv_folds)}，建议 optuna_trials ≤ 20')
+            update_node_progress(log_id=log_id, rows=1,
+                                 detail=f'超参选择：purged CV {len(_cv_folds)} 折'
+                                        f'（embargo {_cv_cfg.get("embargo_days", 25)} 日），val 不参与选择')
+
         try:
             import optuna
             from optuna.samplers import TPESampler
@@ -3605,12 +3810,25 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                 total_r2 = 0
                 _tr_dates = df[train_mask]['trade_date'].values
                 for label, tname, hdays in TARGETS:
-                    if train_objective == 'pairwise':
-                        model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates)
+                    if _use_cv:
+                        # 折外均值：每折在剔除泄漏窗（折前 embargo 日）的剩余训练数据上
+                        # 拟合、折内打分；模型不在此落——选出最优超参后统一重拟合
+                        y_all = df[train_mask][tname].values
+                        fold_r2 = []
+                        for fold_idx, tr_idx in _cv_folds:
+                            # X_train 是 DataFrame（非连续行集必须 .iloc，方括号会变成列查找）
+                            fm = _fit_model(params, X_train.iloc[tr_idx], y_all[tr_idx],
+                                            _tr_dates[tr_idx] if train_objective == 'pairwise' else None)
+                            fold_r2.append(val_score(fm, X_train.iloc[fold_idx], y_all[fold_idx], train_objective))
+                        r2 = float(np.mean(fold_r2))
+                        models[label] = {'model': None, 'r2': r2}
                     else:
-                        model = _fit_model(params, X_tr, Y_tr[tname], None, X_es, Y_es[tname])
-                    r2 = val_score(model, X_val, df[val_mask][tname], train_objective)
-                    models[label] = {'model': model, 'r2': r2}
+                        if train_objective == 'pairwise':
+                            model = _fit_model(params, X_train, df[train_mask][tname], _tr_dates)
+                        else:
+                            model = _fit_model(params, X_tr, Y_tr[tname], None, X_es, Y_es[tname])
+                        r2 = val_score(model, X_val, df[val_mask][tname], train_objective)
+                        models[label] = {'model': model, 'r2': r2}
                     total_r2 += r2
                 avg_r2 = total_r2 / len(TARGETS)
                 trial_records.append({'trial': len(trial_records)+1, 'params': params, 'r2': round(avg_r2, 4)})
@@ -3652,6 +3870,44 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             _abort('训练未产生有效模型（所有 trial 失败或已终止）')
             return 0
 
+        # ── CV 模式：最优超参在完整训练窗统一重拟合（trial 内只拟合折模型）──
+        if _use_cv and best_params_store:
+            update_node_progress(log_id=log_id, rows=3, detail='CV 选出超参，全训练窗重拟合')
+            for label, tname, hdays in TARGETS:
+                if label not in best_params_store:
+                    continue
+                p = dict(best_params_store[label]['params'])
+                if train_objective == 'pairwise':
+                    model = _fit_model(p, X_train, df[train_mask][tname], _tr_dates_all)
+                else:
+                    model = _fit_model(p, X_tr_h, df[train_mask][tname].values[:train_n], None,
+                                       X_es_h, df[train_mask][tname].values[train_n:])
+                best_models[label] = model
+
+        # ── 多种子集成（可选，cfg.ensemble.seeds>1）：同一最优超参 × N 个
+        #    random_state 拟合、预测取均值——单模型种子噪声被平均，val-test
+        #    差距的方差成分收窄。SeedEnsemble 对 pred_score/信号链路透明，
+        #    pkl 仍是一个文件。──
+        _n_seeds = int((cfg.get('ensemble') or {}).get('seeds') or 1)
+        if _n_seeds > 1 and best_models:
+            update_node_progress(log_id=log_id, rows=3, detail=f'种子集成拟合 ×{_n_seeds}')
+            for label, tname, hdays in TARGETS:
+                if label not in best_params_store or label not in best_models:
+                    continue
+                base = dict(best_params_store[label]['params'])
+                members = []
+                for s in range(_n_seeds):
+                    p = {**base, 'random_state': 42 + s}
+                    if train_objective == 'pairwise':
+                        members.append(_fit_model(p, X_train, df[train_mask][tname], _tr_dates_all))
+                    else:
+                        members.append(_fit_model(p, X_tr_h, df[train_mask][tname].values[:train_n],
+                                                  None, X_es_h, df[train_mask][tname].values[train_n:]))
+                best_models[label] = seed_ensemble(members)
+                best_params_store[label]['ensemble_seeds'] = _n_seeds
+                best_params_store[label]['r2'] = val_score(
+                    best_models[label], X_val, df[val_mask][tname], train_objective)
+
         # ── 最终评估：val + test 集回测（val 用于过拟合对比，test 为最终成绩）──
         update_node_progress(log_id=log_id, rows=4, detail='回测评估 (val+test)…')
         test_dates = df[test_mask]['trade_date'].values
@@ -3669,8 +3925,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             update_node_progress(log_id=log_id, rows=4,
                                  detail=f'空仓闸门已启用（指数<{_regime_cfg.get("ma_window", 20)}日线不开新仓，{len(regime_gates)} 个风险日）')
 
-        def _run_backtests(mask):
-            """对给定切分跑全部周期的回测，附带 test R²。"""
+        def _run_backtests(mask, exec_lag=0, with_r2=True):
+            """对给定切分跑全部周期的回测（exec_lag=1 为次日收盘成交口径），附带 test R²。"""
             res = {}
             dates = df[mask]['trade_date'].values
             codes = df[mask]['stock_code'].values
@@ -3688,8 +3944,9 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                                    commission=commission, stamp_tax=stamp_tax, slippage=slippage,
                                    limit_up=lups, limit_down=ldowns,
                                    gated_dates=regime_gates, dd_gate=pdd_gate,
-                                   trailing=trail_val)
-                    bt['r2'] = val_score(best_models[label], df[mask][FEATURES].values, df[mask][tname], train_objective)
+                                   trailing=trail_val, exec_lag=exec_lag)
+                    if with_r2:
+                        bt['r2'] = val_score(best_models[label], df[mask][FEATURES].values, df[mask][tname], train_objective)
                     res[label] = bt
             return res
 
@@ -3705,6 +3962,34 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             _abort('训练已终止')
             return 0
         test_results = _run_backtests(test_mask)
+
+        # ── 差距分解（v3.9.2）：T+1 双口径 + RankIC 三窗 + 基准环境 ──
+        # 让 overfit_gap 可回答「多少是口径、多少是环境、多少是模型」——单一
+        # gap 数字曾把 2.50 的测量伪影误读成模型过拟合（2026-09-15 定位）。
+        # cfg.report.exec_lag=false 可关（省 ~2/5 评估时长）。
+        _report_lag = (cfg.get('report') or {}).get('exec_lag', True)
+        test_results_t1 = _run_backtests(test_mask, exec_lag=1, with_r2=False) if _report_lag else None
+        val_results_t1 = _run_backtests(val_mask, exec_lag=1, with_r2=False) if _report_lag else None
+        update_node_progress(log_id=log_id, rows=4, detail='差距分解（RankIC + 环境）…')
+        _rank_ic = {}
+        for label, tname, hdays in TARGETS:
+            if label in best_models:
+                _p_full = pred_score(best_models[label], df[FEATURES].values)
+                _rank_ic[label] = {
+                    'train': cross_sectional_rank_ic(_p_full[train_mask.values], df[train_mask][tname].values, _tr_dates_all),
+                    'val': cross_sectional_rank_ic(_p_full[val_mask.values], df[val_mask][tname].values, df[val_mask]['trade_date'].values),
+                    'test': cross_sectional_rank_ic(_p_full[test_mask.values], df[test_mask][tname].values, df[test_mask]['trade_date'].values),
+                }
+        _bench = benchmark_window_stats(db, {
+            'train': (str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]),
+            'val': (str(train_cut)[:10], str(test_cut)[:10]),
+            'test': (str(test_cut)[:10], str(dates[-1])[:10]),
+        })
+        _gap = compute_gap_decomposition(val_results, test_results, test_results_t1,
+                                         val_results_t1, _rank_ic, _bench)
+        logger.info(f'[train] 差距分解: gap(T+0)={_gap["sharpe_gap_val_test_t0"]} '
+                    f'gap(T+1)={_gap["sharpe_gap_val_test_t1"]} '
+                    + ' '.join(f"{p['label']}:{p['cause']}" for p in _gap['per_label']))
 
         # ── 存储最优模型文件 ──
         update_node_progress(log_id=log_id, rows=5, detail='存储最优模型')
@@ -3796,6 +4081,20 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             'win_rate_5d': test_results.get('5d', {}).get('win_rate', 0),
             'win_rate_10d': test_results.get('10d', {}).get('win_rate', 0),
             'win_rate_20d': test_results.get('20d', {}).get('win_rate', 0),
+            # 口径补齐：成本拖累 + 样本域（评估数字脱离口径没有可比性）
+            'cost_total': round(sum(test_results[l].get('total_cost', 0) for l in _labels), 2),
+            'cost_pct_avg': round(float(np.mean([test_results[l].get('cost_pct', 0) for l in _labels])), 4) if _labels else 0,
+            # 差距分解（v3.9.2）：口径/环境/模型三成分 + T+1 口径 gap
+            'gap_decomposition': _gap,
+            'overfit_gap_t1': _gap.get('sharpe_gap_val_test_t1'),
+            'sample_domain': {
+                'entity': cfg.get('entity', 'stock'),
+                'windows': {'train': [str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]],
+                            'val': [str(train_cut)[:10], str(test_cut)[:10]],
+                            'test': [str(test_cut)[:10], str(test_dates[-1])[:10] if len(test_dates) else None]},
+                'exec_timing': '收盘 T+0（信号日收盘成交）',
+                'costs': {'commission': commission, 'stamp_tax': stamp_tax, 'slippage': slippage},
+            },
         }
         avg_sharpe = float(np.mean([test_results[l]['sharpe'] for l in _labels])) if _labels else 0
         avg_win = float(np.mean([test_results[l]['win_rate'] for l in _labels])) if _labels else 0
@@ -3873,7 +4172,25 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             "md": round(abs(max_dd_avg), 4),
             "ar": round(annual_return, 4),
         })
-        db.commit(); db.close()
+        db.commit()
+        # 血缘台账：训练事件（模型 ↔ 数据窗快照绑定——训练后数据再被修复/重算时，
+        # /api/lineage/model/{ver} 可直接给出漂移清单）
+        try:
+            from app.lineage import log_event
+            log_event(db, 'train', ver,
+                      scope=f"{cfg.get('train_start','?')}~{str(test_end)[:10]} 训练{str(train_cut)[:10]}~{str(test_cut)[:10]}",
+                      detail={'train_start': cfg.get('train_start'),
+                              'train_cut': str(train_cut)[:10], 'test_cut': str(test_cut)[:10],
+                              'test_end': str(test_end)[:10],
+                              'n_features': len(FEATURES), 'n_rows': int(len(df)),
+                              'label_transform': cfg.get('label_transform', 'none'),
+                              'sharpe': round(float(avg_sharpe), 4),
+                              'max_dd': round(float(abs(max_dd_avg)), 4),
+                              'annual_return': round(float(annual_return), 4),
+                              'trials': len(trial_records)})
+        except Exception:
+            pass
+        db.close()
         write_node_log(log_id=log_id, status='success', detail=f'训练完成: sharpe={avg_sharpe:.3f} win={avg_win:.1%} trials={len(trial_records)}')
         return len(df)
 
@@ -3922,6 +4239,314 @@ def dag_task_analyze(trade_date=None, **kw):
         raise
 
 
+def dag_task_factor_heal(trade_date=None, **kw):
+    """DAG 节点：复权因子一致性自愈（tushare 半修正快照 → 假跳变 → 静默污染）。
+
+    tushare 会**回溯性重定基** adj_factor 且分批落地：采集恰逢半修正窗口时，边界前
+    存旧基准、边界后存新基准，跨界产生 ×1.2~×3 假后复权跳变（原始价不动）。
+    2026-07-01 批次有 911 只，曾在回测里制造单日 +19.5% 假收益并触发假止损。
+
+    流程：近 7 日检测（hfq 收益越界而原始价正常）→ 按代码拉官方当前因子重写
+    close_hfq → 重算污染窗 [边界, +90 天] 特征。跑在 kline 之后（配额基本未动）、
+    feature_compute 之前（避免两边并发写 feature_values）。
+
+    **设计上不阻断流程**：这是数据卫生步骤，不是当日数据生产步骤；异常只记录并
+    在节点 detail 里可见，不让下游因为一次自愈失败而整条跳过。超限/配额不足时
+    只告警不改（剩余部分下次运行继续，检测幂等）。
+    """
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('factor_heal')
+    write_node_log(log_id=log_id, status='running', detail='检测因子一致性')
+
+    def _run():
+        from app.db.connection import get_sync_db
+        from scripts.repair_adj_factor import check_and_heal
+        db = get_sync_db()
+
+        def _hb(done, total, note):
+            update_node_progress(log_id=log_id, rows=done, detail=f'因子自愈 {done}/{total}: {note}')
+
+        try:
+            h = check_and_heal(db, days=7, progress_cb=_hb)
+        finally:
+            db.close()
+        return {'_heal': h}
+
+    try:
+        r = _with_hb(log_id, rid, _run)
+        fatal = r.get('fatal', '')
+        h = r.get('_heal') or {}
+        if fatal:
+            write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
+        elif not h.get('detected'):
+            write_node_log(log_id=log_id, status='success', rows=0, detail='无假跳变，跳过')
+        elif h.get('skipped_quota'):
+            write_node_log(log_id=log_id, status='success', rows=h.get('detected', 0),
+                           detail=f"检出 {h['detected']} 只但超限/配额不足，未自动修"
+                                  f"（人工跑 scripts/repair_adj_factor.py）")
+        else:
+            write_node_log(log_id=log_id, status='success', rows=h.get('rows', 0),
+                           detail=f"自愈完成: 检出{h['detected']}只 改写{h.get('healed', 0)}只"
+                                  f" 特征{h.get('feature_rows', 0):,}行"
+                                  + (f" 失败{h['failed']}只" if h.get('failed') else ''))
+        return r
+    except Exception as e:
+        # 卫生步骤不阻断流程：记日志 + 节点标记失败便于发现，但不 raise
+        logger.warning(f'[factor_heal] 自愈异常（不阻断下游）: {e}')
+        write_node_log(log_id=log_id, status='failed', detail=f'自愈异常: {str(e)[:150]}')
+        return {'rows': 0, '_heal': {'error': str(e)[:200]}}
+
+
+def dag_task_rolling_retrain(trade_date=None, dry_run=False, **kw):
+    """DAG 节点：模型新鲜度守护（陈旧告警 + 滚动重训）。
+
+    背景：模型曾经 8 个月未重训且无人察觉（2026-09-11 评估缺陷之一），重训
+    全靠人想起来手动点。本节点每日随流程跑：
+    ① 陈旧告警——ACTIVE.trained_at 距今超 warn_days 写 risk_alerts
+       （kind='model_stale'）：复用风控告警通道，WS 轮询器自动推前端铃铛 +
+       Chrome 通知，同日同因去重。
+    ② 滚动重训——超 alert_days 且无在途候选（TRAINING / 更新的 DRAFT）、
+       且距上次自动重训超 cooldown_days 时：克隆 ACTIVE 配置建新版本并后台
+       起训（与 /train 端点同一入口 start_training_background，进度/停止
+       行为一致）。产物只落 DRAFT——激活永远走人工 promote 闸门，绝不自动
+       上线（v13/v16 的教训：未过人工评估的模型不能碰实盘信号）。
+    参数在 strategy_config.model_freshness：
+       {warn_days:21, alert_days:30, cooldown_days:14, retrain_enabled:true,
+        last_auto_at(内部记录，勿手改)}。
+    dry_run=True 只输出决策不落库不起训（自测用）。
+    **不阻断流程**：运维步骤，异常只记日志。
+    """
+    from datetime import date, datetime
+    import json as _json2
+    from sqlalchemy import text
+    from app.db.connection import get_sync_db
+    td = trade_date or str(date.today())
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('rolling_retrain')
+    if log_id:
+        write_node_log(log_id=log_id, status='running', detail='检查模型新鲜度')
+    db = get_sync_db()
+    try:
+        row = db.execute(text(
+            "SELECT params FROM strategy_config WHERE strategy_name='model_freshness'"
+        )).fetchone()
+        cfg = (_json2.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+        warn_days = int(cfg.get('warn_days', 21))
+        alert_days = int(cfg.get('alert_days', 30))
+        cooldown = int(cfg.get('cooldown_days', 14))
+        retrain_enabled = bool(cfg.get('retrain_enabled', True))
+
+        act = db.execute(text(
+            "SELECT version, trained_at FROM model_versions WHERE status='ACTIVE'"
+        )).fetchone()
+        if not act:
+            detail = '无 ACTIVE 模型，跳过'
+            if log_id:
+                write_node_log(log_id=log_id, status='success', detail=detail)
+            return {'skip': detail}
+        ver, trained_at = act[0], act[1]
+        age = (datetime.now() - trained_at).days if trained_at else 9999
+
+        actions, blockers = [], []
+        # ① 陈旧告警（写 risk_alerts → 既有 WS 轮询推送，前端零改动）
+        if age >= warn_days:
+            level = 'critical' if age >= alert_days else 'warn'
+            title = f'模型陈旧：{ver} 已 {age} 天未重训'
+            body = (f'ACTIVE 模型 {ver} 训练于 {trained_at:%Y-%m-%d}，距今 {age} 天'
+                    f'（提醒阈值 {warn_days} 天 / 自动重训阈值 {alert_days} 天）。'
+                    f'排序模型会随市场风格漂移衰减，请到模型页评估新候选或手动重训。')
+            if dry_run:
+                actions.append(f'[dry] 将发告警「{title}」({level})')
+            else:
+                from app.risk import _insert_alert
+                if _insert_alert(db, td, 'model_stale', level, title, body):
+                    db.commit()
+                    actions.append('陈旧告警已发')
+                else:
+                    actions.append('今日告警已存在(去重)')
+        # ② 滚动重训判定
+        if age >= alert_days and retrain_enabled:
+            busy = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='TRAINING'"
+            )).fetchall()
+            if busy:
+                blockers.append(f'训练中({",".join(b[0] for b in busy)})')
+            newer = db.execute(text(
+                "SELECT version FROM model_versions WHERE status='DRAFT' AND trained_at > :t"
+            ), {"t": trained_at}).fetchall()
+            if newer:
+                blockers.append(f'待审候选({",".join(b[0] for b in newer)})')
+            la = cfg.get('last_auto_at')
+            if la:
+                try:
+                    if (datetime.now() - datetime.fromisoformat(str(la))).days < cooldown:
+                        blockers.append(f'冷却中(上次自动重训 {str(la)[:10]}，周期 {cooldown} 天)')
+                except ValueError:
+                    pass
+            if not blockers and dry_run:
+                actions.append('[dry] 条件满足，将克隆 ACTIVE 自动起训')
+            elif not blockers:
+                # 克隆 ACTIVE 配置 → 新版本号（数值最大主版本 +1，字符串 MAX 会 v9>v10）
+                cfg_row = db.execute(text(
+                    "SELECT config FROM model_versions WHERE version=:v"), {"v": ver}).fetchone()
+                src_cfg = cfg_row[0] if isinstance(cfg_row[0], dict) else _json2.loads(cfg_row[0])
+                # 旧 ACTIVE（v3.9.2 前）无训练协议键 → 补默认（purged CV + 集成），
+                # 滚动重训自动用新协议；显式关闭的配置不被覆盖
+                src_cfg = with_training_protocol_defaults(src_cfg)
+                majors = []
+                for (v,) in db.execute(text("SELECT version FROM model_versions")).fetchall():
+                    try:
+                        majors.append(int(str(v).lstrip('v').split('.')[0]))
+                    except (ValueError, IndexError):
+                        continue
+                new_ver = f"v{max(majors) + 1}.0" if majors else 'v1.0'
+                db.execute(text(
+                    "INSERT INTO model_versions (version, model_name, status, config) "
+                    "VALUES (:v, :n, 'DRAFT', :c)"),
+                    {"v": new_ver, "n": f'滚动重训·{ver}克隆',
+                     "c": _json2.dumps(src_cfg, ensure_ascii=False, default=str)})
+                # last_auto_at 记进配置行（冷却期判定依据；strategy_config 无唯一约束，删插）
+                cfg['last_auto_at'] = datetime.now().isoformat(timespec='seconds')
+                db.execute(text(
+                    "DELETE FROM strategy_config WHERE strategy_name='model_freshness'"))
+                db.execute(text(
+                    "INSERT INTO strategy_config (strategy_name, display_name, enabled, params) "
+                    "VALUES ('model_freshness', '模型新鲜度守护', true, :p)"),
+                    {"p": _json2.dumps(cfg, ensure_ascii=False)})
+                db.commit()
+                # 与 /train 端点同一入口：TaskManager 任务 + 后台线程 + WS 进度广播
+                from app.api.models import start_training_background
+                res = start_training_background(new_ver)
+                if res.get('ok'):
+                    actions.append(f'已触发自动重训 {new_ver}（任务 {str(res.get("task_id"))[:8]}…，'
+                                   f'完成后待人工评估激活）')
+                    logger.info(f'[rolling_retrain] 自动重训已触发: {new_ver} (克隆 {ver}, AGE={age}天)')
+                    try:
+                        from app.lineage import log_event
+                        log_event(db, 'rolling_retrain', new_ver,
+                                  scope=f'克隆 {ver}（ACTIVE 已训 {age} 天）',
+                                  detail={'clone_of': ver, 'age_days': age,
+                                          'task_id': res.get('task_id')})
+                    except Exception:
+                        pass
+                else:
+                    actions.append(f'起训失败: {res.get("error")}')
+        detail = f'ACTIVE {ver} 已训 {age} 天（阈值 提醒{warn_days}/重训{alert_days}）'
+        if actions:
+            detail += '；' + '；'.join(actions)
+        if blockers:
+            detail += '；重训跳过: ' + '；'.join(blockers)
+        if log_id:
+            write_node_log(log_id=log_id, status='success', detail=detail)
+        logger.info(f'[rolling_retrain] {detail}')
+        return {'version': ver, 'age': age, 'actions': actions, 'blockers': blockers}
+    except Exception as e:
+        logger.warning(f'[rolling_retrain] 异常（不阻断下游）: {e}')
+        if log_id:
+            write_node_log(log_id=log_id, status='failed', detail=f'异常: {str(e)[:150]}')
+        return {'error': str(e)[:200]}
+    finally:
+        db.close()
+
+
+def dag_task_margin_daily(trade_date=None, **kw):
+    """DAG 节点：两融余额采集 + 历史对齐补数（独立流程专用，建议 18:00 触发）。
+
+    tushare margin_detail 按交易日全市场、1 次调用/天；盘后 ~17:30 才发布当日
+    ——主流程 17:00 拉不到，曾致 09-03 起连续空窗且节点静默 success 0 行
+    （2026-09-16 定位）。本节点不依赖任何上游（特征未引用两融字段）：
+
+    ① 对齐补数：按 trade_calendar 找 [start_date, 当日] 全部缺失交易日，
+       最旧优先补齐——与其它数据时间线对齐，天然断点续跑（缺失驱动、幂等）
+    ② 配额护栏：余量 ≤ reserve 即收工，剩余次日继续
+    ③ 单次上限 max_days_per_run（防一次跑干配额）
+    参数在 strategy_config.margin_collect：
+       {start_date:'2014-01-01', reserve:1500, max_days_per_run:2500}
+    长跑有进度心跳（每 25 天上报），不会触发看门狗误杀。
+    """
+    from datetime import date; td = str(trade_date or date.today())[:10]; rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('margin_daily')
+    write_node_log(log_id=log_id, status='running', detail='检查缺失交易日',
+                   trade_date=td, node_name='margin_daily', run_id=rid)
+
+    def _run():
+        import json as _json2
+        from sqlalchemy import text as _t2
+        from app.db.connection import get_sync_db
+        from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import TushareQuota
+        from crawler.writers import batch_upsert_margin_detail
+        db = get_sync_db()
+        try:
+            row = db.execute(_t2(
+                "SELECT params FROM strategy_config WHERE strategy_name='margin_collect'"
+            )).fetchone()
+            cfg = (_json2.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+            start = str(cfg.get('start_date', '2014-01-01'))[:10]
+            reserve = int(cfg.get('reserve', 1500))
+            max_days = int(cfg.get('max_days_per_run', 2500))
+            missing = [str(r[0])[:10] for r in db.execute(_t2("""
+                SELECT cal_date FROM trade_calendar tc
+                WHERE tc.is_trade_day AND tc.cal_date BETWEEN :s AND :e
+                  AND NOT EXISTS (SELECT 1 FROM stock_margin_detail m
+                                  WHERE m.trade_date = tc.cal_date)
+                ORDER BY cal_date
+            """), {"s": start, "e": td}).fetchall()]
+            # 当日可能不在日历（未同步）——只要缺就补上
+            if td not in missing and not db.execute(
+                    _t2("SELECT 1 FROM stock_margin_detail WHERE trade_date=:d LIMIT 1"),
+                    {"d": td}).fetchone():
+                missing.append(td)
+            if not missing:
+                return {'done': 0, 'saved': 0, 'missing': 0, 'stop': ''}
+            quota = TushareQuota.get()
+            source = get_data_source_manager().get_source()
+            done = saved = 0
+            today_got = 0
+            stop = ''
+            for d in missing:
+                if done >= max_days:
+                    stop = f'达单次上限 {max_days} 天'
+                    break
+                if quota.remaining() <= reserve:
+                    stop = f'配额余 {quota.remaining()} ≤ 保留 {reserve}'
+                    break
+                n = batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(d))
+                saved += n
+                done += 1
+                if d == td:
+                    today_got = n
+                if done % 25 == 0:
+                    update_node_progress(log_id=log_id, rows=done,
+                                         detail=f'两融补数 {done}/{len(missing)} 天（至 {d}）')
+            return {'done': done, 'saved': saved, 'missing': len(missing),
+                    'stop': stop, 'today_got': today_got}
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='margin_daily')
+        fatal = r.get('fatal', '')
+        if fatal:
+            write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
+        else:
+            note = f"补数 {r.get('done', 0)}/{r.get('missing', 0)} 天 {r.get('saved', 0):,} 行"
+            if r.get('stop'):
+                note += f"（{r['stop']}，剩余次日继续）"
+            # rows 记数据行数（此前误记天数：2500 天显示成"行数 2500"）；当日
+            # tushare 尚未发布（today_got=0 且今日在缺失清单里）时明确说明——
+            # 是时序不是故障，下次运行自动回补
+            if r.get('done', 0) and not r.get('today_got'):
+                note += '；当日 tushare 尚未发布，下次运行自动回补'
+            write_node_log(log_id=log_id, status='success',
+                           rows=r.get('saved', 0), detail=note,
+                           trade_date=td, node_name='margin_daily', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150],
+                       trade_date=td, node_name='margin_daily', run_id=rid)
+        raise
+
+
 def dag_task_moneyflow(trade_date=None, **kw):
     """DAG 节点：资金流向（tushare moneyflow 全市场，写 stock_moneyflow）。"""
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
@@ -3955,13 +4580,46 @@ def _ext_moneyflow(source, db, td):
     from crawler.writers import batch_upsert_moneyflow
     return batch_upsert_moneyflow(db, source.fetch_moneyflow(td))
 
+def _ext_backfill_recent(source, db, td, table, fetch, writer, lookback=20):
+    """盘后晚发布数据的自愈采集：当日拉空则回看近 lookback 个自然日补缺失日。
+
+    背景（2026-09-16 定位）：两融/龙虎榜 tushare 盘后 ~17:30 才发布当日，
+    每日流程 17:00 跑时天天拉空，且从不回捞——margin_detail 从 09-03 起、
+    top_list 从 09-10 起连续空窗。幂等：已有数据的日子直接跳过（0 配额），
+    当日总是尝试（upsert 幂等）；非交易日接口返回空，无害。
+    返回 (总写入行数, 当日是否拉到数据)——当日空是正常时序（次日回补），
+    调用方需要区分「无事可做」和「当日暂缺」。
+    """
+    from datetime import date as _d, timedelta as _td
+    from sqlalchemy import text as _t
+    try:
+        base = _d.fromisoformat(str(td)[:10])
+    except ValueError:
+        base = _d.today()
+    total = 0
+    today_fetched = 0
+    for k in range(lookback + 1):
+        d = (base - _td(days=k)).isoformat()
+        if k > 0:
+            if db.execute(_t(f"SELECT 1 FROM {table} WHERE trade_date=:d LIMIT 1"),
+                          {"d": d}).fetchone():
+                continue
+        n = writer(db, fetch(d))
+        total += n
+        if k == 0:
+            today_fetched = n
+    return total, today_fetched
+
+
 def _ext_top_list(source, db, td):
     from crawler.writers import batch_upsert_top_list
-    return batch_upsert_top_list(db, source.fetch_top_list(td))
+    return _ext_backfill_recent(source, db, td, 'stock_top_list',
+                                source.fetch_top_list, batch_upsert_top_list)[0]
 
 def _ext_margin_detail(source, db, td):
     from crawler.writers import batch_upsert_margin_detail
-    return batch_upsert_margin_detail(db, source.fetch_margin_detail_ext(td))
+    return _ext_backfill_recent(source, db, td, 'stock_margin_detail',
+                                source.fetch_margin_detail_ext, batch_upsert_margin_detail)[0]
 
 def _ext_moneyflow_hsgt(source, db, td):
     from crawler.writers import batch_upsert_moneyflow_hsgt
@@ -4344,7 +5002,7 @@ def dag_task_paper_portfolio_all(trade_date=None, **kw):
 def dag_task_backup_qiniu(trade_date=None, **kw):
     """DAG 节点：数据库全量备份 → 七牛云 Kodo（restic 增量去重上传）。
 
-    调 scripts/backup_qiniu.sh（pg_dump -Fc 全量 + restic 内容分块去重上传）。
+    调 scripts/backup_qiniu.sh（pg_dump -Fd 目录格式全量 + restic 内容分块去重上传）。
     幂等性：脚本 flock 防并发重叠、暂存文件成功后原子替换、restic 快照不可变，
     任意重跑安全；全量快照自包含，某天流程失败无需回补——下一天的成功快照
     已覆盖全部数据，仅当天的还原点缺失。未配置 ~/.config/stone-backup/qiniu.env
@@ -4375,6 +5033,9 @@ NODE_FN_MAP = {
     'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
     'backup_qiniu':      dag_task_backup_qiniu,
     'kline':              dag_task_kline,
+    'factor_heal':        dag_task_factor_heal,
+    'rolling_retrain':    dag_task_rolling_retrain,
+    'margin_daily':       dag_task_margin_daily,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
     'fund':               dag_task_fund,
