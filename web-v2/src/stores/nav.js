@@ -66,7 +66,15 @@ export const useNavStore = defineStore('nav', () => {
         break
       }
       case 's': target = '/signals'; break
-      case 'l': target = '/stocks'; break
+      case 'l': {
+        // 保留列表页 URL 上已有的查询参数（cat/kw/page/sf/sd，StocksView 维护）——
+        // history.back() 回到列表时 popstate 已把地址还原成带参 URL，此时 syncHash
+        // 若推裸地址会在 StocksView 挂载读参之前把 URL 覆盖掉，页码/排序全部丢失
+        const cur = location.hash.slice(1)
+        const qm = cur.startsWith('/stocks') && cur.includes('?') ? cur.slice(cur.indexOf('?')) : ''
+        target = '/stocks' + qm
+        break
+      }
       case 'x': {
         target = '/status'
         const sq = []
