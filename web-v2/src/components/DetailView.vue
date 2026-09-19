@@ -131,7 +131,7 @@
           <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
           <div v-if="chipData.profit_ratio!=null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px">
-            现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#10b981':'#ef4444',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>
+            现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#ef4444':'#10b981',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
           </div>
         </div>
         <div v-if="sigStats">
@@ -852,7 +852,8 @@ function drawChip(){
     xAxis:{type:'value',axisLabel:{fontSize:9,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
     yAxis:{type:'category',data:prices.map(p=>p.toFixed(2)),axisLabel:{fontSize:9}},
     series:[{type:'bar',barWidth:'72%',
-      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?'rgba(16,185,129,0.7)':'rgba(239,68,68,0.45)'}})),
+      // A 股约定红盈绿亏：现价下方=获利盘(红)，上方=套牢盘(绿)
+      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?'rgba(239,68,68,0.7)':'rgba(16,185,129,0.45)'}})),
       markLine:{silent:true,symbol:'none',
         data:[{yAxis:nearest,label:{formatter:'现价',fontSize:9,color:'#60a5fa'},lineStyle:{color:'#60a5fa',type:'dashed',width:1}}]}}
     ]
