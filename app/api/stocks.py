@@ -11,13 +11,24 @@ VALID_CATEGORIES = {"stock", "index", "etf", "bond", "all"}
 VALID_ORDER_BY = {"price", "chg_pct", "pe_ttm", "trade_date", "market_cap"}
 VALID_ORDER_DIR = {"asc", "desc"}
 
+def _q(col: str, off: int = 0) -> str:
+    """最新一行行情取值的排序表达式（指数走 index_daily_quote，个股/ETF 走 daily_quote）。
+
+    off=N 为再往前第 N 行（0=最新收盘，1=前一收盘）。"""
+    o = f" OFFSET {off}" if off else ""
+    idx = f"(SELECT iq.{col} FROM index_daily_quote iq WHERE iq.index_code=sm.stock_code ORDER BY iq.trade_date DESC LIMIT 1{o})"
+    stk = f"(SELECT dq.{col} FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1{o})"
+    return f"CASE WHEN sm.stock_type='index' THEN {idx} ELSE {stk} END"
+
+
+# 排序表达式白名单（硬编码 SQL 片段，不可由用户任意拼接）。此前 chg_pct 排的是
+# 绝对涨跌额（元）而非百分比——高价股 1% 的涨幅压过低价股 8%，排序"受股价影响"。
 ORDER_SQL_MAP = {
-    "price": "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1)",
+    "price": _q("close"),
+    "chg_pct": f"({_q('close')} - {_q('close', 1)}) / NULLIF({_q('close', 1)}, 0)",
     "pe_ttm": "sf.pe_ttm",
-    "trade_date": "trade_date",
+    "trade_date": _q("trade_date"),
     "market_cap": "sf.market_cap",
-    "chg_pct": ("(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) - "
-                "(SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1)"),
 }
 
 
@@ -100,7 +111,7 @@ def list_stocks(
             LIMIT 1
         ) sf ON true
         WHERE {where_base}
-        ORDER BY {order_sql} {dir_sql} LIMIT :l OFFSET :o"""
+        ORDER BY {order_sql} {dir_sql}, sm.stock_code LIMIT :l OFFSET :o"""
 
         result = db.execute(text(base_sql), params)
 

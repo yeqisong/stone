@@ -22,10 +22,11 @@ import { useViewport } from '../utils/viewport'
 const { isNarrow } = useViewport()
 import { ref, reactive, h, computed, onMounted, onUnmounted } from 'vue'
 import { useNavStore } from '../stores/nav'
-import { NCard, NDataTable, NButton, NButtonGroup, NInput, NPagination, NTag, NSpace, NSpin } from 'naive-ui'
+import { NCard, NDataTable, NButton, NButtonGroup, NInput, NPagination, NTag, NSpace, NSpin, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const emit = defineEmits(['show-detail'])
+const message = useMessage()
 const API = window.location.origin
 const cat = ref('stock'), kw = ref(''), page = ref(1)
 const sortField = ref('trade_date'), sortDir = ref('descend')
@@ -36,18 +37,22 @@ const loading = ref(false)
 
 const exName = e => ({SSE:'沪',SZSE:'深',BSE:'京'}[e]||e)
 
-// URL 状态持久化（#/stocks?cat=&kw=&page=）
+// URL 状态持久化（#/stocks?cat=&kw=&page=&sf=&sd=）：浏览器返回/直达链接都还原
+// 页码与排序（sf/sd = sortField/sortDir，naive-ui 的 ascend/descend）
 function parseHash() {
   try {
     const q = new URLSearchParams((location.hash.split('?')[1] || ''))
     const c = q.get('cat'); if (c) cat.value = c
     const k = q.get('kw'); if (k) kw.value = k
     const p = parseInt(q.get('page')); if (p && p > 0) page.value = p
+    const sf = q.get('sf'); if (sf) sortField.value = sf
+    const sd = q.get('sd'); if (sd === 'ascend' || sd === 'descend') sortDir.value = sd
   } catch (e) {}
 }
 function syncHash() {
   const q = new URLSearchParams()
   q.set('cat', cat.value); q.set('kw', kw.value); q.set('page', page.value)
+  q.set('sf', sortField.value); q.set('sd', sortDir.value)
   history.replaceState(null, '', location.pathname + '#/stocks?' + q.toString())
 }
 

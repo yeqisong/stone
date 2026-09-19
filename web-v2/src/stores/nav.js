@@ -117,7 +117,10 @@ export const useNavStore = defineStore('nav', () => {
   }
 
   function backFromDetail() {
-    tab.value = prevTab.value || 'l'
+    // 有来路（showDetail 必经 pushState）走浏览器历史：列表页的页码/排序在 URL
+    // 参数里，back 原样恢复；直链进入详情（无来路）才落到默认列表
+    if (prevTab.value) { history.back(); return }
+    tab.value = 'l'
   }
 
   function showFeatureDetail(id) {
