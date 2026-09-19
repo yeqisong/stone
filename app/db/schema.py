@@ -99,6 +99,25 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_active
     ON portfolio (is_active, updated_at DESC);
 """
 
+# ── 自选/自定义分组（v3.11：持仓页 tab 化 + 详情页分组标签）──
+
+CREATE_WATCH_GROUPS = """
+CREATE TABLE IF NOT EXISTS watch_groups (
+    id          SERIAL PRIMARY KEY,
+    group_name  VARCHAR(32) NOT NULL UNIQUE,
+    is_default  BOOLEAN NOT NULL DEFAULT false,   -- true=自选组（不可删除）
+    sort_order  INT NOT NULL DEFAULT 0,           -- 自选恒排最前，动态组按 id
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS watch_group_items (
+    group_id    INT NOT NULL REFERENCES watch_groups(id) ON DELETE CASCADE,
+    stock_code  VARCHAR(6) NOT NULL,
+    added_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (group_id, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_wgi_code ON watch_group_items (stock_code);
+"""
+
 CREATE_PORTFOLIO_HISTORY = """
 CREATE TABLE IF NOT EXISTS portfolio_history (
     id               SERIAL PRIMARY KEY,
@@ -990,6 +1009,7 @@ ALL_TABLES = [
     ("index_daily_quote", CREATE_INDEX_DAILY_QUOTE),
     ("portfolio", CREATE_PORTFOLIO),
     ("portfolio_history", CREATE_PORTFOLIO_HISTORY),
+    ("watch_groups", CREATE_WATCH_GROUPS),
     ("signal_history", CREATE_SIGNAL_HISTORY),
     ("strategy_config", CREATE_STRATEGY_CONFIG),
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
@@ -1084,6 +1104,16 @@ def init_db(sync_session) -> None:
 
     # 默认策略配置
     sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
+
+    # 自选默认组（watch_groups 的 is_default 行，幂等播种）
+    try:
+        sync_session.execute(text(
+            "INSERT INTO watch_groups (group_name, is_default, sort_order) "
+            "VALUES ('自选', true, 0) ON CONFLICT (group_name) DO NOTHING"
+        ))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
 
     # 迁移：删除旧 strategy 节点（已从 NODE_FN_MAP 移除）
     try:

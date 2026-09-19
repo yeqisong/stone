@@ -20,6 +20,16 @@
   <n-spin v-if="loading" />
   <n-empty v-else-if="notFound" description="未找到该证券，请检查代码" style="padding:40px" />
   <template v-else-if="detail">
+    <!-- 分组状态：持仓为 portfolio 固有状态（不可移除）；自选/动态组 hover 出 ✕ 点击确认移除；末尾 + 加组 -->
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <span style="font-size:11px;color:var(--c-text-dim)">分组</span>
+      <n-tag v-if="stockGroups.in_portfolio" size="small" type="info" :bordered="false">持仓</n-tag>
+      <n-tag v-for="g in stockGroups.groups" :key="g.id" size="small" closable :bordered="false"
+        class="dt-grp-tag" :type="g.is_default ? 'warning' : 'default'"
+        @close="confirmRemoveGroup(g)">{{ g.name }}</n-tag>
+      <n-button size="tiny" dashed @click="openAddGroup"><AppIcon name="plus" :size="12" />  分组</n-button>
+    </div>
+
     <!-- Summary Cards - unified stat-row style -->
     <StatStrip :items="summaryItems" />
 
@@ -135,6 +145,30 @@
       </div>
     </div>
   </template>
+
+  <!-- 加入分组弹窗：自选+动态组多选，支持就地新建分组并勾选 -->
+  <n-modal v-model:show="showAddGroup">
+    <n-card style="width:400px;max-width:92vw" title="加入分组" role="dialog" aria-modal="true">
+      <n-space vertical size="small">
+        <div style="font-size:11px;color:var(--c-text-dim)">自选与自定义分组可多选；持仓请到持仓页维护</div>
+        <n-checkbox-group v-model:value="pickedGroups">
+          <n-space size="small">
+            <n-checkbox v-for="g in allGroups" :key="g.id" :value="g.id" :label="g.name" />
+          </n-space>
+        </n-checkbox-group>
+        <div style="display:flex;gap:6px;align-items:center">
+          <n-input v-model:value="newGroupName" size="small" placeholder="新分组名称（回车即建）" maxlength="32" style="flex:1" @keyup.enter="createGroupInline" />
+          <n-button size="small" :loading="addingGroup" @click="createGroupInline">新增分组</n-button>
+        </div>
+      </n-space>
+      <template #footer>
+        <n-space justify="flex-end">
+          <n-button size="small" @click="showAddGroup=false">取消</n-button>
+          <n-button size="small" type="primary" :loading="savingGroups" @click="saveGroups">保存</n-button>
+        </n-space>
+      </template>
+    </n-card>
+  </n-modal>
 </div>
 </template>
 
@@ -142,21 +176,88 @@
 import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import {NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NButtonGroup} from 'naive-ui'
+import {NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NButtonGroup, NModal, NCheckboxGroup, NCheckbox, useDialog, useMessage} from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
+import { useAuthStore } from '../stores/auth'
 import StatStrip from './StatStrip.vue'
 
 const props = defineProps({ code: String })
 const emit = defineEmits(['back'])
 const API = window.location.origin
 const _nav = useNavStore()
+const dialog = useDialog()
+const message = useMessage()
+const authStore = useAuthStore()
+const _authH = () => authStore.token ? {Authorization: 'Bearer '+authStore.token} : {}
 const code = ref(props.code||'')
 const loading = ref(false)
 const detail = ref(null)
 const notFound = ref(false)
 const hcnt = ref(0)
+
+// ── 分组状态（持仓 / 自选 / 动态组）──
+const stockGroups = ref({ groups: [], in_portfolio: false })
+const allGroups = ref([])          // 加组弹窗里的全量分组
+const pickedGroups = ref([])       // 弹窗勾选
+const showAddGroup = ref(false), newGroupName = ref(''), addingGroup = ref(false), savingGroups = ref(false)
+
+async function loadStockGroups(){
+  try{
+    const r = await axios.get(API + '/api/watch/stock-groups?code=' + code.value)
+    stockGroups.value = r.data
+  }catch(e){ stockGroups.value = { groups: [], in_portfolio: false } }
+}
+function confirmRemoveGroup(g){
+  dialog.warning({
+    title: '移除分组',
+    content: `是否将该股从「${g.name}」移除？`,
+    positiveText: '移除', negativeText: '取消',
+    onPositiveClick: async () => {
+      const ids = stockGroups.value.groups.map(x => x.id).filter(id => id !== g.id)
+      try{
+        await axios.put(API + '/api/watch/stock-groups',
+          { stock_code: code.value, group_ids: ids }, { headers: _authH() })
+        await loadStockGroups()
+        message.success(`已移出「${g.name}」`)
+      }catch(e){ message.error(e.response?.data?.detail || '移除失败') }
+    }
+  })
+}
+async function openAddGroup(){
+  showAddGroup.value = true
+  newGroupName.value = ''
+  pickedGroups.value = stockGroups.value.groups.map(g => g.id)
+  try{
+    const r = await axios.get(API + '/api/watch/groups')
+    allGroups.value = r.data.groups || []
+  }catch(e){ allGroups.value = [] }
+}
+async function createGroupInline(){
+  const name = newGroupName.value.trim()
+  if (!name) return
+  addingGroup.value = true
+  try{
+    const r = await axios.post(API + '/api/watch/groups', { name }, { headers: _authH() })
+    allGroups.value.push({ id: r.data.id, name, is_default: false, count: 0 })
+    pickedGroups.value.push(r.data.id)
+    newGroupName.value = ''
+    message.success(`分组「${name}」已创建并勾选`)
+  }catch(e){ message.error(e.response?.data?.detail || '创建失败') }
+  addingGroup.value = false
+}
+async function saveGroups(){
+  savingGroups.value = true
+  try{
+    await axios.put(API + '/api/watch/stock-groups',
+      { stock_code: code.value, group_ids: pickedGroups.value }, { headers: _authH() })
+    showAddGroup.value = false
+    await loadStockGroups()
+    message.success('分组已更新')
+  }catch(e){ message.error(e.response?.data?.detail || '保存失败') }
+  savingGroups.value = false
+}
 // 复权记忆：记住用户上次选择
 const adj = ref(localStorage.getItem('detail_adj') || 'none')
 // K 线周期与区间（方案1：区间快捷选择 + 日/周/月切换；days 上限 7000 ≈ 全部历史）
@@ -346,6 +447,7 @@ async function load(){
   }catch(e){}
   // ── 扩展图数据（全部 best-effort：空数据隐藏卡片，异常不影响主图）──
   await Promise.allSettled([
+    loadStockGroups(),
     axios.get(API+'/api/stock/'+code.value+'/moneyflow?days=7000').then(r=>{
       mfData.value = r.data.data||[]
       const cum=[]; let s=0
@@ -835,3 +937,9 @@ onUnmounted(() => { if (_resizeHandler && window.removeEventListener) window.rem
 
 watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load()}})
 </script>
+
+<style>
+/* 详情页分组标签：✕ 平时隐去，hover 才出现（naive-ui n-tag closable 默认常显） */
+.dt-grp-tag .n-tag__close { opacity: 0; transition: opacity .15s; }
+.dt-grp-tag:hover .n-tag__close { opacity: 1; }
+</style>
