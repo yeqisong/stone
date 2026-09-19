@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS watch_group_items (
     group_id    INT NOT NULL REFERENCES watch_groups(id) ON DELETE CASCADE,
     stock_code  VARCHAR(6) NOT NULL,
     added_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    join_price  NUMERIC(12,4),             -- 加入时收盘（真实价，加入即落库：加入后涨跌幅基准不随采集漂移）
     PRIMARY KEY (group_id, stock_code)
 );
 CREATE INDEX IF NOT EXISTS idx_wgi_code ON watch_group_items (stock_code);
@@ -1111,6 +1112,14 @@ def init_db(sync_session) -> None:
             "INSERT INTO watch_groups (group_name, is_default, sort_order) "
             "VALUES ('自选', true, 0) ON CONFLICT (group_name) DO NOTHING"
         ))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：watch_group_items.join_price（加入后涨跌幅基准价；旧行 NULL 由查询按加入日收盘回退）
+    try:
+        sync_session.execute(text(
+            "ALTER TABLE watch_group_items ADD COLUMN IF NOT EXISTS join_price NUMERIC(12,4)"))
         sync_session.commit()
     except Exception:
         sync_session.rollback()

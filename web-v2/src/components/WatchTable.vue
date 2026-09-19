@@ -53,6 +53,12 @@ const columns = computed(() => [
   { title:'行业', key:'industry', width:160, render(r){ return ell(r.industry, { maxWidth:'148px' }) } },
   { title:'数据日期', key:'trade_date', width:105, align:'center', render(r){return r.trade_date||'-'} },
   { title:'加入时间', key:'added_at', width:120, align:'center', render(r){return r.added_at||'-'} },
+  // 加入后涨跌幅（现价 vs 加入时价格；方向域红涨绿跌）
+  { title:'加入后涨跌', key:'chg_since_join', width:100, align:'right', render(r){
+    if(r.chg_since_join==null) return h('span',{style:{whiteSpace:'nowrap'}},'-')
+    const color = r.chg_since_join>=0?'#ef4444':'#10b981'
+    return h('span',{style:{color,fontWeight:500,whiteSpace:'nowrap'}}, (r.chg_since_join>=0?'+':'')+r.chg_since_join.toFixed(2)+'%')
+  }},
 ])
 
 function rowProps(row){ return { style:'cursor:pointer', onClick:()=>emit('show-detail', row.stock_code) } }
