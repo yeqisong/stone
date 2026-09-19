@@ -187,8 +187,10 @@
       </div>
     </n-space>
     <template #footer>
-      <n-button @click="showAiFormula=false">取消</n-button>
-      <n-button type="primary" @click="callAiFormula" :loading="aiFormulaLoading">生成</n-button>
+      <n-space justify="flex-end">
+        <n-button @click="showAiFormula=false">取消</n-button>
+        <n-button type="primary" @click="callAiFormula" :loading="aiFormulaLoading">生成</n-button>
+      </n-space>
     </template>
   </n-modal>
 

@@ -335,8 +335,10 @@
         </div>
       </n-space>
       <template #footer>
-        <n-button @click="showScanModal=false">取消</n-button>
-        <n-button type="primary" @click="startScan" :loading="scanRunning">开始扫描</n-button>
+        <n-space justify="flex-end">
+          <n-button @click="showScanModal=false">取消</n-button>
+          <n-button type="primary" @click="startScan" :loading="scanRunning">开始扫描</n-button>
+        </n-space>
       </template>
     </n-modal>
 

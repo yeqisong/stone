@@ -140,8 +140,10 @@
       </div>
     </n-space>
     <template #footer>
-      <n-button @click="showExecModal=false">取消</n-button>
-      <n-button type="primary" @click="doExecute" :loading="execLoading">执行</n-button>
+      <n-space justify="flex-end">
+        <n-button @click="showExecModal=false">取消</n-button>
+        <n-button type="primary" @click="doExecute" :loading="execLoading">执行</n-button>
+      </n-space>
     </template>
   </n-modal>
 
@@ -151,8 +153,10 @@
       <n-input v-model:value="confirmChangelog" type="textarea" size="small" placeholder="变更说明（可选）" :autosize="{minRows:2,maxRows:4}" />
     </n-space>
     <template #footer>
-      <n-button @click="showConfirmModal=false">取消</n-button>
-      <n-button type="primary" @click="confirmAction" :loading="saving">确认</n-button>
+      <n-space justify="flex-end">
+        <n-button @click="showConfirmModal=false">取消</n-button>
+        <n-button type="primary" @click="confirmAction" :loading="saving">确认</n-button>
+      </n-space>
     </template>
   </n-modal>
 </div>
