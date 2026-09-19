@@ -130,7 +130,7 @@
     <n-empty v-if="!loading && !flows.length" description="暂无流程，点击「+ 新建」创建" style="padding:40px" />
   </div>
 
-  <n-modal v-model:show="showExecModal" preset="card" :title="'执行「' + (flowName || selectedFlow) + '」'" style="width:360px;max-width:92vw">
+  <n-modal v-model:show="showExecModal" preset="card" :title="'执行「' + (quickExecFlowName || flowName || selectedFlow || '') + '」'" style="width:360px;max-width:92vw">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">选择执行日期（默认今天）</div>
       <n-date-picker v-model:value="execDate" type="date" size="small" style="width:100%" />
@@ -475,7 +475,9 @@ async function doExecute() {
   try {
     const fd = (d) => { if (!d) return ''; const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0') }
     const r = await axios.post(API + `/api/dag/flows/${fid}/execute`, { trade_date: fd(execDate.value) })
-    execResult.value = r.data
+    // 成功即关弹窗，任务号走全局 toast（WS 会推送进度）；失败留在弹窗内可重试
+    message.success('已触发执行 · ' + (r.data.task_id || ''))
+    showExecModal.value = false
     loadTaskStatuses()
   } catch(e) { execResult.value = { ok: false, error: e.response?.data?.detail || e.message } }
   execLoading.value = false
