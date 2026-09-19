@@ -367,6 +367,25 @@ async function load(){
   drawChip()
 }
 
+// dataZoom 滑块统一低调样式：ECharts 画在 canvas 上，颜色必须字面量（CSS 变量不生效，
+// 会回退默认配色反而刺眼）；填充/手柄/数据剪影全部弱化，滑块只做窗口提示不抢图表主体
+const DZ_SLIDER = {
+  height:16, bottom:4, handleSize:6,
+  borderColor:'transparent',
+  backgroundColor:'rgba(128,128,128,0.08)',
+  fillerColor:'rgba(96,165,250,0.10)',
+  dataBackground:{lineStyle:{color:'transparent'},areaStyle:{color:'rgba(128,128,128,0.05)'}},
+  selectedDataBackground:{lineStyle:{color:'rgba(96,165,250,0.35)'},areaStyle:{color:'rgba(96,165,250,0.06)'}},
+  handleStyle:{color:'rgba(148,163,184,0.45)',borderColor:'rgba(148,163,184,0.35)'},
+  moveHandleStyle:{color:'rgba(148,163,184,0.2)'},
+  textStyle:{color:'rgba(148,163,184,0.6)',fontSize:9},
+  labelStyle:{color:'transparent'},
+}
+
+// 联动图组统一 grid：固定像素边距让 11 张图绘图区严格同宽（带右轴的图右边距留在
+// 轴标签，无右轴的图留白——对齐优先于零留白）
+const GRID_STD = { left:54, right:48, bottom:30 }
+
 function drawCharts(kd){
   const dates = kd.kline.map(d=>d.trade_date)
   const closes = kd.kline.map(d=>d.close)
@@ -392,15 +411,8 @@ function drawCharts(kd){
     // 滚轮缩放时间窗（普通滚轮=以鼠标为中心缩放，Shift+滚轮=平移）；
     // 五图同组（echarts.connect），任一图滚轮缩放全组同步
     {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
-    {type:'slider', xAxisIndex:0, start:SHOW, end:100, height:22, bottom:4, handleSize:8,
-    borderColor:'var(--c-input-bg)',
-    backgroundColor:'var(--c-card-bg)',
-    fillerColor:'rgba(96,165,250,0.15)',
-    handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},
-    textStyle:{color:'var(--c-text-faint)',fontSize:9},
-    labelStyle:{color:'transparent'},
-    moveHandleStyle:{color:'var(--c-card-bg-hover)'}
-  }]
+    {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...DZ_SLIDER}
+  ]
   const xA = {type:'category',data:dates,axisLabel:{show:false},
     axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},
     axisTick:{show:false}}
@@ -440,7 +452,7 @@ function drawCharts(kd){
 
   const c1 = make('c1', {
     tooltip:{trigger:'axis',axisPointer:{type:'cross'},formatter:tooltipFmt},
-    grid:{left:'8%',right:'3%',top:18,bottom:30},
+    grid:{...GRID_STD, top:18},
     xAxis:xA, yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
@@ -472,7 +484,7 @@ function drawCharts(kd){
   const initI0 = Math.max(0, Math.round((totalDays - 1) * (parseFloat(SHOW) || 0) / 100))
 
   const c2 = make('c2', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+    tooltip:tt, grid:{...GRID_STD, top:8},
     xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
     dataZoom:dz,
     series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]},
@@ -495,7 +507,7 @@ function drawCharts(kd){
     })
   }
   const c3 = make('c3', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+    tooltip:tt, grid:{...GRID_STD, top:8},
     xAxis:xA, yAxis:{splitLine:gl},
     dataZoom:dz,
     series:[
@@ -505,7 +517,7 @@ function drawCharts(kd){
     ]
   })
   const c4 = make('c4', {
-    tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+    tooltip:tt, grid:{...GRID_STD, top:8},
     xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
     series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(139,92,246,0.1)'},
@@ -529,7 +541,7 @@ function drawCharts(kd){
     tooltip: tt,
     legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
             textStyle:{fontSize:9, color:'#9ca3af'}},
-    grid:{left:'8%',right:'3%',top:26,bottom:30},
+    grid:{...GRID_STD, top:26},
     xAxis: { ...xA, axisLabel: { show: true, fontSize: 9, interval: 'auto' } },
     yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
@@ -578,12 +590,7 @@ function drawAuxCharts(kd){
   const SHOW = totalDays<=250?0:((totalDays-250)/totalDays*100).toFixed(1)
   const dz = [
     {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
-    {type:'slider', xAxisIndex:0, start:SHOW, end:100, height:18, bottom:4, handleSize:8,
-    borderColor:'var(--c-input-bg)', backgroundColor:'var(--c-card-bg)',
-    fillerColor:'rgba(96,165,250,0.15)',
-    handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},
-    textStyle:{color:'var(--c-text-faint)',fontSize:9}, labelStyle:{color:'transparent'},
-    moveHandleStyle:{color:'var(--c-card-bg-hover)'}}
+    {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...DZ_SLIDER}
   ]
   const xA = {type:'category',data:dates,axisLabel:{show:false},
     axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}}, axisTick:{show:false}}
@@ -595,7 +602,7 @@ function drawAuxCharts(kd){
     const nm = reindex(mfData.value, 'net_main')
     const cum = reindex(mfCum.value.map((v,i)=>({date:mfData.value[i].date, v})), 'v')
     const c7 = makeChart('c7', {
-      tooltip:tt, grid:{left:'8%',right:'10%',top:8,bottom:30},
+      tooltip:tt, grid:{...GRID_STD, top:8},
       xAxis:xA, yAxis:[
         {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(1)+'亿'},splitLine:gl},
         {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(0)+'亿'},splitLine:{show:false}}],
@@ -622,7 +629,7 @@ function drawAuxCharts(kd){
       const ben = bc.map(c=>c!=null?+(c/m0).toFixed(4):null)
       const exc = rel.map((v,i)=>v!=null&&ben[i]!=null?+(v-ben[i]).toFixed(4):null)
       const c8 = makeChart('c8', {
-        tooltip:tt, grid:{left:'8%',right:'3%',top:18,bottom:30},
+        tooltip:tt, grid:{...GRID_STD, top:18},
         legend:{show:true,top:0,itemWidth:14,itemHeight:8,itemGap:6,textStyle:{fontSize:9,color:'#9ca3af'}},
         xAxis:xA, yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize:9}},
         dataZoom:dz,
@@ -646,7 +653,7 @@ function drawAuxCharts(kd){
             {yAxis:pctl(w,0.8),label:{formatter:`P80 ${pctl(w,0.8).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'rgba(156,163,175,0.8)'},lineStyle:{color:'rgba(156,163,175,0.8)',type:'dashed',width:1}}]} }
     const initI0 = Math.max(0, Math.round((totalDays-1)*(parseFloat(SHOW)||0)/100))
     const c9 = makeChart('c9', {
-      tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+      tooltip:tt, grid:{...GRID_STD, top:8},
       xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:'{value}%'},splitLine:gl},
       dataZoom:dz,
       series:[{name:'换手率',type:'bar',data:trns,itemStyle:{color:'rgba(96,165,250,0.6)'},markLine:marks(initI0,totalDays-1)}]
@@ -670,7 +677,7 @@ function drawAuxCharts(kd){
   if (marginData.value.length > 2) {
     const fin = reindex(marginData.value,'fin'), tot = reindex(marginData.value,'total')
     const c10 = makeChart('c10', {
-      tooltip:tt, grid:{left:'8%',right:'3%',top:8,bottom:30},
+      tooltip:tt, grid:{...GRID_STD, top:8},
       xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e8).toFixed(0)+'亿'},splitLine:gl},
       dataZoom:dz,
       series:[
@@ -689,7 +696,7 @@ function drawAuxCharts(kd){
     const atr = tr.map((_,i)=>{ if(i<14) return null; let s=0; for(let j=i-13;j<=i;j++) s+=tr[j]; return +(s/14).toFixed(3) })
     const atrPct = atr.map((v,i)=>v!=null&&closes[i]?+(v/closes[i]*100).toFixed(2):null)
     const c11 = makeChart('c11', {
-      tooltip:tt, grid:{left:'8%',right:'9%',top:8,bottom:30},
+      tooltip:tt, grid:{...GRID_STD, top:8},
       xAxis:xA, yAxis:[
         {axisLabel:{fontSize:9},splitLine:gl,scale:true},
         {axisLabel:{fontSize:9,formatter:'{value}%'},splitLine:{show:false}}],
@@ -774,7 +781,7 @@ function drawPeChart(){
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
             textStyle:{fontSize:9, color:'#9ca3af'}},
-    grid:{left:'8%',right:'3%',top:26,bottom:30},
+    grid:{...GRID_STD, top:26},
     xAxis:{type:'category',data:peDates,axisLabel:{show:false},
       axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},axisTick:{show:false}},
     yAxis:[
@@ -785,13 +792,8 @@ function drawPeChart(){
       // 滚轮独立缩放保留；窗口与 K 线组经「日历翻译」双向联动（见 syncPe/syncKline），
       // 不直接进 connect 组——两轴日期集不同，百分比联动会对到不同日历时段
       {type:'inside', zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
-      {type:'slider',start:0,end:100,height:22,bottom:4,handleSize:8,
-      borderColor:'var(--c-input-bg)',backgroundColor:'var(--c-card-bg)',
-      fillerColor:'rgba(96,165,250,0.15)',
-      handleStyle:{borderColor:'var(--c-text-faint)',color:'var(--c-input-bg)'},
-      textStyle:{color:'var(--c-text-faint)'},labelStyle:{color:'transparent'},
-      moveHandleStyle:{color:'var(--c-card-bg-hover)'}
-    }],
+      {type:'slider',start:0,end:100,...DZ_SLIDER}
+    ],
     series:[
       {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
       {name:'PB',type:'line',data:pbVals,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
