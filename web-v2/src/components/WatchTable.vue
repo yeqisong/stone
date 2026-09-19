@@ -52,6 +52,7 @@ const columns = computed(() => [
   { title:'PE', key:'pe_ttm', width:80, align:'right', sorter:true, sortOrder: sortField.value==='pe_ttm'?sortDir.value:false, render(r){return r.pe_ttm?r.pe_ttm.toFixed(1):'亏损'} },
   { title:'行业', key:'industry', width:160, render(r){ return ell(r.industry, { maxWidth:'148px' }) } },
   { title:'数据日期', key:'trade_date', width:105, align:'center', render(r){return r.trade_date||'-'} },
+  { title:'加入时间', key:'added_at', width:120, align:'center', render(r){return r.added_at||'-'} },
 ])
 
 function rowProps(row){ return { style:'cursor:pointer', onClick:()=>emit('show-detail', row.stock_code) } }

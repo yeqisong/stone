@@ -26,6 +26,7 @@
       <n-tag v-if="stockGroups.in_portfolio" size="small" type="info" :bordered="false">持仓</n-tag>
       <n-tag v-for="g in stockGroups.groups" :key="g.id" size="small" closable :bordered="false"
         class="dt-grp-tag" :type="g.is_default ? 'warning' : 'default'"
+        :title="g.added_at ? '加入于 ' + g.added_at : ''"
         @close="confirmRemoveGroup(g)">{{ g.name }}</n-tag>
       <n-button size="tiny" dashed @click="openAddGroup"><AppIcon name="plus" :size="12" />  分组</n-button>
     </div>
