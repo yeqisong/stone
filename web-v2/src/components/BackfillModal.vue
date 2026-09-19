@@ -34,10 +34,12 @@
   </n-space>
 
   <template #footer>
-    <n-button @click="onStart" type="primary" :disabled="submitted" :loading="submitted">
-      {{ submitted ? '已提交' : (props.type === 'stock_master' ? '开始更新' : '开始补数') }}
-    </n-button>
-    <n-button @click="onClose">关闭</n-button>
+    <n-space justify="flex-end">
+      <n-button @click="onStart" type="primary" :disabled="submitted" :loading="submitted">
+        {{ submitted ? '已提交' : (props.type === 'stock_master' ? '开始更新' : '开始补数') }}
+      </n-button>
+      <n-button @click="onClose">关闭</n-button>
+    </n-space>
   </template>
 </n-modal>
 </template>
