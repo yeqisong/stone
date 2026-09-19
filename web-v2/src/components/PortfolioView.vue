@@ -1,15 +1,45 @@
 <template>
 <div class="page-fill">
-  <StatStrip v-if="data.count" :items="statItems" />
-
-  <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin:6px 0" class="no-shrink self-start">+ 新增持仓</n-button>
-
-  <n-spin v-if="loading" style="padding:40px" />
-  <div v-else class="fill-table" style="display:flex;flex-direction:column">
-    <n-data-table v-if="data.positions&&data.positions.length" class="fill-table" flex-height :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
-    <n-empty v-else description="暂无持仓" style="flex:1" />
+  <!-- Tab 行：持仓 / 自选 / 动态分组（右侧新增分组） -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;flex-shrink:0">
+    <n-button-group size="tiny">
+      <n-button size="tiny" :type="activeTab==='pos'?'primary':'default'" @click="activeTab='pos'">持仓</n-button>
+      <n-button v-for="g in groups" :key="g.id" size="tiny" :type="activeTab===g.id?'primary':'default'" @click="activeTab=g.id">
+        {{ g.name }}<span v-if="g.count" style="font-size:10px;opacity:0.75"> {{ g.count }}</span>
+      </n-button>
+    </n-button-group>
+    <n-button size="tiny" quaternary type="primary" style="margin-left:auto" @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
   </div>
+
+  <!-- 持仓 tab：统计区 + 持仓表（统计区仅持仓 tab 显示） -->
+  <template v-if="activeTab==='pos'">
+    <StatStrip v-if="data.count" :items="statItems" />
+
+    <n-button type="primary" ghost size="tiny" @click="startAdd" style="margin:6px 0" class="no-shrink self-start">+ 新增持仓</n-button>
+
+    <n-spin v-if="loading" style="padding:40px" />
+    <div v-else class="fill-table" style="display:flex;flex-direction:column">
+      <n-data-table v-if="data.positions&&data.positions.length" class="fill-table" flex-height :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
+      <n-empty v-else description="暂无持仓" style="flex:1" />
+    </div>
+  </template>
+
+  <!-- 自选 / 动态分组 tab：列字段同个股列表 -->
+  <WatchTable v-else-if="activeTab!==null" :group-id="activeTab" @show-detail="c=>emit('show-detail',c)" />
 </div>
+
+<!-- 新增分组弹窗 -->
+<n-modal v-model:show="showNewGroup">
+  <n-card style="width:380px" title="新增分组" role="dialog" aria-modal="true">
+    <n-input v-model:value="newGroupName" size="small" placeholder="分组名称（1~32 字符）" maxlength="32" @keyup.enter="doCreateGroup" />
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button size="small" @click="showNewGroup=false">取消</n-button>
+        <n-button size="small" type="primary" :loading="creatingGroup" @click="doCreateGroup">创建</n-button>
+      </n-space>
+    </template>
+  </n-card>
+</n-modal>
 
 <n-modal v-model:show="showEdit">
   <n-card style="width:450px" :title="isAdding ? '新增持仓' : '编辑持仓'" role="dialog" aria-modal="true">
@@ -64,8 +94,9 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
+import WatchTable from './WatchTable.vue'
 import { ref, reactive, h, computed, onMounted } from 'vue'
-import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag } from 'naive-ui'
+import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag, NButtonGroup } from 'naive-ui'
 import axios from 'axios'
 import { useAuthStore } from '../stores/auth'
 import StatStrip from './StatStrip.vue'
@@ -75,6 +106,34 @@ const message = useMessage()
 const auth2 = useAuthStore()
 const data = reactive({positions:[], count:0, total_value:0, total_pnl:0})
 const showEdit = ref(false), showDeleteConfirm = ref(false), loading = ref(true)
+
+// ── Tab：'pos'=持仓，number=分组 id（自选 + 动态组） ──
+const activeTab = ref('pos')
+const groups = ref([])
+const showNewGroup = ref(false), newGroupName = ref(''), creatingGroup = ref(false)
+const _authHeaders = () => auth2.token ? {Authorization: 'Bearer '+auth2.token} : {}
+async function loadGroups(){
+  try{
+    const r = await axios.get(API+'/api/watch/groups')
+    groups.value = r.data.groups||[]
+    // 当前 tab 的组被删（详情页/其它入口）时回退到持仓
+    if (activeTab.value !== 'pos' && !groups.value.some(g => g.id === activeTab.value)) activeTab.value = 'pos'
+  }catch(e){}
+}
+function openNewGroup(){ newGroupName.value=''; showNewGroup.value=true }
+async function doCreateGroup(){
+  const name = newGroupName.value.trim()
+  if (!name) { message.warning('请输入分组名称'); return }
+  creatingGroup.value = true
+  try{
+    const r = await axios.post(API+'/api/watch/groups', {name}, {headers:_authHeaders()})
+    showNewGroup.value = false
+    await loadGroups()
+    activeTab.value = r.data.id
+    message.success(`分组「${name}」已创建`)
+  }catch(e){ message.error(e.response?.data?.detail || '创建失败') }
+  creatingGroup.value = false
+}
 function onSuggestFill() {
   if (!editForm.qty) editForm.qty = 100   // 选中建议仅填充代码；数量为空给默认一手
 }
@@ -144,6 +203,7 @@ const columns = [
 ]
 function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{if(!e.target.closest('button'))emit('show-detail',row.stock_code)}}}
 async function load(){loading.value=true;try{const r=await axios.get(API+'/api/portfolio');Object.assign(data,r.data)}catch(e){message.error('持仓加载失败，请刷新重试')}finally{loading.value=false}}
+onMounted(() => { load(); loadGroups() })
 async function doAdd(){
   if(!editForm.code)return
   const auth2 = useAuthStore()
