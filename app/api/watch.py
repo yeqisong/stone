@@ -111,7 +111,10 @@ def list_group_stocks(
                    (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) AS price,
                    (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1) AS prev_close,
                    (SELECT dq.trade_date FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) AS trade_date,
-                   sf.pe_ttm, sm.industry_l1, sm.industry_l2, wgi.added_at
+                   sf.pe_ttm, sm.industry_l1, sm.industry_l2, wgi.added_at, wgi.join_price,
+                   (SELECT dq2.close FROM daily_quote dq2 WHERE dq2.stock_code = sm.stock_code
+                    AND dq2.trade_date <= wgi.added_at::date AND dq2.close > 0
+                    ORDER BY dq2.trade_date DESC LIMIT 1) AS join_close_hist
             FROM stock_master sm
             JOIN watch_group_items wgi ON wgi.stock_code = sm.stock_code AND wgi.group_id = :g
             LEFT JOIN LATERAL (
@@ -126,6 +129,9 @@ def list_group_stocks(
         for r in rows:
             p = float(r.price) if r.price else None
             pp = float(r.prev_close) if r.prev_close else None
+            # 加入后涨跌幅：基准优先取加入时落库的 join_price（不随采集漂移）；
+            # 功能上线前的旧行无 join_price，回退取加入日（或其前最后一交易日）收盘
+            jr = float(r.join_price) if r.join_price else (float(r.join_close_hist) if r.join_close_hist else None)
             stocks.append({
                 "stock_code": r.stock_code,
                 "stock_name": r.stock_name,
@@ -136,6 +142,7 @@ def list_group_stocks(
                 "industry": (r.industry_l1 or "") + (("/" + r.industry_l2) if r.industry_l2 else ""),
                 "trade_date": str(r.trade_date) if r.trade_date else None,
                 "added_at": str(r.added_at)[:16] if r.added_at else None,
+                "chg_since_join": round((p - jr) / jr * 100, 2) if p and jr and jr > 0 else None,
             })
         return {"stocks": stocks, "total": total, "page": page, "page_size": page_size,
                 "total_pages": (total + page_size - 1) // page_size}
@@ -167,12 +174,16 @@ def set_stock_groups(body: dict, user: str = Depends(get_current_user)):
             "DELETE FROM watch_group_items WHERE stock_code=:c AND group_id <> ALL(CAST(:g AS int[]))"),
             {"c": code, "g": gids})
         if gids:
+            # 加入价此刻落库（最新有效收盘，真实价）：加入后涨跌幅的基准不随当晚采集漂移
+            jp = db.execute(text(
+                "SELECT close FROM daily_quote WHERE stock_code=:c AND close > 0 "
+                "ORDER BY trade_date DESC LIMIT 1"), {"c": code}).scalar()
             # CAST 而非 ::int[] —— text() 会把 :g::int 解析成第二个绑定参数
             db.execute(text(
-                "INSERT INTO watch_group_items (group_id, stock_code) "
-                "SELECT g, :c FROM unnest(CAST(:g AS int[])) AS g "
+                "INSERT INTO watch_group_items (group_id, stock_code, join_price) "
+                "SELECT g, :c, :jp FROM unnest(CAST(:g AS int[])) AS g "
                 "ON CONFLICT (group_id, stock_code) DO NOTHING"),
-                {"c": code, "g": gids})
+                {"c": code, "g": gids, "jp": float(jp) if jp else None})
         db.commit()
         return {"ok": True}
     finally:
