@@ -95,7 +95,9 @@ def list_group_stocks(
         if not exists:
             raise HTTPException(404, "分组不存在")
         offset = (page - 1) * page_size
-        where = "sm.stock_code IN (SELECT stock_code FROM watch_group_items WHERE group_id = :g)"
+        # 限定个股/ETF：指数代码与深市个股代码天然冲突（000001=上证指数/平安银行），
+        # 不过滤会把同名脏行带进列表（个股列表 /api/stocks 同口径过滤）
+        where = "sm.stock_type IN ('stock','etf') AND sm.stock_code IN (SELECT stock_code FROM watch_group_items WHERE group_id = :g)"
         params = {"g": group_id, "l": page_size, "o": offset}
         if keyword:
             where += " AND (sm.stock_code LIKE :k OR sm.stock_name LIKE :k)"
@@ -103,13 +105,15 @@ def list_group_stocks(
         total = db.execute(text(f"SELECT COUNT(*) FROM stock_master sm WHERE {where}"), params).scalar() or 0
         dir_sql = "DESC NULLS LAST" if order_dir == "desc" else "ASC NULLS LAST"
         order_sql = ORDER_SQL_MAP[order_by]
+        # JOIN 直取 added_at（加入时间）：移除即删行、再加入为全新行——天然「取最后一次加入时间」
         rows = db.execute(text(f"""
             SELECT sm.stock_code, sm.stock_name, sm.exchange, sm.stock_type,
                    (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) AS price,
                    (SELECT dq.close FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1 OFFSET 1) AS prev_close,
                    (SELECT dq.trade_date FROM daily_quote dq WHERE dq.stock_code=sm.stock_code ORDER BY dq.trade_date DESC LIMIT 1) AS trade_date,
-                   sf.pe_ttm, sm.industry_l1, sm.industry_l2
+                   sf.pe_ttm, sm.industry_l1, sm.industry_l2, wgi.added_at
             FROM stock_master sm
+            JOIN watch_group_items wgi ON wgi.stock_code = sm.stock_code AND wgi.group_id = :g
             LEFT JOIN LATERAL (
                 SELECT pe_ttm FROM stock_fundamentals f
                 WHERE f.stock_code = sm.stock_code ORDER BY f.trade_date DESC LIMIT 1
@@ -131,6 +135,7 @@ def list_group_stocks(
                 "pe_ttm": float(r.pe_ttm) if r.pe_ttm else None,
                 "industry": (r.industry_l1 or "") + (("/" + r.industry_l2) if r.industry_l2 else ""),
                 "trade_date": str(r.trade_date) if r.trade_date else None,
+                "added_at": str(r.added_at)[:16] if r.added_at else None,
             })
         return {"stocks": stocks, "total": total, "page": page, "page_size": page_size,
                 "total_pages": (total + page_size - 1) // page_size}
@@ -180,7 +185,7 @@ def get_stock_groups(code: str):
     db = get_sync_db()
     try:
         rows = db.execute(text("""
-            SELECT g.id, g.group_name, g.is_default
+            SELECT g.id, g.group_name, g.is_default, i.added_at
             FROM watch_group_items i JOIN watch_groups g ON g.id = i.group_id
             WHERE i.stock_code = :c
             ORDER BY g.is_default DESC, g.sort_order, g.id
@@ -188,7 +193,8 @@ def get_stock_groups(code: str):
         in_portfolio = bool(db.execute(text(
             "SELECT 1 FROM portfolio WHERE stock_code=:c AND is_active=true AND quantity > 0 LIMIT 1"
         ), {"c": code}).scalar())
-        return {"groups": [{"id": r[0], "name": r[1], "is_default": r[2]} for r in rows],
+        return {"groups": [{"id": r[0], "name": r[1], "is_default": r[2],
+                            "added_at": str(r[3])[:16] if r[3] else None} for r in rows],
                 "in_portfolio": in_portfolio}
     finally:
         db.close()
