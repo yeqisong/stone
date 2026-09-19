@@ -2193,41 +2193,33 @@ def dag_task_model_health(trade_date=None, **kw):
             return 0
 
         # 1. 回填 forward 收益（5/10/20 个交易日前的信号，所有版本+方向）
-        # v3.7 修复：原先按自然日回推（5 自然日 ≈ 3 交易日，系统性短算）且只匹配
-        # "恰好第 N 天"那一天（节点当天没跑则永久漏填）；现按交易日历回推，
-        # 并补填历史漏填的 NULL 行（按信号日 + N 交易日的目标日收盘价计算）
+        # v3.7 曾按自然日回推（5 自然日≈3 交易日，系统性短算）；2026-09-19 再修两处：
+        # ①日历查询未过滤 is_trade_day，周末混入使「N 个交易日」实为 N 个日历表位
+        #   （≈3-4 个真交易日），且到期日会落在周末取不到收盘价；
+        # ②cal_idx 键是 str 而查询返回 date 对象，`sig.signal_date not in cal_idx`
+        #   恒真 → 每条信号都被 continue 跳过，forward 三列建表以来一列都填不上。
+        # 现按纯交易日序列 + 逐信号定位到期日：满 N 个交易日即回填（不再依赖
+        # 「恰好第 N 天当天才匹配」的脆弱窗口，漏跑天数自动补齐）
         trade_cal = [str(r[0])[:10] for r in db.execute(text(
-            "SELECT cal_date FROM trade_calendar WHERE cal_date <= :d ORDER BY cal_date DESC LIMIT 80"
+            "SELECT cal_date FROM trade_calendar WHERE cal_date <= :d AND is_trade_day = true "
+            "ORDER BY cal_date DESC LIMIT 120"
         ), {"d": td}).fetchall()]
-        cal_idx = {d: i for i, d in enumerate(trade_cal)}   # 0=今天，越大越早
+        cal_idx = {d: i for i, d in enumerate(trade_cal)}   # 0=今天，越大越早（纯交易日）
         missed = 0
         for days in [5, 10, 20]:
             col = f"forward_{days}d_return"
             if days >= len(trade_cal):
                 continue
-            target_date = trade_cal[days]                   # 今天往前第 N 个交易日
-            # 新信号：恰好到期的当日回填
+            cutoff = trade_cal[days]    # 信号日 ≤ cutoff ⇒ 距今已满 N 个交易日
             signals = db.execute(text(f"""
-                SELECT id, stock_code, signal_date, price, direction FROM signal_history
-                WHERE signal_date = :d AND strategy_name = 'model_signal' AND {col} IS NULL
-            """), {"d": target_date}).fetchall()
-            # 漏填补录：到期已超过 1 个交易日但仍为 NULL 的信号（历史节点缺跑）
-            if days + 1 < len(trade_cal):
-                backstop_date = trade_cal[days + 1]
-                signals += db.execute(text(f"""
-                    SELECT id, stock_code, signal_date, price, direction FROM signal_history
-                    WHERE signal_date = :d AND strategy_name = 'model_signal' AND {col} IS NULL
-                """), {"d": backstop_date}).fetchall()
+                SELECT id, stock_code, signal_date, price FROM signal_history
+                WHERE strategy_name = 'model_signal' AND {col} IS NULL AND signal_date <= :cutoff
+            """), {"cutoff": cutoff}).fetchall()
             for sig in signals:
-                # 到期日收盘价：按交易日历取信号日后第 N 个交易日（漏填补录时该日 < 今天）
-                if sig.signal_date not in cal_idx:
-                    continue
-                sig_seq = cal_idx[sig.signal_date]
-                expire_seq = sig_seq - days
-                if expire_seq < 0 or expire_seq >= len(trade_cal):
-                    missed += 1
-                    continue
-                expire_date = trade_cal[expire_seq]
+                sig_seq = cal_idx.get(str(sig.signal_date)[:10])
+                if sig_seq is None or sig_seq - days < 0:
+                    continue    # 早于日历窗口的悬空信号：保持 NULL（与屏障了结口径一致）
+                expire_date = trade_cal[sig_seq - days]   # 信号日后第 N 个交易日
                 close = db.execute(text(
                     "SELECT close_hfq FROM daily_quote WHERE stock_code=:c AND trade_date=:d"
                 ), {"c": sig.stock_code, "d": expire_date}).scalar()
