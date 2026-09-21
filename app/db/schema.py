@@ -899,6 +899,66 @@ CREATE TABLE IF NOT EXISTS tushare_quota (
 );
 """
 
+# ── 雪球情绪采集（design/06；P1 试点 2026-09-21）──
+
+CREATE_XUEQIU_STATUS = """
+CREATE TABLE IF NOT EXISTS xueqiu_status (
+    status_id      BIGINT NOT NULL,            -- 雪球帖子全局 ID（UPSERT 幂等键之一）
+    code           VARCHAR(6) NOT NULL,        -- 本系统 6 位股票码（SH/SZ 前缀在 adapter 层转换）
+    user_id        BIGINT,
+    created_at     TIMESTAMPTZ NOT NULL,       -- 发帖时间（北京时间）
+    title          VARCHAR(512),
+    text_raw       TEXT,                       -- 富文本原文（含 $股票$ / #话题# / HTML）
+    text_clean     TEXT,                       -- 清洗后纯文本
+    mark           SMALLINT DEFAULT 0,         -- 看涨/看跌标记：0=无（~95%），5 有出现，语义待统计确认
+    view_count     INTEGER DEFAULT 0,
+    like_count     INTEGER DEFAULT 0,
+    retweet_count  INTEGER DEFAULT 0,
+    reply_count    INTEGER DEFAULT 0,
+    fav_count      INTEGER DEFAULT 0,
+    source         VARCHAR(32),                -- Android / iPhone / HarmonyOS / 雪球
+    status_type    VARCHAR(16),
+    fetched_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (status_id, created_at)        -- 分区键必须入 PK
+) PARTITION BY RANGE (created_at);
+CREATE INDEX IF NOT EXISTS idx_xqs_code_time ON xueqiu_status (code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_xqs_user ON xueqiu_status (user_id);
+DO $$
+DECLARE y INT;
+BEGIN
+    -- 按年 RANGE 分区（对齐 feature_values 惯例）：删老年份 = DROP PARTITION；
+    -- 重叠年份静默跳过；DEFAULT 兜底异常日期。注意：注释必须放在 $$ 内——
+    -- _split_statements 按 ';' 切分，DO 前的裸注释会让整条语句以 '--' 开头被 init_db 跳过。
+    IF EXISTS (SELECT 1 FROM pg_partitioned_table WHERE partrelid = 'xueqiu_status'::regclass) THEN
+        FOR y IN 2026..(EXTRACT(YEAR FROM CURRENT_DATE)::int + 2) LOOP
+            BEGIN
+                EXECUTE 'CREATE TABLE IF NOT EXISTS xueqiu_status_y' || y ||
+                        ' PARTITION OF xueqiu_status FOR VALUES FROM (''' ||
+                        make_date(y, 1, 1)::timestamptz::text || ''') TO (''' ||
+                        make_date(y + 1, 1, 1)::timestamptz::text || ''')';
+            EXCEPTION WHEN OTHERS THEN NULL;   -- 既有分区重叠 → 跳过
+            END;
+        END LOOP;
+        EXECUTE 'CREATE TABLE IF NOT EXISTS xueqiu_status_def PARTITION OF xueqiu_status DEFAULT';
+    END IF;
+END $$;
+"""
+
+CREATE_XUEQIU_CRAWL_STATE = """
+CREATE TABLE IF NOT EXISTS xueqiu_crawl_state (
+    code           VARCHAR(6) PRIMARY KEY,
+    tier           SMALLINT NOT NULL DEFAULT 3,   -- 档位：1 热 15min / 2 中 60min / 3 冷 4h
+    last_status_id BIGINT NOT NULL DEFAULT 0,     -- 游标：已见最大帖子 ID
+    next_due_at    TIMESTAMPTZ,                   -- 到期堆持久化（重启续跑）
+    zero_streak    INTEGER NOT NULL DEFAULT 0,    -- 连续零新增轮数（降档依据，P1 只记录不调档）
+    full_streak    INTEGER NOT NULL DEFAULT 0,    -- 连续整页新增轮数（升档依据）
+    fail_streak    INTEGER NOT NULL DEFAULT 0,    -- 连续失败轮数（退避依据）
+    today_status   VARCHAR(16) NOT NULL DEFAULT 'ok',  -- ok / degraded / failed（兜底轮筛选）
+    last_ok_at     TIMESTAMPTZ,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # ── 因子 IC 检验留档（特征页 IC 体检；决策在 features.ic_status，重算不覆盖）──
 
 CREATE_FACTOR_IC_STATS = """
@@ -1053,6 +1113,8 @@ ALL_TABLES = [
     ("stock_margin_detail", CREATE_MARGIN_DETAIL),
     ("stock_holder_number", CREATE_HOLDER_NUMBER),
     ("tushare_quota", CREATE_TUSHARE_QUOTA),
+    ("xueqiu_status", CREATE_XUEQIU_STATUS),
+    ("xueqiu_crawl_state", CREATE_XUEQIU_CRAWL_STATE),
 ]
 
 
