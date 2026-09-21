@@ -105,8 +105,23 @@ def map_item(item: dict, code: str) -> StatusRow:
 
 
 def load_login_cookies() -> dict[str, str] | None:
-    """读 XUEQIU_TOKENS（'k1=v1;k2=v2'）→ dict；未配置返回 None（匿名模式）。"""
+    """读登录 cookie：优先进程环境变量 XUEQIU_TOKENS，回退项目根 .env 文件。
+
+    格式 'k1=v1;k2=v2'（浏览器 F12 复制）；未配置返回 None（匿名模式）。
+    """
     raw = os.environ.get('XUEQIU_TOKENS', '').strip()
+    if not raw:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), '.env')
+        try:
+            with open(env_path, encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('XUEQIU_TOKENS='):
+                        raw = line.split('=', 1)[1].strip().strip('"\'')
+                        break
+        except OSError:
+            pass
     if not raw:
         return None
     out: dict[str, str] = {}
@@ -124,12 +139,13 @@ class XueqiuAdapter:
     def __init__(self):
         self._cookies: dict[str, str] = {}
         self._session = cffi_requests.Session(impersonate='chrome')  # 连接复用 + Chrome TLS 指纹
+        self._login = load_login_cookies() is not None
         self.set_cookies(load_login_cookies() or {})
 
     @property
     def login_mode(self) -> bool:
-        """登录 token 模式（形态 C）：环境变量提供了有效 cookie。"""
-        return bool(os.environ.get('XUEQIU_TOKENS', '').strip())
+        """登录 token 模式（形态 C）：.env 或环境变量提供了有效 cookie。"""
+        return self._login
 
     def set_cookies(self, cookies: dict[str, str]):
         self._cookies = cookies or {}

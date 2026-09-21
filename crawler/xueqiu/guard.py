@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from . import washer
-from .adapter import XueqiuAdapter
+from .adapter import XueqiuAdapter, load_login_cookies
 
 BURST_LIMIT = 20          # 60s 窗口主动预算（实测触发点 28，留余量）
 WINDOW_S = 60.0
@@ -70,12 +70,9 @@ class RatingGuard:
             logger.info(f'雪球洗白节流等待 {wait:.0f}s（{reason}）')
             time.sleep(wait)
         cookies = washer.wash()
-        # 登录模式下洗白仅刷新 WAF cookie，保留登录 token（匿名模式 wash 返回的就是全套）
+        # 登录模式下洗白仅刷新 WAF cookie，登录 token 从交接源（.env）回填，不依赖运行态 cookie
         if self.adapter.login_mode:
-            merged = cookies
-            merged.update({k: v for k, v in self.adapter._cookies.items()
-                           if k in ('xq_a_token', 'xq_r_token', 'xqat', 'xq_id_token', 'u')})
-            cookies = merged
+            cookies = {**cookies, **(load_login_cookies() or {})}
         self.adapter.set_cookies(cookies)
         self._wash_times.append(time.time())
         self._last_wash = time.time()
