@@ -444,9 +444,12 @@ const xqSub = computed(() => {
 
 async function loadXq() {
   try {
-    const r = await axios.get(API + '/api/status/xueqiu')
+    const r = await axios.get(API + '/api/xueqiu')
     xq.value = r.data || {}
-  } catch(e) { /* 采集未部署时静默 */ }
+  } catch(e) {
+    // 接口不可达也要亮红灯（卡片恒可见，静默会让指示灯失去意义）
+    xq.value = { status: 'down', reason: '接口无响应' }
+  }
 }
 
 
