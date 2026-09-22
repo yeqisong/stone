@@ -20,7 +20,8 @@ from .adapter import XueqiuAdapter, load_login_cookies
 
 BURST_LIMIT = 20          # 60s 窗口主动预算（实测触发点 28，留余量）
 WINDOW_S = 60.0
-MAX_WASH_PER_HOUR = 30    # 洗白熔断：每小时超过此数说明被针对性风控，停机人工介入
+MAX_WASH_PER_HOUR = 90    # 洗白熔断：P2 全市场预算 ~0.45 req/s 需 ~50-60 次/h，90 留余量
+                           # （超线 = 被针对性风控，停机人工介入）
 WASH_MIN_INTERVAL_S = 60  # 两次洗白最小间隔——"洗白-打满-再洗白"高频循环本身是异常行为
                            # （2026-09-21 实测教训：无间隔时均摊 3-4 req/s 持续流触发 IP 级 405 软封禁）
 RISK_FAIL_STREAK = 3      # 连续非挑战失败（405 等）→ 熔断停机，绝不重试风暴

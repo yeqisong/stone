@@ -819,6 +819,71 @@ def tushare_quota():
         return {"error": str(e)}
 
 
+@router.get("/xueqiu")
+def xueqiu_status():
+    """雪球情绪采集运行状态（状态页卡片 + 常驻进程指示灯）。
+
+    status 三态（质量域约定：绿=正常 黄=注意 红=异常）：
+      ok       心跳 ≤660s（poller 每循环/休眠分支每 300s 更新，11 分钟覆盖休眠周期+余量）
+      degraded 心跳 660~1800s（疑似卡顿/洗白长退避）
+      down     心跳 >1800s 或无记录（进程停摆）
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        rt = db.execute(text(
+            "SELECT heartbeat_at, started_at, login_mode, pool_size, requests_total, "
+            "ok_total, washes_total, challenged_total, posts_today, last_post_at "
+            "FROM xueqiu_runtime WHERE id = 1")).fetchone()
+        now = datetime.now(timezone.utc)
+        if not rt:
+            return {"status": "down", "reason": "无心跳记录（进程从未启动）"}
+
+        hb = rt[0]
+        if hb.tzinfo is None:
+            hb = hb.replace(tzinfo=timezone(timedelta(hours=8)))
+        age_s = int((now - hb).total_seconds())
+        if age_s <= 660:
+            status = "ok"
+        elif age_s <= 1800:
+            status = "degraded"
+        else:
+            status = "down"
+
+        # 当日真实新增（跨重启，库口径）+ 覆盖进度
+        posts_today = db.execute(text(
+            "SELECT COUNT(*) FROM xueqiu_status WHERE created_at >= "
+            "date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai') "
+            "AT TIME ZONE 'Asia/Shanghai'")).scalar() or 0
+        total_posts = db.execute(text("SELECT COUNT(*) FROM xueqiu_status")).scalar() or 0
+        tiers = {}
+        for tier, n, covered in db.execute(text(
+                "SELECT tier, COUNT(*), "
+                "SUM(CASE WHEN last_ok_at >= CURRENT_TIMESTAMP - interval '1 day' THEN 1 ELSE 0 END) "
+                "FROM xueqiu_crawl_state GROUP BY tier ORDER BY tier")).fetchall():
+            tiers[str(tier)] = {"n": n, "covered_24h": covered or 0}
+        failed = db.execute(text(
+            "SELECT COUNT(*) FROM xueqiu_crawl_state WHERE fail_streak > 0")).scalar() or 0
+
+        return {
+            "status": status, "heartbeat_at": str(hb.astimezone(
+                timezone(timedelta(hours=8))))[:19], "age_s": age_s,
+            "started_at": str(rt[1])[:19] if rt[1] else None,
+            "login_mode": rt[2], "pool_size": rt[3],
+            "requests_total": rt[4], "ok_total": rt[5],
+            "washes_total": rt[6], "challenged_total": rt[7],
+            "posts_today_runtime": rt[8], "last_post_at": str(rt[9])[:19] if rt[9] else None,
+            "posts_today": posts_today, "total_posts": total_posts,
+            "tiers": tiers, "failed_stocks": failed,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "down", "reason": str(e)}
+    finally:
+        db.close()
+
+
 # ═══════════════════════════════════════════════
 #  历史补数
 # ═══════════════════════════════════════════════

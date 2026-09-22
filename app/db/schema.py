@@ -927,8 +927,9 @@ DO $$
 DECLARE y INT;
 BEGIN
     -- 按年 RANGE 分区（对齐 feature_values 惯例）：删老年份 = DROP PARTITION；
-    -- 重叠年份静默跳过；DEFAULT 兜底异常日期。注意：注释必须放在 $$ 内——
-    -- _split_statements 按 ';' 切分，DO 前的裸注释会让整条语句以 '--' 开头被 init_db 跳过。
+    -- 重叠年份静默跳过；DEFAULT 兜底异常日期。注意：dollar-quote 体（DO 块）
+    -- 内部不能出现美元对字样，否则 _split_statements 的状态机切分会错位；
+    -- 注释也不可放 DO 块之前（会让整条语句以注释开头被 init_db 跳过）。
     IF EXISTS (SELECT 1 FROM pg_partitioned_table WHERE partrelid = 'xueqiu_status'::regclass) THEN
         FOR y IN 2026..(EXTRACT(YEAR FROM CURRENT_DATE)::int + 2) LOOP
             BEGIN
@@ -947,7 +948,7 @@ END $$;
 CREATE_XUEQIU_CRAWL_STATE = """
 CREATE TABLE IF NOT EXISTS xueqiu_crawl_state (
     code           VARCHAR(6) PRIMARY KEY,
-    tier           SMALLINT NOT NULL DEFAULT 3,   -- 档位：1 热 15min / 2 中 60min / 3 冷 4h
+    tier           SMALLINT NOT NULL DEFAULT 3,   -- 档位：1 热 45min / 2 中 3h / 3 冷 8h（P2 预算重估）
     last_status_id BIGINT NOT NULL DEFAULT 0,     -- 游标：已见最大帖子 ID
     next_due_at    TIMESTAMPTZ,                   -- 到期堆持久化（重启续跑）
     zero_streak    INTEGER NOT NULL DEFAULT 0,    -- 连续零新增轮数（降档依据，P1 只记录不调档）
@@ -956,6 +957,23 @@ CREATE TABLE IF NOT EXISTS xueqiu_crawl_state (
     today_status   VARCHAR(16) NOT NULL DEFAULT 'ok',  -- ok / degraded / failed（兜底轮筛选）
     last_ok_at     TIMESTAMPTZ,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_XUEQIU_RUNTIME = """
+CREATE TABLE IF NOT EXISTS xueqiu_runtime (
+    id              SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- 单行表
+    heartbeat_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 常驻进程心跳（每循环更新）
+    started_at      TIMESTAMPTZ,
+    login_mode      BOOLEAN NOT NULL DEFAULT false,
+    pool_size       INTEGER NOT NULL DEFAULT 0,
+    requests_total  BIGINT NOT NULL DEFAULT 0,
+    ok_total        BIGINT NOT NULL DEFAULT 0,
+    washes_total    INTEGER NOT NULL DEFAULT 0,
+    challenged_total INTEGER NOT NULL DEFAULT 0,
+    posts_today     INTEGER NOT NULL DEFAULT 0,   -- 今日新增（poller 内存计数快照）
+    last_post_at    TIMESTAMPTZ,                  -- 最近一条新增帖的发帖时间
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -1115,6 +1133,7 @@ ALL_TABLES = [
     ("tushare_quota", CREATE_TUSHARE_QUOTA),
     ("xueqiu_status", CREATE_XUEQIU_STATUS),
     ("xueqiu_crawl_state", CREATE_XUEQIU_CRAWL_STATE),
+    ("xueqiu_runtime", CREATE_XUEQIU_RUNTIME),
 ]
 
 

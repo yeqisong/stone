@@ -22,11 +22,16 @@ from .guard import RatingGuard
 
 _TZ = ZoneInfo('Asia/Shanghai')
 
-TIER_PERIOD_S = {1: 15 * 60, 2: 60 * 60, 3: 4 * 3600}
+# P2 预算重估（design/06 §9.8）：干净会话天花板 ~0.5 req/s（洗白周期×会话预算），
+# 全市场分档压在 ~0.45 req/s 均摊：T1 500×45min + T2 1500×3h + T3 3400×8h ≈ 3.8 万 req/天
+TIER_PERIOD_S = {1: 45 * 60, 2: 3 * 3600, 3: 8 * 3600}
+TIER1_TOP_N = 500      # 成交额 top N → T1
+TIER2_TOP_N = 2000     # 成交额 top N 内非 T1 → T2；其余 T3
 MAX_PAGES_PER_ROUND = 5          # 单轮翻页保护
 FLUSH_ROWS = 200
 FLUSH_INTERVAL_S = 30
 STATE_PERSIST_S = 60             # crawl_state 批量回写间隔
+HEARTBEAT_S = 30                 # 心跳最小间隔（休眠分支也跳，保证"活着就心跳"）
 
 
 def speed_factor(now: datetime.datetime, is_trade_day: bool) -> float:
@@ -58,6 +63,9 @@ class Poller:
         self._last_flush = time.time()
         self._last_persist = time.time()
         self._new_today = 0
+        self._last_post_at = None
+        self._started_at = None
+        self._last_heartbeat = 0.0
         self._last_report = time.time()
 
     # ── 启动 ──
@@ -86,15 +94,19 @@ class Poller:
     def run(self):
         from crawler.trade_calendar import is_trade_day
         self.guard.ensure_ready()
+        self._started_at = _now()
+        self._last_heartbeat = 0
+        self._heartbeat()
         logger.info(f'雪球轮询器启动（login_mode={self.adapter.login_mode}），'
                     f'股票 {len(self._states)} 只')
         while True:
             now_dt = _now()
             factor = speed_factor(now_dt, is_trade_day(now_dt.date()))
             if factor == 0.0:
-                # 深夜休眠：每 5 分钟醒一次看时段
+                # 深夜休眠：每 5 分钟醒一次看时段（心跳照跳——"活着就心跳"）
                 self._flush(force=True)
                 self._persist()
+                self._heartbeat()
                 time.sleep(300)
                 continue
 
@@ -104,6 +116,7 @@ class Poller:
                 # 无到期任务：先做缓冲落盘/状态回写，再小睡
                 self._flush()
                 self._persist()
+                self._heartbeat()
                 # 半速/20% 时段：把到期时间往后等效拉长（简化实现——
                 # factor<1 时下轮重排已按周期乘 1/factor 放大，这里只控制消费节奏）
                 time.sleep(min(deficit, 1.0))
@@ -113,6 +126,7 @@ class Poller:
             self._process_one(code, factor)
             self._flush()
             self._persist()
+            self._heartbeat()
             self._report()
 
     # ── 单股一轮 ──
@@ -176,6 +190,9 @@ class Poller:
             rows = [map_item(it, code) for it in new_items]
             self._buffer.extend(rows)
             self._new_today += len(rows)
+            latest = max(r.created_at for r in rows)
+            if self._last_post_at is None or latest > self._last_post_at:
+                self._last_post_at = latest
             st['last_status_id'] = max(int(it['id']) for it in new_items)
             st['zero_streak'] = 0
             st['full_streak'] = st.get('full_streak', 0) + 1 if full_page else 0
@@ -262,3 +279,32 @@ class Poller:
         logger.info(f'雪球轮询 5min 汇总: 今日新增 {self._new_today} 帖 | 请求 {g.requests} '
                     f'(ok {g.ok}) | 洗白 {g.washes} | 被动触发 {g.challenged} | '
                     f'缓冲 {len(self._buffer)} 行')
+
+    # ── 心跳（xueqiu_runtime 单行 upsert，状态页指示灯数据源）──
+
+    def _heartbeat(self):
+        if time.time() - self._last_heartbeat < HEARTBEAT_S:
+            return
+        self._last_heartbeat = time.time()
+        g = self.guard.stats
+        try:
+            self.db.execute(text(
+                "INSERT INTO xueqiu_runtime (id, heartbeat_at, started_at, login_mode, pool_size, "
+                "requests_total, ok_total, washes_total, challenged_total, posts_today, "
+                "last_post_at, updated_at) "
+                "VALUES (1, CURRENT_TIMESTAMP, :st, :lm, :pool, :req, :ok, :w, :ch, :pt, :lpa, "
+                "CURRENT_TIMESTAMP) "
+                "ON CONFLICT (id) DO UPDATE SET heartbeat_at=CURRENT_TIMESTAMP, "
+                "started_at=EXCLUDED.started_at, login_mode=EXCLUDED.login_mode, "
+                "pool_size=EXCLUDED.pool_size, requests_total=EXCLUDED.requests_total, "
+                "ok_total=EXCLUDED.ok_total, washes_total=EXCLUDED.washes_total, "
+                "challenged_total=EXCLUDED.challenged_total, posts_today=EXCLUDED.posts_today, "
+                "last_post_at=EXCLUDED.last_post_at, updated_at=CURRENT_TIMESTAMP"),
+                {'st': self._started_at, 'lm': self.adapter.login_mode,
+                 'pool': len(self._states), 'req': g.requests, 'ok': g.ok,
+                 'w': g.washes, 'ch': g.challenged, 'pt': self._new_today,
+                 'lpa': self._last_post_at})
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            logger.debug(f'雪球心跳写失败: {e}')

@@ -56,6 +56,20 @@
           <div v-else style="font-size:10px;color:var(--c-text-faint)">暂无数据</div>
         </div>
       </div>
+      <!-- 雪球情绪采集：常驻进程指示灯 + 数据累积（设计 06） -->
+      <div v-if="xq" style="display:flex;align-items:baseline;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :title="`常驻采集进程状态：${xqLight.label} · 登录模式 ${xq.login_mode?'开':'关'} · 池 ${xq.pool_size} 只 · 洗白 ${xq.washes_total??0} 次 · 被动触发 ${xq.challenged_total??0}`">
+        <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
+          <span style="display:inline-flex;align-items:center;gap:4px;position:relative;top:1px">
+            <span :style="{width:'7px',height:'7px',borderRadius:'50%',background:xqLight.color,animation:xqLight.pulse?'xqPulse 2s infinite':'none',flexShrink:0}"></span>
+            <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">雪球讨论</span>
+          </span>
+          <span :style="{fontSize:'10px',color:xqLight.color,whiteSpace:'nowrap',fontWeight:600}">{{xqLight.label}}</span>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:14px;font-weight:700;color:var(--c-text)">{{ xq.posts_today ?? '-' }} <span style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">帖/今日</span></div>
+          <div style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">累计 {{ xq.total_posts ?? '-' }} · {{ xqSub }}</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -409,15 +423,43 @@ async function loadQuota() {
   } catch(e) { /* 未配置 tushare 时静默 */ }
 }
 
+// ── 雪球情绪采集（常驻进程指示灯 + 数据累积）──
+const xq = ref(null)
+const xqLight = computed(() => {
+  const s = xq.value?.status
+  if (s === 'ok') return { color: '#10b981', label: '采集中', pulse: true }
+  if (s === 'degraded') return { color: '#f59e0b', label: '延迟', pulse: true }
+  return { color: '#ef4444', label: '已停摆', pulse: false }
+})
+const xqSub = computed(() => {
+  const d = xq.value
+  if (!d) return ''
+  if (d.status === 'down' && d.reason) return d.reason
+  const parts = []
+  if (d.posts_today != null) parts.push(`今日 ${d.posts_today} 帖`)
+  if (d.total_posts != null) parts.push(`累计 ${d.total_posts}`)
+  if (d.heartbeat_at) parts.push(`心跳 ${d.heartbeat_at.slice(11)}`)
+  return parts.join(' · ')
+})
+
+async function loadXq() {
+  try {
+    const r = await axios.get(API + '/api/status/xueqiu')
+    xq.value = r.data || {}
+  } catch(e) { /* 采集未部署时静默 */ }
+}
+
 
 onMounted(() => {
   loadDataStatus()
   loadDataSources()
   loadQuota()
+  loadXq()
   loadSysMetrics()
   loadPref()
   // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
   quotaTimer = setInterval(loadQuota, 30000)
+  xqTimer = setInterval(loadXq, 30000)
   wsUnwatch.value = addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
@@ -455,7 +497,8 @@ onMounted(() => {
 // WS 监听器清理（v-if 切 tab 时防止泄漏）
 const wsUnwatch = ref(null)
 let quotaTimer = null
-onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer) })
+let xqTimer = null
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer) })
 
 // ── 历史补数 ──
 
@@ -646,4 +689,10 @@ async function loadBfLogs() {
 
 /* 状态页：服务器监控卡片网格，行高 1fr 撑满与右侧日历等高 */
 .sv-metric-grid { flex:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); grid-auto-rows:1fr; gap:10px; }
+
+/* 雪球采集指示灯呼吸脉冲（透明度呼吸，色由内联 background 控制） */
+@keyframes xqPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
 </style>
