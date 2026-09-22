@@ -66,7 +66,7 @@
           <span :style="{fontSize:'10px',color:xqLight.color,whiteSpace:'nowrap',fontWeight:600}">{{xqLight.label}}</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:14px;font-weight:700;color:var(--c-text)">{{ xq.posts_today ?? '-' }} <span style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">帖/今日</span></div>
+          <div style="font-size:14px;font-weight:700;color:var(--c-text)">{{ xq.total_posts ?? '-' }} <span style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">条</span></div>
           <div style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{ xqSub }}</div>
         </div>
       </div>
@@ -436,7 +436,7 @@ const xqSub = computed(() => {
   if (!d) return ''
   if (d.status === 'down' && d.reason) return d.reason
   const parts = []
-  if (d.total_posts != null) parts.push(`累计 ${d.total_posts}`)
+  if (d.posts_today != null) parts.push(`今日 ${d.posts_today} 帖`)
   if (d.heartbeat_at) parts.push(`心跳 ${d.heartbeat_at.slice(11)}`)
   return parts.join(' · ')
 })
