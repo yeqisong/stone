@@ -55,6 +55,14 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  分钟K线 <span style="font-size:11px;color:var(--c-text-dim)">腾讯实时 · 不复权 · 30s 刷新</span>
+            <n-button-group size="tiny" style="margin-left:8px">
+              <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
+            </n-button-group>
+          </h4>
+          <div :id="'c0'" style="width:100%;height:260px"></div>
+        </div>
+        <div style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
@@ -490,6 +498,7 @@ async function load(){
   await nextTick()
   drawAuxCharts(lastKline)
   drawChip()
+  loadMink()   // 容器就绪后立即画（timer 30s 兜底）
 }
 
 // dataZoom 滑块统一低调样式：ECharts 画在 canvas 上，颜色必须字面量（CSS 变量不生效，
@@ -951,15 +960,60 @@ async function reloadChart(){
 }
 
 // 窗口 resize 时自适应所有图表
-function resizeAll(){ ['c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
+function resizeAll(){ ['c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
 let _resizeHandler = null
+
+// ── 分钟K线（腾讯实时，design/06 外延）：默认 m5，30s 轮询刷新 ──
+const MINK_PERIODS = [{v:'m1',t:'1分'},{v:'m5',t:'5分'},{v:'m15',t:'15分'},{v:'m30',t:'30分'},{v:'m60',t:'60分'}]
+const minkPeriod = ref('m5')
+const minkBars = ref([])
+let minkTimer = null
+
+async function loadMink(){
+  try{
+    const r = await axios.get(API+'/api/stock/'+code.value+'/minkline?period='+minkPeriod.value+'&count=320')
+    minkBars.value = r.data.bars||[]
+    drawMink()
+  }catch(e){ /* 限流/非交易时段失败静默保留旧图 */ }
+}
+
+function drawMink(){
+  const bars = minkBars.value
+  if(!bars.length) return
+  const dates = bars.map(b=>b.datetime.slice(5))            // MM-DD HH:MM
+  const ohlc = bars.map(b=>[b.open, b.close, b.low, b.high])
+  const closes = bars.map(b=>b.close)
+  const ma = (n) => closes.map((_,i)=> i<n ? null : +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2))
+  const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
+  makeChart('c0', {
+    grid:{left:54,right:16,top:10,bottom:44},
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},
+      formatter(ps){
+        const b = bars[ps[0].dataIndex]; if(!b) return ''
+        const chg = ((b.close-b.open)/b.open*100)
+        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手`
+      }},
+    xAxis:{type:'category',data:dates,axisLabel:{fontSize:9,color:'#94a3b8'},axisLine:{lineStyle:{color:'rgba(128,128,128,0.2)'}}},
+    yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize:9,color:'#94a3b8'}},
+    dataZoom:[{type:'inside',start:60,end:100},{type:'slider',height:14,bottom:4,borderColor:'transparent',backgroundColor:'rgba(128,128,128,0.08)',fillerColor:'rgba(96,165,250,0.10)',handleSize:'60%'}],
+    series:[
+      {name:'分钟K',type:'candlestick',data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
+      {name:'MA5',type:'line',data:ma(5),lineStyle:{color:'#f59e0b',width:1},symbol:'none'},
+      {name:'MA10',type:'line',data:ma(10),lineStyle:{color:'#60a5fa',width:1},symbol:'none'},
+    ]
+  })
+}
+
+watch(minkPeriod, ()=>loadMink())
+
 onMounted(() => {
   _resizeHandler = window.addEventListener ? window.addEventListener('resize', resizeAll) : null
-  if(code.value) load()
+  if(code.value){ load(); loadMink() }
+  minkTimer = setInterval(loadMink, 30000)
 })
-onUnmounted(() => { if (_resizeHandler && window.removeEventListener) window.removeEventListener('resize', resizeAll) })
+onUnmounted(() => { if (_resizeHandler && window.removeEventListener) window.removeEventListener('resize', resizeAll); if (minkTimer) clearInterval(minkTimer) })
 
-watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load()}})
+watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()}})
 </script>
 
 <style>

@@ -1,5 +1,7 @@
 """个股详情 API — 最新策略信号 + 历史信号分页 + K线(含全部指标)。"""
 import json
+import time
+
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
@@ -717,3 +719,36 @@ def get_stock_xueqiu(code: str, days: int = Query(7, ge=1, le=30),
                 "interactions_7d": inter7, "hot": hot}
     finally:
         db.close()
+
+
+# ── 腾讯分钟K线（design/06 外延：详情页盘中分钟图；不入库，30s 内存缓存防刷）──
+
+_mk_cache: dict = {}   # (code, period, count) -> (ts, payload)
+_MK_TTL_S = 30
+
+
+@router.get("/stock/{code}/minkline")
+def get_stock_minkline(code: str, period: str = Query("m5"),
+                       count: int = Query(120, ge=1, le=320)):
+    """实时分钟K线（腾讯财经，不复权，最近 count 根）。period: m1/m5/m15/m30/m60。
+
+    纯代理不入库；30s 内存缓存——详情页 30s 轮询刷新与限流（单入口 ~600 次）
+    之间的缓冲。三入口轮换+冷却见 crawler/adapters/tencent_adapter.py。
+    """
+    key = (code, period.lower(), count)
+    hit = _mk_cache.get(key)
+    now = time.time()
+    if hit and now - hit[0] < _MK_TTL_S:
+        return hit[1]
+    from crawler.adapters.tencent_adapter import minute_kline
+    try:
+        bars = minute_kline(code, period, count)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    payload = {"code": code, "period": period, "bars": bars, "fetched_at": now}
+    _mk_cache[key] = (now, payload)
+    if len(_mk_cache) > 500:   # 防无限膨胀（活跃访问的 code×period 组合远小于此）
+        _mk_cache.clear()
+    return payload
