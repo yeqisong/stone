@@ -55,8 +55,12 @@ class Poller:
         self.db = db
         self.adapter = XueqiuAdapter()
         self.guard = RatingGuard(self.adapter)
-        self._heap: list[tuple[float, int, str]] = []   # (due_ts, seq, code)
+        # 三档独立堆 + 加权轮询（2026-09-23 修复）：单一堆是纯 FIFO，吞吐瓶颈
+        # （~0.34 req/s）下档位周期形同虚设——实际全市场 ~6h 一轮，热门股无优先权，
+        # 积压队列导致活跃股隔日才被轮到（"今日 0 帖"根因）。
+        self._heaps: dict[int, list] = {1: [], 2: [], 3: []}
         self._seq = 0
+        self._rr = 0
         self._buffer: list[StatusRow] = []
         self._states: dict[str, dict] = {}              # code -> state dict（内存缓存）
         self._dirty: set[str] = set()
@@ -83,11 +87,12 @@ class Poller:
             # 冷启动：已有游标直接续跑；无游标先建立基线（首刷只记游标不落历史）
             due = now if not (r[2] or 0) else now + random.uniform(0, TIER_PERIOD_S.get(r[1], 3600))
             self._push(r[0], due)
-        logger.info(f'雪球轮询器装载 {len(self._states)} 只股票状态')
+        logger.info(f'雪球轮询器装载 {len(self._states)} 只股票状态'
+                    f'（各档 { {t: len(h) for t, h in self._heaps.items()} }）')
 
     def _push(self, code: str, due_ts: float):
         self._seq += 1
-        heapq.heappush(self._heap, (due_ts, self._seq, code))
+        heapq.heappush(self._heaps[self._states[code]['tier']], (due_ts, self._seq, code))
 
     # ── 主循环 ──
 
@@ -99,6 +104,7 @@ class Poller:
         self._heartbeat()
         logger.info(f'雪球轮询器启动（login_mode={self.adapter.login_mode}），'
                     f'股票 {len(self._states)} 只')
+        rr_order = [1, 1, 1, 1, 1, 2, 2, 2, 3, 3]   # 加权轮询序列：预算 5:3:2 分配
         while True:
             now_dt = _now()
             factor = speed_factor(now_dt, is_trade_day(now_dt.date()))
@@ -110,19 +116,25 @@ class Poller:
                 time.sleep(300)
                 continue
 
-            due_ts, _, code = self._heap[0]
-            deficit = due_ts - time.time()
-            if deficit > 0:
-                # 无到期任务：先做缓冲落盘/状态回写，再小睡
+            # 加权轮询选档：序列位置起找第一个"有到期任务"的档；全未到期则睡到最近到期
+            now_ts = time.time()
+            picked_tier = None
+            for k in range(len(rr_order)):
+                tier = rr_order[(self._rr + k) % len(rr_order)]
+                h = self._heaps[tier]
+                if h and h[0][0] <= now_ts:
+                    picked_tier = tier
+                    self._rr = (self._rr + k + 1) % len(rr_order)
+                    break
+            if picked_tier is None:
+                nexts = [h[0][0] for h in self._heaps.values() if h]
                 self._flush()
                 self._persist()
                 self._heartbeat()
-                # 半速/20% 时段：把到期时间往后等效拉长（简化实现——
-                # factor<1 时下轮重排已按周期乘 1/factor 放大，这里只控制消费节奏）
-                time.sleep(min(deficit, 1.0))
+                time.sleep(min(max(min(nexts) - time.time(), 0.05), 1.0))
                 continue
 
-            heapq.heappop(self._heap)
+            due_ts, _, code = heapq.heappop(self._heaps[picked_tier])
             self._process_one(code, factor)
             self._flush()
             self._persist()
