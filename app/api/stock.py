@@ -681,3 +681,39 @@ def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
         }
     finally:
         db.close()
+
+
+@router.get("/stock/{code}/xueqiu")
+def get_stock_xueqiu(code: str, days: int = Query(7, ge=1, le=30),
+                     limit: int = Query(10, ge=1, le=30)):
+    """雪球讨论聚合（design/06）：今日帖数 + 7 日标记帖占比/互动量 + 热帖精选。
+
+    mark 语义（看涨/看跌）未确认（design/06 §9.6），此处只做中性"标记帖"计数，
+    不染色不定向；语义确认后再升级为看涨比指标。
+    热帖排序：like + reply×3（回复权重高 = 讨论热度）。
+    """
+    db = get_sync_db()
+    try:
+        today_count = db.execute(text(
+            "SELECT COUNT(*) FROM xueqiu_status WHERE code=:c AND created_at >= "
+            "date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai') "
+            "AT TIME ZONE 'Asia/Shanghai'"), {"c": code}).scalar() or 0
+        mark_row = db.execute(text(
+            "SELECT COUNT(*), SUM(CASE WHEN mark != 0 THEN 1 ELSE 0 END), "
+            "COALESCE(SUM(like_count + reply_count + retweet_count), 0) FROM xueqiu_status "
+            "WHERE code=:c AND created_at >= CURRENT_TIMESTAMP - make_interval(days => :d)"),
+            {"c": code, "d": str(days)}).fetchone()
+        n7, marked7, inter7 = (mark_row[0] or 0, mark_row[1] or 0, int(mark_row[2] or 0))
+        rows = db.execute(text(
+            "SELECT created_at, source, mark, like_count, reply_count, text_clean "
+            "FROM xueqiu_status WHERE code=:c AND created_at >= CURRENT_TIMESTAMP - "
+            "(:d || ' days')::interval AND COALESCE(text_clean, '') != '' "
+            "ORDER BY like_count + reply_count * 3 DESC LIMIT :l"),
+            {"c": code, "d": str(days), "l": limit}).fetchall()
+        hot = [{"created_at": str(r[0])[:16], "source": r[1], "mark": r[2],
+                "like_count": r[3], "reply_count": r[4], "text": r[5]} for r in rows]
+        return {"today_count": today_count, "count_7d": n7,
+                "mark_ratio": round(marked7 / n7, 3) if n7 else None,
+                "interactions_7d": inter7, "hot": hot}
+    finally:
+        db.close()

@@ -143,6 +143,26 @@
             20d <span :style="{color:sigStats.f20>=0?'#ef4444':'#10b981'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
           </div>
         </div>
+        <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色 -->
+        <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)">
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
+          <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
+            今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖 ·
+            标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b> ·
+            7日互动 <b style="color:var(--c-text)">{{xqData.interactions_7d}}</b>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div v-for="(p,i) in xqData.hot" :key="i" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+              <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-text-faint);margin-bottom:3px">
+                <span>{{p.created_at.slice(5)}}</span>
+                <span v-if="p.source">{{p.source}}</span>
+                <span v-if="p.mark" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">标</span>
+                <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} · 评 {{p.reply_count}}</span>
+              </div>
+              <div class="xq-hot-text" :title="p.text">{{p.text}}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </template>
@@ -359,6 +379,7 @@ const marginData = ref([])   // 两融余额（元）
 const toplistData = ref([])  // 龙虎榜上榜记录
 const chipData = ref(null)   // 筹码分布（现价口径）
 const sigData = ref([])      // 模型信号史（含前瞻收益）
+const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
 const sigStats = ref(null)   // 信号摘要（侧栏）
 const mfCum = ref([])        // 主力净流入累计（与 mfData 同长）
 
@@ -463,6 +484,7 @@ async function load(){
     axios.get(API+'/api/stock/'+code.value+'/top_list?days=3650').then(r=>{ toplistData.value = r.data.data||[] }),
     axios.get(API+'/api/stock/'+code.value+'/chip').then(r=>{ chipData.value = r.data }),
     axios.get(API+'/api/stock/'+code.value+'/signals?days=1095').then(r=>{ sigData.value = r.data.data||[] }),
+    axios.get(API+'/api/stock/'+code.value+'/xueqiu').then(r=>{ xqData.value = r.data }),
   ])
   computeSigStats()
   await nextTick()
@@ -944,4 +966,11 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load()}})
 /* 详情页分组标签：✕ 平时隐去，hover 才出现（naive-ui n-tag closable 默认常显） */
 .dt-grp-tag .n-tag__close { opacity: 0; transition: opacity .15s; }
 .dt-grp-tag:hover .n-tag__close { opacity: 1; }
+
+/* 雪球热帖：两行截断，全文 hover title */
+.xq-hot-text {
+  font-size: 11px; line-height: 1.55; color: var(--c-text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
 </style>
