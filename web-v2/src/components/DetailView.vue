@@ -982,24 +982,41 @@ function drawMink(){
   if(!bars.length) return
   const dates = bars.map(b=>b.datetime.slice(5))            // MM-DD HH:MM
   const ohlc = bars.map(b=>[b.open, b.close, b.low, b.high])
+  const vols = bars.map(b=>b.volume)
+  // 分时成交量柱：红涨绿跌 per-bar（对齐日线成交量惯例）
+  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
   const closes = bars.map(b=>b.close)
   const ma = (n) => closes.map((_,i)=> i<n ? null : +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2))
   const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
   makeChart('c0', {
-    grid:{left:54,right:16,top:10,bottom:44},
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    grid:[
+      {left:54,right:16,top:8,height:'56%'},
+      {left:54,right:16,top:'72%',height:'22%'},
+    ],
     tooltip:{trigger:'axis',axisPointer:{type:'cross'},
       formatter(ps){
         const b = bars[ps[0].dataIndex]; if(!b) return ''
         const chg = ((b.close-b.open)/b.open*100)
-        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手`
+        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手 · 换手 ${b.turnover_rate_pct!=null?b.turnover_rate_pct+'%':'-'}`
       }},
-    xAxis:{type:'category',data:dates,axisLabel:{fontSize:9,color:'#94a3b8'},axisLine:{lineStyle:{color:'rgba(128,128,128,0.2)'}}},
-    yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize:9,color:'#94a3b8'}},
-    dataZoom:[{type:'inside',start:60,end:100},{type:'slider',height:14,bottom:4,borderColor:'transparent',backgroundColor:'rgba(128,128,128,0.08)',fillerColor:'rgba(96,165,250,0.10)',handleSize:'60%'}],
+    xAxis:[
+      {type:'category',data:dates,gridIndex:0,axisLabel:{show:false},axisLine:{lineStyle:{color:'rgba(128,128,128,0.2)'}}},
+      {type:'category',data:dates,gridIndex:1,axisLabel:{fontSize:9,color:'#94a3b8'},axisLine:{lineStyle:{color:'rgba(128,128,128,0.2)'}}},
+    ],
+    yAxis:[
+      {scale:true,gridIndex:0,splitLine:gl,axisLabel:{fontSize:9,color:'#94a3b8'}},
+      {gridIndex:1,splitLine:{show:false},axisLabel:{fontSize:9,color:'#94a3b8',formatter:v=>(v/1e3).toFixed(0)+'千手'}},
+    ],
+    dataZoom:[
+      {type:'inside',xAxisIndex:[0,1],start:60,end:100},
+      {type:'slider',xAxisIndex:[0,1],height:13,bottom:2,borderColor:'transparent',backgroundColor:'rgba(128,128,128,0.08)',fillerColor:'rgba(96,165,250,0.10)',handleSize:'60%'},
+    ],
     series:[
-      {name:'分钟K',type:'candlestick',data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
-      {name:'MA5',type:'line',data:ma(5),lineStyle:{color:'#f59e0b',width:1},symbol:'none'},
-      {name:'MA10',type:'line',data:ma(10),lineStyle:{color:'#60a5fa',width:1},symbol:'none'},
+      {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
+      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),lineStyle:{color:'#f59e0b',width:1},symbol:'none'},
+      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),lineStyle:{color:'#60a5fa',width:1},symbol:'none'},
+      {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,itemStyle:{color:p=>vc[p.dataIndex]}},
     ]
   })
 }
