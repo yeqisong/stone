@@ -138,9 +138,11 @@ class Poller:
         try:
             res = self.guard.fetch(code, page=1)
         except RuntimeError as e:
-            # 洗白熔断：停调度器，交人工
-            logger.error(f'雪球轮询器停机: {e}')
-            raise SystemExit(2)
+            # 风控熔断（405 软封禁/洗白熔断）：冷却恢复而非退出——
+            # 2026-09-22 教训：SystemExit 后无人重启，停摆 14h 才被指示灯发现
+            self._cooldown_recover(e)
+            self._push(code, time.time() + 60)
+            return
 
         if not res.ok:
             st['fail_streak'] = st.get('fail_streak', 0) + 1
@@ -205,6 +207,26 @@ class Poller:
         self._dirty.add(code)
         jitter = random.uniform(0.8, 1.2)
         self._push(code, time.time() + period * jitter)
+
+    # ── 冷却恢复（风控熔断后自动探测，不退出进程）──
+
+    def _cooldown_recover(self, reason: Exception):
+        """405 实测 ~76min 自愈：每 10min 探测一次（wash+单发），4h 仍封才退出交人工。
+
+        退出前心跳已停 >4h，指示灯必红——人工介入有充分信号。"""
+        logger.error(f'雪球进入冷却恢复: {reason}')
+        for i in range(1, 25):
+            time.sleep(600)
+            try:
+                self.guard.ensure_ready()          # 重新 wash（重置风控计数）
+                res = self.guard.fetch('600519')   # 探测
+                if res.ok:
+                    logger.info(f'雪球冷却恢复成功（第 {i} 次探测），恢复采集')
+                    return
+                logger.warning(f'冷却探测第 {i} 次仍未解封: {res.error[:50]}')
+            except Exception as e:
+                logger.warning(f'冷却探测第 {i} 次失败: {str(e)[:80]}')
+        raise SystemExit(2)
 
     # ── 写缓冲 ──
 

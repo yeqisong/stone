@@ -18,7 +18,9 @@ from loguru import logger
 from . import washer
 from .adapter import XueqiuAdapter, load_login_cookies
 
-BURST_LIMIT = 20          # 60s 窗口主动预算（实测触发点 28，留余量）
+BURST_LIMIT = 25          # 60s 窗口主动预算（实测触发点 28-32，取 80%）——
+                           # 2026-09-22 复盘：BURST 20 时洗白 525 次/天仍触发 405（当日累计画像），
+                           # 提高单会话预算把洗白频率降 20%（~420/天）
 WINDOW_S = 60.0
 MAX_WASH_PER_HOUR = 90    # 洗白熔断：P2 全市场预算 ~0.45 req/s 需 ~50-60 次/h，90 留余量
                            # （超线 = 被针对性风控，停机人工介入）
