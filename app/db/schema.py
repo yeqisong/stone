@@ -1,4 +1,5 @@
 """数据库 Schema 定义与管理。使用原生 SQL 确保与 PRD DDL 一致。"""
+from loguru import logger
 from sqlalchemy import text
 
 SCHEMA_VERSION = 1
@@ -977,6 +978,18 @@ CREATE TABLE IF NOT EXISTS xueqiu_runtime (
 );
 """
 
+CREATE_XUEQIU_SENTIMENT = """
+CREATE TABLE IF NOT EXISTS xueqiu_sentiment (
+    status_id   BIGINT PRIMARY KEY,               -- 对应 xueqiu_status.status_id
+    sentiment   SMALLINT NOT NULL,                -- 1 看多 / 0 中性或无关 / -1 看空
+    confidence  REAL,                             -- LLM 自报置信 0~1
+    reason      VARCHAR(200),                     -- 一句话依据（可审计）
+    model       VARCHAR(64) NOT NULL,             -- 打分模型（切换 LLM 后可分辨）
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_xqs_sent_created ON xueqiu_sentiment (created_at);
+"""
+
 # ── 因子 IC 检验留档（特征页 IC 体检；决策在 features.ic_status，重算不覆盖）──
 
 CREATE_FACTOR_IC_STATS = """
@@ -1134,6 +1147,7 @@ ALL_TABLES = [
     ("xueqiu_status", CREATE_XUEQIU_STATUS),
     ("xueqiu_crawl_state", CREATE_XUEQIU_CRAWL_STATE),
     ("xueqiu_runtime", CREATE_XUEQIU_RUNTIME),
+    ("xueqiu_sentiment", CREATE_XUEQIU_SENTIMENT),
 ]
 
 
@@ -1204,6 +1218,44 @@ def init_db(sync_session) -> None:
         sync_session.commit()
     except Exception:
         sync_session.rollback()
+
+    # 迁移：雪球情绪治理视图（design/06 数据治理层，规则可随噪音形态演进直接改视图定义）
+    #  - 公告帖：user_id=-1（雪球官方系统号）或 source='公告'，零互动纯播报
+    #  - 水军：发帖 ≥100 且跨股 ≥50（广撒网营销号），或单账号日均 >80 帖
+    #  - v_xueqiu_clean_status：下游情绪分析统一入口（排除官方+水军）
+    xq_views = """
+    CREATE OR REPLACE VIEW v_xueqiu_user_stats AS
+    SELECT user_id,
+           COUNT(*) AS n_posts,
+           COUNT(DISTINCT code) AS n_stocks,
+           COUNT(DISTINCT created_at::date) AS n_days,
+           COUNT(*)::float / GREATEST(COUNT(DISTINCT created_at::date), 1) AS posts_per_day,
+           COALESCE(SUM(like_count + reply_count), 0) AS interactions
+    FROM xueqiu_status WHERE user_id != -1 GROUP BY user_id;
+
+    CREATE OR REPLACE VIEW v_xueqiu_spam_users AS
+    SELECT user_id, n_posts, n_stocks, posts_per_day,
+           CASE WHEN n_posts >= 100 AND n_stocks >= 50 THEN 'broadcaster'
+                WHEN posts_per_day > 80 THEN 'flooder' END AS spam_type
+    FROM v_xueqiu_user_stats
+    WHERE (n_posts >= 100 AND n_stocks >= 50) OR posts_per_day > 80;
+
+    CREATE OR REPLACE VIEW v_xueqiu_clean_status AS
+    SELECT s.* FROM xueqiu_status s
+    WHERE s.user_id != -1 AND s.source != '公告'
+      AND NOT EXISTS (SELECT 1 FROM v_xueqiu_spam_users sp WHERE sp.user_id = s.user_id);
+    """
+    for stmt in xq_views.split(";"):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        try:
+            sync_session.execute(text(stmt))
+            sync_session.commit()
+        except Exception as e:
+            sync_session.rollback()
+            if "does not exist" not in str(e).lower():
+                logger.warning(f"雪球视图迁移失败（忽略）: {e}")
 
     # 迁移：删除旧 strategy 节点（已从 NODE_FN_MAP 移除）
     try:

@@ -29,6 +29,22 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 
+    # ── LLM 通用别名（OpenAI 兼容协议；情绪打分等新链路用，GLM/DeepSeek 可切换：
+    #    未配置时回退 DEEPSEEK_*；切 GLM 示例：
+    #    LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4  LLM_MODEL=glm-4-flash）──
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = ""
+    LLM_MODEL: str = ""
+
+    @property
+    def llm_config(self) -> dict:
+        """解析生效的 LLM 配置：LLM_* 优先，回退 DEEPSEEK_*。"""
+        return {
+            "api_key": self.LLM_API_KEY or self.DEEPSEEK_API_KEY,
+            "base_url": self.LLM_BASE_URL or self.DEEPSEEK_BASE_URL,
+            "model": self.LLM_MODEL or self.DEEPSEEK_MODEL,
+        }
+
     # ── 登录认证 ──
     LOGIN_USERNAME: str = "admin"
     LOGIN_PASSWORD: str = ""  # 必须通过环境变量 LOGIN_PASSWORD 设置
