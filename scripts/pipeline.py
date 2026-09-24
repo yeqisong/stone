@@ -4565,6 +4565,81 @@ def dag_task_moneyflow(trade_date=None, **kw):
         raise
 
 
+def dag_task_xueqiu_sentiment(trade_date=None, **kw):
+    """DAG 节点：雪球帖子 LLM 情绪打分（独立流程，建议 02:00 触发）。
+
+    帖子 24h 产生、由常驻 poller 断点采集，17:00 主流程跑时当日帖远未收全
+    （盘后讨论才是散户情绪高发段）——与 margin_daily 同理（发布时点晚于主流程），
+    独立流程凌晨跑完整日。
+
+    - 只打「未打分热帖」：v_xueqiu_clean_status 已排除公告帖与水军（design/06 §9.10），
+      heat = like + reply*3 降序，配合 max_posts 预算限流
+    - 幂等且天然断点续跑：ON CONFLICT DO NOTHING + 只取未打分 → 前夜漏网的次夜
+      自动补上。**不做日期窗口**：既不依赖 poller 某时刻是否已抓全，也无需维护游标
+    - 参数在 strategy_config.xueqiu_sentiment：{min_heat, max_posts, workers}
+    - LLM 失败不阻断数据流程：单批折半重试，失败帖保持未打分待次夜重试
+    """
+    from datetime import date; td = str(trade_date or date.today())[:10]; rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('xueqiu_sentiment')
+    write_node_log(log_id=log_id, status='running', detail='情绪打分中',
+                   trade_date=td, node_name='xueqiu_sentiment', run_id=rid)
+
+    def _run():
+        import json as _json3
+        from sqlalchemy import text as _t3
+        from app.config import settings
+        from app.db.connection import get_sync_db
+        from scripts.xueqiu_sentiment import score_pending, PROMPT_VER
+
+        llm = settings.llm_config
+        if not llm['api_key']:
+            return {'skipped': 'LLM key 未配置（.env LLM_API_KEY 或 DEEPSEEK_API_KEY）'}
+
+        db = get_sync_db()
+        try:
+            row = db.execute(_t3(
+                "SELECT params FROM strategy_config WHERE strategy_name='xueqiu_sentiment'"
+            )).fetchone()
+            cfg = (_json3.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+            min_heat = int(cfg.get('min_heat', 5))
+            max_posts = int(cfg.get('max_posts', 8000))
+            workers = int(cfg.get('workers', 8))
+
+            from openai import OpenAI
+            client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+
+            def _hb(done, fail, total):
+                update_node_progress(
+                    log_id=log_id, rows=done,
+                    detail=f'情绪打分 {done}/{total}（失败 {fail}，{llm["model"]}/{PROMPT_VER}）')
+
+            r = score_pending(db, client, llm['model'], limit=max_posts,
+                              min_heat=min_heat, workers=workers, progress_cb=_hb)
+            r['model'] = llm['model']
+            r['prompt_ver'] = PROMPT_VER
+            r['min_heat'] = min_heat
+            return r
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='xueqiu_sentiment')
+        if r.get('skipped'):
+            write_node_log(log_id=log_id, status='success', rows=0, detail=r['skipped'],
+                           trade_date=td, node_name='xueqiu_sentiment', run_id=rid)
+            return r
+        note = (f"打分 {r.get('done', 0)} 帖（失败 {r.get('fail', 0)}）"
+                f" heat≥{r.get('min_heat', 0)} {r.get('model', '')}/{r.get('prompt_ver', '')}")
+        if r.get('fail'):
+            note += '；失败帖未落库，下次运行自动重试'
+        write_node_log(log_id=log_id, status='success', rows=r.get('done', 0), detail=note,
+                       trade_date=td, node_name='xueqiu_sentiment', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150],
+                       trade_date=td, node_name='xueqiu_sentiment', run_id=rid)
+        raise
+
 
 # ── 拓展数据采集器（每日节点与 data_backfill 回补共用，step2 扩展）──
 
@@ -5042,6 +5117,7 @@ NODE_FN_MAP = {
     'factor_ic':         dag_task_factor_ic,
     'paper_portfolio':    dag_task_paper_portfolio_all,
     'moneyflow':         dag_task_moneyflow,
+    'xueqiu_sentiment':  dag_task_xueqiu_sentiment,
     'analyze':           dag_task_analyze,
     **{n: _make_ext_node(n, f'DAG 节点：{n} 拓展数据采集') for n in (
         'top_list', 'margin_detail', 'moneyflow_hsgt', 'block_trade', 'share_float',

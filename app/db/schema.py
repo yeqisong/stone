@@ -1398,6 +1398,40 @@ def init_db(sync_session) -> None:
         except Exception:
             sync_session.rollback()
 
+        # 迁移：雪球情绪打分独立节点（2026-09-24）——帖子 24h 产生、由常驻 poller
+        # 断点采集，主流程 17:00 跑时当日帖远未收全（盘后讨论才是散户情绪高发段），
+        # 故独立流程凌晨 02:00 跑完整日。与 margin_daily 同一模式（发布时点晚于主流程）。
+        try:
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('xueqiu_sentiment', '', '💬 雪球情绪打分', 97)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='💬 雪球情绪打分', sort_order=97
+            """))
+            sync_session.execute(text("""
+                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                SELECT 'xueqiu_sentiment', '雪球情绪打分', true,
+                       '{"min_heat": 5, "max_posts": 8000, "workers": 8}'
+                WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='xueqiu_sentiment')
+            """))
+            # 独立定时流程（02:00）：cron_scheduler 扫 status='published' 的 cron_expr，
+            # 按 last_run_at 幂等触发。nodes 数组是执行权威（executor 按它建 DAG），
+            # 故须含 cron 根标记 + 打分节点（与「两融采集」流程同构）。
+            # 仅缺失时补种，已存在则不动（用户可能在 UI 调过时间/画布位置）
+            sync_session.execute(text("""
+                INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+                SELECT '雪球情绪打分', '雪球帖子 LLM 情绪打分（凌晨跑完整日，热帖优先，幂等续跑）',
+                       :n, :e, '00 02 * * *', 'published', false
+                WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='雪球情绪打分')
+            """), {
+                'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
+                     '{"deps": ["cron"], "position": {"x": 20, "y": 120}, '
+                     '"node_name": "xueqiu_sentiment"}]',
+                'e': '[{"source": "cron", "target": "xueqiu_sentiment"}]',
+            })
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
+
         # 每日流程（id=1 已发布）插入节点：挂在 model_signal 之后（叶子，无下游）
         frow = sync_session.execute(text(
             "SELECT nodes, edges FROM dag_flows WHERE id=1 AND status='published'"

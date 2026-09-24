@@ -64,8 +64,16 @@ WORKERS = 8          # 并发请求数。实测单请求 ~28s，串行仅 2.1 rp
 
 
 def fetch_pending(db, limit: int, min_heat: int, codes: list[str] | None, rescore: bool):
-    """取待打分帖子：干净帖视图 + 互动热度排序，热帖优先。
-    rescore=True 时改为「重打已有分数的帖」（同一批 status_id，用于 prompt A/B）。"""
+    """取待打分帖子：干净帖视图（已排除公告/水军），按「发帖日倒序 → 热度倒序」。
+
+    排序口径（2026-09-24 修订）：原为纯 heat 倒序，但存在历史积压时（首次上线
+    积压 1.3 万帖），近期帖会排在多年前的高热老帖后面——展示层要新帖、IC 体检
+    要**逐日截面完整**，两者都被纯热度序拖坏。改为日期优先：先填满最近一天，
+    再填前一天，日内在按热度取。积压期（8000/夜 vs 稳态新增 ~5000/夜）约 3 夜填平。
+
+    rescore=True 时改为「重打已有分数的帖」，且仍按 heat 倒序——那是 prompt A/B
+    的固定对照集，改排序会让两次对照的样本不一致。
+    """
     code_filter = "AND s.code = ANY(:codes) " if codes else ""
     if rescore:
         sql = text(f"""
@@ -88,7 +96,8 @@ def fetch_pending(db, limit: int, min_heat: int, codes: list[str] | None, rescor
               AND LENGTH(s.text_clean) BETWEEN 10 AND 800
               AND COALESCE(s.like_count,0) + COALESCE(s.reply_count,0)*3 >= :heat
               {code_filter}
-            ORDER BY heat DESC LIMIT :l
+            ORDER BY (s.created_at AT TIME ZONE 'Asia/Shanghai')::date DESC, heat DESC
+            LIMIT :l
         """)
     params = {'heat': min_heat, 'l': limit}
     if codes:
@@ -163,6 +172,81 @@ def score_batch(client, model: str, batch, fail_max: int):
             + score_batch(client, model, batch[mid:], fail_max))
 
 
+def run_scoring(db, client, model: str, rows, *, workers: int = WORKERS,
+                rpm: int = RPM_LIMIT, fail_max: int = FAIL_MAX, batch: int = BATCH,
+                rescore: bool = False, progress_cb=None):
+    """打分主循环。CLI 与 DAG 节点共用这一份实现，避免两处口径漂移。
+
+    并发只发生在 LLM 调用（线程池），DB 写入固定在主线程——保证 commit 顺序，
+    也保证 psycopg2 连接不被多线程共享。progress_cb(done, fail, total) 供长跑
+    节点上报心跳（DAG 看门狗 5 分钟无进展会误杀）。
+
+    返回 {'done','fail','total','req','elapsed'}。
+    """
+    if not rows:
+        return {'done': 0, 'fail': 0, 'total': 0, 'req': 0, 'elapsed': 0.0}
+    batches = [rows[i:i + batch] for i in range(0, len(rows), batch)]
+    sql = text("""INSERT INTO xueqiu_sentiment
+                      (status_id, sentiment, confidence, reason, model, prompt_ver)
+                  VALUES (:i, :s, :c, :r, :m, :pv)
+                  """ + ("""ON CONFLICT (status_id) DO UPDATE SET
+                      sentiment=EXCLUDED.sentiment, confidence=EXCLUDED.confidence,
+                      reason=EXCLUDED.reason, model=EXCLUDED.model,
+                      prompt_ver=EXCLUDED.prompt_ver, created_at=now()"""
+                         if rescore else 'ON CONFLICT (status_id) DO NOTHING'))
+
+    done = fail = 0
+    t0 = time.time()
+    t_sub: list[float] = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {}
+        for b in batches:
+            # RPM 滑动窗口闸门（并发数已自然限速，此处兜住 API 硬上限）
+            while True:
+                now = time.time()
+                t_sub[:] = [t for t in t_sub if now - t < 60]
+                if len(t_sub) < rpm:
+                    break
+                time.sleep(min(5.0, 60 - (now - t_sub[0]) + 0.1))
+            t_sub.append(time.time())
+            futs[ex.submit(score_batch, client, model, b, fail_max)] = b
+
+        for n_batch, fut in enumerate(as_completed(futs), 1):
+            b = futs[fut]
+            results = fut.result() or []
+            if not results:
+                fail += len(b)
+                logger.error(f'批次连续 {fail_max} 次失败，跳过 {len(b)} 帖')
+            else:
+                for sid, s, c, r in results:
+                    db.execute(sql, {'i': sid, 's': s, 'c': c, 'r': r,
+                                     'm': model, 'pv': PROMPT_VER})
+                db.commit()
+                done += len(results)
+                fail += len(b) - len(results)   # 折半重试后仍丢的单条计入失败
+            if n_batch % 10 == 0:
+                if progress_cb:
+                    progress_cb(done, fail, len(rows))
+                else:
+                    el = time.time() - t0
+                    logger.info(f'进度 {min(n_batch * batch, len(rows))}/{len(rows)} '
+                                f'(done {done}, fail {fail}) {el:.0f}s '
+                                f'{n_batch / el * 60:.1f} req/min')
+    return {'done': done, 'fail': fail, 'total': len(rows), 'req': len(batches),
+            'elapsed': time.time() - t0}
+
+
+def score_pending(db, client, model: str, *, limit: int = 300, min_heat: int = 5,
+                  codes: list[str] | None = None, workers: int = WORKERS,
+                  rpm: int = RPM_LIMIT, rescore: bool = False, progress_cb=None):
+    """取待打分帖 + 执行打分（CLI 与 DAG 节点共用入口）。"""
+    rows = fetch_pending(db, limit, min_heat, codes, rescore)
+    logger.info(f'待打分 {len(rows)} 帖（min_heat={min_heat}, '
+                f'codes={codes or "全市场"}, prompt_ver={PROMPT_VER}）')
+    return run_scoring(db, client, model, rows, workers=workers, rpm=rpm,
+                       rescore=rescore, progress_cb=progress_cb)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--limit', type=int, default=300, help='本次最多打分帖数')
@@ -184,72 +268,20 @@ def main():
                 f"workers={args.workers} rescore={args.rescore}")
 
     db = get_sync_db()
-    rows = fetch_pending(db, args.limit, args.min_heat, codes, args.rescore)
-    logger.info(f'待打分 {len(rows)} 帖（min_heat={args.min_heat}, codes={codes or "全市场"}）')
-    if not rows:
+    try:
+        r = score_pending(db, client, llm['model'], limit=args.limit,
+                          min_heat=args.min_heat, codes=codes or None,
+                          workers=args.workers, rescore=args.rescore)
+        if not r['total']:
+            return
+        stat = db.execute(text("""
+            SELECT sentiment, COUNT(*) FROM xueqiu_sentiment GROUP BY 1 ORDER BY 1""")).fetchall()
+        rate = r['req'] / r['elapsed'] * 60 if r['elapsed'] else 0
+        logger.info(f"打分完成: done={r['done']} fail={r['fail']} 用时={r['elapsed']/60:.1f}min "
+                    f"({rate:.1f} req/min) | 全表分布(看多/中性/看空)="
+                    f"{ {x[0]: x[1] for x in stat} }")
+    finally:
         db.close()
-        return
-
-    batches = [rows[i:i + BATCH] for i in range(0, len(rows), BATCH)]
-
-    if args.rescore:
-        sql = text("""INSERT INTO xueqiu_sentiment
-                          (status_id, sentiment, confidence, reason, model, prompt_ver)
-                      VALUES (:i, :s, :c, :r, :m, :pv)
-                      ON CONFLICT (status_id) DO UPDATE SET
-                          sentiment=EXCLUDED.sentiment, confidence=EXCLUDED.confidence,
-                          reason=EXCLUDED.reason, model=EXCLUDED.model,
-                          prompt_ver=EXCLUDED.prompt_ver, created_at=now()""")
-    else:
-        sql = text("""INSERT INTO xueqiu_sentiment
-                          (status_id, sentiment, confidence, reason, model, prompt_ver)
-                      VALUES (:i, :s, :c, :r, :m, :pv)
-                      ON CONFLICT (status_id) DO NOTHING""")
-
-    done = fail = 0
-    t0 = time.time()
-    t_sub: list[float] = []
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {}
-        for batch in batches:
-            # RPM 滑动窗口闸门（并发数已自然限速，此处兜住 API 硬上限）
-            while True:
-                now = time.time()
-                t_sub[:] = [t for t in t_sub if now - t < 60]
-                if len(t_sub) < RPM_LIMIT:
-                    break
-                time.sleep(min(5.0, 60 - (now - t_sub[0]) + 0.1))
-            t_sub.append(time.time())
-            futs[ex.submit(score_batch, client, llm['model'], batch, FAIL_MAX)] = batch
-
-        n_batch = 0
-        for fut in as_completed(futs):
-            batch = futs[fut]
-            n_batch += 1
-            results = fut.result() or []
-            if not results:
-                fail += len(batch)
-                logger.error(f'批次连续 {FAIL_MAX} 次失败，跳过 {len(batch)} 帖')
-            else:
-                for sid, s, c, r in results:
-                    db.execute(sql, {'i': sid, 's': s, 'c': c, 'r': r,
-                                     'm': llm['model'], 'pv': PROMPT_VER})
-                db.commit()
-                done += len(results)
-                fail += len(batch) - len(results)   # 折半重试后仍丢的单条计入失败
-            if n_batch % 10 == 0:
-                el = time.time() - t0
-                logger.info(f'进度 {min(n_batch*BATCH, len(rows))}/{len(rows)} '
-                            f'(done {done}, fail {fail}) {el:.0f}s '
-                            f'{n_batch/el*60:.1f} req/min')
-
-    el = time.time() - t0
-    stat = db.execute(text("""
-        SELECT sentiment, COUNT(*) FROM xueqiu_sentiment GROUP BY 1 ORDER BY 1""")).fetchall()
-    logger.info(f'打分完成: done={done} fail={fail} 用时={el/60:.1f}min '
-                f'({len(batches)/el*60:.1f} req/min) | 全表分布(看多/中性/看空)='
-                f'{ {r[0]: r[1] for r in stat} }')
-    db.close()
 
 
 if __name__ == '__main__':
