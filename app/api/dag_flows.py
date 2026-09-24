@@ -338,6 +338,14 @@ def _execute_flow_internal(flow_id: int, body: dict = {}) -> dict:
             deps = n.get("deps", [])
             fn = NODE_FN_MAP.get(name)
             if not fn:
+                # 无实现兜底为 no-op，但必须喊出来：后端进程持有的是启动时的
+                # NODE_FN_MAP 快照，新增节点函数后若不重启，该节点会**静默成功**
+                # 且什么都不做（2026-09-24 雪球情绪打分首跑实测：流程 9ms"执行完成"，
+                # 节点日志停在 pending）。这类静默 success 比报错更难发现。
+                from loguru import logger as _lg
+                _lg.warning(
+                    f"[flow] 节点 '{name}' 无实现（当前进程 NODE_FN_MAP 快照中不存在）"
+                    f"——将按空操作跳过。若刚新增该节点函数，需重启后端生效。")
                 fn = lambda **kw: True
             executor.add(DagNode(name, deps, fn))
 

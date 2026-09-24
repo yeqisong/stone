@@ -151,7 +151,8 @@
             20d <span :style="{color:sigStats.f20>=0?'#ef4444':'#10b981'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
           </div>
         </div>
-        <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色 -->
+        <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色；
+             情绪方向由 LLM 打分给出（红多绿空），与 mark 徽标相互独立 -->
         <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)">
           <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
@@ -159,11 +160,36 @@
             标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b> ·
             7日互动 <b style="color:var(--c-text)">{{xqData.interactions_7d}}</b>
           </div>
+          <!-- LLM 情绪构成（design/06 §9.10）：只统计已打分帖（夜间任务，按热度取） -->
+          <div v-if="xqData.sentiment && xqData.sentiment.scored"
+               style="margin-bottom:8px;padding:7px 9px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-bottom:5px">
+              <span style="color:var(--c-text-dim)">
+                LLM 情绪
+                <span style="color:var(--c-text-faint)">· {{xqData.sentiment.scored}} 帖已打分</span>
+              </span>
+              <span :style="{color: xqData.sentiment.net>=0 ? UP_COLOR : DOWN_COLOR, fontWeight:600}">
+                净看多 {{ xqData.sentiment.net>=0?'+':'' }}{{ (xqData.sentiment.net*100).toFixed(0) }}%
+              </span>
+            </div>
+            <!-- 占比条：红=看多 灰=中性 绿=看空（方向域，与全站一致） -->
+            <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--c-border)">
+              <div v-for="seg in sentiSegs" :key="seg.k" :title="seg.t+' '+seg.n+' 帖'"
+                   :style="{width:seg.w+'%', background:seg.c}"></div>
+            </div>
+            <div style="display:flex;gap:10px;font-size:10px;margin-top:4px">
+              <span v-for="seg in sentiSegs" :key="seg.k" style="color:var(--c-text-dim)">
+                <span :style="{color:seg.c,fontWeight:600}">{{seg.t}}</span> {{seg.n}}
+              </span>
+            </div>
+          </div>
           <div style="display:flex;flex-direction:column;gap:6px">
             <div v-for="(p,i) in xqData.hot" :key="i" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
               <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{p.created_at.slice(5)}}</span>
                 <span v-if="p.source">{{p.source}}</span>
+                <span v-if="sentiOf(p.sentiment)" :title="p.reason||''"
+                      :style="{color:sentiOf(p.sentiment).c, background:'rgba(148,163,184,0.18)', borderRadius:'8px', padding:'0 5px', fontWeight:600}">{{sentiOf(p.sentiment).t}}</span>
                 <span v-if="p.mark" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">标</span>
                 <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} · 评 {{p.reply_count}}</span>
               </div>
@@ -374,8 +400,11 @@ const adjOptions = [
   {value:'hfq',label:'后复权'},
 ]
 const dirName = d => ({buy:'买入',sell:'卖出',neutral:'中性'}[d]||d)
-import { fmtMoney } from '../utils/ui'
+import { fmtMoney, UP_COLOR, DOWN_COLOR } from '../utils/ui'
 const fmt = v => v!=null?fmtMoney(Number(v)):'0'
+// 情绪（LLM 三分类）→ 文案/配色：方向域红多绿空，中性灰（design/06 §9.10）
+const SENTI_DEF = {1:{t:'多',c:UP_COLOR}, 0:{t:'中',c:'var(--c-text-faint)'}, '-1':{t:'空',c:DOWN_COLOR}}
+const sentiOf = s => (s===null||s===undefined) ? null : (SENTI_DEF[s] || null)
 const priceChg = ref(null)
 const priceColor = ref('#fff')
 const hoverInfo = ref(null)  // crosshair hover 时动态更新的行情数据
@@ -388,6 +417,17 @@ const toplistData = ref([])  // 龙虎榜上榜记录
 const chipData = ref(null)   // 筹码分布（现价口径）
 const sigData = ref([])      // 模型信号史（含前瞻收益）
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
+// 情绪占比条段：按"已打分帖数"归一（不含未打分帖），0 帖的段不占宽度
+const sentiSegs = computed(() => {
+  const s = xqData.value?.sentiment
+  if (!s || !s.scored) return []
+  const tot = s.scored
+  return [
+    {k:'b', t:'看多', n:s.bull,    w:100*s.bull/tot,    c:UP_COLOR},
+    {k:'n', t:'中性', n:s.neutral, w:100*s.neutral/tot, c:'var(--c-text-faint)'},
+    {k:'s', t:'看空', n:s.bear,    w:100*s.bear/tot,    c:DOWN_COLOR},
+  ].filter(x => x.n > 0)
+})
 const sigStats = ref(null)   // 信号摘要（侧栏）
 const mfCum = ref([])        // 主力净流入累计（与 mfData 同长）
 

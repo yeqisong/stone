@@ -688,11 +688,15 @@ def get_stock_chip(code: str, days: int = Query(7000, ge=250, le=7000),
 @router.get("/stock/{code}/xueqiu")
 def get_stock_xueqiu(code: str, days: int = Query(7, ge=1, le=30),
                      limit: int = Query(10, ge=1, le=30)):
-    """雪球讨论聚合（design/06）：今日帖数 + 7 日标记帖占比/互动量 + 热帖精选。
+    """雪球讨论聚合（design/06）：今日帖数 + 7 日标记帖占比/互动量 + 热帖精选 + LLM 情绪。
 
     mark 语义（看涨/看跌）未确认（design/06 §9.6），此处只做中性"标记帖"计数，
-    不染色不定向；语义确认后再升级为看涨比指标。
+    不染色不定向；**情绪方向改由 LLM 打分给出**（xueqiu_sentiment，design/06 §9.10，
+    已修「反驳/质疑型」误判），mark 保持中性展示。
     热帖排序：like + reply×3（回复权重高 = 讨论热度）。
+
+    sentiment 为近 days 天已打分帖的构成与逐日净分（旧→新，供前端迷你趋势）。
+    只覆盖已打分帖——打分是 02:00 夜间任务且按热度取，故当日早期可能为空。
     """
     db = get_sync_db()
     try:
@@ -707,16 +711,40 @@ def get_stock_xueqiu(code: str, days: int = Query(7, ge=1, le=30),
             {"c": code, "d": str(days)}).fetchone()
         n7, marked7, inter7 = (mark_row[0] or 0, mark_row[1] or 0, int(mark_row[2] or 0))
         rows = db.execute(text(
-            "SELECT created_at, source, mark, like_count, reply_count, text_clean "
-            "FROM xueqiu_status WHERE code=:c AND created_at >= CURRENT_TIMESTAMP - "
-            "(:d || ' days')::interval AND COALESCE(text_clean, '') != '' "
-            "ORDER BY like_count + reply_count * 3 DESC LIMIT :l"),
+            "SELECT s.created_at, s.source, s.mark, s.like_count, s.reply_count, s.text_clean, "
+            "       se.sentiment, se.reason "
+            "FROM xueqiu_status s "
+            "LEFT JOIN xueqiu_sentiment se ON se.status_id = s.status_id "
+            "WHERE s.code=:c AND s.created_at >= CURRENT_TIMESTAMP - "
+            "(:d || ' days')::interval AND COALESCE(s.text_clean, '') != '' "
+            "ORDER BY s.like_count + s.reply_count * 3 DESC LIMIT :l"),
             {"c": code, "d": str(days), "l": limit}).fetchall()
         hot = [{"created_at": str(r[0])[:16], "source": r[1], "mark": r[2],
-                "like_count": r[3], "reply_count": r[4], "text": r[5]} for r in rows]
+                "like_count": r[3], "reply_count": r[4], "text": r[5],
+                "sentiment": r[6], "reason": r[7]} for r in rows]
+
+        # LLM 情绪构成（design/06 §9.10）：只统计已打分帖；逐日给净分供迷你趋势
+        srows = db.execute(text("""
+            SELECT (s.created_at AT TIME ZONE 'Asia/Shanghai')::date AS d, COUNT(*),
+                   SUM(CASE WHEN se.sentiment = 1  THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN se.sentiment = 0  THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN se.sentiment = -1 THEN 1 ELSE 0 END)
+            FROM xueqiu_sentiment se JOIN xueqiu_status s USING (status_id)
+            WHERE s.code=:c AND s.created_at >= CURRENT_TIMESTAMP - make_interval(days => :d)
+            GROUP BY 1 ORDER BY 1"""), {"c": code, "d": str(days)}).fetchall()
+        scored = sum(int(r[1]) for r in srows)
+        bull = sum(int(r[2]) for r in srows)
+        neutral = sum(int(r[3]) for r in srows)
+        bear = sum(int(r[4]) for r in srows)
+        daily = [{"d": str(r[0])[5:], "n": int(r[1]),
+                  "net": round((int(r[2]) - int(r[4])) / int(r[1]), 3)} for r in srows]
+        sentiment = {"scored": scored, "bull": bull, "neutral": neutral, "bear": bear,
+                     "net": round((bull - bear) / scored, 3) if scored else None,
+                     "daily": daily}
+
         return {"today_count": today_count, "count_7d": n7,
                 "mark_ratio": round(marked7 / n7, 3) if n7 else None,
-                "interactions_7d": inter7, "hot": hot}
+                "interactions_7d": inter7, "hot": hot, "sentiment": sentiment}
     finally:
         db.close()
 
