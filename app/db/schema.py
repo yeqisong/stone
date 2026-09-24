@@ -985,6 +985,7 @@ CREATE TABLE IF NOT EXISTS xueqiu_sentiment (
     confidence  REAL,                             -- LLM 自报置信 0~1
     reason      VARCHAR(200),                     -- 一句话依据（可审计）
     model       VARCHAR(64) NOT NULL,             -- 打分模型（切换 LLM 后可分辨）
+    prompt_ver  VARCHAR(8),                       -- 打分提示词版本（同模型改 prompt 后做 A/B）
     created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_xqs_sent_created ON xueqiu_sentiment (created_at);
@@ -1256,6 +1257,14 @@ def init_db(sync_session) -> None:
             sync_session.rollback()
             if "does not exist" not in str(e).lower():
                 logger.warning(f"雪球视图迁移失败（忽略）: {e}")
+
+    # 迁移：xueqiu_sentiment.prompt_ver（打分提示词版本；同模型下改 prompt 后可做 A/B 对照）
+    try:
+        sync_session.execute(text(
+            "ALTER TABLE xueqiu_sentiment ADD COLUMN IF NOT EXISTS prompt_ver VARCHAR(8)"))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
 
     # 迁移：删除旧 strategy 节点（已从 NODE_FN_MAP 移除）
     try:
