@@ -224,7 +224,9 @@ def run_scoring(db, client, model: str, rows, *, workers: int = WORKERS,
                 db.commit()
                 done += len(results)
                 fail += len(b) - len(results)   # 折半重试后仍丢的单条计入失败
-            if n_batch % 10 == 0:
+            if n_batch % (2 if progress_cb else 10) == 0:
+                # 节点路径每 2 批报一次：LLM 故障时每批要熬 3 次重试（3+6s 退避）≈27s，
+                # 每 10 批就是 270s —— 逼近看门狗 5 分钟阈值（2026-09-25 实测被误杀）。
                 if progress_cb:
                     progress_cb(done, fail, len(rows))
                 else:

@@ -4630,6 +4630,14 @@ def dag_task_xueqiu_sentiment(trade_date=None, **kw):
             return r
         note = (f"打分 {r.get('done', 0)} 帖（失败 {r.get('fail', 0)}）"
                 f" heat≥{r.get('min_heat', 0)} {r.get('model', '')}/{r.get('prompt_ver', '')}")
+        # 大面积失败必须显性化：2026-09-28 全夜 574 帖 100% 失败（LLM 侧不可用），
+        # 节点却报 success rows=0 —— 靠人工翻 detail 才发现，属静默故障。
+        tot = (r.get('done', 0) or 0) + (r.get('fail', 0) or 0)
+        if tot and (r.get('fail', 0) or 0) / tot > 0.5:
+            write_node_log(log_id=log_id, status='failed',
+                           detail=f"大面积失败: {note}（LLM 侧不可用？失败帖未落库，下次运行自动重试）",
+                           trade_date=td, node_name='xueqiu_sentiment', run_id=rid)
+            return r
         if r.get('fail'):
             note += '；失败帖未落库，下次运行自动重试'
         write_node_log(log_id=log_id, status='success', rows=r.get('done', 0), detail=note,
