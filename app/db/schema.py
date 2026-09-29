@@ -991,6 +991,85 @@ CREATE TABLE IF NOT EXISTS xueqiu_sentiment (
 CREATE INDEX IF NOT EXISTS idx_xqs_sent_created ON xueqiu_sentiment (created_at);
 """
 
+# ── 新闻资讯模块（design/07）：第 1 层原文 + 第 2 层 LLM 总结 ──
+#  采集为 DAG 定时流程（无 WAF，不需要雪球那套常驻洗白），四类源：
+#    flash      快讯（财联社主源 / 东财 7×24 / 华尔街见闻 互备）
+#    stock_news 个股新闻（东财 search-api，关注池分片轮转 + 抓正文）
+#    report     研报（东财 reportapi，个股 qType=0 / 行业 qType=1）
+#    notice     公告（巨潮 cninfo）
+#  不分区：约 2000-4000 条/天（1.4M 行/年），比 daily_quote 小一个量级，
+#  且可避开「DO 块建分区不能含 $ 字符」的语句切分坑（见 _split_statements）。
+
+CREATE_NEWS_ITEM = """
+CREATE TABLE IF NOT EXISTS news_item (
+    id            BIGSERIAL PRIMARY KEY,
+    source        VARCHAR(16) NOT NULL,        -- cls / em724 / wscn / em_stock / em_report / cninfo
+    category      VARCHAR(16) NOT NULL,        -- flash / stock_news / report / notice
+    source_id     VARCHAR(96) NOT NULL,        -- 源内唯一 id（无 id 的源用内容哈希兜底）
+    content_hash  VARCHAR(40) NOT NULL,        -- sha1(title|content) 前 20 位，跨源去重用
+    published_at  TIMESTAMPTZ NOT NULL,        -- 发布时间（北京时间口径，见 crawler/news/sources.py）
+    title         VARCHAR(512),
+    content       TEXT,                        -- 源侧可得全文：快讯=正文；个股新闻=正文页；研报/公告=标注行
+    url           TEXT,                         -- 原文链接（研报 PDF / 公告 PDF / 新闻正文页）
+    extra         JSONB,                        -- 源特有：研报机构/评级/EPS、见闻 score、公告类型、源股票标注
+    fetched_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (source, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_pub ON news_item (published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_hash ON news_item (content_hash);
+CREATE INDEX IF NOT EXISTS idx_news_cat ON news_item (category, published_at DESC);
+"""
+
+CREATE_NEWS_STOCK = """
+CREATE TABLE IF NOT EXISTS news_stock (
+    news_id     BIGINT NOT NULL REFERENCES news_item(id) ON DELETE CASCADE,
+    stock_code  VARCHAR(6) NOT NULL,
+    rel         VARCHAR(8) NOT NULL,           -- src=源显式标注 / match=关注池名称匹配
+    confidence  REAL DEFAULT 1.0,
+    PRIMARY KEY (news_id, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_news_stock_code ON news_stock (stock_code, news_id DESC);
+"""
+
+CREATE_NEWS_SUMMARY = """
+CREATE TABLE IF NOT EXISTS news_summary (
+    news_id     BIGINT PRIMARY KEY REFERENCES news_item(id) ON DELETE CASCADE,
+    summary     VARCHAR(400) NOT NULL,         -- 1-2 句摘要
+    importance  SMALLINT NOT NULL,             -- 1 低 / 2 中 / 3 高（列表默认只看 ≥2）
+    topics      VARCHAR(200) DEFAULT '',       -- 主题标签，逗号分隔
+    sentiment   SMALLINT,                      -- 1 看多 / 0 中性或无关 / -1 看空（第 3 层与雪球交叉分析用）
+    model       VARCHAR(64) NOT NULL,
+    prompt_ver  VARCHAR(8) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_news_sum_imp ON news_summary (importance, news_id DESC);
+"""
+
+CREATE_NEWS_CRAWL_STATE = """
+CREATE TABLE IF NOT EXISTS news_crawl_state (
+    source            VARCHAR(32) PRIMARY KEY,  -- cls / em724 / wscn
+    cursor            TEXT,                     -- 财联社 last_time / 见闻 next_cursor（增量）
+    last_published_at TIMESTAMPTZ,
+    last_fetched_at   TIMESTAMPTZ,
+    last_ok           BOOLEAN DEFAULT true,
+    fail_streak       INT DEFAULT 0,            -- 连续失败轮数（状态页三态判定）
+    note              VARCHAR(200) DEFAULT '',
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_NEWS_POLL_STATE = """
+CREATE TABLE IF NOT EXISTS news_poll_state (
+    stock_code      VARCHAR(6) PRIMARY KEY,
+    last_fetched_at TIMESTAMPTZ,                -- 关注池分片轮转依据（NULLS FIRST 优先补）
+    last_news_at    TIMESTAMPTZ,                -- 该股最近一条新闻发布时间
+    fetched_count   INT DEFAULT 0,
+    fail_count      INT DEFAULT 0,              -- 含东财 search-api 间歇空返回（IP 风控）
+    org_id          VARCHAR(32),                -- 巨潮 orgId 缓存（官方映射表 >7 天重拉）
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # ── 因子 IC 检验留档（特征页 IC 体检；决策在 features.ic_status，重算不覆盖）──
 
 CREATE_FACTOR_IC_STATS = """
@@ -1149,6 +1228,11 @@ ALL_TABLES = [
     ("xueqiu_crawl_state", CREATE_XUEQIU_CRAWL_STATE),
     ("xueqiu_runtime", CREATE_XUEQIU_RUNTIME),
     ("xueqiu_sentiment", CREATE_XUEQIU_SENTIMENT),
+    ("news_item", CREATE_NEWS_ITEM),
+    ("news_stock", CREATE_NEWS_STOCK),
+    ("news_summary", CREATE_NEWS_SUMMARY),
+    ("news_crawl_state", CREATE_NEWS_CRAWL_STATE),
+    ("news_poll_state", CREATE_NEWS_POLL_STATE),
 ]
 
 
@@ -1427,6 +1511,86 @@ def init_db(sync_session) -> None:
                      '{"deps": ["cron"], "position": {"x": 20, "y": 120}, '
                      '"node_name": "xueqiu_sentiment"}]',
                 'e': '[{"source": "cron", "target": "xueqiu_sentiment"}]',
+            })
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
+
+        # 迁移：新闻资讯模块（design/07，2026-09-29）——第 1 层原文 + 第 2 层 LLM 总结
+        #  关注池 v_focus_pool = 持仓 ∪ 自选分组：既是采集分片轮转的范围（个股新闻/研报/公告
+        #  只采池内，不采全市场 5000 只），也是文本→个股匹配的字典——限定在几百个名字内
+        #  暴力长名优先完全够用，且天然绕开全市场重名/短名歧义。
+        #  v_news_feed = 原文 LEFT JOIN 总结：下游（API/前端）统一入口，未总结的行 summary 为 NULL。
+        news_views = """
+        CREATE OR REPLACE VIEW v_focus_pool AS
+        SELECT stock_code FROM portfolio WHERE is_active = true
+        UNION
+        SELECT stock_code FROM watch_group_items;
+
+        CREATE OR REPLACE VIEW v_news_feed AS
+        SELECT n.id, n.source, n.category, n.source_id, n.content_hash,
+               n.published_at, n.title, n.content, n.url, n.extra, n.fetched_at,
+               s.summary, s.importance, s.topics, s.sentiment,
+               s.model AS summary_model, s.prompt_ver
+        FROM news_item n
+        LEFT JOIN news_summary s ON s.news_id = n.id;
+        """
+        for stmt in news_views.split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                sync_session.execute(text(stmt))
+                sync_session.commit()
+            except Exception as _e:
+                sync_session.rollback()
+                logger.warning(f"[schema] 新闻资讯视图创建失败: {str(_e)[:120]}")
+
+        try:
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('news_crawl', '', '📰 资讯采集', 98)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='📰 资讯采集', sort_order=98
+            """))
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('news_summary', '', '🧠 资讯总结', 99)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='🧠 资讯总结', sort_order=99
+            """))
+            # 采集参数：focus_shard=每轮关注的池内股票数（轮转分片，压住东财风控线）；
+            # em_min_interval=东财系请求最小间隔秒（实测风控阈值 5/s、200/min）；
+            # max_pages=单源单轮翻页上限（防某源分页异常时打爆请求数）。
+            sync_session.execute(text("""
+                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                SELECT 'news_collect', '资讯采集', true,
+                       '{"flash_enabled": true, "focus_shard": 20, "em_min_interval": 1.2,
+                         "max_pages": 4, "report_enabled": true, "notice_enabled": true,
+                         "fetch_article_body": true, "body_max_chars": 6000}'
+                WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='news_collect')
+            """))
+            sync_session.execute(text("""
+                INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+                SELECT 'news_summary', '资讯总结', true,
+                       '{"max_items": 3000, "min_len": 20, "workers": 8}'
+                WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='news_summary')
+            """))
+            # 独立定时流程：快讯是全天滚动产出，每 20 分钟一轮增量采集 + 增量总结。
+            # 节点幂等（只取未入库/未总结的），故轮次密集也不会重复；机器关机漏轮次
+            # 由「无日期窗口 + 补跑窗口 24h」自愈（与雪球情绪打分同构）。
+            # 仅缺失时补种，已存在则不动（用户可能在 UI 调过时间/画布位置）
+            sync_session.execute(text("""
+                INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+                SELECT '新闻资讯', '资讯采集（快讯增量 + 关注池分片个股新闻/研报/公告）+ LLM 总结',
+                       :n, :e, '*/20 * * * *', 'published', false
+                WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='新闻资讯')
+            """), {
+                'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
+                     '{"deps": ["cron"], "position": {"x": 20, "y": 120}, '
+                     '"node_name": "news_crawl"}, '
+                     '{"deps": ["news_crawl"], "position": {"x": 20, "y": 220}, '
+                     '"node_name": "news_summary"}]',
+                'e': '[{"source": "cron", "target": "news_crawl"}, '
+                     '{"source": "news_crawl", "target": "news_summary"}]',
             })
             sync_session.commit()
         except Exception:

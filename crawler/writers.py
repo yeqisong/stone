@@ -634,3 +634,118 @@ def batch_upsert_index_weight(db, records):
         db.commit()
         saved += len(records[i:i + 1000])
     return saved
+
+
+# ── 新闻资讯（design/07 第 1 层）────────────────────────────────
+# 与上面各 ext 表有意不同：news_item 的 id 是 BIGSERIAL，入库后要拿回 id 才能建
+# news_stock 关联；而 ON CONFLICT DO NOTHING 不会回传已存在行的 id，
+# 故插入后按 (source, source_id) 反查一次（按源分组，一批 3-4 条查询）。
+
+_NEWS_COLS = ('source', 'category', 'source_id', 'content_hash', 'published_at',
+              'title', 'content', 'url', 'extra')
+
+
+def news_existing_keys(db, pairs) -> set:
+    """主幂等过滤：返回已存在的 (source, source_id) 集合。
+
+    必须以唯一键判存在、而非 content_hash —— 正文页抓取会改写 content，
+    同一篇文章两轮的哈希不同，用哈希过滤会每轮重复尝试插入，并把「新增」
+    报成持续增长（假的数据增长信号，比重复插入本身更糟）。
+    """
+    from sqlalchemy import text
+    srcs = sorted({s for s, _ in (pairs or [])})
+    if not srcs:
+        return set()
+    out = set()
+    for s in srcs:
+        ids = sorted({str(i) for src, i in pairs if src == s})
+        for i in range(0, len(ids), 1000):
+            rows = db.execute(text(
+                "SELECT source_id FROM news_item WHERE source = :s AND source_id = ANY(:ids)"
+            ), {'s': s, 'ids': ids[i:i + 1000]}).fetchall()
+            out.update((s, str(r[0])) for r in rows)
+    return out
+
+
+def news_hash_sources(db, hashes) -> dict:
+    """返回 {content_hash: {已收录该内容的 source, ...}}，供**跨源**去重判定。
+
+    只用于跨源：主备源切换窗口内同一事件会被两个源各抓一条。同源内不改判——
+    两个 announcementId 不同但标题正文相同的公告是两份真实文档（实测存在），
+    按哈希合并会静默丢数据。
+    """
+    from sqlalchemy import text
+    hashes = [h for h in (hashes or []) if h]
+    if not hashes:
+        return {}
+    out = {}
+    for i in range(0, len(hashes), 1000):
+        rows = db.execute(text(
+            "SELECT content_hash, source FROM news_item WHERE content_hash = ANY(:hs)"
+        ), {'hs': list(hashes[i:i + 1000])}).fetchall()
+        for h, s in rows:
+            out.setdefault(h, set()).add(s)
+    return out
+
+
+def batch_upsert_news(db, records):
+    """入库原文，返回 {(source, source_id): id}（含本次新增与被去重跳过的已存在行）。
+
+    调用方拿这个映射建 news_stock 关联，故不能只返回新增数。
+    """
+    from sqlalchemy import text
+    if not records:
+        return {}
+    import json as _json
+    col_str = ", ".join(_NEWS_COLS)
+    ph = ", ".join(f":{c}" for c in _NEWS_COLS)
+    sql = text(f"""
+        INSERT INTO news_item ({col_str}) VALUES ({ph})
+        ON CONFLICT (source, source_id) DO NOTHING
+    """)
+    payload = []
+    for r in records:
+        row = {c: r.get(c) for c in _NEWS_COLS}
+        # JSONB 列必须显式序列化：psycopg2 不认 Python dict
+        row['extra'] = _json.dumps(r.get('extra') or {}, ensure_ascii=False)
+        payload.append(row)
+    saved = 0
+    for i in range(0, len(payload), 500):
+        res = db.execute(sql, payload[i:i + 500])
+        db.commit()
+        saved += max(res.rowcount or 0, 0)
+
+    # 反查 id：新插入行与既有行都要（重复轮次里同一批可能全是已存在行）
+    by_source = {}
+    for r in records:
+        by_source.setdefault(r['source'], set()).add(str(r['source_id']))
+    mapping = {}
+    for src, ids in by_source.items():
+        ids = list(ids)
+        for i in range(0, len(ids), 1000):
+            rows = db.execute(text(
+                "SELECT id, source_id FROM news_item WHERE source = :s AND source_id = ANY(:ids)"
+            ), {'s': src, 'ids': ids[i:i + 1000]}).fetchall()
+            for nid, sid in rows:
+                mapping[(src, str(sid))] = nid
+    return mapping
+
+
+def batch_upsert_news_stock(db, records):
+    """新闻↔个股关联。rel='src' 源显式标注 / 'match' 关注池名称匹配。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO news_stock (news_id, stock_code, rel, confidence)
+        VALUES (:news_id, :stock_code, :rel, :confidence)
+        ON CONFLICT (news_id, stock_code) DO UPDATE SET
+            rel = CASE WHEN news_stock.rel = 'src' THEN 'src' ELSE EXCLUDED.rel END,
+            confidence = GREATEST(news_stock.confidence, EXCLUDED.confidence)
+    """)
+    saved = 0
+    for i in range(0, len(records), 1000):
+        db.execute(sql, records[i:i + 1000])
+        db.commit()
+        saved += len(records[i:i + 1000])
+    return saved
