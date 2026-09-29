@@ -297,6 +297,9 @@ def get_stock_kline(
                 low=('low', 'min'), close=('close', 'last'),
                 volume=('volume', 'sum'), amount=('amount', 'sum'),
                 turnover=('turnover', 'mean')).reset_index(drop=True)
+            # 全 None 的组（指数无 turnover 列 / 整周停牌）mean 出 NaN——NaN 是真值，
+            # 会绕过载荷里的 falsy 守卫，最终被 JSON 渲染的 allow_nan=False 炸成整响应 500
+            agg['turnover'] = agg['turnover'].where(agg['turnover'].notna(), None)
             rows = agg.to_dict('records')
 
         closes = pd.Series([float(r['close'] if isinstance(r, dict) else r.close) for r in rows])
