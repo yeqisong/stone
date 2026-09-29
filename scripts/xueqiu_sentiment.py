@@ -21,7 +21,6 @@ import argparse
 import json
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, '/home/bnbnyu/projects/stone')
 
@@ -105,71 +104,35 @@ def fetch_pending(db, limit: int, min_heat: int, codes: list[str] | None, rescor
     return db.execute(sql, params).fetchall()
 
 
-def _extract_array(content: str):
-    """从模型输出里抠出 JSON 数组。容忍围栏代码块、前后缀说明、以及模型先吐半截再吐完整数组
-    （首版用 find('[')+rfind(']') 切片，两数组并存时会拼成非法 JSON → 整批 10 帖丢失）。
-    取「吃掉最多文本」的那个数组，避免误取嵌套的内层小数组。"""
-    dec = json.JSONDecoder()
-    s = content.strip()
-    best, best_end = None, -1
-    for i, ch in enumerate(s):
-        if ch != '[':
-            continue
-        try:
-            obj, end = dec.raw_decode(s[i:])
-        except ValueError:
-            continue
-        if isinstance(obj, list) and end > best_end:
-            best, best_end = obj, end
-    return best
-
-
 def _try_batch(client, model: str, batch, fail_max: int):
     """单批 LLM 调用 + 解析。成功返回结果列表，解析/调用失败返回 None。"""
+    from scripts.llm_batch import llm_json_batch, pick_by_ids
     posts_json = json.dumps([{'id': r[0], 'code': r[1], 'text': r[2][:400]} for r in batch],
                             ensure_ascii=False)
-    for attempt in range(1, fail_max + 1):
+    arr = llm_json_batch(client, model, PROMPT.replace('{posts}', posts_json),
+                         fail_max=fail_max, max_tokens=1500, log_tag='xq')
+    if arr is None:
+        return None
+    valid = {r[0] for r in batch}
+    out = []
+    for it in pick_by_ids(arr, valid):        # LLM 幻觉 id 防御：只收本批的
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{'role': 'user', 'content': PROMPT.replace('{posts}', posts_json)}],
-                temperature=0,
-                max_tokens=1500,
-            )
-            arr = _extract_array(resp.choices[0].message.content)
-            if arr is None:
-                raise ValueError('输出中找不到合法 JSON 数组')
-            out = []
-            for it in arr:
-                sid = int(it['id'])
-                if not any(r[0] == sid for r in batch):
-                    continue   # LLM 幻觉 id 防御：只收本批的
-                s = int(it['s'])
-                if s not in (1, 0, -1):
-                    continue
-                out.append((sid, s, float(it.get('c') or 0.5), str(it.get('r') or '')[:200]))
-            return out
-        except Exception as e:
-            logger.warning(f'批次失败 第 {attempt} 次: {str(e)[:100]}')
-            if attempt < fail_max:
-                time.sleep(3 * attempt)
-    return None
+            s = int(it['s'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if s not in (1, 0, -1):
+            continue
+        out.append((int(it['id']), s, float(it.get('c') or 0.5),
+                    str(it.get('r') or '')[:200]))
+    return out
 
 
 def score_batch(client, model: str, batch, fail_max: int):
     """单批打分（纯 LLM 调用，不碰 DB——供线程池并发）。
     整批失败时折半重试：单条坏 JSON 只牺牲自己，不拖累同批其余帖。"""
-    if not batch:
-        return []
-    res = _try_batch(client, model, batch, fail_max)
-    if res is not None:
-        return res
-    if len(batch) == 1:
-        return []
-    mid = len(batch) // 2
-    logger.warning(f'批次失败，折半重试 {len(batch)} → {mid}+{len(batch) - mid}')
-    return (score_batch(client, model, batch[:mid], fail_max)
-            + score_batch(client, model, batch[mid:], fail_max))
+    from scripts.llm_batch import retry_split
+    return retry_split(lambda b: _try_batch(client, model, b, fail_max), batch,
+                       log_tag='xq')
 
 
 def run_scoring(db, client, model: str, rows, *, workers: int = WORKERS,
@@ -177,15 +140,10 @@ def run_scoring(db, client, model: str, rows, *, workers: int = WORKERS,
                 rescore: bool = False, progress_cb=None):
     """打分主循环。CLI 与 DAG 节点共用这一份实现，避免两处口径漂移。
 
-    并发只发生在 LLM 调用（线程池），DB 写入固定在主线程——保证 commit 顺序，
-    也保证 psycopg2 连接不被多线程共享。progress_cb(done, fail, total) 供长跑
-    节点上报心跳（DAG 看门狗 5 分钟无进展会误杀）。
-
-    返回 {'done','fail','total','req','elapsed'}。
+    轮询/并发/心跳的通用部分在 scripts/llm_batch.run_batches（与资讯总结共用）；
+    此处只提供本任务的落库写法。返回 {'done','fail','total','req','elapsed'}。
     """
-    if not rows:
-        return {'done': 0, 'fail': 0, 'total': 0, 'req': 0, 'elapsed': 0.0}
-    batches = [rows[i:i + batch] for i in range(0, len(rows), batch)]
+    from scripts.llm_batch import run_batches
     sql = text("""INSERT INTO xueqiu_sentiment
                       (status_id, sentiment, confidence, reason, model, prompt_ver)
                   VALUES (:i, :s, :c, :r, :m, :pv)
@@ -195,47 +153,15 @@ def run_scoring(db, client, model: str, rows, *, workers: int = WORKERS,
                       prompt_ver=EXCLUDED.prompt_ver, created_at=now()"""
                          if rescore else 'ON CONFLICT (status_id) DO NOTHING'))
 
-    done = fail = 0
-    t0 = time.time()
-    t_sub: list[float] = []
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {}
-        for b in batches:
-            # RPM 滑动窗口闸门（并发数已自然限速，此处兜住 API 硬上限）
-            while True:
-                now = time.time()
-                t_sub[:] = [t for t in t_sub if now - t < 60]
-                if len(t_sub) < rpm:
-                    break
-                time.sleep(min(5.0, 60 - (now - t_sub[0]) + 0.1))
-            t_sub.append(time.time())
-            futs[ex.submit(score_batch, client, model, b, fail_max)] = b
+    def _write(b, results):
+        for sid, s, c, r in results:
+            db.execute(sql, {'i': sid, 's': s, 'c': c, 'r': r,
+                             'm': model, 'pv': PROMPT_VER})
+        db.commit()
 
-        for n_batch, fut in enumerate(as_completed(futs), 1):
-            b = futs[fut]
-            results = fut.result() or []
-            if not results:
-                fail += len(b)
-                logger.error(f'批次连续 {fail_max} 次失败，跳过 {len(b)} 帖')
-            else:
-                for sid, s, c, r in results:
-                    db.execute(sql, {'i': sid, 's': s, 'c': c, 'r': r,
-                                     'm': model, 'pv': PROMPT_VER})
-                db.commit()
-                done += len(results)
-                fail += len(b) - len(results)   # 折半重试后仍丢的单条计入失败
-            if n_batch % (2 if progress_cb else 10) == 0:
-                # 节点路径每 2 批报一次：LLM 故障时每批要熬 3 次重试（3+6s 退避）≈27s，
-                # 每 10 批就是 270s —— 逼近看门狗 5 分钟阈值（2026-09-25 实测被误杀）。
-                if progress_cb:
-                    progress_cb(done, fail, len(rows))
-                else:
-                    el = time.time() - t0
-                    logger.info(f'进度 {min(n_batch * batch, len(rows))}/{len(rows)} '
-                                f'(done {done}, fail {fail}) {el:.0f}s '
-                                f'{n_batch / el * 60:.1f} req/min')
-    return {'done': done, 'fail': fail, 'total': len(rows), 'req': len(batches),
-            'elapsed': time.time() - t0}
+    return run_batches(rows, lambda b: score_batch(client, model, b, fail_max), _write,
+                       workers=workers, rpm=rpm, batch_size=batch,
+                       progress_cb=progress_cb, log_tag='xq')
 
 
 def score_pending(db, client, model: str, *, limit: int = 300, min_heat: int = 5,
