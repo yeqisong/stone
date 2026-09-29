@@ -95,6 +95,19 @@ NODE_SUB_STEPS = {
         {'name': 'JOIN 计算总格子', 'desc': 'daily_quote 行数 × 特征数 = 总预期格子'},
         {'name': '写入 entity_stats', 'desc': '每只股票一行的数据完整度基线'},
     ],
+    'news_crawl': [
+        {'name': '快讯增量（主备）', 'desc': '财联社→东财7×24→华尔街见闻，第一个成功即止；'
+                                           '按游标向旧翻页至追平上次'},
+        {'name': '关注池分片轮转', 'desc': '取 last_fetched_at 最老的 N 只，采个股新闻（含正文页）/研报/公告，'
+                                        '压住东财风控线 5/s、200/min'},
+        {'name': '个股关联', 'desc': '源自带股票标注（rel=src）+ 关注池名称匹配（rel=match）；'
+                                   '跨源同内容按哈希去重'},
+    ],
+    'news_summary': [
+        {'name': '取未总结资讯', 'desc': '无日期窗口、关注池关联优先、发布时间倒序（幂等续跑）'},
+        {'name': 'LLM 逐条总结', 'desc': '一次调用出四字段：摘要 / 重要度 1-3 / 主题 / 情绪 ±1'},
+        {'name': '写入 news_summary', 'desc': 'ON CONFLICT DO NOTHING；失败条目保持未总结待下轮重试'},
+    ],
     'analyze': [
         {'name': '刷新大表统计', 'desc': 'ANALYZE feature_values/daily_quote/stock_moneyflow，防止分区大表统计过期'},
     ],

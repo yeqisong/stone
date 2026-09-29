@@ -193,7 +193,31 @@
                 <span v-if="p.mark" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">标</span>
                 <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} · 评 {{p.reply_count}}</span>
               </div>
-              <div class="xq-hot-text" :title="p.text">{{p.text}}</div>
+              <div class="side-text" :title="p.text">{{p.text}}</div>
+            </div>
+          </div>
+        </div>
+        <!-- 相关资讯（design/07）：与「雪球讨论」并列——第 3 层（资讯 × 雪球交叉分析）的落点。
+             未总结条目 summary/sentiment 为 NULL 而非 0，显示「待总结」不可当「中性」 -->
+        <div v-if="newsData && newsData.count > 0">
+          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 相关资讯 <span style="font-size:11px;color:var(--c-text-dim)">{{newsData.count}} 条 · 近 {{newsData.days}} 天</span></h4>
+          <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
+            <span v-for="(v,k) in newsData.by_category" :key="k" style="margin-right:8px">{{NEWS_CAT_NAME[k]||k}} <b style="color:var(--c-text)">{{v}}</b></span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div v-for="n in newsData.data" :key="n.id" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+              <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-text-faint);margin-bottom:3px">
+                <span>{{(n.published_at||'').slice(5)}}</span>
+                <span :style="{color:NEWS_CAT_COLOR[n.category]||'var(--c-text-dim)',fontWeight:600}">{{NEWS_CAT_NAME[n.category]||n.category}}</span>
+                <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:rgba(239,68,68,0.16);color:#ef4444;border-radius:8px;padding:0 5px;font-weight:600">重</span>
+                <span v-else-if="n.importance===2" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">中</span>
+                <!-- 未总结才显示「待总结」：imp=1 是合法等级（不显示徽标），不能落到 else 里被当成未总结 -->
+                <span v-else-if="n.importance===null" style="background:rgba(148,163,184,0.13);border-radius:8px;padding:0 5px">待总结</span>
+                <span v-if="newsSentiOf(n.sentiment)" :style="{color:newsSentiOf(n.sentiment).c,background:'rgba(148,163,184,0.18)',borderRadius:'8px',padding:'0 5px',fontWeight:600}">{{newsSentiOf(n.sentiment).t}}</span>
+                <a v-if="n.url" :href="n.url" target="_blank" rel="noopener" style="margin-left:auto;flex-shrink:0;color:var(--c-info)">原文</a>
+              </div>
+              <div class="side-text" :title="n.title">{{n.title}}</div>
+              <div v-if="n.summary" class="side-text" style="color:var(--c-text-dim);margin-top:2px" :title="n.summary">{{n.summary}}</div>
             </div>
           </div>
         </div>
@@ -417,6 +441,13 @@ const toplistData = ref([])  // 龙虎榜上榜记录
 const chipData = ref(null)   // 筹码分布（现价口径）
 const sigData = ref([])      // 模型信号史（含前瞻收益）
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
+const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
+// 资讯分类标识色属「质量/状态域」，不表达涨跌方向，故不受红绿铁律约束
+const NEWS_CAT_NAME = { flash:'快讯', stock_news:'个股', report:'研报', notice:'公告' }
+const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'#a78bfa', notice:'#f59e0b' }
+// 资讯情绪（对个股的利好/利空）与雪球帖的看多/看空同属方向域，用同一套红绿、文案各异
+const NEWS_SENTI = {1:{t:'利好',c:UP_COLOR}, 0:{t:'中性',c:'var(--c-text-faint)'}, '-1':{t:'利空',c:DOWN_COLOR}}
+const newsSentiOf = s => (s===null||s===undefined) ? null : (NEWS_SENTI[s] || null)
 // 情绪占比条段：按"已打分帖数"归一（不含未打分帖），0 帖的段不占宽度
 const sentiSegs = computed(() => {
   const s = xqData.value?.sentiment
@@ -497,6 +528,9 @@ async function load(){
   notFound.value = false
   detail.value = null
   hoverInfo.value = null
+  // 清掉上一只票的资讯：扩展数据是 best-effort 补的，不清会在「新票无资讯/请求失败」
+  // 时把上只票的资讯留在侧栏（跨股票串数据，比空白更难察觉）
+  newsData.value = null
   updateNav()
   try{
     const [r1, r2] = await Promise.all([
@@ -533,6 +567,8 @@ async function load(){
     axios.get(API+'/api/stock/'+code.value+'/chip').then(r=>{ chipData.value = r.data }),
     axios.get(API+'/api/stock/'+code.value+'/signals?days=1095').then(r=>{ sigData.value = r.data.data||[] }),
     axios.get(API+'/api/stock/'+code.value+'/xueqiu').then(r=>{ xqData.value = r.data }),
+    // 相关资讯：min_importance=0 全取（含待总结），重要度交给前端徽标表达
+    axios.get(API+'/api/stock/'+code.value+'/news?days=30&limit=20').then(r=>{ newsData.value = r.data }),
   ])
   computeSigStats()
   await nextTick()
@@ -1078,8 +1114,8 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()
 .dt-grp-tag .n-tag__close { opacity: 0; transition: opacity .15s; }
 .dt-grp-tag:hover .n-tag__close { opacity: 1; }
 
-/* 雪球热帖：两行截断，全文 hover title */
-.xq-hot-text {
+/* 侧栏文本块（雪球热帖 / 相关资讯标题与摘要）：两行截断，全文 hover title */
+.side-text {
   font-size: 11px; line-height: 1.55; color: var(--c-text);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; word-break: break-word;

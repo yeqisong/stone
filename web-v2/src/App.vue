@@ -49,6 +49,7 @@
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='l'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StocksView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='n'" style="flex:1;min-height:0;display:flex;flex-direction:column"><NewsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='u'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
@@ -154,6 +155,7 @@ import SignalsView from './components/SignalsView.vue'
 import TreemapView from './components/TreemapView.vue'
 import StocksView from './components/StocksView.vue'
 import StockFundView from './components/StockFundView.vue'
+import NewsView from './components/NewsView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 
@@ -180,6 +182,7 @@ const primaryTabs = [
   { key: 'm', label: '选股' },
   { key: 's', label: '信号' },
   { key: 'l', label: '个股', icon: 'filter' },
+  { key: 'n', label: '资讯', icon: 'news' },
   { key: 'x', label: '状态' },
 ]
 const adminTabs = [
@@ -219,6 +222,7 @@ const titleMap = {
   m: '选股 - 市值 - K道',
   s: '买点信号 - K道',
   l: '个股列表 - K道',
+  n: '新闻资讯 - K道',
   d: '个股详情 - K道',
   x: '数据状态 - K道',
   a: '模型管理 - K道',

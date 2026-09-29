@@ -48,13 +48,14 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
 - **`app/`** — FastAPI 后端
   - `app/main.py` — 入口，16 个 router + CORS + 前端静态 + lifespan（init_db→entity_stats→模型恢复→WS→cron）
   - `app/config.py` — 配置管理（Settings）
-  - `app/db/` — 数据库连接（connection.py 双引擎）+ 47 张表 DDL（feature_values 按年分区，库内实际 70 张）+ init_db 幂等迁移（schema.py）
+  - `app/db/` — 数据库连接（connection.py 双引擎）+ 59 个 DDL 常量（5 个视图 + 表；feature_values 按年分区，库内 public 实有 88 表 / 5 视图）+ init_db 幂等迁移（schema.py）
   - `app/api/` — REST API 路由：
     - `portfolio.py` / `treemap.py` / `signals.py` / `stock.py` / `stocks.py` — 持仓/树图/信号/详情/列表
     - `risk.py` — 风控规则与告警查询（/api/risk/*）
     - `status.py` — 数据状态/DAG 触发/WS/系统指标/**tushare_quota**
     - `settings.py` / `models.py` / `functions.py` / `features.py` / `kepl.py` — 配置/模型/函数/特征/KEPL
     - `dag_types.py` / `dag_flows.py` — DAG 节点类型 / 动态流程编排 + 执行
+    - `news.py` — 新闻资讯（GET /api/news 列表筛选分页、/api/news/health 各源三态、/api/news/{id} 详情；个股侧 `/stock/{code}/news` 在 stock.py）
   - `app/risk.py` — 风控规则引擎（止损/回撤熔断/行业上限；规则存 strategy_config，paper_portfolio 节点每日评估，告警走 WS 推送）
   - `app/auth/` — JWT 认证 + 登录（单用户，环境变量密码）
   - `app/task/` — TaskManager 统一任务机制（并发≤5、同流程互斥、WS 推送）
@@ -68,7 +69,8 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `adapters/` — `tushare_adapter.py`（主源，按交易日全市场）+ `baostock_adapter.py`（补充器）+ `tushare_quota.py`（配额计数）+ `manager.py`（主源直取 + 补充器健康缓存）+ `base.py`（标准化 dataclass）
   - `backfill.py` — 历史补数管理器（按交易日逐日拉取、断点续传按日期完整度 80% 阈值、配额预算、补充器分批提交+可取消）
   - `trade_calendar.py` — 交易日历同步（baostock 唯一源）
-  - `writers.py` — 批量 UPSERT（kline/fundamentals）+ 市值补全 + 基本面 ROE 补充
+  - `writers.py` — 批量 UPSERT（kline/fundamentals）+ 市值补全 + 基本面 ROE 补充 + 新闻（news_item/news_stock 批量 UPSERT + 幂等键/跨源哈希查询）
+  - `news/` — 资讯采集（`sources.py` 六源公开 JSON 接口 HTTP 抓取 + `em_get()` 东财节流、`match.py` 关注池文本→个股匹配（纯函数）、`collect.py` 编排：快讯主备切换 / 关注池分片轮转 / 巨潮 orgId 映射 / 两层幂等 flush）；连通性自检 `python -m crawler.news.sources`
 
 - **`scripts/`** — 调度与计算层
   - `pipeline.py` — 全部 dag_task_* 节点函数 + NODE_FN_MAP（14 节点）+ 模型训练 + generate_stats；**模型评估链路已抽为模块级函数**（`prepare_model_frame` 预处理+标签 / `build_targets` 标签 / `run_training_backtest` 回测内核 / `pred_score` 预测入口），训练节点与复评脚本共用同一实现；v3.9.2 起训练支持 `selection_cv`（purged time-series CV 超参选择，折前 embargo ≥ 标签前瞻，启用后 val 不参与选择成为诚实 OOS）与 `ensemble.seeds`（多种子平均，SeedEnsemble/ProbaSeedEnsemble 单 pkl 对 pred_score 透明——回归成员不定义 predict_proba 否则 hasattr 探测误入概率分支）；模块级还有 `cross_sectional_rank_ic`/`benchmark_window_stats`/`compute_gap_decomposition`（差距三分解，供训练与复评共用）
@@ -77,6 +79,9 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `eval_version.py` — 对**已训练**模型重跑评估（不重训），覆盖 backtest_records / backtest_daily_records / model_versions 指标；改引擎口径或修数据后想拿干净数字就用它，不必等 40 分钟重训。默认跑 T+0/T+1 双口径四遍回测 + RankIC 三窗 + 基准环境，报告带 sample_domain（三切分/成交时点/成本参数）、逐周期成本拖累与 gap_decomposition（Val-Test 差距三分解：执行口径/环境/模型排序力）；`--end` 钉死窗口做复现对照（窗随日历前移时切分日会漂移，数字微动属正常）
   - `repair_zero_prices.py` — 存量零价停牌行修复（沿用上一收盘；默认试运行，`--apply` 执行）
   - `repair_adj_factor.py` — 复权因子一致性自愈（tushare 回溯性重定基 → 半修正窗口造成跨界假跳变；`--check` 体检、`--apply` 重写 close_hfq、`--apply --features` 连特征重算）。日常由 DAG 节点 `factor_heal` 自动跑（kline 之后、feature_compute 之前）
+  - `llm_batch.py` — 批量 LLM 公共件（JSON 数组提取 + 幻觉 id 回收 + RPM 滑动窗口闸门 + 线程池 + 折半重试），雪球打分与资讯总结共用；**并发只在 LLM 调用，落库固定回主线程**（psycopg2 连接不可跨线程）
+  - `news_summary.py` — 资讯逐条总结（`PROMPT_VER='n1'`：一次调用出摘要/重要度 1-3/主题/情绪；只取未总结的 → 幂等自愈）；`summarize_pending()` 为 CLI 与 DAG 节点共用入口
+  - `xueqiu_sentiment.py` — 雪球帖 LLM 情绪打分（`heat≥5` 取热帖；评分逻辑已改为引用 `llm_batch`）
   - `scan_gate.py` — 闸门前沿重扫（熔断档位 × regime 空仓闸门 × trailing × 持有期），完全复用 eval_version 载入路径与 pipeline 四件套；跑前先复现现行档锚点数字，锚不中说明 harness 有 bug 网格作废；结果 CSV 落 data/，不改生产配置
   - `cron_scheduler.py` — cron 定时触发（last_run_at 幂等，60s 扫描）
   - `daily_crawl.sh` — 触发 dag_flows 已发布流程（不再直接调用采集）
@@ -86,9 +91,9 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
 
 - **`web-v2/`** — 前端 V2
   - Vue 3 + Vite + Naive UI + ECharts + Pinia + Vue Flow (DAG 流程图) + Monaco Editor (代码编辑)
-  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, StockFundView, DagNode
+  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, StockFundView, DagNode, NewsView
   - 5 个 Pinia Store: `auth`, `nav`, `model`, `market`, `theme`
-  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, x=状态, a=模型, f=函数, e=特征, g=DAG, u=证券主档, d=详情, v=特征详情, q=日志, r=流程查看
+  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, n=资讯, x=状态, a=模型, f=函数, e=特征, g=DAG, u=证券主档, d=详情, v=特征详情, q=日志, r=流程查看
   - 自研 hash 路由（stores/nav.js），无 vue-router；WS 监听 `addWsListener` 返回取消函数（onUnmounted 必清理）
 
 - **`nginx/`** — Nginx 配置（default.conf 容器内 / host-nginx.conf 宿主机）
@@ -106,14 +111,15 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
                       ├─ Baostock 补充器（ROE/ETF复权，补数场景分批）
                       ├─ treemap/stats/completeness/entity_stats（统计表缓存）
                       ├─ feature_compute（KEPL → feature_values）
-                      └─ model_signal / model_health（ACTIVE 模型）
+                      ├─ model_signal / model_health（ACTIVE 模型）
+                      └─ news_crawl / news_summary（财联社等六源 → news_item → LLM 总结，每 20 分钟）
                                       ↓
               Vue 前端 ← REST API + WS 推送（配额/任务/补数进度实时）
                  ↓
              飞书 Bot (DeepSeek AI 对话)
 ```
 
-### 关键数据表（SQL schema in `app/db/schema.py`, 47 张 DDL / 库内含分区 70 张）
+### 关键数据表（SQL schema in `app/db/schema.py`, 59 个 DDL 常量 / 库内 public 88 表 5 视图）
 - **行情**: `trade_calendar`, `stock_master`, `daily_quote`, `index_daily_quote`
 - **基本面**: `stock_fundamentals`(PK: code+trade_date), `stock_fundamentals_history`
 - **业务**: `portfolio`, `portfolio_history`, `signal_history`, `stock_treemap_cache`
@@ -122,6 +128,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **DAG**: `dag_config`, `dag_run_log`, `dag_flows`, `dag_flow_versions`, `backfill_tasks`
 - **统计/系统**: `daily_completeness`, `data_stats_cache`, `entity_stats`, `system_metrics`, `strategy_config`, **`tushare_quota`**, `data_lineage`（血缘台账）
 - **风控**: `risk_alerts`（规则引擎告警：止损/回撤熔断/行业上限，WS→Chrome 通知）
+- **资讯**: `news_item`（原文：四源六源幂等键 `(source, source_id)`，**不分区**）、`news_stock`（资讯↔个股，`rel=src|match`）、`news_summary`（LLM 派生：摘要/重要度/主题/情绪，**未总结=NULL 不是 0**）、`news_crawl_state`（各源游标与健康）、`news_poll_state`（关注池轮转 + 巨潮 orgId 缓存）；视图 `v_focus_pool`（持仓∪自选）与 `v_news_feed`（原文 LEFT JOIN 总结）。第 3 层（资讯×雪球交叉）只预留字段未实现，见 `design/07`
 - **拓展**: `stock_moneyflow`（已接入：每日 DAG 节点 + KEPL 字段 + 2010 起历史回补完成）、`stock_top_list` / `stock_margin_detail` / `stock_holder_number`（表就绪，采集链路未接入）、`stock_hk_hold`（北向个股披露 2024-08 停止，数据源失效，保留表结构）
 
 ## Conventions
@@ -232,6 +239,7 @@ ssh myhuawei "docker logs stock-app --tail 20"
 
 ## Notes
 
+- **v3.10.0（2026-09-29）**：新闻资讯模块第 1+2 层（design/07）——①四类六源采集：快讯（财联社主 / 东财7×24 / 华尔街见闻**主备切换**，三源全收会把近重复内容与 LLM 成本翻三倍）、关注池个股新闻、研报（qType 0 个股 / 1 行业）、巨潮公告；全部公开 JSON 接口零 key，东财侧统一走 `em_get()` 节流（实测风控线 5/s、200/min）。②五表两视图（`news_item` 不分区；`news_stock` src/match；`news_summary` 含第 3 层预留的 `sentiment`；`news_crawl_state`/`news_poll_state`；`v_focus_pool`/`v_news_feed`）。③LLM 逐条总结（`PROMPT_VER='n1'` 一次出摘要/重要度/主题/情绪），抽公共件 `scripts/llm_batch.py` 与雪球打分共用（RPM 闸门 + 线程池 + 折半重试）。④DAG 流程「新闻资讯」`*/20 * * * *`（cron→news_crawl→news_summary）+ 资讯页 tab / 详情页「相关资讯」块 / 状态页卡片。冒烟：六源全部取到数据、连续两轮幂等（第二轮「跳过已存在 109」）、冷启动积压 199→18（18 条为 provider 瞬时失败，单条重发 10/10 成功，下轮自动重试）。教训：**幂等主键必须是 `(source, source_id)`，`content_hash` 只能做跨源去重**（正文回填会改 content，用哈希判幂等会静默丢同源多份文档）；巨潮 orgId 兜底猜测（`gssz0302874`）返回 0 条与「没公告」无法区分，已改为缺失即报错；未总结必须是 NULL 而非 0，且按重要度过滤要保留 NULL 行，否则「刚采集完还没总结」的窗口里列表空空而库里有数据
 - **v3.9.2（2026-09-15）**：过拟合治理两件套——①评估报告 Val-Test 差距三分解（gap_decomposition：执行口径 T+0/T+1、环境 基准年化三窗、模型 RankIC 三窗 + per_label 归因结论），eval_version 默认双口径四遍回测；ModelEval 拟合度判读改按 T+1 诚实口径并新增「差距分解」卡。定论（v15.0 实测）：gap 2.50 里 10d 周期在 T+1 下消失（执行口径伪影）、RankIC val≈test 无退化（环境切换主导）、train 段回测反而最差（平市）——真模型侧份额仅 ~0.3-0.5 选择偏差。②训练侧 purged CV（selection_cv，治选择偏差）+ 多种子集成（ensemble.seeds，治方差）。冒烟 v18.0 验证全链路（CV 选择→集成 pkl→分解报告→血缘）。教训：X_train 是 DataFrame，非连续行集必须 .iloc；回归集成不得定义 predict_proba；实时库上「逐位复现存档」只在数据静态时成立（每日采集/特征补窗会让窗口内自然长行，昨 3,453,426 → 今 3,458,568）
 - **v3.9.1（2026-09-14）**：闸门重扫与运维三件套——①`scan_gate.py` 闸门前沿重扫（干净基线验证 F1 档，锚点复现存档数字后方可采信网格）②`rolling_retrain` DAG 节点：模型新鲜度守护（ACTIVE 超阈值写 risk_alerts kind='model_stale' 走既有 WS/Chrome 通道；超重训阈值且无在途候选/不在冷却期时克隆 ACTIVE 自动起训，产物只落 DRAFT 人工激活，参数在 strategy_config.model_freshness）③数据血缘台账 data_lineage + /api/lineage（模型↔数据漂移一查便知）④评估口径补齐：run_training_backtest 增 exec_lag（T+1 次日收盘成交对照）与 total_cost/cost_pct（只读观测），bt_summary/eval 报告增 sample_domain（三切分+成交时点+成本参数）。教训：psycopg2 读会话长事务持锁，独立脚本读完务必 commit（曾把后端 init_db 的 ALTER 卡进锁队列）
 - **v3.8.0（2026-09-02）**：特征引擎并行化与五步拓展——①alpha158_full 并行引擎（每年宽表单次拉取共享 + fork 多进程各自 engine，全量 1140 因子年 30h→1.5h；进度文件迁仓库根 .a158_full_progress.json）②KEPL `neut(字段)` 截面中性化算子（市值+行业哑变量逐日 OLS 残差）+ 训练/评估/预测 `feature_neut` 钩子（先中性化后 cs_rank）+ ModelView 开关 ③资金流接入（moneyflow DAG 节点 + KEPL 5 字段 + 2010 起历史回补 4047 天全量；tushare 真实列名 *_amount，hk_hold 因北向披露停止撤销）④风控引擎 app/risk.py（止损/回撤熔断/行业上限，risk_alerts 表，WS 推送 type='risk_alert' → Chrome 通知，顶栏铃铛开关；paper 持仓口径必须 close_hfq）⑤feature_values 按年分区（零拷贝 legacy-attach 2017-2027 + 前瞻分区 + DEFAULT；init_db 升级 $-quote 感知切分 + 动态分区确保块；删老年份=DROP PARTITION）⑥数据治理：特征库十年保留（13.1 亿→3.25 亿行重建，value float8，砍 idx_fv_stock_date）、WSL 迁 D:\WSL（vhdx compact 444→335G）、ANALYZE 节点上流程（数据页统计过期防治）、start_local.sh pg_isready 等待 + a158/资金流回补自愈续跑、turnover_rev 按修复引擎重算（373.8 万行）

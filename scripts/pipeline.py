@@ -370,6 +370,11 @@ def update_node_progress(log_id: int = None, trade_date: str = '', node_name: st
             where = "WHERE id = :lid"
             params = {"lid": log_id}
         else:
+            if not trade_date or not node_name:
+                # 无 DAG 上下文（函数直调）：空串绑 DATE 列会报 InvalidDatetimeFormat，
+                # 与 write_node_log 同一处置——没有可匹配的行，直接返回。
+                db.close()
+                return
             where = "WHERE trade_date=:d AND node_name=:n AND run_id=:rid AND status='running'"
             params = {"d": trade_date, "n": node_name, "rid": run_id}
         if detail is not None:
@@ -4649,6 +4654,141 @@ def dag_task_xueqiu_sentiment(trade_date=None, **kw):
         raise
 
 
+def dag_task_news_crawl(trade_date=None, **kw):
+    """DAG 节点：资讯采集（design/07 第 1 层）——快讯增量 + 关注池分片个股新闻/研报/公告。
+
+    - 快讯走主备（财联社 → 东财7×24 → 华尔街见闻），第一个成功即止
+    - 个股新闻/研报/公告只采关注池（持仓 ∪ 自选），按 last_fetched_at 分片轮转，
+      把请求速率压在东财风控线（5/s、200/min）以内
+    - 幂等：唯一键 (source, source_id) 去重 + 轮转状态推进，故 20 分钟一轮不会重复；
+      机器关机漏掉的轮次由下一轮自愈（无日期窗口）
+    - 参数在 strategy_config.news_collect
+    """
+    from datetime import date; td = str(trade_date or date.today())[:10]; rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('news_crawl')
+    write_node_log(log_id=log_id, status='running', detail='资讯采集中',
+                   trade_date=td, node_name='news_crawl', run_id=rid)
+
+    def _run():
+        from app.db.connection import get_sync_db
+        from crawler.news.collect import collect_once, load_cfg
+
+        db = get_sync_db()
+        try:
+            cfg = load_cfg(db)
+
+            def _hb(done, total, msg):
+                update_node_progress(log_id=log_id, rows=done, detail=msg)
+
+            return collect_once(db, cfg, progress_cb=_hb)
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='news_crawl')
+        src = r.get('flash_source') or '（快讯全源失败）'
+        note = (f"入库 {r.get('inserted', 0)} 条（快讯 {r.get('flash', 0)}/{src}"
+                f"，关注池 {r.get('pool', 0)}，行业研报 {r.get('industry_report', 0)}）"
+                f"；关联 {r.get('linked', 0)}（名称匹配 {r.get('matched', 0)}）"
+                f"，跳过已存在 {r.get('already', 0)}/跨源重复 {r.get('dup_skipped', 0)}"
+                f"；关注池 {r.get('focus_n', 0)} 只")
+        if r.get('flash_fallback'):
+            note += f"；快讯已切备源 {r['flash_fallback']}"
+        if r.get('flash_errors'):
+            note += f"；快讯失败源 {','.join(r['flash_errors'])}"
+        # 大面积失败必须显性化：各子步独立记 fail_streak，但整轮几乎全灭时
+        # 不能报 success（「全夜 100% 失败却报 success rows=0」的静默故障教训）
+        att, err = r.get('attempts', 0), r.get('errors', 0)
+        if att and err / att > 0.5:
+            write_node_log(log_id=log_id, status='failed',
+                           detail=f"大面积失败: {note}（{err}/{att} 子步失败，源侧不可用？"
+                                  f"未入库条目下轮自动重试）",
+                           trade_date=td, node_name='news_crawl', run_id=rid)
+            return r
+        write_node_log(log_id=log_id, status='success', rows=r.get('inserted', 0),
+                       detail=note, trade_date=td, node_name='news_crawl', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150],
+                       trade_date=td, node_name='news_crawl', run_id=rid)
+        raise
+
+
+def dag_task_news_summary(trade_date=None, **kw):
+    """DAG 节点：资讯 LLM 总结（design/07 第 2 层）。
+
+    一次调用出四字段：摘要 / 重要度 1-3 / 主题 / 情绪（情绪为第 3 层与雪球交叉预留）。
+    只取「未总结」的 → 幂等且天然断点续跑，LLM 不可用漏掉的批次下轮自动补上。
+    """
+    from datetime import date; td = str(trade_date or date.today())[:10]; rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('news_summary')
+    write_node_log(log_id=log_id, status='running', detail='资讯总结中',
+                   trade_date=td, node_name='news_summary', run_id=rid)
+
+    def _run():
+        import json as _json4
+        from sqlalchemy import text as _t4
+        from app.config import settings
+        from app.db.connection import get_sync_db
+        from scripts.news_summary import summarize_pending, PROMPT_VER
+
+        llm = settings.llm_config
+        if not llm['api_key']:
+            return {'skipped': 'LLM key 未配置（.env LLM_API_KEY 或 DEEPSEEK_API_KEY）'}
+
+        db = get_sync_db()
+        try:
+            row = db.execute(_t4(
+                "SELECT params FROM strategy_config WHERE strategy_name='news_summary'"
+            )).fetchone()
+            cfg = (_json4.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+            max_items = int(cfg.get('max_items', 3000))
+            min_len = int(cfg.get('min_len', 20))
+            workers = int(cfg.get('workers', 8))
+
+            from openai import OpenAI
+            client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+
+            def _hb(done, fail, total):
+                update_node_progress(
+                    log_id=log_id, rows=done,
+                    detail=f'资讯总结 {done}/{total}（失败 {fail}，{llm["model"]}/{PROMPT_VER}）')
+
+            r = summarize_pending(db, client, llm['model'], limit=max_items,
+                                  min_len=min_len, workers=workers, progress_cb=_hb)
+            r['model'] = llm['model']
+            r['prompt_ver'] = PROMPT_VER
+            return r
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='news_summary')
+        if r.get('skipped'):
+            write_node_log(log_id=log_id, status='success', rows=0, detail=r['skipped'],
+                           trade_date=td, node_name='news_summary', run_id=rid)
+            return r
+        note = (f"总结 {r.get('done', 0)}/{r.get('total', 0)} 条（失败 {r.get('fail', 0)}）"
+                f" {r.get('model', '')}/{r.get('prompt_ver', '')}"
+                f" 用时 {r.get('elapsed', 0) / 60:.1f}min")
+        tot = (r.get('done', 0) or 0) + (r.get('fail', 0) or 0)
+        if tot and (r.get('fail', 0) or 0) / tot > 0.5:
+            write_node_log(log_id=log_id, status='failed',
+                           detail=f"大面积失败: {note}（LLM 侧不可用？未总结条目保持未总结，"
+                                  f"下轮自动重试）",
+                           trade_date=td, node_name='news_summary', run_id=rid)
+            return r
+        if r.get('fail'):
+            note += '；失败条目未落库，下轮自动重试'
+        write_node_log(log_id=log_id, status='success', rows=r.get('done', 0), detail=note,
+                       trade_date=td, node_name='news_summary', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:150],
+                       trade_date=td, node_name='news_summary', run_id=rid)
+        raise
+
+
 # ── 拓展数据采集器（每日节点与 data_backfill 回补共用，step2 扩展）──
 
 def _ext_moneyflow(source, db, td):
@@ -5126,6 +5266,8 @@ NODE_FN_MAP = {
     'paper_portfolio':    dag_task_paper_portfolio_all,
     'moneyflow':         dag_task_moneyflow,
     'xueqiu_sentiment':  dag_task_xueqiu_sentiment,
+    'news_crawl':        dag_task_news_crawl,
+    'news_summary':      dag_task_news_summary,
     'analyze':           dag_task_analyze,
     **{n: _make_ext_node(n, f'DAG 节点：{n} 拓展数据采集') for n in (
         'top_list', 'margin_detail', 'moneyflow_hsgt', 'block_trade', 'share_float',

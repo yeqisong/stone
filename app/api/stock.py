@@ -780,3 +780,41 @@ def get_stock_minkline(code: str, period: str = Query("m5"),
     if len(_mk_cache) > 500:   # 防无限膨胀（活跃访问的 code×period 组合远小于此）
         _mk_cache.clear()
     return payload
+
+
+@router.get("/stock/{code}/news")
+def get_stock_news(code: str, days: int = Query(30, ge=1, le=365),
+                   limit: int = Query(20, ge=1, le=100),
+                   min_importance: int = Query(0, ge=0, le=3)):
+    """个股相关资讯（详情页「相关资讯」块）。
+
+    关联口径含两层：rel='src'（源自带股票标注）与 rel='match'（关注池名称匹配）。
+    summary/importance/sentiment 为 NULL 表示尚未 LLM 总结——前端需与「中性」区分显示。
+    """
+    db = get_sync_db()
+    rows = db.execute(text("""
+        SELECT n.id, n.source, n.category, n.published_at, n.title, n.summary,
+               n.importance, n.topics, n.sentiment, n.url, ns.rel
+        FROM news_stock ns
+        JOIN v_news_feed n ON n.id = ns.news_id
+        WHERE ns.stock_code = :c
+          AND n.published_at >= now() - make_interval(days => :d)
+          AND (:imp = 0 OR n.importance >= :imp)
+        ORDER BY n.published_at DESC
+        LIMIT :lim
+    """), {'c': code, 'd': days, 'imp': min_importance, 'lim': limit}).fetchall()
+    by_cat = {}
+    for r in rows:
+        by_cat[r[2]] = by_cat.get(r[2], 0) + 1
+    result = {
+        'code': code, 'days': days, 'count': len(rows), 'by_category': by_cat,
+        'data': [{
+            'id': r[0], 'source': r[1], 'category': r[2],
+            'published_at': r[3].strftime('%Y-%m-%d %H:%M') if r[3] else None,
+            'title': r[4], 'summary': r[5], 'importance': r[6],
+            'topics': [t for t in (r[7] or '').split(',') if t],
+            'sentiment': r[8], 'url': r[9], 'rel': r[10],
+        } for r in rows],
+    }
+    db.close()
+    return result

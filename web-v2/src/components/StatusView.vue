@@ -70,6 +70,20 @@
           <div style="font-size:10px;color:var(--c-text-faint);white-space:nowrap">{{ xqSub }}</div>
         </div>
       </div>
+      <!-- 新闻资讯采集：DAG 定时流程（每 20 分钟一轮），灯色取各源最差态（设计 07） -->
+      <div v-if="news" style="display:flex;align-items:baseline;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :title="newsTip">
+        <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
+          <span style="display:inline-flex;align-items:center;gap:4px;position:relative;top:1px">
+            <span :style="{width:'7px',height:'7px',borderRadius:'50%',background:newsLight.color,animation:newsLight.pulse?'xqPulse 2s infinite':'none',flexShrink:0}"></span>
+            <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">新闻资讯</span>
+          </span>
+          <span :style="{fontSize:'10px',color:newsLight.color,whiteSpace:'nowrap',fontWeight:600}">{{newsLight.label}}</span>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:14px;font-weight:700;color:var(--c-text)">{{ news.total ?? '-' }} <span style="font-size:10px;font-weight:400;color:var(--c-text-dimmer)">条</span></div>
+          <div style="font-size:10px;color:var(--c-text-faint);white-space:nowrap" :style="news.pending_summary>0?{color:'#f59e0b'}:{}">{{ newsSub }}</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -451,17 +465,60 @@ async function loadXq() {
   }
 }
 
+// ── 新闻资讯采集（DAG 定时流程，每 20 分钟一轮）──
+const news = ref(null)
+const NSRC_NAME = { cls:'财联社', em724:'东财7×24', wscn:'华尔街见闻', em_stock:'关注池个股',
+                    em_report:'个股研报', em_report_industry:'行业研报', cninfo:'公告', cninfo_orgid:'巨潮映射' }
+// 灯色取 health 的 status（各源最差态，后端已按各源轮询节奏换算成时间阈值）
+const newsLight = computed(() => {
+  const s = news.value?.status
+  if (s === 'ok') return { color: '#10b981', label: '采集中', pulse: true }
+  if (s === 'degraded') return { color: '#f59e0b', label: '延迟', pulse: true }
+  return { color: '#ef4444', label: '已停摆', pulse: false }
+})
+const newsSub = computed(() => {
+  const d = news.value
+  if (!d) return ''
+  const parts = []
+  if (d.today != null) parts.push(`今日 ${d.today} 条`)
+  // 未总结积压要显性：总结节点被中断/LLM 失败时 backlog 会一直涨（本卡唯一的滞后信号）
+  if (d.pending_summary > 0) parts.push(`待总结 ${d.pending_summary}`)
+  return parts.join(' · ')
+})
+const newsTip = computed(() => {
+  const d = news.value
+  if (!d) return ''
+  const lines = (d.sources || []).map(s =>
+    `${NSRC_NAME[s.source] || s.source}：${s.age_min != null ? s.age_min + ' 分钟前' : '未采集'}`
+    + `${s.last_ok ? '' : `（连续失败 ${s.fail_streak}）`}${s.note ? ' · ' + s.note : ''}`)
+  lines.push(`累计 ${d.total} 条 · 今日 ${d.today} 条（快讯 ${d.today_flash}）· 已总结 ${d.summarized}（今日 ${d.summarized_today}）`)
+  lines.push(`待总结 ${d.pending_summary} · 关注池 ${d.focus_n} 只`)
+  return lines.join('\n')
+})
+
+async function loadNews() {
+  try {
+    const r = await axios.get(API + '/api/news/health')
+    news.value = r.data || {}
+  } catch(e) {
+    // 同雪球卡：接口不可达也亮红灯，不让卡片静默消失
+    news.value = { status: 'down', total: null, pending_summary: 0, sources: [] }
+  }
+}
+
 
 onMounted(() => {
   loadDataStatus()
   loadDataSources()
   loadQuota()
   loadXq()
+  loadNews()
   loadSysMetrics()
   loadPref()
   // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
   quotaTimer = setInterval(loadQuota, 30000)
   xqTimer = setInterval(loadXq, 30000)
+  newsTimer = setInterval(loadNews, 30000)
   wsUnwatch.value = addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
@@ -500,7 +557,8 @@ onMounted(() => {
 const wsUnwatch = ref(null)
 let quotaTimer = null
 let xqTimer = null
-onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer) })
+let newsTimer = null
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer) })
 
 // ── 历史补数 ──
 

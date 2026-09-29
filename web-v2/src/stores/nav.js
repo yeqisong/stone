@@ -49,7 +49,7 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
   }
@@ -98,6 +98,14 @@ export const useNavStore = defineStore('nav', () => {
       case 'r': target = '/dag-flow-view/' + (flowId.value || ''); break
       case 'u': target = '/stock-fund/' + stockFundType.value; break
       case 'w': target = '/dbx'; break
+      case 'n': {
+        // 同 'l'：保留列表页查询参数（cat/kw/imp/sf/page，NewsView 维护），
+        // 否则 history.back() 回列表时页码/筛选全部丢失
+        const cur = location.hash.slice(1)
+        const qm = cur.startsWith('/news') && cur.includes('?') ? cur.slice(cur.indexOf('?')) : ''
+        target = '/news' + qm
+        break
+      }
       default: target = '/'
     }
     if (location.hash.slice(1) !== target) history.pushState(null, '', '#'+target)

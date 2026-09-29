@@ -148,6 +148,8 @@ app.include_router(models_router, prefix="/api")
 app.include_router(functions_router, prefix="/api")
 app.include_router(features_router, prefix="/api")
 app.include_router(kepl_router, prefix="/api")
+from app.api.news import router as news_router
+app.include_router(news_router, prefix="/api")
 from app.api.dbexplorer import router as dbex_router
 app.include_router(dbex_router, prefix="/api")
 app.include_router(lineage_router, prefix="/api")

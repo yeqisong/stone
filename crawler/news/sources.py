@@ -459,8 +459,9 @@ def _map_report(r: dict, qtype: str = '0') -> dict | None:
                                            'predictNextTwoYearEps') if r.get(k))
     if eps:
         parts.append(f'EPS预测：{eps}')
-    if r.get('reportType'):
-        parts.append(str(r['reportType']))
+    rtype = str(r.get('reportType') or '').strip()
+    if rtype and not rtype.isdigit():        # reportType 多为数字码，拼进正文是噪音
+        parts.append(rtype)
     code = norm_code(r.get('stockCode'))
     extra = {
         'org': r.get('orgSName'), 'org_full': r.get('orgName'),
