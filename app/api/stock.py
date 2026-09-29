@@ -254,9 +254,11 @@ def get_stock_kline(
             ), {"c": code}).scalar()
 
         if stype == 'index':
-            # 指数：从 index_daily_quote 获取（无复权概念），days 限制最近 N 个交易日
+            # 指数：从 index_daily_quote 获取（无复权概念），days 限制最近 N 个交易日。
+            # 表里没有 turnover 列（查询它曾整接口 500，详情页沪深300 基准被 allSettled
+            # 静默吞掉）；下游聚合与载荷都是 getattr/g('turnover') 取值，缺列安全落到 None
             result = db.execute(text("""
-                SELECT trade_date, open, high, low, close, volume, amount, turnover
+                SELECT trade_date, open, high, low, close, volume, amount
                 FROM index_daily_quote WHERE index_code=:c
                 ORDER BY trade_date DESC LIMIT :days
             """), {"c": code, "days": days})
