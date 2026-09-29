@@ -77,6 +77,25 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+        # 回收卡死的 DAG 运行日志：节点都跑在本进程内，启动瞬间不可能有在途运行，
+        # 故所有 pending/running 行都属于已死进程（重启/宕机 kill 掉的在途轮次）。
+        # 不清扫的话这些行永远停在「待进行/进行中」，运行日志页留下从不清尾的假在途行，
+        # 且「看数据表还是看运行日志判断节点跑没跑过」会产生分歧（design/07 §6.1）
+        try:
+            r = db.execute(text("""
+                UPDATE dag_run_log
+                SET status='failed', finished_at=now(),
+                    detail = coalesce(nullif(detail, '') || '；', '')
+                             || '进程重启中断（启动清扫器收尾；幂等节点由下一轮自愈）'
+                WHERE status IN ('pending', 'running')
+            """))
+            db.commit()
+            if r.rowcount > 0:
+                logger.info(f"[startup] 回收卡死运行日志: {r.rowcount} 行 pending/running→failed")
+        except Exception as e:
+            logger.warning(f"[startup] 卡死运行日志回收失败（非致命）: {e}")
+            db.rollback()
+
         # tushare 配额计数恢复：内存单例随进程重启归零，会令补数预算/熔断判断
         # （remaining() < 10 中止、≤reserve 收尾）误以为额度充足而超用当日限额
         try:
