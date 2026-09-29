@@ -528,9 +528,18 @@ async function load(){
   notFound.value = false
   detail.value = null
   hoverInfo.value = null
-  // 清掉上一只票的资讯：扩展数据是 best-effort 补的，不清会在「新票无资讯/请求失败」
-  // 时把上只票的资讯留在侧栏（跨股票串数据，比空白更难察觉）
+  // 清掉上一只票的全部扩展数据：这些都是 best-effort 补的（allSettled 吞错、空数据隐藏卡片），
+  // 不清会在「新票无数据/请求失败」时把上只票的内容留在侧栏与图表——跨股票串数据比空白更难察觉
+  xqData.value = null
   newsData.value = null
+  mfData.value = []; mfCum.value = []
+  benchData.value = []
+  marginData.value = []
+  toplistData.value = []
+  chipData.value = null
+  sigData.value = []
+  sigStats.value = null
+  peData.value = []   // 同上：新票 PE 拉空/失败时旧票 PE 图会残留（c5 图层不随 v-if 消失）
   updateNav()
   try{
     const [r1, r2] = await Promise.all([
@@ -548,7 +557,8 @@ async function load(){
   try{
     const r=await axios.get(API+'/api/stock/'+code.value+'/pe_history')
     if(r.data.data&&r.data.data.length){peData.value=r.data.data;nextTick(()=>drawPeChart())}
-  }catch(e){}
+    else clearPeChart()   // 新票无 PE 数据：清掉上一只票的图与标题区间
+  }catch(e){ clearPeChart() }
   // ── 扩展图数据（全部 best-effort：空数据隐藏卡片，异常不影响主图）──
   await Promise.allSettled([
     loadStockGroups(),
@@ -975,6 +985,14 @@ function computeSigStats(){
   sigStats.value = { n:d.length, years:3,
     buys:d.filter(x=>x.direction==='buy').length, sells:d.filter(x=>x.direction==='sell').length,
     f5:avg('f5d'), f10:avg('f10d'), f20:avg('f20d') }
+}
+
+// 换股票清掉 c5 画布上的旧 PE 图：c5 块无 v-if（DOM 常驻），只清 peData 不清实例的话
+// 旧图像素会一直挂着，看起来像新票的 PE
+function clearPeChart(){
+  const peEl = document.getElementById('c5')
+  if(peEl && peEl._echart) peEl._echart.clear()
+  peRange.value = ''
 }
 
 function drawPeChart(){
