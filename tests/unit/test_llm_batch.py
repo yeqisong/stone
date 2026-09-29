@@ -79,6 +79,22 @@ class TestRetrySplit:
     def test_single_failure_gives_nothing(self):
         assert lb.retry_split(lambda b: None, [1]) == []
 
+    def test_empty_result_counts_as_failure_and_halves(self):
+        # 回归（2026-09-29）：调用方把「模型回了但一条没回收到」也表示成 []，
+        # 旧版 is not None 会当成功收下 → 整批静默丢失、零重试、零日志
+        calls = []
+
+        def call(b):
+            calls.append(list(b))
+            return [] if len(b) > 2 else list(b)
+        got = lb.retry_split(call, [1, 2, 3, 4])
+        assert sorted(got) == [1, 2, 3, 4]        # 折半后救回
+        assert len(calls) > 1
+
+    def test_all_empty_ends_up_with_nothing(self):
+        got = lb.retry_split(lambda b: [], [1, 2, 3, 4])
+        assert got == []
+
     def test_empty_batch(self):
         assert lb.retry_split(lambda b: [1], []) == []
 
@@ -107,6 +123,31 @@ class TestRunBatches:
         r = lb.run_batches([1, 2], run_one, lambda b, res: None, workers=1, rpm=1000,
                            batch_size=2)
         assert r['done'] == 1 and r['fail'] == 1
+
+    def test_llm_json_batch_retries_on_empty_array(self, monkeypatch):
+        # 模型只回空数组 → 必须当失败重试，而不是当成功收下（同 retry_split 的回归）
+        class _Msg:
+            content = '```json\n[]\n```'
+
+        class _Choice:
+            message = _Msg()
+
+        class _Resp:
+            choices = [_Choice()]
+
+        class _Completions:
+            n = 0
+
+            def create(self, **kw):
+                _Completions.n += 1
+                return _Resp()
+
+        class _Client:
+            chat = type('C', (), {'completions': _Completions()})()
+
+        monkeypatch.setattr(lb.time, 'sleep', lambda s: None)
+        assert lb.llm_json_batch(_Client(), 'm', 'p', fail_max=2, log_tag='t') is None
+        assert _Completions.n == 2      # 空数组走了重试，没有一次就当成功
 
     def test_progress_cb_receives_running_totals(self):
         seen = []

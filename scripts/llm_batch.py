@@ -68,6 +68,10 @@ def llm_json_batch(client, model: str, prompt: str, *, fail_max: int = 3,
             arr = extract_json_array(resp.choices[0].message.content)
             if arr is None:
                 raise ValueError('输出中找不到合法 JSON 数组')
+            if not arr:
+                # 空数组不是成功：模型偶尔只给 []（或只回一个示例空壳），
+                # 当作成功会让整批静默计为失败且一次重试都不做
+                raise ValueError('输出中的 JSON 数组为空')
             return arr
         except Exception as e:
             logger.warning(f'[{log_tag}] 批次失败 第 {attempt} 次: {str(e)[:100]}')
@@ -80,16 +84,22 @@ def retry_split(call_fn, batch, *, log_tag: str = 'llm'):
     """整批失败时折半重试：单条坏 JSON 只牺牲自己，不拖累同批其余条目。
 
     call_fn(batch) 返回结果列表，失败返回 None。
+    **空列表按失败处理**（不是成功）：调用方把「模型返回了东西但一条都没回收到」也返回 []，
+    旧版 `is not None` 会把它当成功直接收下——整批静默计失败、一次折半都不做，日志里连一行
+    都没有（2026-09-29 资讯总结实测：连续两轮各有一整批 10 条这样消失）。折半后要么救回，
+    要么缩到单条把坏条目孤立出来。
     """
     if not batch:
         return []
     res = call_fn(batch)
-    if res is not None:
+    if res:
         return res
     if len(batch) == 1:
+        logger.warning(f'[{log_tag}] 单条失败，放弃 1 条')
         return []
     mid = len(batch) // 2
-    logger.warning(f'[{log_tag}] 批次失败，折半重试 {len(batch)} → {mid}+{len(batch) - mid}')
+    logger.warning(f'[{log_tag}] 批次失败（{"无结果" if not res else f"仅回收 {len(res)} 条"}），'
+                   f'折半重试 {len(batch)} → {mid}+{len(batch) - mid}')
     return (retry_split(call_fn, batch[:mid], log_tag=log_tag)
             + retry_split(call_fn, batch[mid:], log_tag=log_tag))
 
@@ -134,6 +144,10 @@ def run_batches(items, run_one, on_ok, *, workers: int = 8, rpm: int = 25,
             else:
                 on_ok(b, results)
                 done += len(results)
+                if len(results) < len(b):
+                    # 部分回收也要留痕：静默的「少了 3 条」是最难查的一类丢数据
+                    logger.warning(f'[{log_tag}] 批次仅回收 {len(results)}/{len(b)} 条，'
+                                   f'其余下轮重试')
                 fail += len(b) - len(results)   # 折半重试后仍丢的单条计入失败
             if n_batch % (2 if progress_cb else 10) == 0:
                 if progress_cb:

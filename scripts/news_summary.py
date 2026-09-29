@@ -24,7 +24,9 @@ from sqlalchemy import text
 from app.config import settings
 from app.db.connection import get_sync_db
 
-PROMPT_VER = 'n1'
+# n1 → n2（2026-09-29）：加 id 硬约束（原样照抄、不合并同题条目）。改口径必升版本号，
+# 否则新旧两套口径的标签混在一列里，第 3 层做 IC 体检时分不出来。
+PROMPT_VER = 'n2'
 
 # 注意：本模板用 .replace('{items}', ...) 取值，不是 .format()，故花括号**不需要转义**。
 # 曾写成 {{...}}（沿用旧模板的转义习惯）——模型会把 few-shot 里的双花括号原样复制进输出，
@@ -33,6 +35,10 @@ PROMPT = """你是A股财经资讯编辑。逐条判断并输出，只返回 JSO
 {"id":..,"s":"摘要","imp":2,"t":"主题,主题","sent":0}
 
 字段规则：
+- id：**原样照抄输入里每条的 id**，不得改写、不得省略——缺 id 的条目会被整条丢弃。
+  输入几条就输出几条；**内容几乎相同的两条也要各出一条，严禁合并去重**
+  （实测：研报类一批里多份同股同题报告，模型会自作主张合并并顺手丢掉 id 字段，
+  整批 10 条回收 0 条，只能靠折半重试救回）。
 - s：一句话摘要，≤60字，突出「谁、做了什么、对什么标的/行业有何影响」。
   必须落到**具体结论**（数字/主体/方向）；正文确实没有超出标题的信息时直接陈述该事实。
 - t：主题标签 1-3 个，逗号分隔（如「固态电池,涨停」「减持,高管」「货币政策」）。
@@ -167,6 +173,12 @@ def _call_batch(client, model: str, batch, fail_max: int):
             sent = None
         topics = str(it.get('t') or '').strip()[:200]
         out.append((nid, summary, imp, topics, sent))
+    if len(out) < len(batch):
+        # 回收不全必须留痕：模型回了多少条、首条是什么样（id 对不上/字段名不同是最常见的死法，
+        # 只看「失败 N 条」无法区分「模型没回」和「回了但 id 不匹配」）
+        sample = arr[0] if arr and isinstance(arr[0], dict) else arr[:1]
+        logger.warning(f'[news] 本批 {len(batch)} 条仅解析出 {len(out)} 条'
+                       f'（模型返回 {len(arr)} 条，首条 {str(sample)[:150]}）')
     return out
 
 

@@ -124,6 +124,11 @@ def _try_batch(client, model: str, batch, fail_max: int):
             continue
         out.append((int(it['id']), s, float(it.get('c') or 0.5),
                     str(it.get('r') or '')[:200]))
+    if len(out) < len(batch):
+        # 同 news：回收不全留痕（模型回了多少、首条长什么样），否则只看到「失败 N 条」
+        sample = arr[0] if arr and isinstance(arr[0], dict) else arr[:1]
+        logger.warning(f'[xq] 本批 {len(batch)} 条仅解析出 {len(out)} 条'
+                       f'（模型返回 {len(arr)} 条，首条 {str(sample)[:150]}）')
     return out
 
 
