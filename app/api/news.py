@@ -127,7 +127,13 @@ def news_health():
                 age_min = (now - last_fetch).total_seconds() / 60
                 if src == 'em_stock':
                     state = 'ok' if age_min <= 120 else ('degraded' if age_min <= 360 else 'down')
-                elif src in ('em_report_industry', 'cninfo_orgid'):
+                elif src == 'cninfo_orgid':
+                    # orgId 映射是 ORGID_REFRESH_DAYS(7天) 级低频缓存，刷新挂在公告采集轮里：
+                    # 按小时级阈值会把「上次刷新 1 天前」的正常状态误报成 down（2026-09-30 实际案例）
+                    from crawler.news.collect import ORGID_REFRESH_DAYS
+                    ok_min, warn_min = ORGID_REFRESH_DAYS * 1440, ORGID_REFRESH_DAYS * 1440 * 2
+                    state = 'ok' if age_min <= ok_min else ('degraded' if age_min <= warn_min else 'down')
+                elif src == 'em_report_industry':
                     state = 'ok' if age_min <= 720 else ('degraded' if age_min <= 1440 else 'down')
                 else:
                     state = 'ok' if age_min <= 40 else ('degraded' if age_min <= 120 else 'down')
