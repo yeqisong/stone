@@ -5091,6 +5091,20 @@ def dag_task_stock_master(trade_date=None, **kw):
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise
+    finally:
+        # 终态回写：DAG 路径直接调 _run_stock_master，绕过了 _run_task 的收尾块，
+        # 此前成功后 task.status 恒留 'running'（进度落库的 running 行永远无人收尾，
+        # 状态页每天残留一条【更新股票列表 运行中】，直到下次进程重启被清扫成 failed）
+        from datetime import datetime as _dt
+        if task.status == 'running':
+            task.status = 'completed'
+        task.completed_at = task.completed_at or _dt.now().isoformat()
+        task.updated_at = _dt.now().isoformat()
+        try:
+            bm._persist_task(task)   # upsert：行不存在也能落终态
+            bm._wake_ws()
+        except Exception:
+            pass
 
 
 def dag_task_factor_ic(trade_date=None, **kw):
