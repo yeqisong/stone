@@ -3494,12 +3494,18 @@ def compute_regime_gates(db, dates, cfg=None):
     """市场择时空仓闸门：指数收盘 < MA(N) 为风险期，风险期连续前 max_skip_days 天不开新仓。
 
     「不能连续空仓 3 天」约束（2026-09-05 用户拍板）：风险期第 1、2 天禁止买入，
-    第 3 天强制放行并把连续计数归零——熊市中呈「禁、禁、买」循环，保留反弹敞口。
+    第 3 天强制放行——熊市中呈「禁、禁、买」循环，保留反弹敞口。
     cfg 来自 model_versions.config['regime']：
       {"enabled": true, "index_code": "000300", "ma_window": 20, "max_skip_days": 2}
     cfg 缺 enabled 键视为未启用；指数数据不足 win+1 天时不启用（不误伤）。
-    返回 gated 日期字符串集合（这些日期不产生新买入）。streak 沿指数完整交易日轴累计，
-    单日调用也能拿到正确的连续计数上下文。
+    返回 gated 日期字符串集合（这些日期不产生新买入）。
+
+    判定用「连续低于 MA 天数 mod (max_skip+1)」的局部计数（2026-10-10 重写）：
+    旧实现是累计相位（放行日归零），streak 相位依赖回看窗口起点——窗口随调用日
+    前移时相位漂移，曾在持续下跌段把「禁禁买」循环搅成连续全禁（2026-09-24 起
+    连续 8 个交易日无放行）。局部计数的 gate 决定只依赖「回溯到上一个站上 MA 日
+    的连续段长度」，窗口怎么截都不影响结果（前提：窗口覆盖当前连续段，回看已
+    拉长到一年日历兜底超长熊市段）。
     """
     import pandas as _pd2
     from datetime import datetime as _dtm, timedelta as _tdm
@@ -3513,7 +3519,8 @@ def compute_regime_gates(db, dates, cfg=None):
     ds = sorted({str(d)[:10] for d in (dates if dates is not None else [])})
     if not ds:
         return set()
-    start = (_dtm.strptime(ds[0], '%Y-%m-%d') - _tdm(days=win * 3)).isoformat()
+    # 回看窗口：MA 预热 + 足够覆盖当前连续低于段（超长熊市段兜底，多查几百行成本可忽略）
+    start = (_dtm.strptime(ds[0], '%Y-%m-%d') - _tdm(days=max(win * 3, 370))).isoformat()
     rows = db.execute(_sqltext(
         "SELECT trade_date, close FROM index_daily_quote "
         "WHERE index_code=:c AND trade_date BETWEEN :s AND :e AND close IS NOT NULL "
@@ -3525,19 +3532,18 @@ def compute_regime_gates(db, dates, cfg=None):
     idx['close'] = idx['close'].astype(float)
     idx['ma'] = idx['close'].rolling(win).mean()
     gated_all = set()
-    streak = 0
+    run = 0   # 连续低于 MA 天数（局部计数：站上 MA 归零，放行日不归零）
     for r in idx.itertuples(index=False):
         if _pd2.isna(r.ma):
             continue  # MA 未成形期不设闸
         d10 = str(r.d)[:10]
         if r.close < r.ma:
-            streak += 1
-            if streak <= max_skip:
+            run += 1
+            if run % (max_skip + 1) != 0:
                 gated_all.add(d10)
-            else:
-                streak = 0  # 第 max_skip+1 天强制放行，连续计数归零
+            # run 是 max_skip+1 的整倍数 → 强制放行日（第 3、6、9…个连续低于日）
         else:
-            streak = 0
+            run = 0
     return {d for d in ds if d in gated_all}
 
 
