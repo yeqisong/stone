@@ -1381,15 +1381,23 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
             if log_id: write_node_log(log_id=log_id, status='success', rows=0, detail=f'{td} 已步进过，跳过')
             db.close(); return 0
 
-        # 回放：该模型账户为空 → 从其自身首条信号日回放重建（新模型激活自动建账）
-        pos_count_v = db.execute(text(
-            "SELECT COUNT(*) FROM paper_positions WHERE model_version=:v"), {"v": ver}).scalar()
+        # 回放：账户从未步进过（无任何 EOD）→ 从该模型首条信号日回放建账（新模型激活自动建账）。
+        # 判定看 paper_trades 的 EOD 而非 paper_positions：持仓为空≠账户未初始化——
+        # 深跌中全部止损退出+闸门禁买后账户合法空仓，旧判定（positions 空行）会在这种
+        # 日子里天天误判"新账户"触发全量回放（2026-10-09 起连续多日回放 18 天）
+        has_eod = db.execute(text(
+            "SELECT 1 FROM paper_trades WHERE action='EOD' AND model_version=:v LIMIT 1"), {"v": ver}).scalar()
         first_sig = db.execute(text(
             "SELECT MIN(signal_date) FROM signal_history WHERE strategy_name='model_signal' "
             "AND direction='buy' AND model_version=:v"), {"v": ver}).scalar()
-        _sd = start_date or (str(first_sig)[:10] if (pos_count_v == 0 and first_sig) else None)
-        replay = bool(_sd and pos_count_v == 0)
+        _sd = start_date or (str(first_sig)[:10] if (not has_eod and first_sig) else None)
+        replay = bool(_sd and (start_date is not None or not has_eod))
         if replay:
+            # 回放=从现金重建账户：先清该模型全部旧行（幂等，与重建同事务——中途崩溃
+            # 整体回滚，旧行不丢）。不清旧 = 每次重放都重复插入历史成交（事故实测
+            # 同日 SELL/EOD 行被插 5 遍，页面满屏重复）
+            db.execute(text("DELETE FROM paper_trades WHERE model_version=:v"), {"v": ver})
+            db.execute(text("DELETE FROM paper_positions WHERE model_version=:v"), {"v": ver})
             trade_days = [str(r[0])[:10] for r in db.execute(text(
                 "SELECT DISTINCT trade_date FROM index_daily_quote WHERE index_code='000300' "
                 "AND trade_date >= :s AND trade_date <= :d ORDER BY trade_date"),
