@@ -104,7 +104,43 @@
       </div>
     </div>
 
-    <!-- 右：交易日历 -->
+    <!-- 右：大模型配置（新闻总结/雪球打分等 LLM 链路共用） -->
+    <div class="sv-half sv-half-r" style="flex:1;min-width:380px;display:flex;flex-direction:column">
+      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="target" :size="13" />  大模型配置
+        <span v-if="llmCfg.key_tail" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">已配置（尾号 {{llmCfg.key_tail}}）</span>
+        <span v-else style="font-size:10px;color:#ef4444;margin-left:6px">未配置</span>
+      </div>
+      <div style="flex:1;padding:10px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
+        <n-space vertical size="small">
+          <n-space align="center" :wrap="false" size="small">
+            <span style="font-size:11px;color:var(--c-text-dim);width:64px;flex-shrink:0">API Key</span>
+            <n-input v-model:value="llmForm.api_key" size="small" type="password" show-password-on="click"
+              :placeholder="llmCfg.key_tail ? `已配置（尾号 ${llmCfg.key_tail}），留空=不修改` : '粘贴 API Key'" style="flex:1" />
+          </n-space>
+          <n-space align="center" :wrap="false" size="small">
+            <span style="font-size:11px;color:var(--c-text-dim);width:64px;flex-shrink:0">模型 ID</span>
+            <n-input v-model:value="llmForm.model" size="small" placeholder="如 glm-5.3-flash" style="flex:1" />
+            <span style="font-size:11px;color:var(--c-text-dim);flex-shrink:0">RPM</span>
+            <n-input-number v-model:value="llmForm.rpm" size="small" :min="1" :max="3000" style="width:88px" />
+            <span style="font-size:11px;color:var(--c-text-dim);flex-shrink:0">并发</span>
+            <n-input-number v-model:value="llmForm.workers" size="small" :min="1" :max="16" style="width:76px" />
+          </n-space>
+          <n-space align="center" :wrap="false" size="small">
+            <span style="font-size:11px;color:var(--c-text-dim);width:64px;flex-shrink:0">Base URL</span>
+            <n-input v-model:value="llmForm.base_url" size="small" placeholder="https://open.bigmodel.cn/api/paas/v4" style="flex:1" />
+          </n-space>
+          <n-space align="center" size="small">
+            <n-button size="tiny" :loading="llmTesting" @click="testLlm">测试连接</n-button>
+            <n-button size="tiny" type="primary" :loading="llmSaving" @click="saveLlm">保存</n-button>
+            <span v-if="llmTestMsg" :style="{fontSize:'11px',color:llmTestMsg.ok?'#10b981':'#ef4444'}">
+              {{ llmTestMsg.ok ? `✓ ${llmTestMsg.model} 通（${llmTestMsg.latency_ms}ms）` : `✕ ${llmTestMsg.error}` }}
+            </span>
+          </n-space>
+        </n-space>
+      </div>
+    </div>
+
+    <!-- 交易日历 -->
     <div class="sv-half sv-half-r" style="flex:1;min-width:380px;display:flex;flex-direction:column">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="calendar" :size="13" />  交易日历</span>
@@ -233,8 +269,8 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import ListPagination from './ListPagination.vue'
-import { ref, computed, onMounted, onUnmounted, h } from 'vue'
-import { NDataTable, NButton, NButtonGroup, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, useDialog, useMessage } from 'naive-ui'
+import { ref, reactive, computed, onMounted, onUnmounted, h } from 'vue'
+import { NDataTable, NButton, NButtonGroup, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NInput, NInputNumber, useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
 import StatStrip from './StatStrip.vue'
@@ -514,6 +550,7 @@ onMounted(() => {
   loadXq()
   loadNews()
   loadSysMetrics()
+  loadLlm()
   loadPref()
   // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
   quotaTimer = setInterval(loadQuota, 30000)
@@ -660,6 +697,43 @@ async function openDbDetail() {
     const r = await axios.get(API + '/api/system/metrics')
     dbTables.value = r.data?.db?.tables || []
   } catch(e) {}
+}
+
+// ── 大模型配置（新闻总结/雪球打分等 LLM 链路共用；key 明文不出接口，只回尾号） ──
+const llmCfg = ref({ key_tail: '', model: '', base_url: '', rpm: 6, workers: 2 })
+const llmForm = reactive({ api_key: '', model: '', base_url: '', rpm: 6, workers: 2 })
+const llmTesting = ref(false), llmSaving = ref(false), llmTestMsg = ref(null)
+
+async function loadLlm() {
+  try {
+    const r = await axios.get(API + '/api/llm_config')
+    llmCfg.value = r.data
+    llmForm.model = r.data.model || ''
+    llmForm.base_url = r.data.base_url || ''
+    llmForm.rpm = r.data.rpm || 6
+    llmForm.workers = r.data.workers || 2
+    llmForm.api_key = ''   // 明文不出接口：留空=保留已存 key
+  } catch(e) {}
+}
+async function saveLlm() {
+  llmSaving.value = true
+  try {
+    await axios.post(API + '/api/llm_config', {
+      api_key: llmForm.api_key, base_url: llmForm.base_url,
+      model: llmForm.model, rpm: llmForm.rpm, workers: llmForm.workers })
+    message.success('大模型配置已保存（即时生效，无需重启）')
+    await loadLlm()
+  } catch(e) { message.error(e.response?.data?.detail || '保存失败') }
+  llmSaving.value = false
+}
+async function testLlm() {
+  llmTesting.value = true; llmTestMsg.value = null
+  try {
+    const r = await axios.post(API + '/api/llm_config/test', {
+      api_key: llmForm.api_key, base_url: llmForm.base_url, model: llmForm.model })
+    llmTestMsg.value = r.data
+  } catch(e) { llmTestMsg.value = { ok: false, error: e.response?.data?.detail || e.message } }
+  llmTesting.value = false
 }
 
 async function loadSysMetrics() {

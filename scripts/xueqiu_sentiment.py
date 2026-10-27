@@ -185,26 +185,26 @@ def main():
     ap.add_argument('--limit', type=int, default=300, help='本次最多打分帖数')
     ap.add_argument('--min-heat', type=int, default=5, help='最低互动热度（like+reply*3）')
     ap.add_argument('--codes', type=str, default='', help='逗号分隔股票码，空=全市场')
-    ap.add_argument('--workers', type=int, default=WORKERS, help='并发请求数')
+    ap.add_argument('--workers', type=int, default=0, help='并发请求数，0=取运行时配置')
     ap.add_argument('--rescore', action='store_true', help='重打分已打过的帖（覆盖，用于 prompt A/B）')
     args = ap.parse_args()
     codes = [c.strip() for c in args.codes.split(',') if c.strip()]
 
-    llm = settings.llm_config
+    db = get_sync_db()
+    from app.llm_runtime import get_llm_settings
+    llm = get_llm_settings(db)
     if not llm['api_key']:
-        logger.error('LLM key 未配置。任选其一：'
-                     '① .env 加 LLM_API_KEY/LLM_BASE_URL/LLM_MODEL（GLM: https://open.bigmodel.cn/api/paas/v4, glm-4-flash 免费）；'
-                     '② .env 填 DEEPSEEK_API_KEY')
+        logger.error('LLM key 未配置。到状态页「大模型配置」卡片填写，或 .env 加 LLM_API_KEY/LLM_BASE_URL/LLM_MODEL')
         sys.exit(1)
     client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+    workers = args.workers or llm['workers']
     logger.info(f"情绪打分启动: model={llm['model']} prompt_ver={PROMPT_VER} "
-                f"workers={args.workers} rescore={args.rescore}")
+                f"workers={workers} rescore={args.rescore}")
 
-    db = get_sync_db()
     try:
         r = score_pending(db, client, llm['model'], limit=args.limit,
                           min_heat=args.min_heat, codes=codes or None,
-                          workers=args.workers, rescore=args.rescore)
+                          workers=workers, rescore=args.rescore)
         if not r['total']:
             return
         stat = db.execute(text("""

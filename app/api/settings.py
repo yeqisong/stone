@@ -174,3 +174,103 @@ def set_deepseek_key(body: DeepSeekKey, user: str = Depends(optional_auth)):
         return {"ok": True}
     finally:
         db.close()
+
+
+# ═══════════════════════════════════════════════
+#  LLM 运行时配置（状态页「大模型配置」卡片；news_summary/xueqiu_sentiment 共用）
+# ═══════════════════════════════════════════════
+
+class LLMConfig(BaseModel):
+    api_key: str = ""       # 空=保留已存值
+    base_url: str = ""
+    model: str = ""
+    rpm: int = 0            # 0=保留已存值/默认
+    workers: int = 0
+
+
+def _read_llm_row(db):
+    row = db.execute(text(
+        "SELECT params FROM strategy_config WHERE strategy_name='llm_config'")).fetchone()
+    return (json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+
+
+def _write_llm_row(db, cfg):
+    db.execute(text("""
+        INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+        VALUES ('llm_config', '大模型运行时配置', true, :p)
+        ON CONFLICT (strategy_name) DO UPDATE SET params=:p, updated_at=CURRENT_TIMESTAMP
+    """), {"p": json.dumps(cfg, ensure_ascii=False)})
+    db.commit()
+
+
+@router.get("/llm_config")
+def get_llm_config(user: str = Depends(optional_auth)):
+    """LLM 运行时配置（key 只回尾号掩码，明文不出接口）。"""
+    from app.llm_runtime import get_llm_settings
+    db = get_sync_db()
+    try:
+        llm = get_llm_settings(db)
+        saved = _read_llm_row(db)
+        key = llm["api_key"]
+        return {
+            "configured": bool(key),
+            "key_tail": key[-4:] if key else "",
+            "has_env_fallback": bool(saved.get("api_key")),
+            "base_url": llm["base_url"], "model": llm["model"],
+            "rpm": llm["rpm"], "workers": llm["workers"],
+        }
+    finally:
+        db.close()
+
+
+@router.post("/llm_config")
+def save_llm_config(body: LLMConfig, user: str = Depends(optional_auth)):
+    """保存 LLM 配置。api_key 留空=保留已存值（明文不回传前端，避免覆盖）。"""
+    db = get_sync_db()
+    try:
+        cfg = _read_llm_row(db)
+        if body.api_key.strip():
+            cfg["api_key"] = body.api_key.strip()
+        if body.base_url.strip():
+            cfg["base_url"] = body.base_url.strip()
+        if body.model.strip():
+            cfg["model"] = body.model.strip()
+        if body.rpm > 0:
+            cfg["rpm"] = body.rpm
+        if body.workers > 0:
+            cfg["workers"] = body.workers
+        _write_llm_row(db, cfg)
+        return {"ok": True, "key_tail": (cfg.get("api_key") or "")[-4:]}
+    finally:
+        db.close()
+
+
+@router.post("/llm_config/test")
+def test_llm_config(body: LLMConfig, user: str = Depends(optional_auth)):
+    """连通性测试：优先用请求携带的覆盖值，未带则用已存配置。单次小请求计耗时。"""
+    import time as _t
+    from openai import OpenAI
+    from app.llm_runtime import get_llm_settings
+    db = get_sync_db()
+    try:
+        llm = get_llm_settings(db)
+        key = body.api_key.strip() or llm["api_key"]
+        base = body.base_url.strip() or llm["base_url"]
+        model = body.model.strip() or llm["model"]
+        if not key:
+            return {"ok": False, "error": "未配置 API Key"}
+        t0 = _t.time()
+        try:
+            client = OpenAI(api_key=key, base_url=base, timeout=60)
+            r = client.chat.completions.create(
+                model=model, temperature=0, max_tokens=512,
+                messages=[{"role": "user", "content": '输出 JSON：{"ok": true}'}])
+            dt = int((_t.time() - t0) * 1000)
+            content = (r.choices[0].message.content or "").strip()
+            return {"ok": bool(content), "latency_ms": dt, "model": model,
+                    "sample": content[:80], "error": "" if content else "返回内容为空（思考型模型请增大 max_tokens 或降低温度）"}
+        except Exception as e:
+            return {"ok": False, "latency_ms": int((_t.time() - t0) * 1000),
+                    "model": model, "error": f"{type(e).__name__}: {str(e)[:180]}"}
+    finally:
+        db.close()

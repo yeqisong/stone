@@ -149,7 +149,9 @@ def run_batches(items, run_one, on_ok, *, workers: int = 8, rpm: int = 25,
                     logger.warning(f'[{log_tag}] 批次仅回收 {len(results)}/{len(b)} 条，'
                                    f'其余下轮重试')
                 fail += len(b) - len(results)   # 折半重试后仍丢的单条计入失败
-            if n_batch % (2 if progress_cb else 10) == 0:
+            # 节点看门狗按「进度上报」计活：低并发/慢模型下 2 批一报可能 5 分钟无进展被误杀，
+            # 有 progress_cb 时每批一报（≤batch_size×单请求耗时内必有一次心跳）
+            if progress_cb or n_batch % 10 == 0:
                 if progress_cb:
                     progress_cb(done, fail, len(items))
                 else:

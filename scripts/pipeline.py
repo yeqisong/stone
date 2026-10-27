@@ -4610,9 +4610,10 @@ def dag_task_xueqiu_sentiment(trade_date=None, **kw):
         from app.db.connection import get_sync_db
         from scripts.xueqiu_sentiment import score_pending, PROMPT_VER
 
-        llm = settings.llm_config
+        from app.llm_runtime import get_llm_settings
+        llm = get_llm_settings()   # 自管连接（此时节点 db 尚未创建）
         if not llm['api_key']:
-            return {'skipped': 'LLM key 未配置（.env LLM_API_KEY 或 DEEPSEEK_API_KEY）'}
+            return {'skipped': 'LLM key 未配置（状态页「大模型配置」或 .env LLM_API_KEY）'}
 
         db = get_sync_db()
         try:
@@ -4622,7 +4623,7 @@ def dag_task_xueqiu_sentiment(trade_date=None, **kw):
             cfg = (_json3.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
             min_heat = int(cfg.get('min_heat', 5))
             max_posts = int(cfg.get('max_posts', 8000))
-            workers = int(cfg.get('workers', 8))
+            workers = int(cfg.get('workers') or llm['workers'])   # 0/缺省=运行时配置（限速口径统一）
 
             from openai import OpenAI
             client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
@@ -4746,9 +4747,10 @@ def dag_task_news_summary(trade_date=None, **kw):
         from app.db.connection import get_sync_db
         from scripts.news_summary import summarize_pending, PROMPT_VER
 
-        llm = settings.llm_config
+        from app.llm_runtime import get_llm_settings
+        llm = get_llm_settings()   # 自管连接（此时节点 db 尚未创建）
         if not llm['api_key']:
-            return {'skipped': 'LLM key 未配置（.env LLM_API_KEY 或 DEEPSEEK_API_KEY）'}
+            return {'skipped': 'LLM key 未配置（状态页「大模型配置」或 .env LLM_API_KEY）'}
 
         db = get_sync_db()
         try:
@@ -4758,7 +4760,7 @@ def dag_task_news_summary(trade_date=None, **kw):
             cfg = (_json4.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
             max_items = int(cfg.get('max_items', 3000))
             min_len = int(cfg.get('min_len', 20))
-            workers = int(cfg.get('workers', 8))
+            workers = int(cfg.get('workers') or llm['workers'])   # 0/缺省=运行时配置（限速口径统一）
 
             from openai import OpenAI
             client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
