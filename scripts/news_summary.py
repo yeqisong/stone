@@ -225,7 +225,7 @@ def main():
     ap.add_argument('--limit', type=int, default=3000, help='本次最多总结条数')
     ap.add_argument('--min-len', type=int, default=20, help='正文最短长度阈值')
     ap.add_argument('--only-focus', action='store_true', help='只总结有关联个股的')
-    ap.add_argument('--workers', type=int, default=WORKERS)
+    ap.add_argument('--workers', type=int, default=0)  # 0=取运行时配置(llm_config.workers)
     ap.add_argument('--dry-run', action='store_true', help='只统计待总结条数')
     args = ap.parse_args()
 
@@ -237,16 +237,18 @@ def main():
             for r in rows[:5]:
                 print(f'  [{r[1]}] {(r[2] or "")[:50]}')
             return
-        llm = settings.llm_config
+        from app.llm_runtime import get_llm_settings
+        llm = get_llm_settings(db)
         if not llm['api_key']:
-            logger.error('LLM key 未配置（.env LLM_API_KEY 或 DEEPSEEK_API_KEY）')
+            logger.error('LLM key 未配置（状态页「大模型配置」或 .env LLM_API_KEY）')
             sys.exit(1)
         client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+        workers = args.workers or llm['workers']
         logger.info(f"资讯总结启动: model={llm['model']} prompt_ver={PROMPT_VER} "
-                    f"limit={args.limit} workers={args.workers}")
+                    f"limit={args.limit} workers={workers}")
         r = summarize_pending(db, client, llm['model'], limit=args.limit,
                               min_len=args.min_len, only_focus=args.only_focus,
-                              workers=args.workers)
+                              workers=workers)
         logger.info(f"总结完成: done={r['done']} fail={r['fail']} "
                     f"用时={r['elapsed'] / 60:.1f}min "
                     f"{r['req'] / max(r['elapsed'], 1) * 60:.1f} req/min")
