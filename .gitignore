@@ -64,3 +64,6 @@ data/
 *.sql.gz
 *.pkl
 *.dump
+
+# AI 问答 Agent 会话沙箱工作区（代码/依赖/产物，不入库）
+data/agent_ws/
