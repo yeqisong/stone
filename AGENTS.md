@@ -61,7 +61,7 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `app/task/` — TaskManager 统一任务机制（并发≤5、同流程互斥、WS 推送）
   - `app/feishu/` — 飞书 Bot webhook（签名校验、对话历史、确认卡片闭环）
   - `app/ai/` — DeepSeek AI 客户端（8 个 Function Calling 工具 + 降级菜单）
-  - `app/agent/` — 站内问答 Agent（ReAct + SSE）：`runtime.py` 多轮「思考→工具→观察」（≤12 步，同会话串行可中断，轨迹落 agent_sessions/agent_messages）；`tools.py` 13 个工具（只读 SQL/表结构/个股全景/资讯检索/沙箱 Python·Node/pip·npm/DAG 列表·建流程·触发）；`sandbox.py` 每会话工作区 `data/agent_ws/<sid>/`（私有 pylibs/node，超时+2GB 上限，非容器隔离）；`_child.py` 子进程 rlimit 启动器（`preexec_fn` 在多线程 uvicorn 下会 SIGSEGV，必须 `start_new_session`）；API `app/api/agent.py`，前端 `AgentView.vue`（tab i=问答）
+  - `app/agent/` — 站内问答 Agent（ReAct + SSE）：`runtime.py` 多轮「思考→工具→观察」（≤12 步，同会话串行可中断，轨迹落 agent_sessions/agent_messages）；`tools.py` 13 个工具（只读 SQL/表结构/个股全景/资讯检索/沙箱 Python·Node/pip·npm/DAG 列表·建流程·触发）；`sandbox.py` 每会话工作区 `data/agent_ws/<sid>/`（私有 pylibs/node，超时+2GB 上限，非容器隔离）；`_child.py` 子进程 rlimit 启动器（`preexec_fn` 在多线程 uvicorn 下会 SIGSEGV，必须 `start_new_session`）；API `app/api/agent.py`，前端 `AgentView.vue`（tab i=问答）；`skills.py` 技能体系（`skills/<name>/SKILL.md` 内置随仓库版本管理 + `data/skills/` 用户技能，frontmatter 的 description 进系统提示做渐进披露，命中后 read_skill 读全文；工具 list_skills/read_skill/save_skill）
   - `app/kepl/` — KEPL 表达式解析器（Lark LALR(1) + AST + 时间序列/截面函数）
   - `app/signal.py` — DAG ↔ WebSocket 解耦桥梁（asyncio Event + 线程安全唤醒）
   - `app/lineage.py` — 数据血缘台账（旁路观测：factor_heal/零价修复/特征重算/复评/训练/滚动重训事件落 `data_lineage` 表，MB 级元数据；`log_event` 失败绝不影响主链路）；`model_data_drift` 回答「模型训练后数据又被改过吗」；API 在 `app/api/lineage.py`（GET /api/lineage、/api/lineage/model/{ver}）
