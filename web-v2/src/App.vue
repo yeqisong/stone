@@ -52,6 +52,7 @@
           <div v-if="nav.tab==='n'" style="flex:1;min-height:0;display:flex;flex-direction:column"><NewsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='u'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
+          <div v-if="nav.tab==='i'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AgentView /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
           <div v-if="nav.tab==='a'"><ModelView /></div>
           <div v-if="nav.tab==='f'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FunctionView /></div>
@@ -156,6 +157,7 @@ import TreemapView from './components/TreemapView.vue'
 import StocksView from './components/StocksView.vue'
 import StockFundView from './components/StockFundView.vue'
 import NewsView from './components/NewsView.vue'
+import AgentView from './components/AgentView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 
@@ -183,6 +185,7 @@ const primaryTabs = [
   { key: 's', label: '信号' },
   { key: 'l', label: '个股', icon: 'filter' },
   { key: 'n', label: '资讯', icon: 'news' },
+  { key: 'i', label: '问答', icon: 'compass' },
   { key: 'x', label: '状态' },
 ]
 const adminTabs = [

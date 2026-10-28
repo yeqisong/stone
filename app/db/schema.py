@@ -884,6 +884,31 @@ CREATE TABLE IF NOT EXISTS stock_holder_number (
 CREATE INDEX IF NOT EXISTS idx_shn_date ON stock_holder_number (end_date);
 """
 
+# ── AI 问答 Agent（会话 + 消息轨迹；沙箱工作区落 data/agent_ws/<session_id>/）──
+
+CREATE_AGENT = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id          SERIAL PRIMARY KEY,
+    title       VARCHAR(100) NOT NULL DEFAULT '新会话',
+    status      VARCHAR(16) DEFAULT 'active',   -- active / archived
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id            BIGSERIAL PRIMARY KEY,
+    session_id    INT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    role          VARCHAR(16) NOT NULL,          -- user / assistant / tool
+    content       TEXT,
+    tool_calls    JSONB,                          -- assistant 发起的工具调用（OpenAI 原样结构）
+    tool_call_id  VARCHAR(64),                    -- role=tool 时对应调用 id
+    tool_name     VARCHAR(64),
+    meta          JSONB,                          -- 工具结果状态/耗时/截断标记
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_msg_session ON agent_messages (session_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_sess_updated ON agent_sessions (updated_at DESC);
+"""
+
 # ── tushare 当日配额（状态页展示 + 补数预算策略）──
 
 CREATE_TUSHARE_QUOTA = """
@@ -1233,6 +1258,7 @@ ALL_TABLES = [
     ("news_summary", CREATE_NEWS_SUMMARY),
     ("news_crawl_state", CREATE_NEWS_CRAWL_STATE),
     ("news_poll_state", CREATE_NEWS_POLL_STATE),
+    ("agent", CREATE_AGENT),
 ]
 
 
