@@ -30,8 +30,9 @@
   <section class="agent-main">
     <header class="agent-head">
       <div style="font-size:13px;font-weight:600;color:var(--c-text)">{{ currentTitle }}</div>
-      <div style="font-size:10px;color:var(--c-text-faint);margin-left:auto">
-        数据在本地库 · 可跑沙箱 · 可建 DAG 流程
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+        <span style="font-size:10px;color:var(--c-text-faint)">数据在本地库 · 可跑沙箱 · 可建 DAG 流程</span>
+        <n-button size="tiny" quaternary @click="openSkills"><AppIcon name="compass" :size="12" /> 技能 {{ skills.length || '' }}</n-button>
       </div>
     </header>
 
@@ -74,6 +75,41 @@
       <n-button size="small" type="primary" :loading="running" :disabled="!draft.trim() || running" @click="send">发送</n-button>
     </footer>
   </section>
+
+  <!-- 技能面板 -->
+  <n-modal v-model:show="showSkills" preset="card" title="技能（可复用的分析方法）" style="width:760px;max-width:94vw">
+    <div style="display:flex;gap:12px;min-height:360px">
+      <div style="width:220px;flex-shrink:0;border-right:1px solid var(--c-border-light);padding-right:8px">
+        <n-button size="tiny" type="primary" block style="margin-bottom:6px" @click="startNewSkill">
+          <AppIcon name="plus" :size="12" /> 新建技能
+        </n-button>
+        <div v-for="s in skills" :key="s.name" class="agent-sess" :class="{ active: skEditing.name === s.name }" @click="openSkill(s)">
+          <span class="agent-sess-title" :title="s.name">{{ s.display_name }}</span>
+          <span style="font-size:9px;color:var(--c-text-faint);flex-shrink:0">{{ s.builtin ? '内置' : '用户' }}</span>
+        </div>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+        <n-space align="center" :wrap="false" size="small">
+          <n-input v-model:value="skEditing.name" size="small" placeholder="英文名（如 my-screen）" style="width:190px"
+                   :disabled="skEditing.builtin" />
+          <n-input v-model:value="skEditing.title" size="small" placeholder="中文标题（可选）" style="width:150px" />
+          <n-tag v-if="skEditing.builtin" size="small" type="warning" :bordered="false">内置只读</n-tag>
+        </n-space>
+        <n-input v-model:value="skEditing.description" size="small" placeholder="何时使用（一句话，模型靠它判断命中）"
+                 :disabled="skEditing.builtin" />
+        <n-input v-model:value="skEditing.content" type="textarea" size="small"
+                 :autosize="{ minRows: 12, maxRows: 20 }" placeholder="Markdown：步骤 / SQL 模板 / 输出格式 / 注意事项"
+                 :disabled="skEditing.builtin" style="font-family:monospace" />
+        <div style="display:flex;gap:8px;align-items:center">
+          <n-button v-if="!skEditing.builtin" size="small" type="primary" :loading="skSaving" @click="saveSkill">保存</n-button>
+          <n-button v-if="!skEditing.builtin && skEditing.name && skills.some(x => x.name === skEditing.name && !x.builtin)"
+                    size="small" type="error" quaternary @click="removeSkill">删除</n-button>
+          <n-button size="small" quaternary @click="useSkill">在对话中使用</n-button>
+          <span style="font-size:10px;color:var(--c-text-faint)">技能正文会在模型判断命中后按需读取，不占常驻上下文</span>
+        </div>
+      </div>
+    </div>
+  </n-modal>
 </div>
 </template>
 
@@ -309,8 +345,57 @@ function handleEvent(ev) {
   }
 }
 
+// ── 技能面板 ──
+const showSkills = ref(false)
+const skills = ref([])
+const skSaving = ref(false)
+const skEditing = ref({ name: '', title: '', description: '', content: '', builtin: false })
+
+async function loadSkills() {
+  try { skills.value = (await axios.get(API + '/api/agent/skills', { headers: H() })).data.items || [] } catch (e) {}
+}
+async function openSkills() { showSkills.value = true; await loadSkills(); if (skills.value.length) openSkill(skills.value[0]) }
+async function openSkill(s) {
+  try {
+    const r = await axios.get(`${API}/api/agent/skills/${s.name}`, { headers: H() })
+    skEditing.value = { name: s.name, title: s.display_name, description: s.description, content: r.data.content, builtin: !!s.builtin }
+  } catch (e) { message.error('技能读取失败') }
+}
+function startNewSkill() {
+  skEditing.value = { name: '', title: '', description: '', content: '', builtin: false }
+}
+async function saveSkill() {
+  const e = skEditing.value
+  if (!e.name.trim() || !e.description.trim() || !e.content.trim()) { message.warning('名称、描述、正文都要填'); return }
+  skSaving.value = true
+  try {
+    await axios.post(API + '/api/agent/skills', {
+      name: e.name.trim(), title: e.title, description: e.description, content: e.content }, { headers: H() })
+    message.success('技能已保存（下一条消息起生效）')
+    await loadSkills()
+  } catch (err) { message.error(err.response?.data?.detail || '保存失败') }
+  skSaving.value = false
+}
+async function removeSkill() {
+  const e = skEditing.value
+  dialog.warning({
+    title: '删除技能', content: `删除技能「${e.name}」？`,
+    positiveText: '删除', negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await axios.delete(`${API}/api/agent/skills/${e.name}`, { headers: H() })
+        message.success('已删除'); showSkills.value = false; await loadSkills()
+      } catch (err) { message.error(err.response?.data?.detail || '删除失败') }
+    },
+  })
+}
+function useSkill() {
+  draft.value = `请使用技能 ${skEditing.value.name} 帮我分析：`
+  showSkills.value = false
+}
+
 onMounted(async () => {
-  await Promise.all([loadInfo(), loadSessions()])
+  await Promise.all([loadInfo(), loadSessions(), loadSkills()])
   if (sessions.value.length) { sid.value = sessions.value[0].id; await loadMessages(sid.value) }
 })
 </script>

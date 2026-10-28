@@ -326,6 +326,31 @@ def tool_run_dag_flow(_session_id: int, flow_id: int = 0, trade_date: str = "", 
 
 
 # ══════════════════════════════════════════════
+#  技能（Skills）
+# ══════════════════════════════════════════════
+
+def tool_list_skills(_session_id: int, **kw) -> dict:
+    """可用技能清单（内置 + 用户）。"""
+    from app.agent.skills import list_skills
+    return {"skills": [{"name": s["name"], "title": s["display_name"],
+                        "description": s["description"], "builtin": s["builtin"],
+                        "files": s["files"]} for s in list_skills()]}
+
+
+def tool_read_skill(_session_id: int, name: str = "", file: str = "", **kw) -> dict:
+    """读技能全文（先 list_skills 看清单，命中再读）。file 可读技能目录下的附加文件。"""
+    from app.agent.skills import read_skill
+    return read_skill(name, file)
+
+
+def tool_save_skill(_session_id: int, name: str = "", description: str = "",
+                    content: str = "", title: str = "", **kw) -> dict:
+    """把一套分析方法沉淀为技能（写入 data/skills，供以后所有会话复用）。"""
+    from app.agent.skills import save_skill
+    return save_skill(name, description, content, title)
+
+
+# ══════════════════════════════════════════════
 #  注册表（OpenAI tools 格式）
 # ══════════════════════════════════════════════
 
@@ -364,6 +389,16 @@ TOOL_SPECS = [
     _tool("run_dag_flow", "触发某个 DAG 流程执行（后台任务）。",
           {"flow_id": {"type": "integer"}, "trade_date": {"type": "string", "description": "YYYY-MM-DD，空=今天"}},
           ["flow_id"]),
+    _tool("list_skills", "列出可用技能（可复用的分析方法包）。接到分析类任务时先看这里有没有匹配技能。", {}),
+    _tool("read_skill", "读取技能全文（含步骤、SQL 模板、注意事项）。判断技能命中后必须先读再执行。",
+          {"name": {"type": "string", "description": "技能名（list_skills 返回的 name）"},
+           "file": {"type": "string", "description": "可选：技能目录下的附加文件"}}, ["name"]),
+    _tool("save_skill", "把一套分析方法/流程沉淀为技能，供以后所有会话复用。",
+          {"name": {"type": "string", "description": "英文短横线名，如 my-screen"},
+           "description": {"type": "string", "description": "一句话说明何时使用（模型靠它判断命中）"},
+           "content": {"type": "string", "description": "Markdown 正文：步骤、SQL 模板、输出格式、注意事项"},
+           "title": {"type": "string", "description": "可选中文标题"}},
+          ["name", "description", "content"]),
 ]
 
 _DISPATCH = {
@@ -375,6 +410,8 @@ _DISPATCH = {
     "list_workspace": tool_list_workspace,
     "list_dag_flows": tool_list_dag_flows, "create_dag_flow": tool_create_dag_flow,
     "run_dag_flow": tool_run_dag_flow,
+    "list_skills": tool_list_skills, "read_skill": tool_read_skill,
+    "save_skill": tool_save_skill,
 }
 
 

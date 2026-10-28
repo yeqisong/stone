@@ -12,6 +12,7 @@ from loguru import logger
 
 from app.agent import sandbox
 from app.agent.tools import TOOL_SPECS, DAG_NODE_HINT, TABLE_DOCS, execute_tool
+from app.agent.skills import skill_index_text
 
 MAX_STEPS = 12
 HISTORY_LIMIT = 40          # 送给模型的最近消息条数（含工具轨迹）
@@ -37,6 +38,7 @@ def request_stop(session_id: int) -> bool:
 
 def _system_prompt() -> str:
     docs = "\n".join(f"- {t}: {d}" for t, d in TABLE_DOCS.items())
+    skills = skill_index_text()
     return f"""你是「K道」个股监测平台的内部数据分析助手。今天是 {date.today()}。
 
 ## 你的职责
@@ -51,6 +53,14 @@ def _system_prompt() -> str:
 - DAG 流程编排：{DAG_NODE_HINT}
 - 特征库：features 注册表（151 个特征）+ feature_values 长表（查询务必带 trade_date 或 feature_name 限定）
 - 你可以创建 DAG 流程草稿（create_dag_flow，默认 draft 不发布会），也可触发已发布流程（run_dag_flow）
+
+## 技能（Skills）
+下面是可用技能清单（名称：描述）。接到某类分析任务时，先看清单里有没有匹配的技能；
+命中就用 read_skill 读全文，严格按技能里的步骤与 SQL 模板执行——技能是沉淀好的口径，
+避免每次自由发挥导致统计口径漂移。用户要求「以后都这么分析 / 把这套流程记下来」时，
+用 save_skill 沉淀成新技能。
+
+{skills}
 
 ## 沙箱
 - 会话有独立工作区：代码、数据、依赖都保存在里面，跨轮次可用

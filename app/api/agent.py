@@ -92,3 +92,47 @@ def chat(sid: int, body: ChatBody, user: str = Depends(optional_auth)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+# ═══════════════════════════════════════════════
+#  技能（Skills）管理
+# ═══════════════════════════════════════════════
+
+class SkillBody(BaseModel):
+    name: str = ""
+    title: str = ""
+    description: str = ""
+    content: str = ""
+
+
+@router.get("/skills")
+def skills_list(user: str = Depends(optional_auth)):
+    from app.agent.skills import list_skills
+    return {"items": list_skills()}
+
+
+@router.get("/skills/{name}")
+def skill_get(name: str, file: str = "", user: str = Depends(optional_auth)):
+    from app.agent.skills import read_skill
+    r = read_skill(name, file)
+    if r.get("error"):
+        raise HTTPException(404, r["error"])
+    return r
+
+
+@router.post("/skills")
+def skill_save(body: SkillBody, user: str = Depends(optional_auth)):
+    from app.agent.skills import save_skill
+    r = save_skill(body.name, body.description, body.content, body.title)
+    if r.get("error"):
+        raise HTTPException(400, r["error"])
+    return r
+
+
+@router.delete("/skills/{name}")
+def skill_delete(name: str, user: str = Depends(optional_auth)):
+    from app.agent.skills import delete_skill
+    r = delete_skill(name)
+    if r.get("error"):
+        raise HTTPException(400, r["error"])
+    return r
