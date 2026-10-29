@@ -223,4 +223,13 @@ async def health_check():
     }
 
 # 前端静态文件 (放在最后，不影响 API 路由匹配)
+@app.middleware("http")
+async def _no_cache_html(request, call_next):
+    """HTML 一律 no-cache：index.html 引用的 JS 哈希每次构建都变，缓存住就会跑旧包。"""
+    resp = await call_next(request)
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 app.mount("/", StaticFiles(directory="web-v2/dist", html=True), name="web")

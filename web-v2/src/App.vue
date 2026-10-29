@@ -90,15 +90,21 @@
           </div>
         </div>
       </div>
+      <!-- 新版本提示：构建哈希变了（后端 /api/version）才出现 -->
+      <div v-if="updateReady" class="app-update" role="status">
+        <span>页面有新版本</span>
+        <n-button size="tiny" type="primary" @click="reloadNow">刷新</n-button>
+      </div>
     </n-message-provider>
     </n-dialog-provider>
   </n-config-provider>
 </template>
 
 <script setup>
-import { computed, ref, h, onMounted, watch } from 'vue'
+import { computed, ref, h, onMounted, onUnmounted, watch } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, NButton, NDropdown } from 'naive-ui'
 import axios from 'axios'
+import { startVersionWatch, canAutoReload } from './utils/version'
 import { useAuthStore } from './stores/auth'
 import { useNavStore } from './stores/nav'
 import { useThemeStore } from './stores/theme'
@@ -214,6 +220,20 @@ const userOptions = [
 function handleUserMenu(key) {
   if (key === 'logout') auth.logout()
 }
+// ── 版本自检：构建哈希变化 → 自动/提示刷新（解决"总看到上一版"）──
+const updateReady = ref(false)
+let stopVersionWatch = null
+function reloadNow() { location.reload() }
+onMounted(() => {
+  stopVersionWatch = startVersionWatch({
+    onUpdate: () => {
+      if (canAutoReload()) { location.reload(); return }
+      updateReady.value = true
+    },
+  })
+})
+onUnmounted(() => { if (stopVersionWatch) stopVersionWatch() })
+
 const showLogin = computed(() => !auth.token)
 
 watch(showLogin, (v) => {
@@ -258,6 +278,12 @@ if (!showLogin.value) {
 </script>
 
 <style>
+/* 新版本提示条（右下角悬浮，不遮挡主内容） */
+.app-update { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display: flex;
+  align-items: center; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--c-text);
+  background: var(--c-card-bg); border: 1px solid rgba(32,128,240,0.45); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
+
 .app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 /* 组合按钮：合并组内圆角与边框（naive ButtonGroup 子按钮圆角样式未生效，全局兜底） */
 .n-button-group { display: inline-flex; }
