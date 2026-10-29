@@ -262,9 +262,11 @@ def test_llm_config(body: LLMConfig, user: str = Depends(optional_auth)):
         t0 = _t.time()
         try:
             client = OpenAI(api_key=key, base_url=base, timeout=60)
-            r = client.chat.completions.create(
-                model=model, temperature=0, max_tokens=512,
-                messages=[{"role": "user", "content": '输出 JSON：{"ok": true}'}])
+            from app.llm_metrics import track
+            with track(model):
+                r = client.chat.completions.create(
+                    model=model, temperature=0, max_tokens=512,
+                    messages=[{"role": "user", "content": '输出 JSON：{"ok": true}'}])
             dt = int((_t.time() - t0) * 1000)
             content = (r.choices[0].message.content or "").strip()
             return {"ok": bool(content), "latency_ms": dt, "model": model,
@@ -274,3 +276,13 @@ def test_llm_config(body: LLMConfig, user: str = Depends(optional_auth)):
                     "model": model, "error": f"{type(e).__name__}: {str(e)[:180]}"}
     finally:
         db.close()
+
+
+@router.get("/llm_config/metrics")
+def llm_metrics(user: str = Depends(optional_auth)):
+    """大模型调用实时指标：并发/峰值、1 分钟 RPM、成功失败、平均与 P95 时延、最近错误码。
+
+    进程内计数（覆盖 Agent/新闻总结/雪球打分/连通性测试）；CLI 独立进程不计入。
+    """
+    from app.llm_metrics import snapshot
+    return snapshot()

@@ -136,6 +136,22 @@
               {{ llmTestMsg.ok ? `✓ ${llmTestMsg.model} 通（${llmTestMsg.latency_ms}ms）` : `✕ ${llmTestMsg.error}` }}
             </span>
           </n-space>
+          <!-- 实时调用指标：进程内计数，5s 轮询 -->
+          <div class="llm-metrics">
+            <span class="llm-m" :style="{ color: (llmM.saturated ? '#f59e0b' : 'var(--c-text)') }">
+              并发 <b>{{ llmM.active ?? '-' }}</b><span class="llm-sub">/ {{ llmM.config?.workers ?? '-' }}</span>
+            </span>
+            <span class="llm-m">1 分钟 <b>{{ llmM.rpm_1m ?? '-' }}</b><span class="llm-sub">/ {{ llmM.config?.rpm ?? '-' }} RPM</span></span>
+            <span class="llm-m">峰值 <b>{{ llmM.peak ?? '-' }}</b></span>
+            <span class="llm-m">成功/失败 <b>{{ llmM.ok ?? 0 }}</b><span class="llm-sub">/ {{ llmM.fail ?? 0 }}</span></span>
+            <span class="llm-m">平均 <b>{{ llmM.avg_ms ?? '-' }}</b><span class="llm-sub">ms</span></span>
+            <span class="llm-m">P95 <b>{{ llmM.p95_ms ?? '-' }}</b><span class="llm-sub">ms</span></span>
+          </div>
+          <div v-if="llmM.recent_errors && llmM.recent_errors.length" class="llm-err">
+            <span v-for="e in llmM.recent_errors.slice(-2)" :key="e.at + e.code">
+              {{ e.at }} · {{ e.code }} · {{ e.msg.slice(0, 40) }}
+            </span>
+          </div>
         </n-space>
       </div>
     </div>
@@ -551,6 +567,8 @@ onMounted(() => {
   loadNews()
   loadSysMetrics()
   loadLlm()
+  loadLlmMetrics()
+  llmTimer = setInterval(loadLlmMetrics, 5000)
   loadPref()
   // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
   quotaTimer = setInterval(loadQuota, 30000)
@@ -595,7 +613,7 @@ const wsUnwatch = ref(null)
 let quotaTimer = null
 let xqTimer = null
 let newsTimer = null
-onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer) })
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer); if (llmTimer) clearInterval(llmTimer) })
 
 // ── 历史补数 ──
 
@@ -703,6 +721,11 @@ async function openDbDetail() {
 const llmCfg = ref({ key_tail: '', model: '', base_url: '', rpm: 6, workers: 2 })
 const llmForm = reactive({ api_key: '', model: '', base_url: '', rpm: 6, workers: 2 })
 const llmTesting = ref(false), llmSaving = ref(false), llmTestMsg = ref(null)
+const llmM = ref({})
+let llmTimer = null
+async function loadLlmMetrics() {
+  try { llmM.value = (await axios.get(API + '/api/llm_config/metrics')).data } catch (e) {}
+}
 
 async function loadLlm() {
   try {
@@ -816,6 +839,15 @@ async function loadBfLogs() {
 <style>
 .nowrap-cell, .nowrap-cell .n-data-table-th { white-space:nowrap !important; }
 .n-data-table-td__ellipsis { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap !important; }
+
+/* 状态页：大模型实时指标行 */
+.llm-metrics { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--c-border-light); font-size: 10.5px; color: var(--c-text-dim); }
+.llm-m { white-space: nowrap; }
+.llm-m b { font-size: 12px; color: var(--c-text); font-weight: 700; margin: 0 1px; }
+.llm-sub { color: var(--c-text-faint); }
+.llm-err { margin-top: 4px; font-size: 9.5px; color: #ef4444; line-height: 1.5;
+  display: flex; flex-direction: column; gap: 1px; }
 
 /* 状态页：数据明细通栏网格（≥1440px 3列，以下 2列） */
 .sv-dt-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }

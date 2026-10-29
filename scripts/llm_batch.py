@@ -59,12 +59,14 @@ def llm_json_batch(client, model: str, prompt: str, *, fail_max: int = 3,
     """
     for attempt in range(1, max(1, fail_max) + 1):
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{'role': 'user', 'content': prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            from app.llm_metrics import track
+            with track(model):
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{'role': 'user', 'content': prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
             arr = extract_json_array(resp.choices[0].message.content)
             if arr is None:
                 raise ValueError('输出中找不到合法 JSON 数组')

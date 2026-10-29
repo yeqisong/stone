@@ -266,10 +266,12 @@ def stream_agent(sid: int, user_content: str):
                 return
             t0 = time.time()
             try:
-                resp = client.chat.completions.create(
-                    model=llm["model"], messages=messages, tools=TOOL_SPECS,
-                    tool_choice="auto", temperature=0.3, max_tokens=4096,
-                )
+                from app.llm_metrics import track
+                with track(llm["model"]):
+                    resp = client.chat.completions.create(
+                        model=llm["model"], messages=messages, tools=TOOL_SPECS,
+                        tool_choice="auto", temperature=0.3, max_tokens=4096,
+                    )
             except Exception as e:
                 msg = f"{type(e).__name__}: {str(e)[:300]}"
                 logger.warning(f"[agent] LLM 调用失败 sid={sid}: {msg}")
