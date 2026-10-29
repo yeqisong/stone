@@ -104,58 +104,6 @@
       </div>
     </div>
 
-    <!-- 右：大模型配置（新闻总结/雪球打分等 LLM 链路共用） -->
-    <div class="sv-half sv-half-r" style="flex:1;min-width:380px;display:flex;flex-direction:column">
-      <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="target" :size="13" />  大模型配置
-        <span v-if="llmCfg.key_tail" style="font-size:10px;color:var(--c-text-faint);margin-left:6px">已配置（尾号 {{llmCfg.key_tail}}）</span>
-        <span v-else style="font-size:10px;color:#ef4444;margin-left:6px">未配置</span>
-      </div>
-      <div style="flex:1;padding:10px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
-        <n-space vertical size="small">
-          <n-space align="center" :wrap="false" size="small">
-            <span style="font-size:11px;color:var(--c-text-dim);width:64px;flex-shrink:0">API Key</span>
-            <n-input v-model:value="llmForm.api_key" size="small" type="password" show-password-on="click"
-              :placeholder="llmCfg.key_tail ? `已配置（尾号 ${llmCfg.key_tail}），留空=不修改` : '粘贴 API Key'" style="flex:1" />
-          </n-space>
-          <n-space align="center" :wrap="false" size="small">
-            <span style="font-size:11px;color:var(--c-text-dim);width:64px;flex-shrink:0">模型 ID</span>
-            <n-input v-model:value="llmForm.model" size="small" placeholder="如 glm-5.3-flash" style="flex:1" />
-            <span style="font-size:11px;color:var(--c-text-dim);flex-shrink:0">RPM</span>
-            <n-input-number v-model:value="llmForm.rpm" size="small" :min="1" :max="3000" style="width:88px" />
-            <span style="font-size:11px;color:var(--c-text-dim);flex-shrink:0">并发</span>
-            <n-input-number v-model:value="llmForm.workers" size="small" :min="1" :max="16" style="width:76px" />
-          </n-space>
-          <n-space align="center" :wrap="false" size="small">
-            <span style="font-size:11px;color:var(--c-text-dim);width:64px;flex-shrink:0">Base URL</span>
-            <n-input v-model:value="llmForm.base_url" size="small" placeholder="https://open.bigmodel.cn/api/paas/v4" style="flex:1" />
-          </n-space>
-          <n-space align="center" size="small">
-            <n-button size="tiny" :loading="llmTesting" @click="testLlm">测试连接</n-button>
-            <n-button size="tiny" type="primary" :loading="llmSaving" @click="saveLlm">保存</n-button>
-            <span v-if="llmTestMsg" :style="{fontSize:'11px',color:llmTestMsg.ok?'#10b981':'#ef4444'}">
-              {{ llmTestMsg.ok ? `✓ ${llmTestMsg.model} 通（${llmTestMsg.latency_ms}ms）` : `✕ ${llmTestMsg.error}` }}
-            </span>
-          </n-space>
-          <!-- 实时调用指标：进程内计数，5s 轮询 -->
-          <div class="llm-metrics">
-            <span class="llm-m" :style="{ color: (llmM.saturated ? '#f59e0b' : 'var(--c-text)') }">
-              并发 <b>{{ llmM.active ?? '-' }}</b><span class="llm-sub">/ {{ llmM.config?.workers ?? '-' }}</span>
-            </span>
-            <span class="llm-m">1 分钟 <b>{{ llmM.rpm_1m ?? '-' }}</b><span class="llm-sub">/ {{ llmM.config?.rpm ?? '-' }} RPM</span></span>
-            <span class="llm-m">峰值 <b>{{ llmM.peak ?? '-' }}</b></span>
-            <span class="llm-m">成功/失败 <b>{{ llmM.ok ?? 0 }}</b><span class="llm-sub">/ {{ llmM.fail ?? 0 }}</span></span>
-            <span class="llm-m">平均 <b>{{ llmM.avg_ms ?? '-' }}</b><span class="llm-sub">ms</span></span>
-            <span class="llm-m">P95 <b>{{ llmM.p95_ms ?? '-' }}</b><span class="llm-sub">ms</span></span>
-          </div>
-          <div v-if="llmM.recent_errors && llmM.recent_errors.length" class="llm-err">
-            <span v-for="e in llmM.recent_errors.slice(-2)" :key="e.at + e.code">
-              {{ e.at }} · {{ e.code }} · {{ e.msg.slice(0, 40) }}
-            </span>
-          </div>
-        </n-space>
-      </div>
-    </div>
-
     <!-- 交易日历 -->
     <div class="sv-half sv-half-r" style="flex:1;min-width:380px;display:flex;flex-direction:column">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -194,6 +142,85 @@
         </div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- 大模型配置（通栏：左表单 / 右实时指标） -->
+  <div style="margin-top:14px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+      <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="target" :size="13" />  大模型配置</span>
+      <span v-if="llmCfg.key_tail" style="font-size:10px;color:var(--c-text-faint)">已配置 · 尾号 {{llmCfg.key_tail }}</span>
+      <span v-else style="font-size:10px;color:#ef4444">未配置</span>
+      <span style="font-size:10px;color:var(--c-text-faint)">新闻总结 / 雪球打分 / 问答 Agent / 连通性测试 共用</span>
+    </div>
+    <div class="sv-llm">
+      <!-- 左：表单 -->
+      <div class="sv-llm-form">
+        <span class="sv-llm-lb">API Key</span>
+        <n-input v-model:value="llmForm.api_key" size="small" type="password" show-password-on="click"
+                 :placeholder="llmCfg.key_tail ? `已配置（尾号 ${llmCfg.key_tail}），留空=不修改` : '粘贴 API Key'"
+                 class="sv-llm-span3" />
+        <span class="sv-llm-lb">模型 ID</span>
+        <n-input v-model:value="llmForm.model" size="small" placeholder="如 glm-5.3-flash" />
+        <span class="sv-llm-lb">Base URL</span>
+        <n-input v-model:value="llmForm.base_url" size="small" placeholder="https://open.bigmodel.cn/api/paas/v4" />
+        <span class="sv-llm-lb">限速</span>
+        <div class="sv-llm-span3" style="display:flex;align-items:center;gap:6px">
+          <n-input-number v-model:value="llmForm.rpm" size="small" :min="1" :max="3000" style="width:92px" />
+          <span class="sv-llm-unit">RPM</span>
+          <n-input-number v-model:value="llmForm.workers" size="small" :min="1" :max="16" style="width:80px" />
+          <span class="sv-llm-unit">并发</span>
+        </div>
+        <span class="sv-llm-lb">操作</span>
+        <div class="sv-llm-span3" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <n-button size="tiny" type="primary" :loading="llmSaving" @click="saveLlm">保存</n-button>
+          <n-button size="tiny" :loading="llmTesting" @click="testLlm">测试连接</n-button>
+          <span v-if="llmTestMsg" :style="{fontSize:'10.5px',color:llmTestMsg.ok?'#10b981':'#ef4444'}">
+            {{ llmTestMsg.ok ? `✓ ${llmTestMsg.model} 通（${llmTestMsg.latency_ms}ms）` : `✕ ${llmTestMsg.error}` }}
+          </span>
+        </div>
+      </div>
+
+      <!-- 右：实时指标 -->
+      <div class="sv-llm-metrics">
+        <div class="sv-llm-mhead">
+          实时调用
+          <span style="font-size:9.5px;color:var(--c-text-faint);font-weight:400">5 秒刷新 · 进程内计数</span>
+        </div>
+        <div class="sv-llm-mgrid">
+          <div class="sv-llm-mt" :style="{ borderColor: llmM.saturated ? 'rgba(245,158,11,0.5)' : 'var(--c-card-bg-hover)' }">
+            <div class="sv-llm-ml">在途并发</div>
+            <div class="sv-llm-mv" :style="{ color: llmM.saturated ? '#f59e0b' : 'var(--c-text)' }">
+              {{ llmM.active ?? '-' }}<span class="sv-llm-ms">/ {{ llmM.config?.workers ?? '-' }}</span>
+            </div>
+          </div>
+          <div class="sv-llm-mt">
+            <div class="sv-llm-ml">近 1 分钟</div>
+            <div class="sv-llm-mv">{{ llmM.rpm_1m ?? '-' }}<span class="sv-llm-ms">/ {{ llmM.config?.rpm ?? '-' }} RPM</span></div>
+          </div>
+          <div class="sv-llm-mt">
+            <div class="sv-llm-ml">峰值并发</div>
+            <div class="sv-llm-mv">{{ llmM.peak ?? '-' }}</div>
+          </div>
+          <div class="sv-llm-mt">
+            <div class="sv-llm-ml">成功 / 失败</div>
+            <div class="sv-llm-mv">{{ llmM.ok ?? 0 }}<span class="sv-llm-ms" :style="{ color: (llmM.fail ? '#ef4444' : 'var(--c-text-faint)') }">/ {{ llmM.fail ?? 0 }}</span></div>
+          </div>
+          <div class="sv-llm-mt">
+            <div class="sv-llm-ml">平均时延</div>
+            <div class="sv-llm-mv">{{ llmM.avg_ms ?? '-' }}<span class="sv-llm-ms">ms</span></div>
+          </div>
+          <div class="sv-llm-mt">
+            <div class="sv-llm-ml">P95 时延</div>
+            <div class="sv-llm-mv">{{ llmM.p95_ms ?? '-' }}<span class="sv-llm-ms">ms</span></div>
+          </div>
+        </div>
+        <div v-if="llmM.recent_errors && llmM.recent_errors.length" class="llm-err">
+          <span v-for="e in llmM.recent_errors.slice(-2)" :key="e.at + e.code">
+            {{ e.at }} · {{ e.code }} · {{ e.msg.slice(0, 46) }}
+          </span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -840,13 +867,25 @@ async function loadBfLogs() {
 .nowrap-cell, .nowrap-cell .n-data-table-th { white-space:nowrap !important; }
 .n-data-table-td__ellipsis { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap !important; }
 
-/* 状态页：大模型实时指标行 */
-.llm-metrics { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; padding-top: 8px;
-  border-top: 1px dashed var(--c-border-light); font-size: 10.5px; color: var(--c-text-dim); }
-.llm-m { white-space: nowrap; }
-.llm-m b { font-size: 12px; color: var(--c-text); font-weight: 700; margin: 0 1px; }
-.llm-sub { color: var(--c-text-faint); }
-.llm-err { margin-top: 4px; font-size: 9.5px; color: #ef4444; line-height: 1.5;
+/* 状态页：大模型配置（通栏：左表单 / 右指标） */
+.sv-llm { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
+.sv-llm-form { flex: 1.6; min-width: 420px; display: grid; grid-template-columns: 58px minmax(0, 1.2fr) 58px minmax(0, 1fr);
+  gap: 8px 8px; align-items: center; padding: 10px 12px; background: var(--c-card-bg);
+  border: 1px solid var(--c-card-bg-hover); border-radius: 6px; }
+.sv-llm-lb { font-size: 11px; color: var(--c-text-dim); text-align: right; white-space: nowrap; }
+.sv-llm-unit { font-size: 10px; color: var(--c-text-faint); white-space: nowrap; }
+.sv-llm-span3 { grid-column: span 3; }
+.sv-llm-metrics { flex: 1; min-width: 320px; padding: 10px 12px; background: var(--c-card-bg);
+  border: 1px solid var(--c-card-bg-hover); border-radius: 6px; display: flex; flex-direction: column; }
+.sv-llm-mhead { font-size: 11px; font-weight: 600; color: var(--c-text); margin-bottom: 8px;
+  display: flex; align-items: baseline; gap: 6px; }
+.sv-llm-mgrid { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.sv-llm-mt { padding: 6px 8px; border: 1px solid var(--c-card-bg-hover); border-radius: 5px;
+  background: var(--c-bg); min-width: 0; }
+.sv-llm-ml { font-size: 9.5px; color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sv-llm-mv { font-size: 15px; font-weight: 700; color: var(--c-text); line-height: 1.3; }
+.sv-llm-ms { font-size: 9.5px; font-weight: 400; color: var(--c-text-faint); margin-left: 2px; }
+.llm-err { margin-top: 6px; font-size: 9.5px; color: #ef4444; line-height: 1.5;
   display: flex; flex-direction: column; gap: 1px; }
 
 /* 状态页：数据明细通栏网格（≥1440px 3列，以下 2列） */
