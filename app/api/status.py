@@ -790,6 +790,25 @@ def get_dag_logs(log_id: int = Query(None)):
         return {"ok": False, "error": str(e)}
 
 
+@router.get("/version")
+def app_version():
+    """前端构建版本（dist/index.html 里的 JS 哈希）——页面自检用：变了就提示刷新。
+
+    dev（:3000）走 vite HMR 不需要它，但同一接口也能反映重新 build 的 dist。
+    """
+    import re as _re
+    from pathlib import Path as _P
+    idx = _P(__file__).resolve().parents[2] / "web-v2" / "dist" / "index.html"
+    try:
+        html = idx.read_text(encoding="utf-8", errors="replace")
+        m = _re.search(r"index-([A-Za-z0-9_-]+)\.js", html)
+        build = m.group(1) if m else "unknown"
+        mtime = int(idx.stat().st_mtime)
+    except Exception:
+        build, mtime = "dev", 0
+    return {"build": build, "dist_mtime": mtime}
+
+
 @router.get("/data_status/sync_status")
 def sync_status(task_id: str):
     task = _sync_tasks.get(task_id)
