@@ -1,6 +1,6 @@
 #!/bin/bash
-# WSL 启动自启（crontab @reboot）：后端 + 前端
-# 幂等：已在运行则跳过；日志落 /tmp/stone_local.log
+# WSL 启动自启（crontab @reboot）：后端 + 前端 + 雪球采集常驻
+# 幂等：已在运行则跳过；日志落 /tmp/stone_local.log（各服务另见 logs/）
 LOG=/tmp/stone_local.log
 echo "$(date '+%F %T') ====== stone 自启 ======" >> "$LOG"
 
@@ -33,4 +33,23 @@ if ! pgrep -f 'alpha158_full' >/dev/null; then
   cd /home/bnbnyu/projects/stone
   setsid nohup venv/bin/python scripts/alpha158_full.py --start-year 2017 >> /tmp/a158_full.log 2>&1 < /dev/null &
   echo "a158 resume started (2017+)" >> "$LOG"
+fi
+
+# 雪球采集常驻（design/06 §9.8：独立进程，不进 DAG/TaskManager；幂等，已在跑则跳过）
+# 日志落仓库 logs/（持久，已 gitignore）——/tmp 每次开机清空，旧路径 /tmp/xq_p0/p1_run.log 留不住
+# 夜间 23:00-09:15 speed_factor=0 主调度休眠属设计内（心跳照跳，指示灯仍绿），勿误判为掉线
+if ! pgrep -f 'venv/bin/python -m scripts.xueqiu_poller' >/dev/null; then
+  cd /home/bnbnyu/projects/stone
+  mkdir -p /tmp/xq_p0
+  setsid nohup venv/bin/python -m scripts.xueqiu_poller >> logs/xueqiu_poller.log 2>&1 < /dev/null &
+  sleep 2
+  pid=$(pgrep -f 'venv/bin/python -m scripts.xueqiu_poller' | head -1)
+  if [ -n "$pid" ]; then
+    echo "$pid" > /tmp/xq_p0/p1.pid
+    echo "xueqiu poller started (pid $pid)" >> "$LOG"
+  else
+    echo "xueqiu poller FAILED to start (see logs/xueqiu_poller.log)" >> "$LOG"
+  fi
+else
+  echo "xueqiu poller already up" >> "$LOG"
 fi
