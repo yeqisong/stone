@@ -274,6 +274,13 @@ def collect_flash(db, cfg: dict, stats: dict, name_index: list) -> str:
         stats['flash'] = stats.get('flash', 0) + n
         if name != 'cls':
             stats['flash_fallback'] = name
+        # 主源成功即止：未启用的备源刷新状态语义（否则残留数天前的失败 note，
+        # 健康判定会把「备胎待命」误报成「已停摆」——2026-10-31 实际案例）
+        if name == 'cls':
+            for other, _, _ in nsrc.FLASH_SOURCES:
+                if other != 'cls':
+                    state_set(db, other, ok=True, fail_streak=0,
+                              note='主源正常，本轮未启用', touch_fetched=False)
         return name
     stats['flash_errors'] = errs
     return ''
