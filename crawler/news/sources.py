@@ -45,6 +45,49 @@ EM_JITTER = 0.3
 _EM_LOCK = threading.Lock()
 _EM_LAST = [0.0]
 _SESSION = cffi_requests.Session(impersonate='chrome')
+_SESSION_CREATED = time.time()
+
+# 长驻进程内 curl_cffi 的 DNS/连接状态会坏死（实测：WSL 下 /etc/resolv.conf 变更后
+# 进程内 curl(6) 永久失败，而 fresh 进程同代码路径 200；财联社靠未断的长连接幸存）。
+# 自愈：连接类异常 → 重建 Session（新的解析通道，重读 resolv.conf）→ 立即重试一次；
+# 另有会话超龄懒重建，防慢降解。
+_CONN_ERR_KEYS = ('curl: (6)', 'curl: (7)', 'curl: (28)', 'curl: (35)', 'curl: (56)',
+                  'Could not resolve', 'DNSError', 'SSLError', 'Connection ', 'connect')
+_SESSION_MAX_AGE = 6 * 3600
+
+
+def _is_conn_error(e: Exception) -> bool:
+    msg = str(e)
+    return any(k in msg for k in _CONN_ERR_KEYS)
+
+
+def _rebuild_session(reason: str = ''):
+    global _SESSION, _SESSION_CREATED
+    try:
+        _SESSION.close()
+    except Exception:
+        pass
+    _SESSION = cffi_requests.Session(impersonate='chrome')
+    _SESSION_CREATED = time.time()
+    logger.warning(f'[news] HTTP 会话已重建{("：" + reason) if reason else ""}')
+
+
+def _session_request(method: str, url: str, **kw):
+    """全局会话请求唯一入口（带自愈）。"""
+    global _SESSION_CREATED
+    if time.time() - _SESSION_CREATED > _SESSION_MAX_AGE:
+        _rebuild_session(f'超龄 {int((time.time() - _SESSION_CREATED) / 3600)}h')
+    try:
+        if method == 'POST':
+            return _SESSION.post(url, **kw)
+        return _SESSION.get(url, **kw)
+    except Exception as e:
+        if not _is_conn_error(e):
+            raise
+        _rebuild_session(f'连接异常 {str(e)[:90]}')
+        if method == 'POST':
+            return _SESSION.post(url, **kw)
+        return _SESSION.get(url, **kw)
 
 
 def bj_now() -> datetime.datetime:
@@ -162,8 +205,8 @@ def em_get(url, *, params=None, data=None, headers=None, timeout=20, method='GET
             time.sleep(wait)
         try:
             if method == 'POST':
-                return _SESSION.post(url, data=data, headers=h, timeout=timeout)
-            return _SESSION.get(url, params=params, headers=h, timeout=timeout)
+                return _session_request('POST', url, data=data, headers=h, timeout=timeout)
+            return _session_request('GET', url, params=params, headers=h, timeout=timeout)
         finally:
             _EM_LAST[0] = time.time()
 
@@ -223,7 +266,7 @@ def fetch_cls(cursor: str = '', max_pages: int = 4) -> tuple:
         params = {'appName': 'CailianpressWeb', 'os': 'web', 'sv': '7.7.5',
                   'last_time': last_time, 'refresh_type': '1', 'rn': '50'}
         qs = '&'.join(f'{k}={params[k]}' for k in sorted(params))
-        r = _SESSION.get(f'{CLS_URL}?{qs}&sign={_cls_sign(params)}',
+        r = _session_request('GET', f'{CLS_URL}?{qs}&sign={_cls_sign(params)}',
                          headers={'User-Agent': UA, 'Referer': 'https://www.cls.cn/'},
                          timeout=20)
         d = r.json()
@@ -332,7 +375,7 @@ def fetch_wscn(cursor: str = '', max_pages: int = 4) -> tuple:
         params = {'channel': 'a-stock-channel', 'limit': '100'}
         if cur:
             params['cursor'] = cur
-        r = _SESSION.get(WSCN_URL, params=params,
+        r = _session_request('GET', WSCN_URL, params=params,
                          headers={'User-Agent': UA, 'Referer': 'https://wallstreetcn.com/'},
                          timeout=20)
         d = r.json()
@@ -519,7 +562,7 @@ def fetch_cninfo_orgid_map() -> dict:
     orgId 并非统一格式（601318→9900002221 / 601398→jjxt0000019 / 688017→9900041602），
     硬编码会让 601xxx 段大量返回 totalAnnouncement=0，故必须动态取。
     """
-    r = _SESSION.get(CNINFO_ORGID_URL, headers={'User-Agent': UA}, timeout=20)
+    r = _session_request('GET', CNINFO_ORGID_URL, headers={'User-Agent': UA}, timeout=20)
     lst = (r.json() or {}).get('stockList') or []
     return {s['code']: s['orgId'] for s in lst if s.get('code') and s.get('orgId')}
 
