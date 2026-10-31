@@ -229,6 +229,7 @@ class Poller:
         logger.error(f'雪球进入冷却恢复: {reason}')
         for i in range(1, 25):
             time.sleep(600)
+            self._heartbeat()   # 冷却期也保心跳：活着就心跳，看门狗不误杀合法冷却
             try:
                 self.guard.ensure_ready()          # 重新 wash（重置风控计数）
                 res = self.guard.fetch('600519')   # 探测

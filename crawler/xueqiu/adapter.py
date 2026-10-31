@@ -58,9 +58,20 @@ def clean_text(raw: str) -> str:
 class FetchResult:
     ok: bool = False
     challenged: bool = False       # True = 命中 WAF 行为评分（200 + 挑战 HTML）
+    net: bool = False              # True = 传输层故障（DNS/连接/SSL）——不是封禁，不计入熔断
     error: str = ''
     items: list = field(default_factory=list)   # 原始 status dict 列表
     max_page: int = 0
+
+
+# 连接类异常特征（与 crawler/news/sources.py 同款机制：重建会话自愈）
+_CONN_ERR_KEYS = ('curl: (6)', 'curl: (7)', 'curl: (28)', 'curl: (35)', 'curl: (56)',
+                  'Could not resolve', 'DNSError', 'SSLError', 'Connection ', 'connect')
+
+
+def _is_conn_error(e: Exception) -> bool:
+    msg = str(e)
+    return any(k in msg for k in _CONN_ERR_KEYS)
 
 
 @dataclass
@@ -138,7 +149,7 @@ class XueqiuAdapter:
 
     def __init__(self):
         self._cookies: dict[str, str] = {}
-        self._session = cffi_requests.Session(impersonate='chrome')  # 连接复用 + Chrome TLS 指纹
+        self._new_session()
         self._login = load_login_cookies() is not None
         self.set_cookies(load_login_cookies() or {})
 
@@ -157,12 +168,25 @@ class XueqiuAdapter:
     def ready(self) -> bool:
         return 'xq_a_token' in self._cookies
 
+    def _new_session(self):
+        D = "新建 Chrome 指纹会话（连接复用；重建是 DNS/连接状态坏死的自愈手段）"
+        self._session = cffi_requests.Session(impersonate='chrome')
+
+    def _rebuild_session(self, reason: str = ''):
+        from loguru import logger as _lg
+        try:
+            self._session.close()
+        except Exception:
+            pass
+        self._new_session()
+        _lg.warning('[xueqiu] HTTP 会话已重建: ' + (reason or ''))
+
     def fetch_page(self, code: str, page: int = 1, count: int = 20) -> FetchResult:
         """拉一页个股讨论列表（sort=time 时间倒序）。"""
         if not self.ready():
             return FetchResult(error='no cookie')
-        try:
-            r = self._session.get(
+        def _do():
+            return self._session.get(
                 API,
                 params={'symbol': to_xq_symbol(code), 'count': count, 'page': page,
                         'sort': 'time', 'source': 'all', 'q': ''},
@@ -172,8 +196,17 @@ class XueqiuAdapter:
                          'Cookie': self.cookie_header},
                 timeout=15,
             )
+        try:
+            try:
+                r = _do()
+            except Exception as e:
+                if not _is_conn_error(e):
+                    return FetchResult(net=True, error=f'req exc: {e}')
+                # 传输层故障：重建会话（新解析通道重读 resolv.conf）后重试一次
+                self._rebuild_session(str(e)[:80])
+                r = _do()
         except Exception as e:
-            return FetchResult(error=f'req exc: {e}')
+            return FetchResult(net=True, error=f'req exc: {e}')
 
         ct = r.headers.get('content-type', '')
         if r.status_code != 200 or 'json' not in ct:
