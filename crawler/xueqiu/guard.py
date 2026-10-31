@@ -118,6 +118,13 @@ class RatingGuard:
                 self.stats.ok += 1
             return res
 
+        # 传输层故障（DNS/连接/SSL）：不是封禁——不计熔断 streak，不进冷却监狱
+        # （2026-10-30 事故：DNS 坏死被误判为 IP 软封禁，冷却探测也 DNS 失败，
+        #  4h×24 次探测全部失败后僵尸化）。交给上层 per-stock 退避处理。
+        if res.net:
+            logger.warning(f'雪球传输层故障（不计封禁）: {res.error[:60]}')
+            return res
+
         # 非挑战失败：405 等风控信号，连续出现即熔断（2026-09-21 教训：
         # 短退避重试风暴 60s 打 ~460 请求，直接把 IP 打成 405 软封禁）
         self._risk_streak += 1
