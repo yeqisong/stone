@@ -113,16 +113,24 @@ def news_health():
     try:
         rows = db.execute(text("""
             SELECT source, cursor, last_published_at, last_fetched_at, last_ok,
-                   fail_streak, note
+                   fail_streak, note, updated_at
             FROM news_crawl_state ORDER BY source
         """)).fetchall()
         now = db.execute(text("SELECT now()")).scalar()
         sources, worst = [], 'ok'
         rank = {'ok': 0, 'degraded': 1, 'down': 2}
         for r in rows:
-            src, _, last_pub, last_fetch, ok, streak, note = r
+            src, _, last_pub, last_fetch, ok, streak, note, updated = r
+            # 快讯备源（em724/wscn）主备切换设计：主源正常时未启用属正常态，
+            # 不拖累总灯（2026-10-31 修复：残留失败 note 被误判为「已停摆」）
+            standby_ok = (src in ('em724', 'wscn')
+                          and (note or '').startswith('主源正常')
+                          and updated is not None
+                          and (now - updated).total_seconds() < 3600)
             if last_fetch is None:
-                state = 'down' if src in ('cls', 'em724', 'wscn') else 'ok'
+                state = 'ok' if standby_ok else ('down' if src in ('cls', 'em724', 'wscn') else 'ok')
+            elif standby_ok:
+                state = 'ok'
             else:
                 age_min = (now - last_fetch).total_seconds() / 60
                 if src == 'em_stock':
