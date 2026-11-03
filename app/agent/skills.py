@@ -136,6 +136,112 @@ def delete_skill(name: str) -> dict:
     return {"ok": True}
 
 
+# ── GitHub 技能导入（预览 → 人工确认入库；不自动安装）──────────
+
+_IMPORT_RE = re.compile(
+    r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(\.git)?/?$")
+_TMP = ROOT / "data" / "skills" / ".import-tmp"
+
+
+def _clone_shallow(repo_url: str) -> tuple:
+    """浅克隆到临时目录，返回 (目录, 仓库默认 slug)。"""
+    import subprocess
+    m = _IMPORT_RE.match((repo_url or "").strip())
+    if not m:
+        raise ValueError("仅支持 github.com 仓库 URL（https://github.com/<owner>/<repo>）")
+    owner, repo = m.group(1), m.group(2)
+    tmp = _TMP / f"{owner}__{repo}"
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    _TMP.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(
+        ["git", "clone", "--depth", "1", "--single-branch",
+         f"https://github.com/{owner}/{repo}.git", str(tmp)],
+        capture_output=True, timeout=180)
+    if r.returncode != 0:
+        raise ValueError(f"克隆失败: {r.stderr.decode('utf-8', 'replace')[:200]}")
+    shutil.rmtree(tmp / ".git", ignore_errors=True)
+    return tmp, repo
+
+
+def _find_skill_md(d: Path) -> Path:
+    """根目录 SKILL.md 优先；其次 skills/<x>/SKILL.md（唯一时）。"""
+    if (d / "SKILL.md").exists():
+        return d / "SKILL.md"
+    subs = [p for p in d.glob("skills/*/SKILL.md")]
+    if len(subs) == 1:
+        return subs[0]
+    if len(subs) > 1:
+        raise ValueError("仓库含多个技能（skills/*/SKILL.md），请手动选择子目录安装")
+    raise ValueError("未找到 SKILL.md（根目录或 skills/*/ 下）")
+
+
+def import_github_preview(repo_url: str) -> dict:
+    """拉取并预览：不落库，只返回技能元信息与正文预览。"""
+    try:
+        tmp, repo = _clone_shallow(repo_url)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    try:
+        f = _find_skill_md(tmp)
+        parsed = _parse(f.read_text(encoding="utf-8", errors="replace"))
+        files = sorted(str(p.relative_to(tmp)) for p in tmp.rglob("*")
+                       if p.is_file() and ".git" not in p.parts)
+        size = sum(p.stat().st_size for p in tmp.rglob("*") if p.is_file())
+        return {
+            "repo": repo,
+            "default_slug": parsed["meta"].get("name") or repo,
+            "title": parsed["meta"].get("title") or repo,
+            "description": parsed["meta"].get("description") or "",
+            "body_preview": parsed["body"][:600],
+            "body_chars": len(parsed["body"]),
+            "file_count": len(files),
+            "files": files[:40],
+            "size_mb": round(size / 1024 / 1024, 2),
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+def import_github_confirm(repo_url: str, slug: str = "") -> dict:
+    """确认入库：移动临时目录到 data/skills/<slug>。"""
+    if not _NAME_RE.match((slug or "").strip() or "x"):
+        pass  # slug 缺省时用 repo 名再校验
+    try:
+        tmp, repo = _clone_shallow(repo_url)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    try:
+        meta_name = _parse((tmp / "SKILL.md").read_text(encoding="utf-8", errors="replace"))["meta"].get("name") or ""
+    except Exception:
+        meta_name = ""
+    use = (slug or "").strip() or meta_name or repo
+    if not _NAME_RE.match(use):
+        shutil.rmtree(tmp, ignore_errors=True)
+        return {"error": "技能名只能用字母/数字/._-"}
+    if (BUILTIN_DIR / use).exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+        return {"error": f"「{use}」是内置技能目录名，请换一个"}
+    try:
+        _find_skill_md(tmp)          # 确认存在再落位
+    except ValueError as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return {"error": str(e)}
+    dest = USER_DIR / use
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    for item in tmp.iterdir():
+        shutil.move(str(item), str(dest / item.name))
+    shutil.rmtree(tmp, ignore_errors=True)
+    logger.info(f"[skills] 已从 GitHub 导入技能 {use}")
+    return {"ok": True, "name": use}
+
+
 def skill_index_text(limit: int = 40) -> str:
     """系统提示用的技能清单（名称 + 描述）。"""
     items = list_skills()[:limit]

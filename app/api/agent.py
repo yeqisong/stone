@@ -129,6 +129,31 @@ def skill_save(body: SkillBody, user: str = Depends(optional_auth)):
     return r
 
 
+class SkillImportBody(BaseModel):
+    repo_url: str
+    slug: str = ""
+
+
+@router.post("/skills/import/preview")
+def skill_import_preview(body: SkillImportBody, user: str = Depends(optional_auth)):
+    """拉取 GitHub 技能仓库并返回预览（不落库，人工审核后确认导入）。"""
+    from app.agent.skills import import_github_preview
+    r = import_github_preview(body.repo_url)
+    if r.get("error"):
+        raise HTTPException(400, r["error"])
+    return r
+
+
+@router.post("/skills/import/confirm")
+def skill_import_confirm(body: SkillImportBody, user: str = Depends(optional_auth)):
+    """确认入库到 data/skills/<slug>（覆盖同名用户技能，内置技能拒绝）。"""
+    from app.agent.skills import import_github_confirm
+    r = import_github_confirm(body.repo_url, body.slug)
+    if r.get("error"):
+        raise HTTPException(400, r["error"])
+    return r
+
+
 @router.delete("/skills/{name}")
 def skill_delete(name: str, user: str = Depends(optional_auth)):
     from app.agent.skills import delete_skill
