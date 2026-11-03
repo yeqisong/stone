@@ -884,6 +884,42 @@ CREATE TABLE IF NOT EXISTS stock_holder_number (
 CREATE INDEX IF NOT EXISTS idx_shn_date ON stock_holder_number (end_date);
 """
 
+# ── 宏观指标与指数估值（macro_daily DAG 节点写入；tushare 2000 积分实测可用）──
+
+CREATE_MACRO_INDICATOR = """
+CREATE TABLE IF NOT EXISTS macro_indicator (
+    indicator_code  VARCHAR(24) NOT NULL,   -- cpi/ppi/gdp/m0/m1/m2/shibor_on（value 统一为同比/增速）
+    period_date     DATE NOT NULL,          -- 月度=当月1日，季度=季末月1日，shibor=当日
+    value           FLOAT,                  -- 主值：同比/增速（shibor_on=隔夜利率%）
+    yoy             FLOAT,
+    extra           JSONB,                  -- 原始行全字段（绝对值/环比/各期限等）
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (indicator_code, period_date)
+);
+CREATE INDEX IF NOT EXISTS idx_macro_period ON macro_indicator (period_date DESC);
+"""
+
+CREATE_INDEX_VALUATION = """
+CREATE TABLE IF NOT EXISTS index_valuation (
+    ts_code         VARCHAR(16) NOT NULL,
+    trade_date      DATE NOT NULL,
+    pe              FLOAT,
+    pe_ttm          FLOAT,
+    pb              FLOAT,
+    total_mv        NUMERIC(18,3),
+    float_mv        NUMERIC(18,3),
+    total_share     NUMERIC(20,4),
+    float_share     NUMERIC(20,4),
+    turnover_rate   FLOAT,
+    turnover_rate_f FLOAT,
+    volume          NUMERIC(20,4),
+    amount          NUMERIC(20,4),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ts_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_index_val_date ON index_valuation (trade_date DESC);
+"""
+
 # ── AI 问答 Agent（会话 + 消息轨迹；沙箱工作区落 data/agent_ws/<session_id>/）──
 
 CREATE_AGENT = """
@@ -1259,6 +1295,8 @@ ALL_TABLES = [
     ("news_crawl_state", CREATE_NEWS_CRAWL_STATE),
     ("news_poll_state", CREATE_NEWS_POLL_STATE),
     ("agent", CREATE_AGENT),
+    ("macro_indicator", CREATE_MACRO_INDICATOR),
+    ("index_valuation", CREATE_INDEX_VALUATION),
 ]
 
 
@@ -1318,6 +1356,20 @@ def init_db(sync_session) -> None:
             "INSERT INTO watch_groups (group_name, is_default, sort_order) "
             "VALUES ('自选', true, 0) ON CONFLICT (group_name) DO NOTHING"
         ))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 播种：宏观与指数估值采集流程（每日 23:05，幂等；同名流程存在则跳过）
+    try:
+        import json as _json_seed
+        _nodes = _json_seed.dumps([{"node_name": "macro_daily", "deps": []}], ensure_ascii=False)
+        sync_session.execute(text(
+            "INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status) "
+            "VALUES ('宏观与指数估值采集', '每日 23:05 采集宏观月度指标（CPI/PPI/GDP/M0M1M2/SHIBOR）"
+            "与指数每日估值（tushare）', :nodes, '[]', '5 23 * * *', 'published') "
+            "ON CONFLICT (flow_name) DO NOTHING"
+        ), {"nodes": _nodes})
         sync_session.commit()
     except Exception:
         sync_session.rollback()

@@ -4459,6 +4459,192 @@ def dag_task_rolling_retrain(trade_date=None, dry_run=False, **kw):
         db.close()
 
 
+def _fv(v):
+    """numpy/pandas 标量 → 原生 float（SQLAlchemy 会把 np.float64 内联进 SQL 并报错）。"""
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return None if f != f else f   # NaN → None
+    except Exception:
+        return None
+
+
+def dag_task_macro_daily(trade_date=None, **kw):
+    """DAG 节点：宏观月度指标 + 指数每日估值（独立流程 23:05 触发）。
+
+    tushare 2000 积分实测可用（2026-11-01）：cn_cpi/cn_ppi/cn_gdp/cn_m/shibor/
+    index_dailybasic；sw_daily 无权限不调用。全部按主键 upsert 幂等，缺口自动回补：
+    - 指数估值：近 40 自然日窗口 × 7 个主要指数（沪深300/上证/深成/创业板/中证500/1000/上证50）
+    - 宏观：近 24 个月 CPI/PPI/M0M1M2、近 8 季度 GDP、近 10 个交易日 SHIBOR
+    value 列统一为同比/增速（shibor_on 为隔夜利率），extra 保留原始行全字段。
+    配额护栏：余量 <20 即收工，下次续跑（幂等）。
+    """
+    from datetime import date as _date, timedelta
+    td = str(trade_date or _date.today())[:10]
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('macro_daily')
+    write_node_log(log_id=log_id, status='running', detail='采集宏观指标与指数估值…',
+                   trade_date=td, node_name='macro_daily', run_id=rid)
+
+    def _run():
+        import json as _json5
+        import tushare as ts
+        from sqlalchemy import text as _t5
+        from app.config import settings as _st5
+        from app.db.connection import get_sync_db
+        from crawler.adapters.tushare_quota import TushareQuota
+
+        pro = ts.pro_api(_st5.TUSHARE_TOKEN)
+        quota = TushareQuota.get()
+        db = get_sync_db()
+        stats = {'index_rows': 0, 'macro_rows': 0, 'errors': [], 'stop': ''}
+
+        def _q():
+            """配额检查 + 计数；不足返回 False。"""
+            if quota.remaining() < 20:
+                stats['stop'] = '配额余量不足 20，下次续跑'
+                return False
+            quota.consume()
+            return True
+
+        def _upsert_macro(code, period, value, yoy, extra):
+            db.execute(_t5("""
+                INSERT INTO macro_indicator (indicator_code, period_date, value, yoy, extra)
+                VALUES (:c, :d, :v, :y, :e)
+                ON CONFLICT (indicator_code, period_date) DO UPDATE SET
+                    value = EXCLUDED.value, yoy = EXCLUDED.yoy, extra = EXCLUDED.extra
+            """), {'c': code, 'd': period, 'v': _fv(value), 'y': _fv(yoy),
+                   'e': _json5.dumps(extra or {}, ensure_ascii=False, default=str)})
+            stats['macro_rows'] += 1
+
+        def _month_date(m):
+            m = str(m)[:6]
+            return f'{m[:4]}-{m[4:6]}-01'
+
+        try:
+            # ── 1. 指数每日估值（近 40 自然日，缺口自动补）──
+            start = (_date.fromisoformat(td) - timedelta(days=40)).isoformat()
+            indexes = ['000300.SH', '000001.SH', '399001.SZ', '399006.SZ',
+                       '000905.SH', '000852.SH', '000016.SH']
+            for code in indexes:
+                if stats['stop'] or not _q():
+                    break
+                try:
+                    df = pro.index_dailybasic(ts_code=code,
+                                              start_date=start.replace('-', ''),
+                                              end_date=td.replace('-', ''))
+                except Exception as e:
+                    stats['errors'].append(f'index {code}: {str(e)[:70]}')
+                    continue
+                for _, r in (df.iterrows() if df is not None and len(df) else []):
+                    db.execute(_t5("""
+                        INSERT INTO index_valuation (ts_code, trade_date, pe, pe_ttm, pb,
+                            total_mv, float_mv, total_share, float_share,
+                            turnover_rate, turnover_rate_f, volume, amount)
+                        VALUES (:c, :d, :pe, :pet, :pb, :tmv, :fmv, :ts, :fs, :tr, :trf, :vol, :amt)
+                        ON CONFLICT (ts_code, trade_date) DO UPDATE SET
+                            pe=EXCLUDED.pe, pe_ttm=EXCLUDED.pe_ttm, pb=EXCLUDED.pb,
+                            total_mv=EXCLUDED.total_mv, float_mv=EXCLUDED.float_mv,
+                            total_share=EXCLUDED.total_share, float_share=EXCLUDED.float_share,
+                            turnover_rate=EXCLUDED.turnover_rate, turnover_rate_f=EXCLUDED.turnover_rate_f,
+                            volume=EXCLUDED.volume, amount=EXCLUDED.amount
+                    """), {'c': code, 'd': str(r['trade_date'])[:10],
+                           'pe': _fv(r.get('pe')), 'pet': _fv(r.get('pe_ttm')), 'pb': _fv(r.get('pb')),
+                           'tmv': _fv(r.get('total_mv')), 'fmv': _fv(r.get('float_mv')),
+                           'ts': _fv(r.get('total_share')), 'fs': _fv(r.get('float_share')),
+                           'tr': _fv(r.get('turnover_rate')), 'trf': _fv(r.get('turnover_rate_f')),
+                           'vol': _fv(r.get('volume')), 'amt': _fv(r.get('amount'))})
+                    stats['index_rows'] += 1
+            db.commit()
+
+            # ── 2. 宏观月度（近 24 个月 / 近 8 季度）──
+            end_m = td[:7].replace('-', '')
+            y, mo = int(td[:4]), int(td[5:7])
+            started_y, started_m = y - 2, mo
+            start_m = f'{started_y}{started_m:02d}'
+            q_now = (mo - 1) // 3 + 1
+            start_q_y = y - 2
+            start_q = f'{start_q_y}Q{q_now}'
+            end_q = f'{y}Q{q_now}'
+
+            if not stats['stop'] and _q():
+                try:
+                    df = pro.cn_cpi(start_m=start_m, end_m=end_m)
+                    for _, r in (df.iterrows() if df is not None and len(df) else []):
+                        _upsert_macro('cpi', _month_date(r['month']), r.get('nt_yoy'), r.get('nt_yoy'),
+                                      {k: r.get(k) for k in ('nt_val', 'nt_yoy', 'nt_mom', 'nt_accu')})
+                except Exception as e:
+                    stats['errors'].append(f'cpi: {str(e)[:70]}')
+            if not stats['stop'] and _q():
+                try:
+                    df = pro.cn_ppi(start_m=start_m, end_m=end_m)
+                    for _, r in (df.iterrows() if df is not None and len(df) else []):
+                        _upsert_macro('ppi', _month_date(r['month']), r.get('ppi_yoy'), r.get('ppi_yoy'),
+                                      {k: r.get(k) for k in ('ppi_yoy', 'ppi_mp_yoy', 'ppi_mp_qm_yoy')})
+                except Exception as e:
+                    stats['errors'].append(f'ppi: {str(e)[:70]}')
+            if not stats['stop'] and _q():
+                try:
+                    df = pro.cn_m(start_m=start_m, end_m=end_m)
+                    for _, r in (df.iterrows() if df is not None and len(df) else []):
+                        for code in ('m0', 'm1', 'm2'):
+                            _upsert_macro(code, _month_date(r['month']),
+                                          r.get(f'{code}_yoy'), r.get(f'{code}_yoy'),
+                                          {code: r.get(code), f'{code}_yoy': r.get(f'{code}_yoy')})
+                except Exception as e:
+                    stats['errors'].append(f'm: {str(e)[:70]}')
+            if not stats['stop'] and _q():
+                try:
+                    df = pro.cn_gdp(start_q=start_q, end_q=end_q)
+                    for _, r in (df.iterrows() if df is not None and len(df) else []):
+                        q = str(r['quarter'])
+                        qy, qn = int(q[:4]), int(q[-1])
+                        _upsert_macro('gdp', f'{qy}-{qn * 3:02d}-01', r.get('gdp_yoy'), r.get('gdp_yoy'),
+                                      {k: r.get(k) for k in ('gdp', 'gdp_yoy', 'pi', 'si', 'ti')})
+                except Exception as e:
+                    stats['errors'].append(f'gdp: {str(e)[:70]}')
+            db.commit()
+
+            # ── 3. SHIBOR（近 10 交易日，缺口回补）──
+            need = [str(r[0])[:10] for r in db.execute(_t5("""
+                SELECT cal_date FROM trade_calendar tc
+                WHERE tc.is_trade_day AND tc.cal_date BETWEEN :s AND :e
+                  AND NOT EXISTS (SELECT 1 FROM macro_indicator m
+                                  WHERE m.indicator_code='shibor_on' AND m.period_date=tc.cal_date)
+                ORDER BY cal_date DESC LIMIT 10
+            """), {'s': (_date.fromisoformat(td) - timedelta(days=20)).isoformat(), 'e': td}).fetchall()]
+            for d in need:
+                if stats['stop'] or not _q():
+                    break
+                try:
+                    df = pro.shibor(date=d.replace('-', ''))
+                    if df is not None and len(df):
+                        r = df.iloc[0]
+                        _upsert_macro('shibor_on', d, r.get('on'), None,
+                                      {k: r.get(k) for k in ('on', '1w', '2w', '1m', '3m', '6m', '9m', '1y')})
+                except Exception as e:
+                    stats['errors'].append(f'shibor {d}: {str(e)[:60]}')
+            db.commit()
+            return stats
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='macro_daily')
+        note = (f"指数估值 {r.get('index_rows', 0)} 行 / 宏观 {r.get('macro_rows', 0)} 行"
+                + (f"；{r.get('stop')}" if r.get('stop') else '')
+                + (f"；异常 {len(r['errors'])}: {'、'.join(r['errors'][:3])}" if r.get('errors') else ''))
+        write_node_log(log_id=log_id, status='success' if not r.get('errors') else 'success',
+                       rows=r.get('index_rows', 0) + r.get('macro_rows', 0), detail=note,
+                       trade_date=td, node_name='macro_daily', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200],
+                       trade_date=td, node_name='macro_daily', run_id=rid)
+        raise
+
+
 def dag_task_margin_daily(trade_date=None, **kw):
     """DAG 节点：两融余额采集 + 历史对齐补数（独立流程专用，建议 18:00 触发）。
 
@@ -5283,6 +5469,7 @@ NODE_FN_MAP = {
     'factor_heal':        dag_task_factor_heal,
     'rolling_retrain':    dag_task_rolling_retrain,
     'margin_daily':       dag_task_margin_daily,
+    'macro_daily':        dag_task_macro_daily,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
     'fund':               dag_task_fund,
