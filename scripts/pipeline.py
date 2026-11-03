@@ -4626,7 +4626,8 @@ def dag_task_xueqiu_sentiment(trade_date=None, **kw):
             workers = int(cfg.get('workers') or llm['workers'])   # 0/缺省=运行时配置（限速口径统一）
 
             from openai import OpenAI
-            client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+            from app.llm_runtime import build_client as _bc
+            client = _bc(llm['api_key'], llm['base_url'], session_id='stone-xueqiu-node')
 
             def _hb(done, fail, total):
                 update_node_progress(
@@ -4763,7 +4764,8 @@ def dag_task_news_summary(trade_date=None, **kw):
             workers = int(cfg.get('workers') or llm['workers'])   # 0/缺省=运行时配置（限速口径统一）
 
             from openai import OpenAI
-            client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+            from app.llm_runtime import build_client as _bc
+            client = _bc(llm['api_key'], llm['base_url'], session_id='stone-news-node')
 
             def _hb(done, fail, total):
                 update_node_progress(

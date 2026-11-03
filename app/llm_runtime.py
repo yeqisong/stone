@@ -9,6 +9,30 @@ import json
 
 from sqlalchemy import text
 
+# OpenCode Go（订阅制聚合网关）要求：稳定的会话标识头 x-opencode-session（路由与
+# prompt 缓存优化）+ 明确的客户端 UA（文档要求不要用通用 SDK 名）。只对 opencode.ai
+# 端点注入，其它 OpenAI 兼容服务保持原样。
+APP_UA = 'stone-monitor/3.x (internal agent)'
+
+
+def build_client(api_key: str = '', base_url: str = '', *, session_id: str = 'stone',
+                 timeout: float = 180):
+    """按运行时配置构建 OpenAI 兼容客户端（缺省取 get_llm_settings）。
+
+    session_id：同一对话/同一批任务用稳定值（Agent 用会话 id，批量任务用任务名）。
+    """
+    from openai import OpenAI
+    cfg = None
+    if not api_key or not base_url:
+        cfg = get_llm_settings()
+        api_key = api_key or cfg['api_key']
+        base_url = base_url or cfg['base_url']
+    headers = {}
+    if 'opencode.ai' in (base_url or ''):
+        headers = {'x-opencode-session': session_id, 'User-Agent': APP_UA}
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout,
+                  default_headers=headers or None)
+
 CFG_KEY = "llm_config"
 DEFAULTS = {"rpm": 6, "workers": 2}
 

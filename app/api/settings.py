@@ -261,7 +261,8 @@ def test_llm_config(body: LLMConfig, user: str = Depends(optional_auth)):
             return {"ok": False, "error": "未配置 API Key"}
         t0 = _t.time()
         try:
-            client = OpenAI(api_key=key, base_url=base, timeout=60)
+            from app.llm_runtime import build_client
+            client = build_client(key, base, session_id='stone-test', timeout=60)
             from app.llm_metrics import track
             with track(model):
                 r = client.chat.completions.create(
