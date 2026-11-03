@@ -115,8 +115,11 @@
   <n-modal v-model:show="showSkills" preset="card" title="技能（可复用的分析方法）" style="width:780px;max-width:94vw">
     <div class="agent-sk-wrap">
       <div class="agent-sk-list">
-        <n-button size="tiny" type="primary" block style="margin-bottom:6px" @click="startNewSkill">
+        <n-button size="tiny" type="primary" block style="margin-bottom:4px" @click="startNewSkill">
           <AppIcon name="plus" :size="12" /> 新建技能
+        </n-button>
+        <n-button size="tiny" block style="margin-bottom:6px" @click="startImport">
+          <AppIcon name="download" :size="12" /> GitHub 导入
         </n-button>
         <div v-for="s in skills" :key="s.name" class="agent-sess" :class="{ active: skEditing.name === s.name }"
              @click="openSkill(s)">
@@ -146,6 +149,37 @@
         </div>
       </div>
     </div>
+  </n-modal>
+
+  <!-- GitHub 技能导入：预览 → 人工审核 → 入库 -->
+  <n-modal v-model:show="showImport" preset="card" title="从 GitHub 导入技能" style="width:560px;max-width:94vw">
+    <n-space vertical size="small">
+      <n-input v-model:value="importUrl" size="small" placeholder="https://github.com/<owner>/<repo>"
+               :disabled="importPreview !== null" @keyup.enter="doPreview" />
+      <template v-if="importPreview">
+        <div class="agent-card" style="background:var(--c-bg)">
+          <div class="agent-card-t">{{ importPreview.title }} <span style="font-weight:400;color:var(--c-text-faint)">/ {{ importPreview.repo }}</span></div>
+          <div class="agent-card-d">{{ importPreview.description || '（无描述）' }}</div>
+          <div class="agent-card-d" style="margin-top:4px">
+            {{ importPreview.body_chars }} 字正文 · {{ importPreview.file_count }} 个文件 · {{ importPreview.size_mb }} MB
+          </div>
+        </div>
+        <pre class="agent-tool-body" style="max-height:200px">{{ importPreview.body_preview }}…</pre>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-size:10.5px;color:var(--c-text-dim);flex-shrink:0">安装名</span>
+          <n-input v-model:value="importSlug" size="small" style="width:200px" placeholder="英文技能名" />
+        </div>
+        <div style="font-size:10px;color:#f59e0b">第三方内容会进入模型上下文，请确认来源可信后再导入</div>
+      </template>
+      <div v-if="importErr" style="font-size:11px;color:#ef4444">{{ importErr }}</div>
+    </n-space>
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button size="small" @click="showImport=false; importPreview=null">{{ importPreview ? '取消' : '关闭' }}</n-button>
+        <n-button v-if="!importPreview" size="small" type="primary" :loading="importing" @click="doPreview">拉取预览</n-button>
+        <n-button v-else size="small" type="primary" :loading="importing" @click="doConfirm">确认导入</n-button>
+      </n-space>
+    </template>
   </n-modal>
 </div>
 </template>
@@ -470,6 +504,39 @@ async function removeSkill() {
       } catch (err) { message.error(err.response?.data?.detail || '删除失败') }
     },
   })
+}
+// ── GitHub 导入 ──
+const showImport = ref(false)
+const importUrl = ref('')
+const importSlug = ref('')
+const importPreview = ref(null)
+const importing = ref(false)
+const importErr = ref('')
+function startImport() {
+  showImport.value = true; importPreview.value = null; importErr.value = ''
+  importUrl.value = ''; importSlug.value = ''
+}
+async function doPreview() {
+  if (!importUrl.value.trim()) { message.warning('请粘贴仓库 URL'); return }
+  importing.value = true; importErr.value = ''
+  try {
+    const r = await axios.post(API + '/api/agent/skills/import/preview',
+      { repo_url: importUrl.value.trim() }, { headers: H() })
+    importPreview.value = r.data
+    importSlug.value = r.data.default_slug || ''
+  } catch (e) { importErr.value = e.response?.data?.detail || e.message }
+  importing.value = false
+}
+async function doConfirm() {
+  importing.value = true; importErr.value = ''
+  try {
+    const r = await axios.post(API + '/api/agent/skills/import/confirm',
+      { repo_url: importUrl.value.trim(), slug: importSlug.value.trim() }, { headers: H() })
+    message.success(`技能「${r.data.name}」已导入`)
+    showImport.value = false
+    await loadSkills()
+  } catch (e) { importErr.value = e.response?.data?.detail || e.message }
+  importing.value = false
 }
 function useSkill() {
   draft.value = `请使用技能 ${skEditing.value.name} 帮我分析：`
