@@ -64,10 +64,20 @@ def list_news(
     db = get_sync_db()
     try:
         total = db.execute(text(f"SELECT count(*) FROM v_news_feed WHERE {w}"), params).scalar()
+        # 总结最小长度（短讯按规则永久跳过，不能显示成「待总结」）
+        try:
+            _row = db.execute(text(
+                "SELECT params FROM strategy_config WHERE strategy_name='news_summary'")).fetchone()
+            import json as _j
+            _cfg = (_j.loads(_row[0]) if isinstance(_row[0], str) else (_row[0] or {})) if _row else {}
+            min_len = int(_cfg.get('min_len', 20))
+        except Exception:
+            min_len = 20
         rows = db.execute(text(f"""
             SELECT id, source, category, published_at, title, summary, importance, topics,
                    sentiment, left(content, 400) AS content_preview, url,
                    (content IS NOT NULL) AS has_content,
+                   length(COALESCE(content, '')) AS content_len,
                    EXISTS (SELECT 1 FROM news_stock ns JOIN v_focus_pool f
                            ON f.stock_code = ns.stock_code
                            WHERE ns.news_id = v_news_feed.id) AS focus_linked
@@ -94,8 +104,11 @@ def list_news(
                 'title': r[4], 'summary': r[5], 'importance': r[6],
                 'topics': [t for t in (r[7] or '').split(',') if t],
                 'sentiment': r[8], 'content_preview': r[9], 'url': r[10],
-                'has_content': r[11], 'focus_linked': r[12],
+                'has_content': r[11], 'focus_linked': r[13],
                 'stocks': stocks.get(r[0], []),
+                # done / pending / short_skip（短讯按 min_len 规则永不总结，前端显示「短讯」）
+                'summary_state': ('done' if r[5] is not None
+                                  else ('short_skip' if int(r[12] or 0) < min_len else 'pending')),
             } for r in rows],
         }
     finally:

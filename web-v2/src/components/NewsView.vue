@@ -28,7 +28,8 @@
             <!-- 重要度：3 级只在真正重大时出现，故用色块而非数字（质量/状态域，红=高） -->
             <span v-if="n.importance===3" class="nv-imp nv-imp3" title="重要度 3：全市场级或个股重大">重</span>
             <span v-else-if="n.importance===2" class="nv-imp nv-imp2" title="重要度 2：行业级或有实质信息">中</span>
-            <span v-if="n.summary===null" class="nv-pending" title="尚未 LLM 总结（每 20 分钟一轮增量总结）">待总结</span>
+            <span v-if="n.summary===null && n.summary_state!=='short_skip'" class="nv-pending" title="尚未 LLM 总结（每 20 分钟一轮增量总结）">待总结</span>
+            <span v-else-if="n.summary_state==='short_skip'" class="nv-pending" title="正文过短（<20 字），按规则不做 LLM 总结">短讯</span>
             <span v-if="sentiOf(n.sentiment)" :style="{color:sentiOf(n.sentiment).c,fontWeight:600}">{{ sentiOf(n.sentiment).t }}</span>
             <span style="margin-left:auto;flex-shrink:0;display:inline-flex;gap:5px;align-items:center">
               <span v-for="s in n.stocks.slice(0,3)" :key="s.code" class="nv-stock" @click.stop="emit('show-detail', s.code)">{{ s.name }}</span>
