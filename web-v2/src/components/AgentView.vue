@@ -88,8 +88,8 @@
               <pre v-else class="agent-tool-body">{{ t.result ? t.result.preview : JSON.stringify(t.args, null, 2) }}</pre>
             </template>
             <div v-if="t.images && t.images.length" class="agent-imgs">
-              <a v-for="im in t.images" :key="im.url" :href="im.url" target="_blank" rel="noopener" :title="im.name">
-                <img :src="im.url" :alt="im.name" loading="lazy" />
+              <a v-for="im in t.images" :key="im.url" :href="mediaUrl(im.url)" target="_blank" rel="noopener" :title="im.name">
+                <img :src="mediaUrl(im.url)" :alt="im.name" loading="lazy" />
               </a>
             </div>
           </div>
@@ -261,6 +261,11 @@ function onAnswerClick(e) {
   const el = e.target.closest('.agent-stock-link')
   if (el && el.dataset.code) emit('show-detail', el.dataset.code)
 }
+// 图片 URL 带上 token（<img> 无法带 Authorization 头）
+function mediaUrl(u) {
+  return u + (u.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(auth.token || '')
+}
+
 // SQL 工具结果 → Markdown 表格（解析失败回退原始 JSON）
 function sqlTable(t) {
   return t.result ? sqlResultToMarkdown(t.result.preview) : null
