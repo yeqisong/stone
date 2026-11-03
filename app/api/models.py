@@ -330,6 +330,53 @@ def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = 
         """), {"v": version}).scalar()
         npos = db.execute(text(
             "SELECT COUNT(*) FROM paper_positions WHERE model_version=:v"), {"v": version}).scalar() or 0
+        # ── 当前持仓明细（信号页「模拟交易」需要一眼看到持仓；盈亏与统计区同口径）──
+        pos_rows = db.execute(text("""
+            SELECT p.stock_code, COALESCE(p.stock_name, sm.stock_name, '') AS sname,
+                   p.shares, p.buy_price, p.cost_basis, p.buy_date, p.peak,
+                   lq.close AS cur_raw, lq.close_hfq AS cur_hfq,
+                   (SELECT COUNT(*) FROM trade_calendar tc
+                     WHERE tc.is_trade_day AND tc.cal_date > p.buy_date
+                       AND tc.cal_date <= COALESCE(lq.trade_date, CURRENT_DATE)) AS hold_days
+            FROM paper_positions p
+            LEFT JOIN stock_master sm ON sm.stock_code = p.stock_code
+            LEFT JOIN LATERAL (
+                SELECT close, close_hfq, trade_date FROM daily_quote q
+                WHERE q.stock_code = p.stock_code AND q.close > 0
+                ORDER BY q.trade_date DESC LIMIT 1
+            ) lq ON true
+            WHERE p.model_version = :v ORDER BY p.buy_date
+        """), {"v": version}).fetchall()
+        fac_p = hfq_to_raw_factors(db, [(r[0], str(r[5])[:10]) for r in pos_rows])
+        stop_loss = float(rules.get('stop_loss') or 0.08)
+        trailing = float(rules.get('trailing') or 0.05)
+        positions = []
+        for r in pos_rows:
+            buy_hfq = float(r[3])
+            cur_raw = float(r[7]) if r[7] is not None else None   # lq.close
+            cur_hfq = float(r[8]) if r[8] is not None else None   # lq.close_hfq
+            cost_basis = float(r[4])
+            pnl_pct = (cur_hfq / buy_hfq - 1) if (cur_hfq and buy_hfq) else None
+            float_pnl = (cur_hfq * r[2] - cost_basis) if cur_hfq is not None else None
+            peak = float(r[6]) if r[6] else None
+            positions.append({
+                "stock_code": r[0], "stock_name": r[1], "shares": r[2],
+                "buy_date": str(r[5])[:10],
+                "hold_days": int(r[9] or 0),
+                "buy_price": raw_price(buy_hfq, fac_p.get((r[0], str(r[5])[:10]))),
+                "current_price": cur_raw,
+                # 市值/浮盈均为后复权模拟口径（与统计区/成交表一致）；价格列为真实价仅展示
+                "market_value": round(cur_hfq * r[2], 2) if cur_hfq is not None else None,
+                "float_pnl": round(float_pnl, 2) if float_pnl is not None else None,
+                "float_pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+                "cost_basis": round(cost_basis, 2),
+                # 止损/移动止盈都按后复权口径算百分比，再换算成真实价展示
+                "stop_price": raw_price(buy_hfq * (1 - stop_loss), fac_p.get((r[0], str(r[5])[:10]))),
+                "stop_pct": stop_loss,
+                "dist_to_stop_pct": round(pnl_pct + stop_loss, 4) if pnl_pct is not None else None,
+                "peak_dd_pct": round(cur_hfq / peak - 1, 4) if (cur_hfq and peak) else None,
+                "trailing_pct": trailing,
+            })
         equity = float(eod[2]) if eod and eod[2] is not None else initial
         cash_v = float(eod[1]) if eod and eod[1] is not None else initial
         stats = {
@@ -342,9 +389,10 @@ def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = 
             "sell_count": sells[0] or 0, "win_count": sells[1] or 0,
             "win_rate": round(sells[1] / sells[0], 3) if sells[0] else None,
             "npos": npos, "max_positions": rules.get('max_positions'),
+            "stop_loss": stop_loss, "trailing": trailing,
         }
         return {"trades": trades, "total": total, "page": page, "page_size": page_size,
-                "initial_cash": initial, "stats": stats}
+                "initial_cash": initial, "stats": stats, "positions": positions}
     finally:
         db.close()
 
