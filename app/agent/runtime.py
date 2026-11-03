@@ -36,6 +36,30 @@ def request_stop(session_id: int) -> bool:
     return False
 
 
+IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp')
+
+
+def workspace_images(session_id: int) -> dict:
+    """工作区内图片文件 → {相对路径: mtime}（跳过 pylibs/node 依赖目录）。"""
+    from app.agent import sandbox
+    ws = sandbox.workspace(session_id)
+    out = {}
+    for ext in IMAGE_EXTS:
+        for f in ws.rglob(f'*{ext}'):
+            rel = f.relative_to(ws)
+            if any(part in ('pylibs', 'node') for part in rel.parts):
+                continue
+            try:
+                out[str(rel)] = f.stat().st_mtime
+            except Exception:
+                pass
+    return out
+
+
+def _new_or_changed(before: dict, after: dict) -> list:
+    return [name for name, mt in after.items() if before.get(name) != mt]
+
+
 def _system_prompt() -> str:
     docs = "\n".join(f"- {t}: {d}" for t, d in TABLE_DOCS.items())
     skills = skill_index_text()
@@ -64,8 +88,8 @@ def _system_prompt() -> str:
 
 ## 沙箱
 - 会话有独立工作区：代码、数据、依赖都保存在里面，跨轮次可用
-- Python 可直接 import pandas/numpy；需要其它包用 pip_install；Node 用 run_node + npm_install
-- 图表可用 matplotlib 存 PNG 到工作区（无法直接展示，可用文字/数据表呈现结论）
+- Python 可直接 import pandas/numpy；matplotlib 等其它包先 pip_install；Node 用 run_node + npm_install
+- 图表用 matplotlib 存 PNG 到工作区后会自动显示在对话里（用户可直接看图），优先给图 + 一句结论
 
 ## 回答规范
 - 中文回答；结论先行，再给依据（数据来源表/时间窗/样本量）
@@ -309,6 +333,7 @@ def stream_agent(sid: int, user_content: str):
                     yield {"type": "stopped"}
                     return
                 tt = time.time()
+                _img_before = workspace_images(sid) if name in ('run_python', 'run_node') else None
                 result = execute_tool(sid, name, args)
                 elapsed = int((time.time() - tt) * 1000)
                 ok = not (isinstance(result, dict) and (result.get("error") or result.get("ok") is False))
@@ -318,8 +343,13 @@ def stream_agent(sid: int, user_content: str):
                       meta={"ok": ok, "elapsed_ms": elapsed})
                 messages.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": res_str[:MAX_ARG_CHARS]})
+                images = []
+                if _img_before is not None:
+                    for name_img in _new_or_changed(_img_before, workspace_images(sid))[:6]:
+                        images.append({"name": name_img,
+                                       "url": f"/api/agent/sessions/{sid}/files/{name_img}"})
                 yield {"type": "tool_result", "id": tc["id"], "name": name, "ok": ok,
-                       "elapsed_ms": elapsed,
+                       "elapsed_ms": elapsed, "images": images,
                        "preview": res_str[:1500] + ("…" if len(res_str) > 1500 else "")}
 
         yield {"type": "assistant", "content": f"（已达到 {MAX_STEPS} 步工具调用上限，先给出当前结论）"}

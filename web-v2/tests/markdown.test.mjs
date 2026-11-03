@@ -45,3 +45,43 @@ test('空输入不炸', () => {
   assert.equal(renderMarkdown(''), '')
   assert.equal(renderMarkdown(null), '')
 })
+
+// ── 股票代码链接化 ──
+import { linkifyStockCodes, sqlResultToMarkdown } from '../src/utils/markdown.js'
+
+test('代码链接化：普通文本中的 6 位代码', () => {
+  const html = linkifyStockCodes('<div>关注 600519 和 000858 两只</div>')
+  assert.ok(html.includes('data-code="600519"'))
+  assert.ok(html.includes('data-code="000858"'))
+  assert.equal((html.match(/agent-stock-link/g) || []).length, 2)
+})
+
+test('代码链接化：跳过 pre/code 内部', () => {
+  const html = linkifyStockCodes('<pre>600519</pre><code>000858</code><div>600519</div>')
+  assert.equal((html.match(/agent-stock-link/g) || []).length, 1)
+})
+
+test('代码链接化：7 位数字不误伤', () => {
+  const html = linkifyStockCodes('<div>编号 6005199 不是代码</div>')
+  assert.equal((html.match(/agent-stock-link/g) || []).length, 0)
+})
+
+// ── SQL 结果表格化 ──
+test('SQL 结果转表格', () => {
+  const preview = JSON.stringify({ columns: ['trade_date', 'close'], rows: [['2026-11-03', 1355.9], ['2026-10-31', 1340.2]], row_count: 2 })
+  const md = sqlResultToMarkdown(preview)
+  assert.ok(md.includes('| trade_date | close |'))
+  assert.ok(md.includes('| 2026-11-03 | 1355.9 |'))
+})
+
+test('SQL 结果超过上限加提示', () => {
+  const rows = Array.from({ length: 20 }, (_, i) => [i, i * 2])
+  const md = sqlResultToMarkdown(JSON.stringify({ columns: ['a', 'b'], rows }), 5)
+  assert.ok(md.includes('共 20 行'))
+  assert.equal((md.match(/\| \d+ \|/g) || []).length, 5)
+})
+
+test('SQL 结果非表格返回 null', () => {
+  assert.equal(sqlResultToMarkdown('{"error":"x"}'), null)
+  assert.equal(sqlResultToMarkdown('not json'), null)
+})

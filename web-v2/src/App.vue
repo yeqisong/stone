@@ -52,7 +52,7 @@
           <div v-if="nav.tab==='n'" style="flex:1;min-height:0;display:flex;flex-direction:column"><NewsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='u'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
-          <div v-if="nav.tab==='i'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AgentView /></div>
+          <div v-if="nav.tab==='i'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AgentView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
           <div v-if="nav.tab==='a'"><ModelView /></div>
           <div v-if="nav.tab==='f'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FunctionView /></div>

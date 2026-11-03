@@ -69,7 +69,8 @@
         </template>
         <template v-else>
           <div v-if="b.text" class="agent-ans">
-            <div class="agent-bubble assistant" v-html="renderMarkdown(b.text)"></div>
+            <div class="agent-bubble assistant" v-html="renderMarkdown(b.text, { linkifyCodes: true })"
+                 @click="onAnswerClick"></div>
             <button class="agent-copy" title="复制回答" @click="copyText(b.text)"><AppIcon name="save" :size="11" /></button>
           </div>
           <div v-for="t in b.tools" :key="t.id" class="agent-tool" :class="{ fail: t.result && !t.result.ok }">
@@ -81,7 +82,16 @@
               <span class="agent-tool-meta">{{ t.result ? `${t.result.elapsed_ms}ms` : '运行中…' }}</span>
               <span class="agent-tool-fold">{{ expanded[t.id] ? '收起' : '详情' }}</span>
             </div>
-            <pre v-if="expanded[t.id]" class="agent-tool-body">{{ t.result ? t.result.preview : JSON.stringify(t.args, null, 2) }}</pre>
+            <template v-if="expanded[t.id]">
+              <div v-if="t.name==='query_sql' && sqlTable(t)" class="agent-tool-body"
+                   v-html="renderMarkdown(sqlTable(t))"></div>
+              <pre v-else class="agent-tool-body">{{ t.result ? t.result.preview : JSON.stringify(t.args, null, 2) }}</pre>
+            </template>
+            <div v-if="t.images && t.images.length" class="agent-imgs">
+              <a v-for="im in t.images" :key="im.url" :href="im.url" target="_blank" rel="noopener" :title="im.name">
+                <img :src="im.url" :alt="im.name" loading="lazy" />
+              </a>
+            </div>
           </div>
         </template>
       </div>
@@ -191,8 +201,9 @@ import { NButton, NInput, NSelect, NTag, NModal, useMessage, useDialog } from 'n
 import axios from 'axios'
 import { useAuthStore } from '../stores/auth'
 import { useViewport } from '../utils/viewport'
-import { renderMarkdown } from '../utils/markdown'
+import { renderMarkdown, linkifyStockCodes, sqlResultToMarkdown } from '../utils/markdown'
 
+const emit = defineEmits(['show-detail'])
 const { isNarrow } = useViewport()
 const API = window.location.origin
 const auth = useAuthStore()
@@ -244,6 +255,16 @@ const TOOL_LABEL = {
 }
 
 const H = () => auth.token ? { Authorization: 'Bearer ' + auth.token } : {}
+
+// 回答里的 6 位代码可点击跳个股详情（模板对 v-html 内容做事件委托）
+function onAnswerClick(e) {
+  const el = e.target.closest('.agent-stock-link')
+  if (el && el.dataset.code) emit('show-detail', el.dataset.code)
+}
+// SQL 工具结果 → Markdown 表格（解析失败回退原始 JSON）
+function sqlTable(t) {
+  return t.result ? sqlResultToMarkdown(t.result.preview) : null
+}
 
 function toolLabel(n) { return TOOL_LABEL[n] || n }
 function relTime(s) {
@@ -630,6 +651,16 @@ onMounted(async () => {
 .agent-bubble.assistant :deep(.agent-table td) { padding: 4px 8px; color: var(--c-text-dim);
   border: 1px solid var(--c-border-light); }
 .agent-bubble.assistant :deep(.agent-table tr:nth-child(even) td) { background: rgba(128,128,128,0.03); }
+
+/* 回答中的股票代码（可点击跳详情） */
+.agent-bubble.assistant :deep(.agent-stock-link) { color: #2080f0; cursor: pointer;
+  border-bottom: 1px dashed rgba(32,128,240,0.5); }
+.agent-bubble.assistant :deep(.agent-stock-link:hover) { color: #4c9aff; }
+
+/* 工具生成的图表缩略图 */
+.agent-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-width: 88%; }
+.agent-imgs a { display: block; border: 1px solid var(--c-border-light); border-radius: 6px; overflow: hidden; }
+.agent-imgs img { display: block; max-width: 200px; max-height: 140px; object-fit: contain; background: #fff; }
 
 /* 工具卡片 */
 .agent-tool { margin-top: 6px; border: 1px solid var(--c-border-light); border-radius: 6px;

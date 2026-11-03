@@ -31,7 +31,7 @@ const isTableSep = (l) => {
   return cells.length > 0 && cells.every(c => /^:?-{2,}:?$/.test(c.replace(/\s+/g, '')))
 }
 
-export function renderMarkdown(text) {
+export function renderMarkdown(text, opts = {}) {
   const lines = String(text ?? '').split('\n')
   const out = []
   let i = 0
@@ -101,5 +101,32 @@ export function renderMarkdown(text) {
     }
     out.push(`<div class="agent-p">${inline(para.join('\n')).replace(/\n/g, '<br/>')}</div>`)
   }
-  return out.join('')
+  const html = out.join('')
+  return opts.linkifyCodes ? linkifyStockCodes(html) : html
+}
+
+/** 把纯文本中的 6 位股票代码包成可点击标记（跳过 pre/code 内部）。 */
+export function linkifyStockCodes(html) {
+  const parts = String(html ?? '').split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/g)
+  return parts
+    .map((p, i) => {
+      if (i % 2 === 1) return p
+      // 负向后视：允许紧跟 HTML 标签（>）与中文，排除属性值（" =）与字母数字
+      return p.replace(/(?<![\w<"=])(\d{6})(?![\w"])/g,
+        (code) => `<span class="agent-stock-link" data-code="${code}">${code}</span>`)
+    })
+    .join('')
+}
+
+/** query_sql 工具结果（JSON: columns/rows）→ Markdown 表格；解析失败返回 null。 */
+export function sqlResultToMarkdown(preview, maxRows = 15) {
+  let j
+  try { j = JSON.parse(preview) } catch (e) { return null }
+  if (!j || !Array.isArray(j.columns) || !Array.isArray(j.rows) || !j.columns.length) return null
+  const cells = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ')
+  const head = '| ' + j.columns.map(cells).join(' | ') + ' |'
+  const sep = '| ' + j.columns.map(() => '---').join(' | ') + ' |'
+  const rows = j.rows.slice(0, maxRows).map(r => '| ' + r.map(cells).join(' | ') + ' |')
+  const more = j.rows.length > maxRows ? `\n\n（共 ${j.rows.length} 行，仅显示前 ${maxRows} 行）` : ''
+  return [head, sep, ...rows].join('\n') + more
 }
