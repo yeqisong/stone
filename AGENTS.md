@@ -61,7 +61,7 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `app/task/` — TaskManager 统一任务机制（并发≤5、同流程互斥、WS 推送）
   - `app/feishu/` — 飞书 Bot webhook（签名校验、对话历史、确认卡片闭环）
   - `app/ai/` — DeepSeek AI 客户端（8 个 Function Calling 工具 + 降级菜单）
-  - `app/agent/` — 站内问答 Agent（ReAct + SSE）：`runtime.py` 多轮「思考→工具→观察」（≤12 步，同会话串行可中断，轨迹落 agent_sessions/agent_messages）；`tools.py` 13 个工具（只读 SQL/表结构/个股全景/资讯检索/沙箱 Python·Node/pip·npm/DAG 列表·建流程·触发）；`sandbox.py` 每会话工作区 `data/agent_ws/<sid>/`（私有 pylibs/node，超时+2GB 上限，非容器隔离）；`_child.py` 子进程 rlimit 启动器（`preexec_fn` 在多线程 uvicorn 下会 SIGSEGV，必须 `start_new_session`）；API `app/api/agent.py`，前端 `AgentView.vue`（tab i=问答）；`skills.py` 技能体系（`skills/<name>/SKILL.md` 内置随仓库版本管理 + `data/skills/` 用户技能，frontmatter 的 description 进系统提示做渐进披露，命中后 read_skill 读全文；工具 list_skills/read_skill/save_skill）
+  - `app/agent/` — 站内问答 Agent（ReAct + SSE）：`runtime.py` 多轮「思考→工具→观察」（≤12 步，同会话串行可中断，轨迹落 agent_sessions/agent_messages）；`tools.py` 13 个工具（只读 SQL/表结构/个股全景/资讯检索/沙箱 Python·Node/pip·npm/DAG 列表·建流程·触发）；`sandbox.py` 每会话工作区 `data/agent_ws/<sid>/`（私有 pylibs/node，超时+2GB 上限，非容器隔离）；`_child.py` 子进程 rlimit 启动器（`preexec_fn` 在多线程 uvicorn 下会 SIGSEGV，必须 `start_new_session`）；API `app/api/agent.py`，前端 `AgentView.vue`（tab i=问答）；`skills.py` 技能体系（`skills/<name>/SKILL.md` 内置随仓库版本管理 + `data/skills/` 用户技能，frontmatter 的 description 进系统提示做渐进披露，命中后 read_skill 读全文；工具 list_skills/read_skill/save_skill；GitHub 导入器 preview/confirm 人工审核后入库；内置含个股尽调/信号复盘/DAG搭建/数据健康/扩展数据(Tushare直查)/仓位计算/回撤纪律/交易复盘/盘前清单）；会话工作区 `data/agent_ws/` 生成的图片经 `/api/agent/sessions/{sid}/files/*` 在对话内展示
   - `app/kepl/` — KEPL 表达式解析器（Lark LALR(1) + AST + 时间序列/截面函数）
   - `app/signal.py` — DAG ↔ WebSocket 解耦桥梁（asyncio Event + 线程安全唤醒）
   - `app/lineage.py` — 数据血缘台账（旁路观测：factor_heal/零价修复/特征重算/复评/训练/滚动重训事件落 `data_lineage` 表，MB 级元数据；`log_event` 失败绝不影响主链路）；`model_data_drift` 回答「模型训练后数据又被改过吗」；API 在 `app/api/lineage.py`（GET /api/lineage、/api/lineage/model/{ver}）
@@ -120,7 +120,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
              飞书 Bot (DeepSeek AI 对话)
 ```
 
-### 关键数据表（SQL schema in `app/db/schema.py`, 59 个 DDL 常量 / 库内 public 88 表 5 视图）
+### 关键数据表（SQL schema in `app/db/schema.py`, 61 个 DDL 常量 / 库内 public 90 表 5 视图）
 - **行情**: `trade_calendar`, `stock_master`, `daily_quote`, `index_daily_quote`
 - **基本面**: `stock_fundamentals`(PK: code+trade_date), `stock_fundamentals_history`
 - **业务**: `portfolio`, `portfolio_history`, `signal_history`, `stock_treemap_cache`
@@ -130,6 +130,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **统计/系统**: `daily_completeness`, `data_stats_cache`, `entity_stats`, `system_metrics`, `strategy_config`, **`tushare_quota`**, `data_lineage`（血缘台账）
 - **风控**: `risk_alerts`（规则引擎告警：止损/回撤熔断/行业上限，WS→Chrome 通知）
 - **资讯**: `news_item`（原文：四源六源幂等键 `(source, source_id)`，**不分区**）、`news_stock`（资讯↔个股，`rel=src|match`）、`news_summary`（LLM 派生：摘要/重要度/主题/情绪，**未总结=NULL 不是 0**）、`news_crawl_state`（各源游标与健康）、`news_poll_state`（关注池轮转 + 巨潮 orgId 缓存）；视图 `v_focus_pool`（持仓∪自选）与 `v_news_feed`（原文 LEFT JOIN 总结）。第 3 层（资讯×雪球交叉）只预留字段未实现，见 `design/07`
+- **宏观/估值**: `macro_indicator`（CPI/PPI/GDP/M0M1M2/SHIBOR，value=同比/增速）、`index_valuation`（7 大指数 PE/PB/市值/换手）——`macro_daily` DAG 节点每日 23:05 采集（tushare 2000 积分实测接口）
 - **拓展**: `stock_moneyflow`（已接入：每日 DAG 节点 + KEPL 字段 + 2010 起历史回补完成）、`stock_top_list` / `stock_margin_detail` / `stock_holder_number`（表就绪，采集链路未接入）、`stock_hk_hold`（北向个股披露 2024-08 停止，数据源失效，保留表结构）
 
 ## Conventions

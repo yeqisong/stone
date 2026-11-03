@@ -59,6 +59,36 @@ def stop(sid: int, user: str = Depends(optional_auth)):
     return {"ok": request_stop(sid)}
 
 
+_ALLOWED_IMG = ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp')
+
+
+def _safe_workspace_file(sid: int, rel: str):
+    """把请求路径解析为会话工作区内文件；越界/非图片返回 None。"""
+    import re as _re
+    from pathlib import Path as _P
+    if not _re.match(r"^[A-Za-z0-9._/-]+$", rel or ""):
+        return None
+    from app.agent.sandbox import workspace
+    ws = workspace(sid).resolve()
+    try:
+        target = (ws / rel).resolve()
+    except Exception:
+        return None
+    if ws not in target.parents or target.suffix.lower() not in _ALLOWED_IMG or not target.is_file():
+        return None
+    return target
+
+
+@router.get("/sessions/{sid}/files/{rel:path}")
+def session_file(sid: int, rel: str, user: str = Depends(optional_auth)):
+    """会话工作区图片（Agent 生成的图表等）；仅图片、路径限定在工作区内。"""
+    from fastapi.responses import FileResponse
+    f = _safe_workspace_file(sid, rel)
+    if not f:
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(str(f))
+
+
 @router.get("/info")
 def info(user: str = Depends(optional_auth)):
     """页面初始化：模型配置状态 + 工具清单（UI 展示用）。"""
