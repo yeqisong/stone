@@ -28,10 +28,28 @@
   <template v-else-if="tab==='trades'">
     <div class="fill-table" style="display:flex;flex-direction:column">
       <StatStrip v-if="trdStats.length" :items="trdStats" />
+
+      <!-- 当前持仓：多次买卖后也能一眼看到还拿着什么 -->
+      <div class="paper-pos no-shrink">
+        <div class="paper-pos-head" @click="posOpen = !posOpen">
+          <span>当前持仓 <b :style="{color: (trd.positions?.length ? 'var(--c-text)' : 'var(--c-text-faint)')}">{{ trd.positions?.length || 0 }}</b>
+            <span style="color:var(--c-text-faint)">/ {{ trdStatsRaw?.max_positions ?? '—' }}</span></span>
+          <span v-if="!posOpen && trd.positions?.length" class="paper-pos-mini">
+            {{ trd.positions.map(p => `${p.stock_name}(${fmtPctCol(p.float_pnl_pct)})`).join(' · ') }}
+          </span>
+          <span v-if="!trd.positions?.length" class="paper-pos-mini">当前空仓（全部已了结，或开仓闸门禁买中）</span>
+          <span class="paper-pos-toggle">{{ posOpen ? '收起' : '展开' }}</span>
+        </div>
+        <div v-if="posOpen && trd.positions?.length" class="paper-pos-body">
+          <n-data-table :columns="posColumns" :data="trd.positions" size="small" :max-height="210"
+                        :scroll-x="980" :row-props="posRowProps" />
+        </div>
+      </div>
+
       <n-data-table v-if="trd.trades" class="fill-table" flex-height :columns="trdColumns" :data="trd.trades" size="small" :scroll-x="1180" />
       <n-empty v-else description="暂无模拟成交" style="flex:1" />
       <div class="no-shrink" style="font-size:10px;color:var(--c-text-faint);padding:4px 2px 0;line-height:1.7">
-        口径：成交单价为真实市价（撮合价除以同日复权因子）；股数/金额/盈亏/总资产为后复权模拟口径，
+        口径：持仓表价格为真实市价、收益率/浮盈/市值为后复权模拟口径（与统计区一致）；成交单价为真实市价（撮合价除以同日复权因子）；股数/金额/盈亏/总资产为后复权模拟口径，
         与初始资金同量级可比，比率类指标不受复权影响。
       </div>
       <TradeRulesNote :version="selModel" />
@@ -166,6 +184,23 @@ const REASON_CN = { signal: '信号买入', stop_loss: '止损', take_profit: '�
                     hold_expire: '持有到期', expire: '持有到期', regime: '空仓闸门' }
 const fmtAmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(0)
 const fmtPctCol = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%'
+// ── 当前持仓（后端 /paper-trades 的 positions 字段）──
+const posOpen = ref(true)
+function posRowProps(row) { return { style: 'cursor:pointer', onClick: () => emit('show-detail', row.stock_code) } }
+const posColumns = [
+  { title:'代码', key:'stock_code', width:78, render(r){ return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code) } },
+  { title:'名称', key:'stock_name', width:92 },
+  { title:'持有', key:'hold_days', width:96, render(r){ return h('span',{style:{fontSize:'10px',color:'var(--c-text-dim)'}}, `${r.hold_days}天 · ${(r.buy_date||'').slice(5)}`) } },
+  { title:'股数', key:'shares', width:64, align:'right', render(r){ return (r.shares||0).toLocaleString() } },
+  { title:'买入价', key:'buy_price', width:78, align:'right', render(r){ return r.buy_price!=null ? r.buy_price.toFixed(2) : '—' } },
+  { title:'现价', key:'current_price', width:78, align:'right', render(r){ const v=r.current_price; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const up=r.buy_price!=null && v>=r.buy_price; return h('span',{style:{color:up?'#ef4444':'#10b981',fontWeight:600}}, v.toFixed(2)) } },
+  { title:'浮动收益率', key:'float_pnl_pct', width:90, align:'right', render(r){ const v=r.float_pnl_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontWeight:600}}, fmtPctCol(v)) } },
+  { title:'浮盈(模拟)', key:'float_pnl', width:92, align:'right', render(r){ const v=r.float_pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
+  { title:'市值(模拟)', key:'market_value', width:102, align:'right', render(r){ return r.market_value==null ? '—' : r.market_value.toLocaleString(undefined,{maximumFractionDigits:0}) } },
+  { title:'止损价', key:'stop_price', width:78, align:'right', render(r){ return r.stop_price!=null ? h('span',{style:{color:'var(--c-text-dim)'}}, r.stop_price.toFixed(2)) : '—' } },
+  { title:'距止损', key:'dist_to_stop_pct', width:82, align:'right', render(r){ const v=r.dist_to_stop_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const danger = v<=0.02; return h('span',{style:{color: danger?'#ef4444':'var(--c-text-dim)',fontWeight: danger?600:400}}, v<=0 ? '已破位' : '+'+(v*100).toFixed(1)+'pp') } },
+  { title:'峰值回撤', key:'peak_dd_pct', width:84, align:'right', render(r){ const v=r.peak_dd_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color: v<=-(r.trailing_pct||0.05)?'#f59e0b':'var(--c-text-dim)'}}, (v*100).toFixed(1)+'%') } },
+]
 const trdColumns = [
   { title:'日期', key:'date', width:78, render(r){ return h('span',{style:{color:'var(--c-text-dim)'}}, (r.date||'').slice(5)) } },
   { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
@@ -250,3 +285,12 @@ async function doGenerate() {
 
 onMounted(async () => { await loadModels(); await loadSignals() })
 </script>
+<style>
+/* 模拟交易：当前持仓区（可折叠，历史成交表占剩余高度） */
+.paper-pos { margin: 2px 0 8px; border: 1px solid var(--c-card-bg-hover); border-radius: 6px; background: var(--c-card-bg); }
+.paper-pos-head { display: flex; align-items: center; gap: 10px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+.paper-pos-head b { font-size: 13px; }
+.paper-pos-mini { flex: 1; font-size: 10px; color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paper-pos-toggle { font-size: 10px; color: var(--c-text-dimmer); flex-shrink: 0; }
+.paper-pos-body { border-top: 1px solid var(--c-border-light); padding: 2px; }
+</style>
