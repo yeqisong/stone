@@ -75,13 +75,12 @@ def _system_prompt() -> str:
 """
 
 
-def _client():
-    from openai import OpenAI
-    from app.llm_runtime import get_llm_settings
+def _client(session_id: str = "agent"):
+    from app.llm_runtime import get_llm_settings, build_client
     llm = get_llm_settings()
     if not llm["api_key"]:
         raise RuntimeError("未配置大模型 API Key（到状态页「大模型配置」填写）")
-    return OpenAI(api_key=llm["api_key"], base_url=llm["base_url"], timeout=180), llm
+    return build_client(llm["api_key"], llm["base_url"], session_id=f"agent-{sid}", timeout=180), llm
 
 
 # ══════════════════════════════════════════════
@@ -255,7 +254,7 @@ def stream_agent(sid: int, user_content: str):
     try:
         _save(sid, "user", user_content)
         _auto_title(sid, user_content)
-        client, llm = _client()
+        client, llm = _client(f"agent-{sid}")
         yield {"type": "start", "session_id": sid, "model": llm["model"]}
 
         messages = [{"role": "system", "content": _system_prompt()}] + _history_for_model(sid)

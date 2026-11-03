@@ -242,7 +242,8 @@ def main():
         if not llm['api_key']:
             logger.error('LLM key 未配置（状态页「大模型配置」或 .env LLM_API_KEY）')
             sys.exit(1)
-        client = OpenAI(api_key=llm['api_key'], base_url=llm['base_url'])
+        from app.llm_runtime import build_client as _bc
+        client = _bc(llm['api_key'], llm['base_url'], session_id='stone-news-cli')
         workers = args.workers or llm['workers']
         logger.info(f"资讯总结启动: model={llm['model']} prompt_ver={PROMPT_VER} "
                     f"limit={args.limit} workers={workers}")
