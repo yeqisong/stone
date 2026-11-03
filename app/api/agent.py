@@ -80,9 +80,22 @@ def _safe_workspace_file(sid: int, rel: str):
 
 
 @router.get("/sessions/{sid}/files/{rel:path}")
-def session_file(sid: int, rel: str, user: str = Depends(optional_auth)):
-    """会话工作区图片（Agent 生成的图表等）；仅图片、路径限定在工作区内。"""
+def session_file(sid: int, rel: str, token: str = "", authorization: str = ""):
+    """会话工作区图片（Agent 生成的图表等）；仅图片、路径限定在工作区内。
+
+    <img src> 没法带 Authorization 头，故支持 ?token= 查询参数（本机单用户场景；
+    生产多用户时换成签名 URL）。
+    """
     from fastapi.responses import FileResponse
+    from app.auth.auth import verify_token
+    bearer = authorization[7:] if authorization.lower().startswith("bearer ") else ""
+    t = token or bearer
+    if not t:
+        raise HTTPException(401, "请提供认证 Token")
+    try:
+        verify_token(t)
+    except Exception:
+        raise HTTPException(401, "无效或过期的 Token")
     f = _safe_workspace_file(sid, rel)
     if not f:
         raise HTTPException(404, "文件不存在")
