@@ -614,19 +614,29 @@ async function dostartTrain() {
 }
 async function approveModel(role) {
   const isPrimary = role === 'primary'
+  const ver = store.selected?.version
+  if (!ver) { message.warning('请先在左侧选择一个模型版本'); return }
   dialog.warning({
     title: isPrimary ? '发布为主模型？' : '发布为备模型？',
     content: isPrimary
-      ? `版本 ${store.selected.version} 将成为主模型（原主模型自动转为备模型），立即按其规则生产信号与模拟交易。若最近一次 walk-forward 判定为 FAIL，本次审批将被拒绝。`
-      : `版本 ${store.selected.version} 将作为备模型上线（主模型不变），同步生产信号与模拟交易用于对比。`,
+      ? `版本 ${ver} 将成为主模型（原主模型自动转为备模型），立即按其规则生产信号与模拟交易。若最近一次 walk-forward 判定为 FAIL，本次审批将被拒绝。`
+      : `版本 ${ver} 将作为备模型上线（主模型不变），同步生产信号与模拟交易用于对比。`,
     positiveText: isPrimary ? '发布为主模型' : '发布为备模型', negativeText: '取消',
     onPositiveClick: () => doApprove(role),
   })
 }
 async function doApprove(role) {
+  const ver = store.selected?.version
+  if (!ver) return
   try {
-    await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/approve`, { role })
+    await axios.post(window.location.origin + `/api/v1/models/${ver}/approve`, { role })
+    // 明确反馈 + 保持选中，避免「点了没反应」的错觉（曾误以为失败）
+    message.success(role === 'primary'
+      ? `${ver} 已发布为主模型（原主模型自动转为备模型）`
+      : `${ver} 已发布为备模型`)
     await store.loadVersions(currentEntity.value)
+    store.selectedId = ver
+    store.detailTab = 'live'
   } catch(e) {
     message.error(e.response?.data?.detail || '审批失败')
   }
@@ -635,9 +645,13 @@ async function rejectModel() {
   dialog.warning({ title: '确认拒绝该版本？', content: '版本将转入 REJECTED，之后可重新训练。', positiveText: '拒绝', negativeText: '取消', onPositiveClick: () => doReject() })
 }
 async function doReject() {
+  const ver = store.selected?.version
+  if (!ver) { message.warning('请先在左侧选择一个模型版本'); return }
   try {
-    await axios.post(window.location.origin + `/api/v1/models/${store.selected.version}/reject`)
+    await axios.post(window.location.origin + `/api/v1/models/${ver}/reject`)
+    message.success(`${ver} 已拒绝（可重新训练）`)
     await store.loadVersions(currentEntity.value)
+    store.selectedId = ver
   } catch(e) {
     message.error(e.response?.data?.detail || '操作失败')
   }
