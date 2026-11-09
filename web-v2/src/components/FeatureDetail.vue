@@ -594,7 +594,7 @@ async function recomputeStats() {
 }
 
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
-const statusTypeMap = { draft:'warning', enabled:'primary', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
+const statusTypeMap = { draft:'warning', enabled:'default', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
 const entityLabel = { stock:'个股', etf:'ETF', index:'指数', global:'全局' }
 
 const infoCards = computed(() => {

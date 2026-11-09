@@ -129,7 +129,7 @@ function predRender(key) {
 const sigColumns = computed(() => {
   const base = [
     { title:'信号日期', key:'signal_date', width:88, render(r){ return h('span',{style:{color:'var(--c-text-dim)'}}, (r.signal_date||'').slice(5)) } },
-    { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--c-accent)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
+    { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
     { title:'名称', key:'stock_name', width:100, fixed:'left', render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
     { title:'现价', key:'real_close', width:95, align:'right', render(r){ return r.real_close!=null ? '¥'+r.real_close.toFixed(2) : '—' } },
     { title:'方向', key:'direction', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
@@ -193,7 +193,7 @@ const fmtPctCol = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFix
 const posOpen = ref(true)
 function posRowProps(row) { return { style: 'cursor:pointer', onClick: () => emit('show-detail', row.stock_code) } }
 const posColumns = [
-  { title:'代码', key:'stock_code', width:78, render(r){ return h('span',{style:{color:'var(--c-accent)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code) } },
+  { title:'代码', key:'stock_code', width:78, render(r){ return h('span',{style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code) } },
   { title:'名称', key:'stock_name', width:92 },
   { title:'持有', key:'hold_days', width:96, render(r){ return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}}, `${r.hold_days}天 · ${(r.buy_date||'').slice(5)}`) } },
   { title:'股数', key:'shares', width:64, align:'right', render(r){ return (r.shares||0).toLocaleString() } },
@@ -208,7 +208,7 @@ const posColumns = [
 ]
 const trdColumns = [
   { title:'日期', key:'date', width:78, render(r){ return h('span',{style:{color:'var(--c-text-dim)'}}, (r.date||'').slice(5)) } },
-  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){return h('span',{style:{color:'var(--c-accent)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
+  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){return h('span',{style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
   { title:'名称', key:'stock_name', width:92, fixed:'left' },
   { title:'操作', key:'action', width:58, render(r){ return h('span',{style:{color:r.action==='BUY'?'#c22b3f':'#0a7a5a',fontWeight:600}}, r.action==='BUY'?'买入':'卖出') } },
   { title:'股数', key:'shares', width:64, align:'right', render(r){ return (r.shares||0).toLocaleString() } },
@@ -299,7 +299,8 @@ onMounted(async () => { await loadModels(); await loadSignals() })
 .paper-pos-toggle { font-size: 11px; color: var(--c-text-dimmer); flex-shrink: 0; }
 .paper-pos-body { border-top: 1px solid var(--c-border-light); padding: 2px; }
 
-.signal-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 48px 24px; text-align: center; }
+.signal-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 48px 24px; text-align: center;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 1px 2px rgba(20,22,26,.03); }
 .signal-empty h3 { margin: 4px 0 0; font-size: 16px; font-weight: 600; color: var(--c-text); }
 .signal-empty p { margin: 0 0 8px; max-width: 46ch; font-size: 13px; line-height: 1.65; color: var(--c-text-dim); }
 </style>

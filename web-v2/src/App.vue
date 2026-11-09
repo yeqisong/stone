@@ -236,14 +236,21 @@ const themeOverrides = computed(() => {
       infoColorPressed: dark ? '#8b9199' : '#3a3f45',
       borderRadius: '8px',
       borderRadiusSmall: '6px',
-      fontFamily: '"PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif',
+      fontFamily: '"Inter", "Segoe UI Variable", "Segoe UI", -apple-system, "PingFang SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
     },
     Button: {
       textColorPrimary: primaryInk,
       textColorHoverPrimary: primaryInk,
       textColorPressedPrimary: primaryInk,
       textColorFocusPrimary: primaryInk,
+      heightTiny: '28px',
+      heightSmall: '32px',
+      fontSizeTiny: '12px',
+      fontSizeSmall: '13px',
     },
+    Input: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
+    Select: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
+    DatePicker: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
   }
   if (isNarrow.value) {
     Object.assign(overrides.Button, { heightTiny: '32px', heightSmall: '36px', heightMedium: '40px', fontSizeTiny: '12px', fontSizeSmall: '13px' })
@@ -368,7 +375,7 @@ if (!showLogin.value) {
   .n-data-table-th--fixed-left ~ .n-data-table-th--fixed-left { position: static !important; }
 }
 .page-titlebar { display: flex; align-items: flex-end; gap: 12px; margin: 2px 0 16px; flex-shrink: 0; }
-.page-titlebar h1 { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; color: var(--c-text); }
+.page-titlebar h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; color: var(--c-text); }
 .page-titlebar span { margin-bottom: 3px; font-size: 12px; color: var(--c-text-dim); }
 @media (max-width: 768px) {
   .page-titlebar { margin: 0 0 12px; }

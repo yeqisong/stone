@@ -444,7 +444,7 @@ const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未�
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
 // 资讯分类标识色属「质量/状态域」，不表达涨跌方向，故不受红绿铁律约束
 const NEWS_CAT_NAME = { flash:'快讯', stock_news:'个股', report:'研报', notice:'公告' }
-const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'#a78bfa', notice:'#f59e0b' }
+const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'var(--c-text-dim)', notice:'#f59e0b' }
 // 资讯情绪（对个股的利好/利空）与雪球帖的看多/看空同属方向域，用同一套红绿、文案各异
 const NEWS_SENTI = {1:{t:'利好',c:UP_COLOR}, 0:{t:'中性',c:'var(--c-text-faint)'}, '-1':{t:'利空',c:DOWN_COLOR}}
 const newsSentiOf = s => (s===null||s===undefined) ? null : (NEWS_SENTI[s] || null)

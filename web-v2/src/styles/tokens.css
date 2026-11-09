@@ -29,8 +29,8 @@
   --radius-sm: 6px;
   --shadow: 0 1px 2px rgba(20, 22, 26, .05), 0 10px 28px rgba(20, 22, 26, .06);
 
-  --font-sans: "PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC",
-    "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", -apple-system, "PingFang SC",
+    "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-num: "SF Mono", "Cascadia Mono", "JetBrains Mono", ui-monospace, monospace;
 }
 
@@ -110,19 +110,26 @@ h1, h2, h3, h4 { letter-spacing: -0.01em; }
 }
 
 /* ── 表格 ── */
-.n-data-table { --n-th-color: var(--surface) !important; --n-td-color: var(--surface) !important; }
+.main-content .n-data-table {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(20, 22, 26, .03);
+  overflow: hidden;
+}
+.n-data-table { --n-th-color: var(--surface-2) !important; --n-td-color: var(--surface) !important; }
 .n-data-table .n-data-table-th {
   font-size: 12px !important;
   font-weight: 500 !important;
   color: var(--muted) !important;
-  background: var(--surface) !important;
+  background: var(--surface-2) !important;
   border-bottom: 1px solid var(--line) !important;
   padding: 9px 14px !important;
 }
 .n-data-table .n-data-table-td {
   font-size: 13px !important;
   color: var(--ink);
-  border-bottom: 1px solid var(--line) !important;
+  border-bottom: 1px solid var(--c-border-light) !important;
   padding: 11px 14px !important;
 }
 .n-data-table .n-data-table-tr:hover .n-data-table-td { background: var(--surface-2) !important; }
@@ -176,14 +183,14 @@ h1, h2, h3, h4 { letter-spacing: -0.01em; }
 }
 .stat-strip .stat-item:first-child { border-left: 0; }
 .stat-strip .stat-label { font-size: 12px !important; color: var(--muted) !important; }
-.stat-strip .stat-value { font-size: 22px !important; font-weight: 600 !important; margin-top: 3px; }
+.stat-strip .stat-value { font-size: 24px !important; font-weight: 600 !important; margin-top: 3px; }
 @media (max-width: 900px) {
   .stat-strip { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stat-strip .stat-item { padding: 10px 14px; border-top: 1px solid var(--line); }
   .stat-strip .stat-item:nth-child(-n+2) { border-top: 0; }
   .stat-strip .stat-item:nth-child(even) { border-left: 1px solid var(--line); }
   .stat-strip .stat-item:nth-child(odd) { border-left: 0; }
-  .stat-strip .stat-value { font-size: 19px !important; }
+  .stat-strip .stat-value { font-size: 20px !important; }
 }
 
 /* ── 页面通用留白 ── */

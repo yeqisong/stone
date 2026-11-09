@@ -310,7 +310,7 @@ async function loadIcBoard() {
 
 // IC 红绿灯：渲染为彩色 CSS 圆点（canvas/文本皆不依赖彩色 emoji）
 const TRAFFIC_COLOR = { green:'#0a7a5a', yellow:'#f59e0b', red:'#c22b3f' }
-const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'primary' }, excluded:{ label:'已剔除', type:'error' } }
+const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'default' }, excluded:{ label:'已剔除', type:'error' } }
 
 // ── 去冗推荐 ──
 const showDedup = ref(false)
@@ -716,7 +716,7 @@ async function doCreate(status) {
 
 // ── Status labels ──
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
-const statusTypeMap = { draft:'warning', enabled:'primary', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
+const statusTypeMap = { draft:'warning', enabled:'default', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
 const entityLabel = { stock:'个股', etf:'ETF', index:'指数', global:'全局' }
 
 const entityOptions = [

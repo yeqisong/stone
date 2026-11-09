@@ -70,7 +70,7 @@ const IMP_OPTS = [
 ]
 const CAT_NAME = { flash: '快讯', stock_news: '个股新闻', report: '研报', notice: '公告' }
 // 分类色属「质量/状态域」的标识色，不表达涨跌方向，故不受红绿铁律约束
-const CAT_COLOR = { flash: 'var(--c-info)', stock_news: 'var(--c-text-dim)', report: '#a78bfa', notice: '#f59e0b' }
+const CAT_COLOR = { flash: 'var(--c-info)', stock_news: 'var(--c-text-dim)', report: 'var(--c-text-dim)', notice: '#f59e0b' }
 const SRC_NAME = { cls: '财联社', em724: '东财7×24', wscn: '华尔街见闻', em_stock: '东财', em_report: '东财研报', cninfo: '巨潮' }
 const SENTI = { 1: { t: '利好', c: UP_COLOR }, 0: { t: '中性', c: 'var(--c-text-faint)' }, '-1': { t: '利空', c: DOWN_COLOR } }
 const sentiOf = s => (s === null || s === undefined) ? null : SENTI[s] || SENTI[String(s)]

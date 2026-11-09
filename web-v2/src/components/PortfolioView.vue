@@ -8,14 +8,15 @@
         {{ g.name }}<span v-if="g.count" style="font-size:11px;opacity:0.75"> {{ g.count }}</span>
       </n-button>
     </n-button-group>
-    <n-button size="tiny" quaternary type="primary" style="margin-left:auto" @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+      <n-button size="tiny" quaternary @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
+      <n-button size="small" type="primary" @click="startAdd">+ 新增持仓</n-button>
+    </div>
   </div>
 
   <!-- 持仓 tab：统计区 + 持仓表（统计区仅持仓 tab 显示） -->
   <template v-if="activeTab==='pos'">
     <StatStrip v-if="data.count" :items="statItems" />
-
-    <n-button type="primary" size="small" @click="startAdd" style="margin:6px 0" class="no-shrink self-start">+ 新增持仓</n-button>
 
     <n-spin v-if="loading" style="padding:40px" />
     <template v-else>
@@ -49,7 +50,7 @@
             </div>
           </div>
         </div>
-        <n-data-table v-else class="fill-table" flex-height :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
+        <n-data-table v-else :class="data.positions.length > 8 ? 'fill-table' : ''" :flex-height="data.positions.length > 8" :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
       </div>
       <n-empty v-else description="暂无持仓" style="flex:1" />
     </template>
@@ -210,13 +211,15 @@ async function showHistory(code){
 }
 import { fmtMoney } from '../utils/ui'
 const fmt = v => v!=null?fmtMoney(Number(v)):'0'
+const signalCount = computed(() => (data.positions || []).filter(p => p.signal_direction).length)
 const statItems = computed(() => [
   { label: '持仓', value: data.count },
-  { label: '市值', value: '¥' + fmt(data.total_value) },
-  { label: '盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? '#c22b3f' : '#0a7a5a' },
+  { label: '总市值', value: '¥' + fmt(data.total_value) },
+  { label: '浮动盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? '#c22b3f' : '#0a7a5a' },
+  { label: '今日信号', value: signalCount.value },
 ])
 const columns = [
-  { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--c-accent)'}},r.stock_code)} },
+  { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--c-text-dim)'}},r.stock_code)} },
   { title:'名称', key:'stock_name', width:100, fixed:'left' },
   { title:'数量', key:'quantity', width:70, align:'right' },
   { title:'成本', key:'cost_price', width:95, align:'right', render(r){return '¥'+(r.cost_price||0).toFixed(2)} },

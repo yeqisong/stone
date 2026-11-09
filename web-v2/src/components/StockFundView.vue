@@ -85,7 +85,7 @@ onMounted(() => {
 })
 
 // Columns - all stock_master + fundamentals（前2列固定左 + 跳详情超链接）
-const linkStyle = { color: '#c22b3f', cursor: 'pointer', textDecoration: 'underline' }
+const linkStyle = { color: 'var(--c-text-dim)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--c-border)', textUnderlineOffset: '2px' }
 // render 列文本统一省略号（naive ellipsis 属性对 render 列不生效，需自行控制），title 悬浮全文
 const ell = (txt, extra = {}) => {
   const s = String(txt ?? '')
@@ -100,7 +100,7 @@ const cols = [
     return h('span', { style: linkStyle, onClick: () => emit('show-detail', r.stock_code) }, r.stock_code)
   } },
   { title: '名称', key: 'stock_name', width: 150, fixed: 'left', render(r) {
-    return ell(r.stock_name || r.stock_code, { maxWidth: '138px', ...linkStyle, textDecoration: 'none', color: '#c22b3f', cursor: 'pointer', onClick: () => emit('show-detail', r.stock_code) })
+    return ell(r.stock_name || r.stock_code, { maxWidth: '138px', ...linkStyle, textDecoration: 'none', color: 'var(--c-text)', cursor: 'pointer', onClick: () => emit('show-detail', r.stock_code) })
   } },
   { title: '类型', key: 'stock_type', width: 50, render(r) { return { stock: '股', index: '指', etf: 'ETF' }[r.stock_type] || r.stock_type } },
   { title: '交易所', key: 'exchange', width: 60 },

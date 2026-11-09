@@ -16,7 +16,7 @@
     </n-button-group>
     <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="s" :size="13" />  只看信号</n-button>
     <span v-if="!loading && !noData" style="font-size:11px;color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 · 蓝实线=实盘持仓 · 青虚线=纸面组合">
-      <span :style="{color:SIG_COLOR}">━</span>信号 · <span style="color:var(--c-info)">━</span>实盘 · <span style="color:#06b6d4">╌</span>纸面
+      <span :style="{color:SIG_COLOR}">━</span>信号 · <span style="color:var(--c-info)">━</span>实盘 · <span style="color:var(--c-text-dim)">╌</span>纸面
     </span>
     <n-tag v-if="!loading && !noData && levelLabel" size="small" style="margin-left:auto">{{levelLabel}}</n-tag>
     <n-button v-if="drillStack.length>0" size="tiny" @click="goBack"><AppIcon name="arrow-left" :size="12" /> {{drillStack.length>1?drillStack[drillStack.length-2].name:'全部行业'}}</n-button>

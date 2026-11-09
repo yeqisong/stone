@@ -56,8 +56,14 @@
           <span style="font-size:12px;margin-left:4px">版本</span>
         </n-button>
         <template v-if="store.selected">
-          <div style="font-size:16px;font-weight:600;color:var(--c-text);margin-bottom:14px">
+          <div style="font-size:18px;font-weight:600;color:var(--c-text);margin-bottom:10px">
             {{store.selected.version}} · {{store.selected.model_name}}
+          </div>
+          <div class="model-metrics">
+            <div><span>状态</span><b>{{ roleLabel(store.selected) }}</b></div>
+            <div><span>夏普</span><b class="num">{{ store.selected.sharpe ?? '—' }}</b></div>
+            <div><span>胜率</span><b class="num">{{ store.selected.win_rate != null ? (store.selected.win_rate * 100).toFixed(0) + '%' : '—' }}</b></div>
+            <div><span>创建</span><b class="num">{{ (store.selected.created_at || '').slice(0, 10) || '—' }}</b></div>
           </div>
 
           <div style="display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--c-border);overflow-x:auto;-webkit-overflow-scrolling:touch">
@@ -742,3 +748,23 @@ onMounted(async () => {
   loading.value = false
 })
 </script>
+<style scoped>
+.model-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-bg-header);
+  overflow: hidden;
+}
+.model-metrics > div { padding: 10px 14px; border-left: 1px solid var(--c-border); }
+.model-metrics > div:first-child { border-left: 0; }
+.model-metrics span { display: block; font-size: 11px; color: var(--c-text-dim); }
+.model-metrics b { display: block; margin-top: 2px; font-size: 15px; font-weight: 600; color: var(--c-text); }
+@media (max-width: 768px) {
+  .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .model-metrics > div:nth-child(3) { border-left: 0; }
+  .model-metrics > div:nth-child(n+3) { border-top: 1px solid var(--c-border); }
+}
+</style>
