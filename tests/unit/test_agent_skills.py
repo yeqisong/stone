@@ -126,14 +126,29 @@ class TestReactLoop(unittest.TestCase):
         self.assertTrue(any(m.get("role") == "tool" for m in msgs))
 
     def test_max_steps_guard(self):
-        """模型反复调工具时不超过 MAX_STEPS 次。"""
+        """显式配置上限（MAX_STEPS>0）时，模型反复调工具也不超过该次数。"""
         script = [_FakeMessage(content="", tool_calls=[_tc(f"c{i}", "list_workspace", "{}")])
-                  for i in range(runtime.MAX_STEPS + 3)]
+                  for i in range(6)]
         fake = _FakeClient(script)
-        with patch.object(runtime, "_client", return_value=(fake, {"model": "m", "base_url": "", "api_key": "x"})):
+        with patch.object(runtime, "MAX_STEPS", 3), \
+                patch.object(runtime, "_client", return_value=(fake, {"model": "m", "base_url": "", "api_key": "x"})):
             events = list(runtime.stream_agent(2, "循环调用"))
-        self.assertEqual(len(fake.chat.completions.calls), runtime.MAX_STEPS)
+        self.assertEqual(len(fake.chat.completions.calls), 3)
         self.assertEqual(events[-1]["type"], "done")
+
+    def test_unlimited_steps_by_default(self):
+        """默认不设步数上限：连续 12 次以上工具调用仍继续，直到模型给出最终答案。"""
+        script = [_FakeMessage(content="", tool_calls=[_tc(f"c{i}", "list_workspace", "{}")])
+                  for i in range(15)]
+        script.append(_FakeMessage(content="最终结论"))
+        fake = _FakeClient(script)
+        with patch.object(runtime, "MAX_STEPS", 0), \
+                patch.object(runtime, "_client", return_value=(fake, {"model": "m", "base_url": "", "api_key": "x"})):
+            events = list(runtime.stream_agent(3, "多步调用"))
+        self.assertEqual(len(fake.chat.completions.calls), 16)
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["steps"], 16)
+        self.assertTrue(any(e.get("content") == "最终结论" for e in events if e["type"] == "assistant"))
 
 
 class TestSaveSkill(unittest.TestCase):
