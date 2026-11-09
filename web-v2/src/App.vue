@@ -12,6 +12,8 @@
         '--c-input-bg':theme.colors.inputBg,
         '--c-success':theme.colors.success, '--c-error':theme.colors.error,
         '--c-warning':theme.colors.warning, '--c-info':theme.colors.info,
+        '--c-accent':theme.colors.accent, '--c-accent-weak':theme.colors.accentWeak,
+        '--c-up':theme.colors.up, '--c-down':theme.colors.down,
         background:'var(--c-bg)'}">
         <!-- 顶栏 -->
         <div class="app-header">
@@ -45,6 +47,10 @@
 
         <!-- 主内容 -->
         <div class="main-content" :class="{ narrow: isNarrow }">
+          <div v-if="pageMeta" class="page-titlebar">
+            <h1>{{ pageMeta.title }}</h1>
+            <span>{{ pageMeta.sub }}</span>
+          </div>
           <div v-if="nav.tab==='p'" style="flex:1;min-height:0;display:flex;flex-direction:column"><PortfolioView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
@@ -54,7 +60,7 @@
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
           <div v-if="nav.tab==='i'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AgentView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='x'"><StatusView /></div>
-          <div v-if="nav.tab==='a'"><ModelView /></div>
+          <div v-if="nav.tab==='a'" style="flex:1;min-height:0;display:flex;flex-direction:column"><ModelView /></div>
           <div v-if="nav.tab==='f'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FunctionView /></div>
           <div v-if="nav.tab==='e'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FeatureView /></div>
           <div v-if="nav.tab==='w'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DbExplorerView /></div>
@@ -101,7 +107,7 @@
 </template>
 
 <script setup>
-import { computed, ref, h, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, h, onMounted, onUnmounted, watch, watchEffect } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, NButton, NDropdown } from 'naive-ui'
 import axios from 'axios'
 import { startVersionWatch, canAutoReload } from './utils/version'
@@ -203,13 +209,56 @@ const adminTabs = [
 ]
 const isAdminTab = computed(() => adminTabs.some(t => t.key === nav.tab))
 
-// H5 下提升全局控件尺寸（触控目标 + 字号基线）
-const themeOverrides = computed(() => isNarrow.value ? {
-  Button: { heightTiny: '32px', heightSmall: '36px', heightMedium: '40px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
-  Input: { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
-  Select: { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
-  DatePicker: { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
-} : {})
+// 全局主题：品牌红 = 上涨红；绿色只表示下跌
+const themeOverrides = computed(() => {
+  const dark = theme.isDark
+  const primary = dark ? '#ff7a85' : '#c22b3f'
+  const primaryHover = dark ? '#ff9aa2' : '#a82033'
+  const primaryPressed = dark ? '#ff6b7a' : '#8f1a2b'
+  const primaryInk = dark ? '#1a0d10' : '#ffffff'
+  const overrides = {
+    common: {
+      primaryColor: primary,
+      primaryColorHover: primaryHover,
+      primaryColorPressed: primaryPressed,
+      primaryColorSuppl: primary,
+      successColor: dark ? '#a6abb3' : '#5b6068',
+      successColorHover: dark ? '#bcc1c8' : '#4a4f56',
+      successColorPressed: dark ? '#8b9199' : '#3a3f45',
+      warningColor: dark ? '#f2b64c' : '#8a5a00',
+      warningColorHover: dark ? '#ffc76b' : '#6f4900',
+      warningColorPressed: dark ? '#e0a53b' : '#553800',
+      errorColor: primary,
+      errorColorHover: primaryHover,
+      errorColorPressed: primaryPressed,
+      infoColor: dark ? '#a6abb3' : '#5b6068',
+      infoColorHover: dark ? '#bcc1c8' : '#4a4f56',
+      infoColorPressed: dark ? '#8b9199' : '#3a3f45',
+      borderRadius: '8px',
+      borderRadiusSmall: '6px',
+      fontFamily: '"PingFang SC", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif',
+    },
+    Button: {
+      textColorPrimary: primaryInk,
+      textColorHoverPrimary: primaryInk,
+      textColorPressedPrimary: primaryInk,
+      textColorFocusPrimary: primaryInk,
+    },
+  }
+  if (isNarrow.value) {
+    Object.assign(overrides.Button, { heightTiny: '32px', heightSmall: '36px', heightMedium: '40px', fontSizeTiny: '12px', fontSizeSmall: '13px' })
+    overrides.Input = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
+    overrides.Select = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
+    overrides.DatePicker = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
+  }
+  return overrides
+})
+
+// 主题落到 <html>，让登录页/全局 token 也跟随深浅色
+watchEffect(() => {
+  const el = document.documentElement
+  el.dataset.theme = theme.isDark ? 'dark' : 'light'
+})
 
 // 关闭管理抽屉：切到非管理 tab 时收起
 watch(() => nav.tab, (t) => { if (!adminTabs.some(x => x.key === t)) showAdmin.value = false })
@@ -239,6 +288,22 @@ const showLogin = computed(() => !auth.token)
 watch(showLogin, (v) => {
   if (v) document.title = '登录 - K道'
 })
+
+const pageMeta = computed(() => ({
+  p: { title: '持仓', sub: '账户与持仓' },
+  m: { title: '选股', sub: '全市场市值分布' },
+  s: { title: '信号', sub: '模型信号与模拟交易' },
+  l: { title: '个股', sub: '全市场个股列表' },
+  n: { title: '资讯', sub: '快讯、公告与研报' },
+  i: { title: '问答', sub: '站内数据问答' },
+  x: { title: '状态', sub: '数据与系统状态' },
+  a: { title: '模型', sub: '版本、训练与评估' },
+  f: { title: '函数', sub: 'KEPL 算子注册表' },
+  e: { title: '特征', sub: '特征库与 IC 体检' },
+  g: { title: 'DAG', sub: '流程编排与执行' },
+  w: { title: '数据', sub: '数据库浏览' },
+  u: { title: '证券主档', sub: '个股 / 指数 / ETF' },
+}[nav.tab] || null))
 
 const titleMap = {
   p: '持仓 - K道',
@@ -281,17 +346,14 @@ if (!showLogin.value) {
 /* 新版本提示条（右下角悬浮，不遮挡主内容） */
 .app-update { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display: flex;
   align-items: center; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--c-text);
-  background: var(--c-card-bg); border: 1px solid rgba(32,128,240,0.45); border-radius: 8px;
+  background: var(--c-card-bg); border: 1px solid rgba(194,43,63,0.45); border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
 
 .app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 /* 组合按钮：合并组内圆角与边框（naive ButtonGroup 子按钮圆角样式未生效，全局兜底） */
-.n-button-group { display: inline-flex; }
-.n-button-group > .n-button { border-radius: 0 !important; }
-.n-button-group > .n-button:first-child { border-radius: 3px 0 0 3px !important; }
-.n-button-group > .n-button:last-child { border-radius: 0 3px 3px 0 !important; }
-.n-button-group > .n-button:only-child { border-radius: 3px !important; }
-.n-button-group > .n-button + .n-button { margin-left: -1px; }
+.n-button-group { display: inline-flex; gap: 2px; padding: 2px; background: var(--c-card-bg); border-radius: 8px; }
+.n-button-group > .n-button { border-radius: 6px !important; border: 0 !important; margin: 0 !important; }
+.n-button-group > .n-button:not(.n-button--primary-type) { background: transparent !important; }
 
 /* 数字防跳动：全站表格与统计值统一等宽数字 */
 .app-root .n-data-table td, .app-root .n-data-table th { font-variant-numeric: tabular-nums; }
@@ -305,23 +367,36 @@ if (!showLogin.value) {
   .n-data-table-td--fixed-left ~ .n-data-table-td--fixed-left,
   .n-data-table-th--fixed-left ~ .n-data-table-th--fixed-left { position: static !important; }
 }
-.app-header { display: flex; align-items: center; justify-content: space-between; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border); padding: 8px 20px; }
-.app-header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.brand { font-size: 18px; font-weight: 700; color: var(--c-text); display: flex; align-items: center; gap: 6px; }
-.header-date { font-size: 11px; color: var(--c-text-dimmer); white-space: nowrap; }
-.app-header-right { display: flex; align-items: center; gap: 12px; }
+.page-titlebar { display: flex; align-items: flex-end; gap: 12px; margin: 2px 0 16px; flex-shrink: 0; }
+.page-titlebar h1 { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; color: var(--c-text); }
+.page-titlebar span { margin-bottom: 3px; font-size: 12px; color: var(--c-text-dim); }
+@media (max-width: 768px) {
+  .page-titlebar { margin: 0 0 12px; }
+  .page-titlebar h1 { font-size: 19px; }
+  .page-titlebar span { display: none; }
+}
+
+.app-header { display: flex; align-items: center; justify-content: space-between; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border); padding: 0 24px; height: 56px; }
+.app-header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.brand { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--c-text); display: flex; align-items: center; gap: 7px; }
+.header-date { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
+.app-header-right { display: flex; align-items: center; gap: 10px; }
 .user-chip { font-size: 12px; color: var(--c-text-dim); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; }
 .user-chip .nav-svg { margin-right: 4px; flex-shrink: 0; }
-.ws-info { font-size: 10px; display: flex; align-items: center; gap: 3px; white-space: nowrap; color: var(--c-text-dimmer); }
-.ws-info .ws-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
-.ws-info.ok { color: #10b981; }
-.ws-info.ok .ws-dot { background: #10b981; }
+.ws-info { font-size: 12px; display: flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--c-text-dim); }
+.ws-info .ws-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--c-error); }
+.ws-info.ok { color: var(--c-accent); }
+.ws-info.ok .ws-dot { background: var(--c-accent); }
 
-.app-nav { display: flex; align-items: center; gap: 4px; padding: 6px 16px; border-bottom: 1px solid var(--c-border); overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.app-nav { display: flex; align-items: stretch; gap: 0; padding: 0 20px; height: 46px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-header); overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .app-nav::-webkit-scrollbar { display: none; }
-.app-nav .n-button { flex-shrink: 0; }
-.app-nav .n-button .nav-svg { margin-right: 5px; }
-.nav-divider { width: 1px; height: 18px; background: var(--c-border); margin: 0 10px; flex-shrink: 0; }
+.app-nav .n-button { flex-shrink: 0; height: 46px !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; padding: 0 12px !important; color: var(--c-text-dim) !important; font-size: 13px !important; font-weight: 500 !important; position: relative; }
+.app-nav .n-button:hover { color: var(--c-text) !important; background: transparent !important; }
+.app-nav .n-button--primary-type { color: var(--c-accent) !important; font-weight: 600 !important; }
+.app-nav .n-button--primary-type::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 1px; background: var(--c-accent); }
+.app-nav .n-button .n-button__border, .app-nav .n-button .n-button__state-border { display: none !important; }
+.app-nav .n-button .nav-svg { margin-right: 6px; }
+.nav-divider { width: 1px; height: 18px; background: var(--c-border); margin: auto 10px; flex-shrink: 0; }
 
 .main-content { flex: 1; overflow-y: auto; padding: 6px 16px; display: flex; flex-direction: column; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .main-content.narrow { padding: 6px 10px calc(64px + env(safe-area-inset-bottom)); }
@@ -347,11 +422,11 @@ if (!showLogin.value) {
 }
 
 /* H5 底部 TabBar */
-.h5-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; height: 52px; padding-bottom: env(safe-area-inset-bottom); background: var(--c-bg-header); border-top: 1px solid var(--c-border); }
-.h5-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--c-text-dimmer); min-width: 0; }
+.h5-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; height: 58px; padding-bottom: env(safe-area-inset-bottom); background: var(--c-bg-header); border-top: 1px solid var(--c-border); }
+.h5-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--c-text-dim); min-width: 0; }
 .h5-tab-icon { font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center; }
-.h5-tab-label { font-size: 10px; line-height: 1.2; }
-.h5-tab.active { color: #2080f0; }
+.h5-tab-label { font-size: 11px; line-height: 1.2; }
+.h5-tab.active { color: var(--c-accent); }
 .h5-tab.active .h5-tab-label { font-weight: 600; }
 
 /* H5 管理抽屉 */
@@ -360,14 +435,14 @@ if (!showLogin.value) {
 .admin-sheet-title { font-size: 13px; font-weight: 600; color: var(--c-text); text-align: center; margin-bottom: 12px; }
 .admin-sheet-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 12px; }
 .admin-sheet-item { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 14px 0; border-radius: 10px; background: var(--c-card-bg); border: 1px solid var(--c-border); color: var(--c-text); font-size: 13px; cursor: pointer; }
-.admin-sheet-item.active { color: #2080f0; border-color: rgba(32,128,240,.4); background: rgba(32,128,240,.08); }
+.admin-sheet-item.active { color: var(--c-accent); border-color: var(--c-accent); background: var(--c-accent-weak); }
 .admin-sheet-icon { font-size: 18px; display: flex; align-items: center; }
 .admin-sheet-close { width: 100%; padding: 12px 0; border-radius: 10px; background: var(--c-card-bg); border: 1px solid var(--c-border); color: var(--c-text-dim); font-size: 13px; cursor: pointer; }
 
 @media (max-width: 768px) {
   .app-root { --h5-tabbar-h: 80px; }  /* 底部 TabBar(52px)+safe-area 供页面图高扣减 */
-  .app-header { padding: 8px 12px; }
+  .app-header { padding: 0 14px; }
   .app-header-left { gap: 8px; }
-  .header-date { font-size: 10px; }
+  .header-date { font-size: 11px; }
 }
 </style>

@@ -5,7 +5,7 @@
     <!-- 顶部导航 -->
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
       <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回列表</n-button>
-      <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ feat.feature_name }}</span>
+      <span style="font-size:17px;font-weight:600;color:var(--c-text)">{{ feat.feature_name }}</span>
       <n-tag :type="statusTypeMap[feat.status]||'default'" size="tiny" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
       <div style="flex:1" />
       <n-button size="tiny" @click="openEditInline"><AppIcon name="edit" :size="13" />  编辑</n-button>
@@ -17,7 +17,7 @@
         <!-- 信息卡行 -->
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
           <div v-for="m in infoCards" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint)">{{ m.label }}</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">{{ m.label }}</div>
             <div :style="{fontSize:m.size||'14px',fontWeight:600,color:m.color||'var(--c-text)'}">{{ m.value }}</div>
           </div>
         </div>
@@ -31,24 +31,24 @@
         <!-- 质量仪表盘 4 卡片 -->
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
-            <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=60?'#10b981':completenessPct>=30?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
+            <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
+            <div :style="{fontSize:'22px',fontWeight:600,color:completenessPct>=60?'#0a7a5a':completenessPct>=30?'#f59e0b':'#c22b3f'}">{{ completenessPct }}%</div>
             <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
-              <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=60?'#10b981':completenessPct>=30?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
+              <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=60?'#0a7a5a':completenessPct>=30?'#f59e0b':'#c22b3f',borderRadius:'4px'}"></div>
             </div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
-            <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
-            <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">交易日×股票数</div>
+            <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
+            <div style="font-size:20px;font-weight:600;color:var(--c-text)">{{ (feat.total_effective_cells||0).toLocaleString() }}</div>
+            <div style="font-size:11px;color:var(--c-text-faint);margin-top:2px">交易日×股票数</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="check" :size="13" />  已计算</div>
-            <div style="font-size:20px;font-weight:700;color:#10b981">{{ computedActual.toLocaleString() }}</div>
+            <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="check" :size="13" />  已计算</div>
+            <div style="font-size:20px;font-weight:600;color:#0a7a5a">{{ computedActual.toLocaleString() }}</div>
           </div>
           <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-            <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  总缺失格</div>
-            <div :style="{fontSize:'20px',fontWeight:700,color:feat.abnormal_missing_cells>0?'#f59e0b':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
+            <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  总缺失格</div>
+            <div :style="{fontSize:'20px',fontWeight:600,color:feat.abnormal_missing_cells>0?'#f59e0b':'var(--c-text-dim)'}">{{ (feat.abnormal_missing_cells||0).toLocaleString() }}</div>
           </div>
         </div>
 
@@ -143,21 +143,21 @@
           <!-- 指标卡 -->
           <div v-else-if="icDetail" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
             <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--c-text-faint)">RankIC（{{ icHorizon }}日前瞻）</div>
-              <div :style="{fontSize:'20px',fontWeight:700,color:icDetail.rank_ic_mean>=0?'#10b981':'#f59e0b'}">{{ icDetail.rank_ic_mean>=0?'+':'' }}{{ icDetail.rank_ic_mean?.toFixed(4) }}</div>
+              <div style="font-size:11px;color:var(--c-text-faint)">RankIC（{{ icHorizon }}日前瞻）</div>
+              <div :style="{fontSize:'20px',fontWeight:600,color:icDetail.rank_ic_mean>=0?'#0a7a5a':'#f59e0b'}">{{ icDetail.rank_ic_mean>=0?'+':'' }}{{ icDetail.rank_ic_mean?.toFixed(4) }}</div>
             </div>
             <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--c-text-faint)">ICIR</div>
-              <div :style="{fontSize:'20px',fontWeight:700,color:Math.abs(icDetail.rank_ic_ir)>=0.3?'#10b981':'#f59e0b'}">{{ icDetail.rank_ic_ir>=0?'+':'' }}{{ icDetail.rank_ic_ir?.toFixed(3) }}</div>
+              <div style="font-size:11px;color:var(--c-text-faint)">ICIR</div>
+              <div :style="{fontSize:'20px',fontWeight:600,color:Math.abs(icDetail.rank_ic_ir)>=0.3?'#0a7a5a':'#f59e0b'}">{{ icDetail.rank_ic_ir>=0?'+':'' }}{{ icDetail.rank_ic_ir?.toFixed(3) }}</div>
             </div>
             <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--c-text-faint)">IC 同号占比</div>
-              <div :style="{fontSize:'20px',fontWeight:700,color:icDetail.ic_win_rate>=0.55?'#10b981':'#f59e0b'}">{{ (icDetail.ic_win_rate*100).toFixed(1) }}%</div>
+              <div style="font-size:11px;color:var(--c-text-faint)">IC 同号占比</div>
+              <div :style="{fontSize:'20px',fontWeight:600,color:icDetail.ic_win_rate>=0.55?'#0a7a5a':'#f59e0b'}">{{ (icDetail.ic_win_rate*100).toFixed(1) }}%</div>
             </div>
             <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:10px;color:var(--c-text-faint)">t 值 / 样本</div>
-              <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ icDetail.t_stat?.toFixed(1) }}</div>
-              <div style="font-size:9px;color:var(--c-text-faint);margin-top:2px">{{ icDetail.sample_days }} 天 × {{ icDetail.avg_names?.toFixed(0) }} 股</div>
+              <div style="font-size:11px;color:var(--c-text-faint)">t 值 / 样本</div>
+              <div style="font-size:20px;font-weight:600;color:var(--c-text)">{{ icDetail.t_stat?.toFixed(1) }}</div>
+              <div style="font-size:11px;color:var(--c-text-faint);margin-top:2px">{{ icDetail.sample_days }} 天 × {{ icDetail.avg_names?.toFixed(0) }} 股</div>
             </div>
           </div>
           <n-empty v-else description="暂无检验记录，点右上角「重算」开始" style="padding:30px" />
@@ -184,7 +184,7 @@
             <n-data-table :columns="icHistoryCols" :data="icRecords" size="small" :max-height="200" :row-props="icRowProps" :bordered="false" :single-line="true" scroll-x="730" />
           </div>
 
-          <div style="margin-top:12px;font-size:10px;color:var(--c-text-faint);line-height:1.8">
+          <div style="margin-top:12px;font-size:11px;color:var(--c-text-faint);line-height:1.8">
             口径：RankIC = 每日截面因子排名 vs 前瞻 N 日收益排名的 Spearman 相关；ICIR = mean(IC)/std(IC)；分层按因子值均分 5 组，
             净值按"前瞻收益/持有天数"日均化近似累计（未计交易成本，仅观察单调性，不作为回测依据）；
             红绿灯：|RankIC|≥0.02 且 |ICIR|≥0.30 且 同号占比≥55% <AppIcon name="arrow-right" :size="13" />  绿，两项 <AppIcon name="arrow-right" :size="13" />  黄，其余 <AppIcon name="arrow-right" :size="13" />  红；IC 为负时标注反向因子。
@@ -212,7 +212,7 @@
       </div>
       <div v-if="showOpsPanel && keplFns" style="max-height:220px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px">
         <div v-for="grp in opGroups" :key="grp.label">
-          <div style="font-size:10px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
           <div style="display:flex;flex-wrap:wrap;gap:4px">
             <n-tag v-for="op in grp.items" :key="op.name" size="small" :bordered="false"
                    style="cursor:pointer;font-family:monospace" :title="`${op.desc}　例: ${op.eg}`"
@@ -268,8 +268,8 @@
       <div v-if="icTask && icTask.status==='running'" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-text-dim)">
         <n-spin size="small" /> 检验中（全周期约 40-60 秒，请勿关闭）…
       </div>
-      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#ef4444"><AppIcon name="x-circle" :size="13" />  {{ icTask.error }}</div>
-      <div v-if="icTask && icTask.status==='completed'" style="font-size:12px;color:#10b981">
+      <div v-if="icTask && icTask.status==='failed'" style="font-size:12px;color:#c22b3f"><AppIcon name="x-circle" :size="13" />  {{ icTask.error }}</div>
+      <div v-if="icTask && icTask.status==='completed'" style="font-size:12px;color:#0a7a5a">
         <AppIcon name="check" :size="13" />  完成：{{ (icTask.results||[]).filter(r=>!r.error).length }}/{{ icTask.horizons?.length }} 个周期落档
         <span v-if="(icTask.failed||[]).length" style="color:#f59e0b">；{{ icTask.failed.map(f=>f.horizon+'d:'+f.error).join('；') }}</span>
       </div>
@@ -425,8 +425,8 @@ function renderIcCharts() {
       xAxis: { type: 'category', data: s.dates || [], axisLabel: { fontSize: 8, interval: Math.max(1, Math.floor((s.dates?.length || 1) / 5)) } },
       yAxis: [{ type: 'value', scale: true, axisLabel: { fontSize: 8 } }, { type: 'value', axisLabel: { fontSize: 8 } }],
       series: [
-        { type: 'bar', name: 'RankIC', data: (s.rank_ic || []).map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#10b981' : '#ef4444' } })), barWidth: '60%' },
-        { type: 'line', name: '累计IC', data: s.cum_ic || [], yAxisIndex: 1, showSymbol: false, lineStyle: { width: 1.5, color: '#2080f0' } },
+        { type: 'bar', name: 'RankIC', data: (s.rank_ic || []).map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#0a7a5a' : '#c22b3f' } })), barWidth: '60%' },
+        { type: 'line', name: '累计IC', data: s.cum_ic || [], yAxisIndex: 1, showSymbol: false, lineStyle: { width: 1.5, color: '#c22b3f' } },
       ],
     })
   }
@@ -435,7 +435,7 @@ function renderIcCharts() {
     layerChartInst?.dispose()
     layerChartInst = echarts.init(layerChart.value)
     const q = d.q_returns || {}
-    const colors = ['#ef4444', '#f59e0b', '#9ca3af', '#38bdf8', '#10b981']
+    const colors = ['#c22b3f', '#f59e0b', '#9ca3af', '#38bdf8', '#0a7a5a']
     layerChartInst.setOption({
       tooltip: { trigger: 'axis' },
       legend: { top: 0, textStyle: { fontSize: 9 }, itemWidth: 12 },
@@ -467,7 +467,7 @@ function renderIcCharts() {
       yAxis: { type: 'value', axisLabel: { fontSize: 8 } },
       series: [{
         type: 'bar', barWidth: '40%',
-        data: hs.map(h => ({ value: latest[h], itemStyle: { color: latest[h] >= 0 ? '#10b981' : '#ef4444' } })),
+        data: hs.map(h => ({ value: latest[h], itemStyle: { color: latest[h] >= 0 ? '#0a7a5a' : '#c22b3f' } })),
         label: { show: true, position: 'top', fontSize: 9, formatter: p => p.value?.toFixed(4) },
       }],
     })
@@ -488,7 +488,7 @@ const icHistoryCols = [
 
 function icRowProps(row) {
   return {
-    style: { cursor: 'pointer', background: row.horizon === icHorizon.value ? 'var(--c-hover-bg, rgba(32,128,240,.06))' : '' },
+    style: { cursor: 'pointer', background: row.horizon === icHorizon.value ? 'var(--c-hover-bg, rgba(194,43,63,.06))' : '' },
     onClick: () => { icHorizon.value = row.horizon; loadIcDetail() },
   }
 }
@@ -594,7 +594,7 @@ async function recomputeStats() {
 }
 
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
-const statusTypeMap = { draft:'warning', enabled:'success', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
+const statusTypeMap = { draft:'warning', enabled:'primary', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
 const entityLabel = { stock:'个股', etf:'ETF', index:'指数', global:'全局' }
 
 const infoCards = computed(() => {
@@ -685,7 +685,7 @@ function renderDiagnosis() {
         series: [{
           type:'pie', radius:['40%','70%'],
           data: [
-            { value:computed,    name:'已计算',         itemStyle:{color:'#10b981'} },
+            { value:computed,    name:'已计算',         itemStyle:{color:'#0a7a5a'} },
             { value:uncomputed,  name:'未补(历史缺口)',  itemStyle:{color:'#f59e0b'} },
             { value:windowMissing, name:'窗口期(天然缺失)', itemStyle:{color:'#9ca3af'} },
           ],
@@ -723,7 +723,7 @@ function loadHeatmap() {
           grid: { left:70, right:20, top:20, bottom:40 },
           xAxis: { type:'category', data: days_labels, axisLabel:{fontSize:8,interval:Math.max(1,Math.floor(days_labels.length/6))} },
           yAxis: { type:'category', data: stock_labels, axisLabel:{fontSize:8}, inverse:true },
-          visualMap: { min:0, max:2, inRange:{color:['#10b981','#9ca3af','#ef4444']}, show:false },
+          visualMap: { min:0, max:2, inRange:{color:['#0a7a5a','#9ca3af','#c22b3f']}, show:false },
           series: [{ type:'heatmap', data: matrix, label:{show:false} }],
         })
       } else {

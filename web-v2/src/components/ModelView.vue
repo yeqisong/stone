@@ -1,8 +1,8 @@
 <template>
-<div>
+<div style="display:flex;flex-direction:column;flex:1;min-height:0">
   <n-spin v-if="loading" style="padding:60px" />
   <template v-else>
-    <div :style="{display:'flex',gap:0,height:'calc(100vh - 110px)'}">
+    <div :style="{display:'flex',gap:0,flex:1,minHeight:0}">
       <!-- Left: Version List (mobile collapsible, PC always visible) -->
       <div v-if="showSidebar" :style="{width:'280px',maxWidth:'100%',flexShrink:0,borderRight:'1px solid var(--c-border)',display:'flex',flexDirection:'column',overflow:'hidden',zIndex:10,background:'var(--c-bg)'}">
         <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between">
@@ -21,12 +21,12 @@
     <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')"><AppIcon name="pie-chart" :size="13" />  ETF</n-button>
   </div>
           <div v-for="v in store.versions" :key="v.version"
-            :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-border)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-card-bg-hover)':'transparent'}"
+            :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-accent)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-accent-weak)':'transparent'}"
             @click="store.selectVersion(v.version)"
             @mouseenter="hoveredVersion = v.version" @mouseleave="hoveredVersion = null">
             <div style="display:flex;align-items:center;justify-content:space-between">
               <div style="display:flex;align-items:center;gap:8px">
-                <span style="font-size:15px;font-weight:700;color:var(--c-text)">{{v.version}}</span>
+                <span style="font-size:15px;font-weight:600;color:var(--c-text)">{{v.version}}</span>
                 <n-tag :type="store.statusBadge(v.status)" size="tiny" :bordered="false">{{roleLabel(v)}}</n-tag>
               </div>
               <div v-if="!store.isMock && hoveredVersion === v.version" style="display:flex;gap:2px;flex-shrink:0">
@@ -39,7 +39,7 @@
               </div>
             </div>
             <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
-            <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--c-text-faint)">
+            <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--c-text-faint)">
               <span v-if="v.sharpe!=null"><AppIcon name="trending-up" :size="13" />  夏普 {{v.sharpe}}</span>
               <span v-if="v.win_rate!=null"><AppIcon name="check" :size="13" />  {{(v.win_rate*100).toFixed(0)}}%</span>
               <span><AppIcon name="calendar" :size="13" />  {{(v.created_at||'').slice(5)}}</span>
@@ -51,17 +51,18 @@
 
       <!-- Right: Detail -->
       <div style="flex:1;min-width:0;overflow-y:auto;padding:16px 12px">
-        <n-button v-if="isMobile && !showSidebar" size="tiny" quaternary @click="showSidebar=true" style="margin-bottom:8px" title="展开列表">
+        <n-button v-if="isMobile && !showSidebar" size="tiny" quaternary @click="showSidebar=true" style="margin-bottom:8px" title="展开版本列表">
           <svg viewBox="0 0 1024 1024" width="18" height="18" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
+          <span style="font-size:12px;margin-left:4px">版本</span>
         </n-button>
         <template v-if="store.selected">
-          <div style="font-size:16px;font-weight:700;color:var(--c-text);margin-bottom:14px">
+          <div style="font-size:16px;font-weight:600;color:var(--c-text);margin-bottom:14px">
             {{store.selected.version}} · {{store.selected.model_name}}
           </div>
 
           <div style="display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--c-border);overflow-x:auto;-webkit-overflow-scrolling:touch">
             <button v-for="t in tabs" :key="t.key"
-              :style="{padding:'8px 14px',border:'none',background:'transparent',color:store.detailTab===t.key?'var(--c-text)':'var(--c-text-dim)',fontSize:'12px',cursor:'pointer',borderBottom:store.detailTab===t.key?'2px solid #2080f0':'2px solid transparent',marginBottom:'-1px',flexShrink:0,whiteSpace:'nowrap'}"
+              :style="{padding:'8px 14px',border:'none',background:'transparent',color:store.detailTab===t.key?'var(--c-text)':'var(--c-text-dim)',fontSize:'12px',cursor:'pointer',borderBottom:store.detailTab===t.key?'2px solid #c22b3f':'2px solid transparent',marginBottom:'-1px',flexShrink:0,whiteSpace:'nowrap'}"
               @click="store.switchTab(t.key)">{{t.label}}</button>
           </div>
 
@@ -71,8 +72,8 @@
             </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
               <div v-for="m in basicMetrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
-                <div style="font-size:10px;color:var(--c-text-faint)">{{m.label}}</div>
-                <div :style="{fontSize:'16px',fontWeight:700,color:m.color||'var(--c-text)'}">{{m.value}}</div>
+                <div style="font-size:11px;color:var(--c-text-faint)">{{m.label}}</div>
+                <div :style="{fontSize:'16px',fontWeight:600,color:m.color||'var(--c-text)'}">{{m.value}}</div>
               </div>
             </div>
             <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px">
@@ -91,7 +92,7 @@
           </div>
           <div v-else-if="store.detailTab==='eval'">
             <div v-if="store.selected.status==='PENDING'" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap">
-              <n-button type="success" @click="approveModel('primary')"><AppIcon name="zap" :size="13" />  发布为主模型</n-button>
+              <n-button type="primary" @click="approveModel('primary')"><AppIcon name="zap" :size="13" />  发布为主模型</n-button>
               <n-button type="info" secondary @click="approveModel('backup')">发布为备模型</n-button>
               <n-button type="error" @click="rejectModel">拒绝</n-button>
             </div>
@@ -108,13 +109,14 @@
             </div>
             <n-empty v-else description="未配置特征" style="padding:20px" />
             <div v-if="fcResult" style="margin-top:8px">
-              <div :style="{fontSize:'11px',color:fcResult.ready?'#10b981':'#ef4444',marginBottom:'6px'}">
-                {{ fcResult.ready ? '<AppIcon name="check" :size="13" />  全部特征数据就绪' : '<AppIcon name="alert" :size="13" /> ️ ' + fcResult.warnings.length + ' 个问题' }}
+              <div :style="{fontSize:'11px',color:fcResult.ready?'var(--c-text)':'var(--c-error)',marginBottom:'6px'}">
+                <template v-if="fcResult.ready"><AppIcon name="check" :size="13" /> 全部特征数据就绪</template>
+                <template v-else><AppIcon name="alert" :size="13" /> {{ fcResult.warnings.length }} 个问题</template>
               </div>
               <div v-if="fcResult.warnings?.length" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px">
-                <div v-for="w in fcResult.warnings" :key="w" style="font-size:10px;color:#f59e0b">{{ w }}</div>
+                <div v-for="w in fcResult.warnings" :key="w" style="font-size:11px;color:#f59e0b">{{ w }}</div>
               </div>
-              <n-data-table v-if="fcResult.features?.length" :columns="fcCols" :data="fcResult.features" size="small" :bordered="false" scroll-x="550" />
+              <n-data-table v-if="fcResult.features?.length" :columns="fcCols" :data="fcResult.features" size="small" :bordered="false" scroll-x="760" />
             </div>
           </div>
         </template>
@@ -157,10 +159,10 @@
             <n-tag v-for="f in featureOptions" :key="f.key"
               :type="createForm.feature_names.includes(f.key)?'info':'default'"
               :style="{cursor:'pointer', opacity: f.ic_status==='excluded'?0.55:1,
-                       border: f.ic_status==='excluded' ? '1px dashed #ef4444' : (f.traffic==='green' ? '1px solid #10b981' : (f.traffic==='yellow' ? '1px solid #f59e0b' : 'none'))}"
+                       border: f.ic_status==='excluded' ? '1px dashed #c22b3f' : (f.traffic==='green' ? '1px solid #0a7a5a' : (f.traffic==='yellow' ? '1px solid #f59e0b' : 'none'))}"
               @click="toggleFeature(f.key)" :bordered="false" size="small">{{ f.traffic==='green'?'●':f.traffic==='yellow'?'●':f.traffic==='red'?'●':'' }}{{f.label}}{{ f.direction==='-'?' ↩':'' }}</n-tag>
           </n-space>
-          <div style="font-size:10px;color:var(--c-text-faint)">// = IC 体检灯（10日前瞻）； = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">// = IC 体检灯（10日前瞻）； = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
           <n-divider style="margin:4px 0">训练参数</n-divider>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">Optuna</span><n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="flex:1" size="small" /></div>
@@ -299,14 +301,14 @@ const fcLoading = ref(false)
 const fcResult = ref(null)
 const fcCols = [
   { title:'特征', key:'name', width:110, fixed:'left', ellipsis:{tooltip:true} },
-  { title:'股票', key:'stocks', width:45, align:'right' },
-  { title:'总量', key:'total_rows', width:65, align:'right', render(r) { return (r.total_rows||0).toLocaleString() } },
-  { title:'训练', key:'train', width:65, align:'right', render(r) { return (r.train||0).toLocaleString() } },
-  { title:'', key:'train_pct', width:45, render(r) { return (r.train_pct||0)+'%' } },
-  { title:'验证', key:'val', width:65, align:'right', render(r) { return (r.val||0).toLocaleString() } },
-  { title:'', key:'val_pct', width:45, render(r) { return (r.val_pct||0)+'%' } },
-  { title:'测试', key:'test', width:65, align:'right', render(r) { return (r.test||0).toLocaleString() } },
-  { title:'', key:'test_pct', width:45, render(r) { return (r.test_pct||0)+'%' } },
+  { title:'股票', key:'stocks', width:55, align:'right' },
+  { title:'总量', key:'total_rows', width:85, align:'right', render(r) { return (r.total_rows||0).toLocaleString() } },
+  { title:'训练', key:'train', width:85, align:'right', render(r) { return (r.train||0).toLocaleString() } },
+  { title:'', key:'train_pct', width:48, render(r) { return (r.train_pct||0)+'%' } },
+  { title:'验证', key:'val', width:85, align:'right', render(r) { return (r.val||0).toLocaleString() } },
+  { title:'', key:'val_pct', width:48, render(r) { return (r.val_pct||0)+'%' } },
+  { title:'测试', key:'test', width:85, align:'right', render(r) { return (r.test||0).toLocaleString() } },
+  { title:'', key:'test_pct', width:48, render(r) { return (r.test_pct||0)+'%' } },
 ]
 
 async function loadFeatureCheck(force) {
@@ -572,8 +574,8 @@ const basicMetrics = computed(() => {
   const s = store.selected
   if (!s) return []
   return [
-    { label:'状态', value: store.statusLabel(s.status), color: s.status==='ACTIVE'?'#10b981':s.status==='PENDING'?'#f59e0b':s.status==='TRAINING'?'#f97316':undefined },
-    { label:'夏普', value: s.sharpe?.toFixed(2)||'—', color:'#10b981' },
+    { label:'状态', value: store.statusLabel(s.status), color: s.status==='ACTIVE'?'#0a7a5a':s.status==='PENDING'?'#f59e0b':s.status==='TRAINING'?'#f97316':undefined },
+    { label:'夏普', value: s.sharpe?.toFixed(2)||'—', color:'#0a7a5a' },
     { label:'胜率', value: s.win_rate ? (s.win_rate*100).toFixed(0)+'%' : '—' },
     { label:'最大回撤', value: s.max_drawdown ? (s.max_drawdown*100).toFixed(1)+'%' : '—' },
     { label:'创建时间', value: (s.created_at||'').slice(0,10) },

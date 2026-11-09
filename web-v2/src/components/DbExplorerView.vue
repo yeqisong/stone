@@ -206,8 +206,8 @@ onMounted(loadAll)
 /* 顶部概览 */
 .dbx-top { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .ov-card { background: var(--c-card-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 8px 14px; text-align: center; min-width: 86px; }
-.ov-label { font-size: 10px; color: var(--c-text-faint); }
-.ov-value { font-size: 14px; font-weight: 700; color: var(--c-text); margin-top: 2px; }
+.ov-label { font-size: 11px; color: var(--c-text-faint); }
+.ov-value { font-size: 14px; font-weight: 600; color: var(--c-text); margin-top: 2px; }
 
 /* 主体：左清单 + 右数据，各自独立滚动，页面不滚动 */
 .dbx-body { flex: 1; min-height: 0; display: flex; gap: 12px; }
@@ -216,18 +216,18 @@ onMounted(loadAll)
 .dbx-table-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding-right: 2px; }
 
 .tbl-item { cursor: pointer; padding: 7px 10px; border-radius: 6px; background: var(--c-card-bg); border: 1px solid var(--c-border); transition: border-color .15s; flex-shrink: 0; }
-.tbl-item:hover { border-color: #2080f0; }
-.tbl-item.active { border-color: #2080f0; background: rgba(32, 128, 240, .10); }
+.tbl-item:hover { border-color: #c22b3f; }
+.tbl-item.active { border-color: #c22b3f; background: rgba(32, 128, 240, .10); }
 .tbl-item-top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .tbl-name { font-size: 12px; font-weight: 600; color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tbl-size { font-size: 10px; color: var(--c-text-faint); flex-shrink: 0; }
-.tbl-sub { font-size: 10px; color: var(--c-text-faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbl-size { font-size: 11px; color: var(--c-text-faint); flex-shrink: 0; }
+.tbl-sub { font-size: 11px; color: var(--c-text-faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 右侧数据区 */
 .dbx-right { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; background: var(--c-card-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 10px 12px; }
 .dbx-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .dbx-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.dbx-table-name { font-size: 13px; font-weight: 700; color: var(--c-text); }
+.dbx-table-name { font-size: 13px; font-weight: 600; color: var(--c-text); }
 .dbx-table-comment { font-size: 11px; color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
 .dbx-rows { font-size: 11px; color: var(--c-text-dim); flex-shrink: 0; }
 .dbx-tools { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
@@ -259,8 +259,8 @@ onMounted(loadAll)
 .th-q {
   display: inline-flex; align-items: center; justify-content: center;
   width: 13px; height: 13px; border-radius: 50%;
-  font-size: 9px; line-height: 1; cursor: help;
-  color: #2080f0; background: rgba(32, 128, 240, .12);
+  font-size: 11px; line-height: 1; cursor: help;
+  color: #c22b3f; background: rgba(32, 128, 240, .12);
   vertical-align: 1px;
 }
 .dbx-table thead th:hover .th-q { background: rgba(32, 128, 240, .25); }

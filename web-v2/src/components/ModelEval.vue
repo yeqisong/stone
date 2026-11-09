@@ -5,8 +5,8 @@
     <!-- Core Metrics -->
     <div style="display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap">
       <div v-for="m in metrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:90px;text-align:center">
-        <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px">{{m.label}}</div>
-        <div :style="{fontSize:'20px',fontWeight:700,color:m.color||'var(--c-text)'}">{{m.value}}</div>
+        <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px">{{m.label}}</div>
+        <div :style="{fontSize:'20px',fontWeight:600,color:m.color||'var(--c-text)'}">{{m.value}}</div>
       </div>
     </div>
 
@@ -15,8 +15,8 @@
       <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin-bottom:10px">最优超参数</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
         <div v-for="p in modelParams" :key="p.key" style="background:var(--c-card-bg-hover);border-radius:6px;padding:8px 14px;text-align:center;min-width:70px">
-          <div style="font-size:9px;color:var(--c-text-faint)">{{p.label}}</div>
-          <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{p.value}}</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">{{p.label}}</div>
+          <div style="font-size:15px;font-weight:600;color:var(--c-text)">{{p.value}}</div>
         </div>
       </div>
     </div>
@@ -27,23 +27,23 @@
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;font-size:11px">
         <div style="padding:8px;text-align:center" title="验证集与测试集夏普差值：正=过拟合, 负=欠拟合；有分解数据时按 T+1 次日收盘口径判读（诚实口径）">
           <div style="color:var(--c-text-faint)">拟合度</div>
-          <div style="font-weight:700;margin-top:2px" :style="{color:overfitColor}">{{overfitLabel}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">Val-Test={{rep.overfit_gap?.toFixed(2)}}<template v-if="gd.sharpe_gap_val_test_t1!=null"> / 次日{{gd.sharpe_gap_val_test_t1.toFixed(2)}}</template></div>
+          <div style="font-weight:600;margin-top:2px" :style="{color:overfitColor}">{{overfitLabel}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">Val-Test={{rep.overfit_gap?.toFixed(2)}}<template v-if="gd.sharpe_gap_val_test_t1!=null"> / 次日{{gd.sharpe_gap_val_test_t1.toFixed(2)}}</template></div>
         </div>
         <div style="padding:8px;text-align:center" title="综合夏普+盈亏比评级：A优秀 B良好 C一般 D较差">
           <div style="color:var(--c-text-faint)">收益能力</div>
-          <div style="font-weight:700;margin-top:2px" :style="{color:profitGrade==='A'?'#ef4444':profitGrade==='B'?'#f59e0b':'#6b7280'}">{{profitLabel}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">{{gradeReason}}</div>
+          <div style="font-weight:600;margin-top:2px" :style="{color:profitGrade==='A'?'#c22b3f':profitGrade==='B'?'#f59e0b':'#6b7280'}">{{profitLabel}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">{{gradeReason}}</div>
         </div>
         <div style="padding:8px;text-align:center" title="总盈利/总亏损：>1.2说明赚时比亏时多">
           <div style="color:var(--c-text-faint)">盈亏比</div>
-          <div style="font-weight:700;margin-top:2px" :style="{color:(rep.profit_factor||0)>=1.2?'#ef4444':(rep.profit_factor||0)>0.8?'#f59e0b':'#10b981'}">{{(rep.profit_factor||0).toFixed(2)}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">均赢{{rep.avg_win?.toFixed(0)}} vs 均亏{{rep.avg_loss?.toFixed(0)}}</div>
+          <div style="font-weight:600;margin-top:2px" :style="{color:(rep.profit_factor||0)>=1.2?'#c22b3f':(rep.profit_factor||0)>0.8?'#f59e0b':'#0a7a5a'}">{{(rep.profit_factor||0).toFixed(2)}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">均赢{{rep.avg_win?.toFixed(0)}} vs 均亏{{rep.avg_loss?.toFixed(0)}}</div>
         </div>
         <div style="padding:8px;text-align:center" title="跑赢基准：模型收益 vs 沪深300同期收益，绿色=跑赢, 红色=跑输">
           <div style="color:var(--c-text-faint)">vs 沪深300</div>
-          <div style="font-weight:700;margin-top:2px" :style="{color:modelReturn!=null?(modelReturn>rep.benchmark_return?'#ef4444':'#10b981'):'var(--c-text-dim)'}">{{modelReturn!=null?(modelReturn>rep.benchmark_return?'跑赢':'跑输'):'—'}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">模型{{modelReturn!=null?(modelReturn*100).toFixed(1)+'%':'—'}} vs 基准{{rep.benchmark_return!=null?(rep.benchmark_return*100).toFixed(1)+'%':'—'}}</div>
+          <div style="font-weight:600;margin-top:2px" :style="{color:modelReturn!=null?(modelReturn>rep.benchmark_return?'#c22b3f':'#0a7a5a'):'var(--c-text-dim)'}">{{modelReturn!=null?(modelReturn>rep.benchmark_return?'跑赢':'跑输'):'—'}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">模型{{modelReturn!=null?(modelReturn*100).toFixed(1)+'%':'—'}} vs 基准{{rep.benchmark_return!=null?(rep.benchmark_return*100).toFixed(1)+'%':'—'}}</div>
         </div>
       </div>
     </div>
@@ -54,21 +54,21 @@
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;font-size:11px">
         <div style="padding:8px;text-align:center" title="T+0 与 T+1 口径的夏普差：同日收盘成交的乐观性成分">
           <div style="color:var(--c-text-faint)">执行口径</div>
-          <div style="font-weight:700;margin-top:2px">val {{fmtNum(gd.exec_optimism?.val)}} / test {{fmtNum(gd.exec_optimism?.test)}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">夏普 T+0−T+1（正=同日收盘虚高）</div>
+          <div style="font-weight:600;margin-top:2px">val {{fmtNum(gd.exec_optimism?.val)}} / test {{fmtNum(gd.exec_optimism?.test)}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">夏普 T+0−T+1（正=同日收盘虚高）</div>
         </div>
         <div style="padding:8px;text-align:center" title="各窗口沪深300年化：val/test 环境差异成分">
           <div style="color:var(--c-text-faint)">市场环境</div>
-          <div style="font-weight:700;margin-top:2px">val {{pct(gd.regime?.val?.annual)}} / test {{pct(gd.regime?.test?.annual)}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">基准年化（val 窗 vs test 窗）</div>
+          <div style="font-weight:600;margin-top:2px">val {{pct(gd.regime?.val?.annual)}} / test {{pct(gd.regime?.test?.annual)}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">基准年化（val 窗 vs test 窗）</div>
         </div>
         <div style="padding:8px;text-align:center" title="逐日截面秩相关均值：模型排序力是否跨窗口退化（与组合夏普解耦）">
           <div style="color:var(--c-text-faint)">模型排序力</div>
-          <div style="font-weight:700;margin-top:2px">val {{icAvg('val')}} / test {{icAvg('test')}}</div>
-          <div style="color:var(--c-text-faint);font-size:9px">RankIC 均值（val≈test=未退化）</div>
+          <div style="font-weight:600;margin-top:2px">val {{icAvg('val')}} / test {{icAvg('test')}}</div>
+          <div style="color:var(--c-text-faint);font-size:11px">RankIC 均值（val≈test=未退化）</div>
         </div>
       </div>
-      <div style="margin-top:8px;font-size:10px;color:var(--c-text-dim)">
+      <div style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
         <span v-for="p in gd.per_label||[]" :key="p.label" style="margin-right:12px">
           {{p.label}}: {{p.cause}}<template v-if="p.gap_t1!=null">（gap {{p.gap_t0}}→{{p.gap_t1}}）</template>
         </span>
@@ -147,14 +147,14 @@
             <tr v-for="(t, i) in pageTrades" :key="i">
               <td class="faint">{{t.trade_id}}</td>
               <td class="strong">{{t.code}}</td>
-              <td :style="{color:t.action==='BUY'?'#ef4444':'#10b981',fontWeight:600}">{{t.action==='BUY'?'买入':'卖出'}}</td>
+              <td :style="{color:t.action==='BUY'?'#c22b3f':'#0a7a5a',fontWeight:600}">{{t.action==='BUY'?'买入':'卖出'}}</td>
               <td>{{(t.date||'').slice(5)}}</td>
               <td>{{t.price?.toFixed(2)}}</td>
               <td>{{t.shares}}</td>
               <td>{{t.amount?.toFixed(0)}}</td>
-              <td :style="{color:(t.cumulative_pnl??0)>=0?'#ef4444':'#10b981'}" class="strong">
+              <td :style="{color:(t.cumulative_pnl??0)>=0?'#c22b3f':'#0a7a5a'}" class="strong">
                 {{(t.cumulative_pnl??0)>=0?'+':''}}{{(t.cumulative_pnl||0).toFixed(0)}}
-                <span v-if="t.action==='SELL' && t.pnl" style="font-size:9px;color:var(--c-text-faint)">({{t.pnl>=0?'+':''}}{{t.pnl.toFixed(0)}})</span>
+                <span v-if="t.action==='SELL' && t.pnl" style="font-size:11px;color:var(--c-text-faint)">({{t.pnl>=0?'+':''}}{{t.pnl.toFixed(0)}})</span>
               </td>
             </tr>
           </tbody>
@@ -175,7 +175,7 @@
       <div v-if="scanBest" style="margin-top:8px;font-size:11px;color:var(--c-text)">
         <AppIcon name="check" :size="13" />  已应用最优<template v-if="scanBest.engine">[{{ scanBest.engine }}]</template>：止损{{(scanBest.stop_loss*100).toFixed(0)}}% / 止盈{{(scanBest.take_profit*100).toFixed(0)}}% /
         trailing{{((scanBest.trailing_retracement||0)*100).toFixed(0)}}%<template v-if="scanBest.topk"> / topk{{ scanBest.topk }}·换血{{ scanBest.n_drop }}</template> —
-        sharpe <b style="color:#10b981">{{scanBest.sharpe?.toFixed(2)}}</b> ·
+        sharpe <b style="color:#0a7a5a">{{scanBest.sharpe?.toFixed(2)}}</b> ·
         收益 <b>{{(scanBest.total_return*100).toFixed(1)}}%</b> ·
         胜率 {{((scanBest.win_rate||0)*100).toFixed(0)}}% · {{scanBest.total_trades}} 笔 · 成本 {{((scanBest.total_cost||0)/10000).toFixed(1)}} 万
       </div>
@@ -190,9 +190,9 @@
       <div v-if="attrLoading && !attribution" style="font-size:11px;color:var(--c-text-dim);padding:6px 0">分析中（宽表 + 三基线回测，约 1 分钟）…</div>
       <div v-if="attribution?.matrix" style="display:flex;gap:8px;flex-wrap:wrap">
         <div v-for="m in attrCards" :key="m.label" style="flex:1;min-width:90px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
-          <div style="font-size:9px;color:var(--c-text-faint)">{{ m.label }}</div>
-          <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{ m.value }}</div>
-          <div style="font-size:9px;color:var(--c-text-faint)">夏普 {{ m.sharpe }}</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">{{ m.label }}</div>
+          <div style="font-size:15px;font-weight:600;color:var(--c-text)">{{ m.value }}</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">夏普 {{ m.sharpe }}</div>
         </div>
       </div>
       <div v-if="attribution?.brinson" style="margin-top:8px;font-size:11px;color:var(--c-text-dim)">
@@ -200,15 +200,15 @@
         <span style="margin-left:8px;font-weight:600" :style="{color:attrMatrixColor}">{{ attrMatrixLabel }}</span>
       </div>
       <!-- 绩效指标（M4：Qlib risk_analysis 口径，N=238） -->
-      <div v-if="attribution?.risk?.sum" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;font-size:10px">
-        <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.sum.information_ratio||0)>=0?'#10b981':'#ef4444'}">
+      <div v-if="attribution?.risk?.sum" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;font-size:11px">
+        <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.sum.information_ratio||0)>=0?'#0a7a5a':'#c22b3f'}">
           IR {{ attribution.risk.sum.information_ratio?.toFixed(2) }}</span>
         <span style="padding:4px 8px;background:var(--c-bg);border-radius:6px">年化 {{ ((attribution.risk.product.annualized_return||0)*100).toFixed(1) }}%</span>
-        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.annualized_return||0)>=0?'#ef4444':'#10b981'}">
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.annualized_return||0)>=0?'#c22b3f':'#0a7a5a'}">
           超额年化 {{ ((attribution.risk.excess.annualized_return||0)*100).toFixed(1) }}%</span>
         <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">α {{ (attribution.risk.excess.alpha_annualized*100).toFixed(1) }}%</span>
         <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">β {{ attribution.risk.excess.beta?.toFixed(2) }}</span>
-        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.information_ratio||0)>=0?'#10b981':'#ef4444'}">
+        <span v-if="attribution.risk.excess" style="padding:4px 8px;background:var(--c-bg);border-radius:6px" :style="{color:(attribution.risk.excess.information_ratio||0)>=0?'#0a7a5a':'#c22b3f'}">
           超额IR {{ attribution.risk.excess.information_ratio?.toFixed(2) }}</span>
         <span v-if="attribution.risk.turnover" style="padding:4px 8px;background:var(--c-bg);border-radius:6px">日均换手 {{ ((attribution.risk.turnover.daily_avg||0)*100).toFixed(1) }}%</span>
       </div>
@@ -230,27 +230,27 @@
       <div v-if="permTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
         检验中（宽表 + 预测 + {{permTask.params?.n_perms || permN}} 次打乱回测，约 5-10 分钟）…
       </div>
-      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="x-circle" :size="13" />  {{permTask.error}}</div>
+      <div v-if="permTask?.status==='failed'" style="font-size:11px;color:#c22b3f;margin-top:8px"><AppIcon name="x-circle" :size="13" />  {{permTask.error}}</div>
       <template v-if="permTest">
-        <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:permVerdict?.color}">{{permVerdict?.label}}</div>
+        <div style="margin-top:8px;font-size:13px;font-weight:600" :style="{color:permVerdict?.color}">{{permVerdict?.label}}</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
           <div style="flex:1;min-width:110px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
-            <div style="font-size:9px;color:var(--c-text-faint)">真预测 sharpe</div>
-            <div style="font-size:15px;font-weight:700;color:#10b981">{{permTest.real?.sharpe?.toFixed(2)}}</div>
-            <div style="font-size:9px;color:var(--c-text-faint)">收益 {{((permTest.real?.total_return||0)*100).toFixed(1)}}%</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">真预测 sharpe</div>
+            <div style="font-size:15px;font-weight:600;color:#0a7a5a">{{permTest.real?.sharpe?.toFixed(2)}}</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">收益 {{((permTest.real?.total_return||0)*100).toFixed(1)}}%</div>
           </div>
           <div style="flex:1;min-width:110px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
-            <div style="font-size:9px;color:var(--c-text-faint)">打乱噪声（{{permTest.n}} 次）</div>
-            <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{permTest.perm?.mean?.toFixed(2)}} ± {{permTest.perm?.std?.toFixed(2)}}</div>
-            <div style="font-size:9px;color:var(--c-text-faint)">p5={{permTest.perm?.p5?.toFixed(2)}} p95={{permTest.perm?.p95?.toFixed(2)}}</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">打乱噪声（{{permTest.n}} 次）</div>
+            <div style="font-size:15px;font-weight:600;color:var(--c-text)">{{permTest.perm?.mean?.toFixed(2)}} ± {{permTest.perm?.std?.toFixed(2)}}</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">p5={{permTest.perm?.p5?.toFixed(2)}} p95={{permTest.perm?.p95?.toFixed(2)}}</div>
           </div>
           <div style="flex:1;min-width:110px;text-align:center;padding:8px;background:var(--c-bg);border-radius:6px">
-            <div style="font-size:9px;color:var(--c-text-faint)">z / 分位</div>
-            <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{permTest.z}} / {{(permTest.pct*100).toFixed(0)}}%</div>
-            <div style="font-size:9px;color:var(--c-text-faint)">随机基线 {{permTest.random?.sharpe?.toFixed(2)}}</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">z / 分位</div>
+            <div style="font-size:15px;font-weight:600;color:var(--c-text)">{{permTest.z}} / {{(permTest.pct*100).toFixed(0)}}%</div>
+            <div style="font-size:11px;color:var(--c-text-faint)">随机基线 {{permTest.random?.sharpe?.toFixed(2)}}</div>
           </div>
         </div>
-        <div style="margin-top:6px;font-size:10px;color:var(--c-text-faint);line-height:1.7">
+        <div style="margin-top:6px;font-size:11px;color:var(--c-text-faint);line-height:1.7">
           窗口 {{permTest.params?.val_start}} ~ {{permTest.params?.val_end}} · sl {{permTest.params?.stop_loss}} / tp {{permTest.params?.take_profit}} · hold {{permTest.params?.hold_days}}d。
           打乱预测必须测不出超额——若噪声也能"赚钱"说明引擎在给噪声送分；真预测进入噪声分布前 5% 才算显著。
         </div>
@@ -271,9 +271,9 @@
       <div v-if="wfTask?.status==='running'" style="font-size:11px;color:var(--c-text-dim);margin-top:8px">
         检验中（基线 {{wfTask.params?.baseline_version || '无'}}，{{wfTask.params?.n_windows}} 窗口 × 2 模型评估，约 2-4 分钟）…
       </div>
-      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#ef4444;margin-top:8px"><AppIcon name="x-circle" :size="13" />  {{wfTask.error}}</div>
+      <div v-if="wfTask?.status==='failed'" style="font-size:11px;color:#c22b3f;margin-top:8px"><AppIcon name="x-circle" :size="13" />  {{wfTask.error}}</div>
       <template v-if="wf">
-        <div style="margin-top:8px;font-size:13px;font-weight:700" :style="{color:wfVerdict?.color}">{{wfVerdict?.label}}</div>
+        <div style="margin-top:8px;font-size:13px;font-weight:600" :style="{color:wfVerdict?.color}">{{wfVerdict?.label}}</div>
         <div style="font-size:11px;color:var(--c-text-dim);margin-top:2px">{{wf.reason}}<span v-if="wf.baseline">（基线 {{wf.baseline}}）</span></div>
         <div class="etbl-scroll" style="margin-top:8px">
           <table class="etbl">
@@ -294,12 +294,12 @@
                 <td>{{w.new?.rank_ic!=null?(w.new.rank_ic>=0?'+':'')+w.new.rank_ic.toFixed(3):'—'}}</td>
                 <td>{{w.baseline?.sharpe?.toFixed(2) ?? '—'}}</td>
                 <td>{{w.baseline?.rank_ic!=null?(w.baseline.rank_ic>=0?'+':'')+w.baseline.rank_ic.toFixed(3):'—'}}</td>
-                <td :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#10b981':'#ef4444'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✓ 胜':'✕ 负'}}</td>
+                <td :style="{color:(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'#0a7a5a':'#c22b3f'}">{{(w.new?.sharpe||0)>(w.baseline?.sharpe||0)?'✓ 胜':'✕ 负'}}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div style="margin-top:6px;font-size:10px;color:var(--c-text-faint);line-height:1.7">
+        <div style="margin-top:6px;font-size:11px;color:var(--c-text-faint);line-height:1.7">
           门槛：≥{{wfWindows}}-2 个窗口 sharpe 胜出且 RankIC 不低于基线（默认 2 窗口）；判定 FAIL 时 PENDING 审批会被拒绝，
           force 可覆盖。窗口 RankIC 只统计已成熟截面（今日−持有期之前）。审批时自动取最近一次判定。
         </div>
@@ -329,7 +329,7 @@
         <div v-if="scanTask?.status==='running'" style="margin-top:8px">
           <n-progress type="line" :percentage="Math.round(scanTask.completed/scanTask.total_combos*100)" />
         </div>
-        <div v-if="scanTask?.status==='completed' && scanTask.best_so_far" style="margin-top:8px;font-size:11px;color:#10b981">
+        <div v-if="scanTask?.status==='completed' && scanTask.best_so_far" style="margin-top:8px;font-size:11px;color:#0a7a5a">
           <AppIcon name="check" :size="13" />  最优[{{ scanTask.best_so_far.engine || 'v1' }}]：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}%<template v-if="scanTask.best_so_far.topk"> topk{{ scanTask.best_so_far.topk }}·换血{{ scanTask.best_so_far.n_drop }}</template> 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
           <n-button size="tiny" type="primary" style="margin-left:8px" @click="applyScan">应用</n-button>
         </div>
@@ -372,12 +372,12 @@ const icAvg = side => {
 }
 
 const metrics = computed(() => [
-  { label:'夏普比率', value: props.version?.sharpe?.toFixed(2) || '—', color:'#ef4444' },
+  { label:'夏普比率', value: props.version?.sharpe?.toFixed(2) || '—', color:'#c22b3f' },
   { label:'胜率',   value: props.version?.win_rate ? (props.version.win_rate*100).toFixed(0)+'%' : '—' },
-  { label:'最大回撤', value: props.version?.max_drawdown ? (props.version.max_drawdown*100).toFixed(1)+'%' : '—', color:'#10b981' },
+  { label:'最大回撤', value: props.version?.max_drawdown ? (props.version.max_drawdown*100).toFixed(1)+'%' : '—', color:'#0a7a5a' },
   { label:'年化收益', value: props.version?.annual_return ? (props.version.annual_return*100).toFixed(1)+'%' : '—' },
   { label:'Val夏普', value: rep.value.val_sharpe?.toFixed(2) || '—', color:'#f59e0b' },
-  { label:'Test夏普', value: rep.value.test_sharpe?.toFixed(2) || '—', color:'#ef4444' },
+  { label:'Test夏普', value: rep.value.test_sharpe?.toFixed(2) || '—', color:'#c22b3f' },
 ])
 
 const overfitLabel = computed(() => {
@@ -393,8 +393,8 @@ const overfitColor = computed(() => {
   const gap = gd.value.sharpe_gap_val_test_t1 ?? rep.value.overfit_gap
   if (gap == null) return 'var(--c-text-dim)'
   if (gap > 0.5) return '#f59e0b'
-  if (gap < -0.3) return '#ef4444'
-  return '#10b981'
+  if (gap < -0.3) return '#c22b3f'
+  return '#0a7a5a'
 })
 
 // 收益能力评级
@@ -522,7 +522,7 @@ const attrMatrixLabel = computed(() => {
 })
 const attrMatrixColor = computed(() => {
   const m = attribution.value?.matrix
-  return {dual_driver:'#10b981',execution_loss:'#f59e0b',beta_amplifier:'#f59e0b',double_misjudge:'#ef4444'}[m] || 'var(--c-text)'
+  return {dual_driver:'#0a7a5a',execution_loss:'#f59e0b',beta_amplifier:'#f59e0b',double_misjudge:'#c22b3f'}[m] || 'var(--c-text)'
 })
 
 const attrVerdict = computed(() => {
@@ -530,8 +530,8 @@ const attrVerdict = computed(() => {
   if (!a?.real || !a?.random) return null
   const rs = a.real.sharpe || 0, rd = a.random.sharpe || 0
   return rs > rd
-    ? { text: `real 优于 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）`, color: '#10b981' }
-    : { text: `real 不及 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）——模型为负贡献`, color: '#ef4444' }
+    ? { text: `real 优于 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）`, color: '#0a7a5a' }
+    : { text: `real 不及 random（${rs.toFixed(2)} vs ${rd.toFixed(2)}）——模型为负贡献`, color: '#c22b3f' }
 })
 
 const cfgValStart = computed(() => props.version?.config?.val_strategy_range?.start || `${new Date().getFullYear()}-01-01`)
@@ -588,9 +588,9 @@ async function startPerm() {
 const permVerdict = computed(() => {
   const v = permTest.value?.verdict
   return {
-    strong: { label: '显著（进入噪声分布前 5%）', color: '#10b981' },
+    strong: { label: '显著（进入噪声分布前 5%）', color: '#0a7a5a' },
     above_mean: { label: '高于噪声均值（未达显著）', color: '#f59e0b' },
-    noise: { label: '与噪声无异（无 alpha）', color: '#ef4444' },
+    noise: { label: '与噪声无异（无 alpha）', color: '#c22b3f' },
   }[v] || null
 })
 
@@ -635,8 +635,8 @@ async function startWF() {
 const wfVerdict = computed(() => {
   const v = wf.value?.verdict
   return {
-    PASS: { label: '晋升门槛通过', color: '#10b981' },
-    FAIL: { label: '晋升门槛未通过', color: '#ef4444' },
+    PASS: { label: '晋升门槛通过', color: '#0a7a5a' },
+    FAIL: { label: '晋升门槛未通过', color: '#c22b3f' },
     NO_BASELINE: { label: '无基线可比', color: '#6b7280' },
   }[v] || null
 })
@@ -705,8 +705,8 @@ onUnmounted(() => {
 }
 .etbl tbody tr:hover td { background: var(--c-card-bg-hover); }
 .etbl td.strong { font-weight: 600; }
-.etbl td.pos { color: #ef4444; font-weight: 600; }
-.etbl td.good { color: #10b981; font-weight: 600; }
-.etbl td.file { font-size: 10px; color: var(--c-text-dim); }
+.etbl td.pos { color: #c22b3f; font-weight: 600; }
+.etbl td.good { color: #0a7a5a; font-weight: 600; }
+.etbl td.file { font-size: 11px; color: var(--c-text-dim); }
 .etbl td.faint { color: var(--c-text-faint); }
 </style>

@@ -1,21 +1,75 @@
 <template>
-<div style="height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;--c-text:#e5e5e5;--c-text-dim:#a1a1aa;--c-text-dimmer:#71717a;--c-bg:#101014;--c-card-bg:#1e1e22;--c-card-bg-hover:#27272a;--c-border:#27272a">
-  <div style="background:#1e1e22;border:1px solid var(--c-border);border-radius:16px;padding:40px;width:380px;max-width:90vw">
-    <h1 style="font-size:24px;text-align:center;margin-bottom:4px;color:var(--c-text)"><LogoFull :height="26" /></h1>
-    <div style="font-size:11px;color:var(--c-text-dimmer);text-align:center;margin-bottom:28px">Stock Signal Monitor</div>
-    <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:4px">用户名</div>
-    <input v-model="username" placeholder="admin" class="input-dark" @keyup.enter="login" />
-    <div style="font-size:11px;color:var(--c-text-dim);margin-top:14px;margin-bottom:4px">密码</div>
-    <input v-model="password" type="password" placeholder="••••••" class="input-dark" @keyup.enter="login" />
-    <button style="width:100%;background:#2080f0;color:var(--c-text);border:none;padding:12px;border-radius:8px;cursor:pointer;font-size:14px;margin-top:20px" @click="login" :disabled="loading">{{loading?'登录中…':'登 录'}}</button>
-    <div style="color:#d03050;font-size:12px;text-align:center;margin-top:8px;min-height:18px;padding:4px 0;word-break:break-all">{{error}}</div>
+<div class="login-page">
+  <div class="login-card">
+    <div class="login-logo"><LogoFull :height="26" /></div>
+    <div class="login-sub">Stock Signal Monitor</div>
+
+    <label class="login-label" for="login-user">用户名</label>
+    <input id="login-user" v-model="username" class="login-input" placeholder="admin"
+           autocomplete="username" @keyup.enter="login" />
+
+    <label class="login-label" for="login-pass">密码</label>
+    <input id="login-pass" v-model="password" type="password" class="login-input" placeholder="••••••"
+           autocomplete="current-password" @keyup.enter="login" />
+
+    <button class="login-btn" @click="login" :disabled="loading">{{ loading ? '登录中…' : '登 录' }}</button>
+    <div class="login-error" role="alert">{{ error }}</div>
   </div>
 </div>
 </template>
+
 <style scoped>
-.input-dark{width:100%;background:var(--c-bg);border:1px solid var(--c-card-bg-hover);color:var(--c-text);padding:10px 14px;border-radius:8px;font-size:14px;outline:none;box-sizing:border-box}
-.input-dark:-webkit-autofill{background:var(--c-bg)!important;-webkit-box-shadow:0 0 0 30px #101014 inset!important;-webkit-text-fill-color:#fff!important;caret-color:#fff;border:1px solid #000!important}
-.input-dark:focus{border-color:#2080f0}
+.login-page {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+}
+.login-card {
+  width: 380px;
+  max-width: 100%;
+  padding: 36px 32px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.login-logo { display: flex; justify-content: center; color: var(--ink); }
+.login-sub { margin: 6px 0 26px; text-align: center; font-size: 12px; color: var(--muted); letter-spacing: .02em; }
+.login-label { display: block; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.login-input {
+  width: 100%;
+  height: 40px;
+  margin-bottom: 16px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font: 14px var(--font-sans);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.login-input::placeholder { color: var(--faint); }
+.login-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.login-btn {
+  width: 100%;
+  height: 40px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 500 14px var(--font-sans);
+  cursor: pointer;
+  transition: background-color .15s;
+}
+.login-btn:hover { background: var(--accent-hover); }
+.login-btn:disabled { opacity: .6; cursor: not-allowed; }
+.login-error { min-height: 20px; margin-top: 10px; text-align: center; font-size: 12px; color: var(--accent); }
 </style>
 
 <script setup>

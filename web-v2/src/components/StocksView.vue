@@ -68,12 +68,12 @@ const columns = computed(() => [
   { title:'名称', key:'stock_name', width: isNarrow.value ? 90 : 150, fixed:'left', render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'var(--c-info)', cursor:'pointer', onClick:()=>emit('show-detail', r.stock_code) }) } },
   { title:'交易所', key:'exchange', width:70, render(r){return exName(r.exchange)} },
   { title:'最新价', key:'price', width:105, align:'right', sorter:true, sortOrder: sortField.value==='price'?sortDir.value:false, render(r){
-    const color = r.chg_pct!=null ? (r.chg_pct>=0?'#ef4444':'#10b981') : 'var(--c-text)'
+    const color = r.chg_pct!=null ? (r.chg_pct>=0?'#c22b3f':'#0a7a5a') : 'var(--c-text)'
     return h('span',{style:{fontWeight:600,color,whiteSpace:'nowrap'}}, '¥'+(r.price||0).toFixed(2))
   }},
   { title:'涨跌幅', key:'chg_pct', width:90, align:'right', sorter:true, sortOrder: sortField.value==='chg_pct'?sortDir.value:false, render(r){
     if(r.chg_pct==null) return h('span',{style:{whiteSpace:'nowrap'}},'-')
-    const color = r.chg_pct>=0?'#ef4444':'#10b981'
+    const color = r.chg_pct>=0?'#c22b3f':'#0a7a5a'
     return h('span',{style:{color,fontWeight:500,whiteSpace:'nowrap'}}, (r.chg_pct>=0?'+':'')+r.chg_pct.toFixed(2)+'%')
   }},
   { title:'PE', key:'pe_ttm', width:80, align:'right', sorter:true, sortOrder: sortField.value==='pe_ttm'?sortDir.value:false, render(r){return r.pe_ttm?r.pe_ttm.toFixed(1):'亏损'} },
