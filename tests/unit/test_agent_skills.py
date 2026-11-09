@@ -163,5 +163,23 @@ class TestSaveSkill(unittest.TestCase):
         self.assertIn("error", r)
 
 
+class TestClientFactory(unittest.TestCase):
+    """回归：_client 必须把 session_id 传给 build_client（曾误用未定义 sid 导致问答必崩）。"""
+
+    def test_session_id_passthrough(self):
+        import app.llm_runtime as llm_mod
+        seen = {}
+
+        def _fake_build(api_key, base_url, *, session_id="stone", timeout=180):
+            seen["session_id"] = session_id
+            return object()
+
+        with patch.object(llm_mod, "get_llm_settings",
+                          return_value={"api_key": "k", "base_url": "u", "model": "m"}), \
+                patch.object(llm_mod, "build_client", side_effect=_fake_build):
+            runtime._client("agent-7")
+        self.assertEqual(seen["session_id"], "agent-7")
+
+
 if __name__ == "__main__":
     unittest.main()

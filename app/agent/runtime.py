@@ -104,7 +104,7 @@ def _client(session_id: str = "agent"):
     llm = get_llm_settings()
     if not llm["api_key"]:
         raise RuntimeError("未配置大模型 API Key（到状态页「大模型配置」填写）")
-    return build_client(llm["api_key"], llm["base_url"], session_id=f"agent-{sid}", timeout=180), llm
+    return build_client(llm["api_key"], llm["base_url"], session_id=session_id, timeout=180), llm
 
 
 # ══════════════════════════════════════════════
