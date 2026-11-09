@@ -14,7 +14,7 @@ from app.agent import sandbox
 from app.agent.tools import TOOL_SPECS, DAG_NODE_HINT, TABLE_DOCS, execute_tool
 from app.agent.skills import skill_index_text
 
-MAX_STEPS = 12
+MAX_STEPS = 0               # 单轮工具调用步数上限：0 = 不限制（用户可随时停止）；>0 时作为安全阀
 HISTORY_LIMIT = 40          # 送给模型的最近消息条数（含工具轨迹）
 MAX_ARG_CHARS = 6000        # 单条工具结果入模型前的上限
 
@@ -283,7 +283,14 @@ def stream_agent(sid: int, user_content: str):
 
         messages = [{"role": "system", "content": _system_prompt()}] + _history_for_model(sid)
 
-        for step in range(1, MAX_STEPS + 1):
+        step = 0
+        while True:
+            step += 1
+            if MAX_STEPS and step > MAX_STEPS:
+                yield {"type": "assistant", "content": f"（已达到 {MAX_STEPS} 步工具调用上限，先给出当前结论）"}
+                _save(sid, "assistant", f"（已达到 {MAX_STEPS} 步工具调用上限）")
+                yield {"type": "done", "steps": step - 1}
+                return
             if stop_ev.is_set():
                 yield {"type": "stopped"}
                 return
@@ -352,9 +359,6 @@ def stream_agent(sid: int, user_content: str):
                        "elapsed_ms": elapsed, "images": images,
                        "preview": res_str[:1500] + ("…" if len(res_str) > 1500 else "")}
 
-        yield {"type": "assistant", "content": f"（已达到 {MAX_STEPS} 步工具调用上限，先给出当前结论）"}
-        _save(sid, "assistant", f"（已达到 {MAX_STEPS} 步工具调用上限）")
-        yield {"type": "done", "steps": MAX_STEPS}
     except Exception as e:
         logger.exception(f"[agent] 运行异常 sid={sid}")
         yield {"type": "error", "error": f"{type(e).__name__}: {str(e)[:300]}"}
