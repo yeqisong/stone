@@ -580,7 +580,7 @@ onMounted(async () => {
 
 /* ── 侧栏 ── */
 .agent-side { width: 216px; flex-shrink: 0; display: flex; flex-direction: column;
-  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 8px; padding: 8px; }
+  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 6px; padding: 8px; }
 .agent-side-head { flex-shrink: 0; }
 .agent-sess-list { flex: 1; overflow-y: auto; min-height: 0; margin-top: 6px; }
 .agent-sess { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 6px;
@@ -601,7 +601,7 @@ onMounted(async () => {
 
 /* ── 主区 ── */
 .agent-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column;
-  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 8px; overflow: hidden; }
+  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 6px; overflow: hidden; }
 .agent-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
   border-bottom: 1px solid var(--c-border-light); flex-shrink: 0; }
 .agent-head-title { font-size: 13px; font-weight: 600; color: var(--c-text);

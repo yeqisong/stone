@@ -21,7 +21,7 @@
     <n-button size="tiny" :type="currentEntity==='etf'?'primary':'default'" @click="switchEntity('etf')"><AppIcon name="pie-chart" :size="13" />  ETF</n-button>
   </div>
           <div v-for="v in store.versions" :key="v.version"
-            :style="{padding:'12px',marginBottom:'4px',borderRadius:'8px',border:'1px solid '+(store.selectedId===v.version?'var(--c-accent)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-accent-weak)':'transparent'}"
+            :style="{padding:'12px',marginBottom:'4px',borderRadius:'6px',border:'1px solid '+(store.selectedId===v.version?'var(--c-accent)':'transparent'),cursor:'pointer',background:store.selectedId===v.version?'var(--c-accent-weak)':'transparent'}"
             @click="store.selectVersion(v.version)"
             @mouseenter="hoveredVersion = v.version" @mouseleave="hoveredVersion = null">
             <div style="display:flex;align-items:center;justify-content:space-between">
@@ -754,7 +754,7 @@ onMounted(async () => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0 0 14px;
   border: 1px solid var(--c-border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--c-bg-header);
   overflow: hidden;
 }
