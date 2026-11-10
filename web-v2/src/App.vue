@@ -273,12 +273,14 @@ const themeOverrides = computed(() => {
     },
     Input: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
     Select: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
+    InternalSelection: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
     DatePicker: { heightTiny: '28px', heightSmall: '32px', fontSizeTiny: '12px', fontSizeSmall: '13px' },
   }
   if (isNarrow.value) {
     Object.assign(overrides.Button, { heightTiny: '32px', heightSmall: '36px', heightMedium: '40px', fontSizeTiny: '12px', fontSizeSmall: '13px' })
     overrides.Input = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
     overrides.Select = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
+    overrides.InternalSelection = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
     overrides.DatePicker = { heightTiny: '32px', heightSmall: '36px', fontSizeTiny: '12px', fontSizeSmall: '13px' }
   }
   return overrides
@@ -385,7 +387,7 @@ if (!showLogin.value) {
 
 .app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 /* 组合按钮：合并组内圆角与边框（naive ButtonGroup 子按钮圆角样式未生效，全局兜底） */
-.n-button-group { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-2); border-radius: 6px; }
+.n-button-group { display: inline-flex; gap: 2px; padding: 0; background: var(--surface-2); border-radius: 6px; }
 .n-button-group .n-button__border, .n-button-group .n-button__state-border { display: none !important; }
 .n-button-group > .n-button { border-radius: 4px !important; border: 0 !important; margin: 0 !important; }
 .n-button-group > .n-button:not(.n-button--primary-type) { background: transparent !important; }
