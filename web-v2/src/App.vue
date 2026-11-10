@@ -18,19 +18,27 @@
         <!-- 顶栏 -->
         <div class="app-header">
           <div class="app-header-left">
-            <span class="brand"><LogoFull :height="19" /></span>
-            <span class="header-date" id="header-date"></span>
+            <span class="brand"><span class="brand-mark"></span>K道</span>
+            <span class="header-date">{{ headerDateLabel }}</span>
+            <span class="header-sep"></span>
+            <span class="market-status">{{ marketStatus }}</span>
           </div>
           <div class="app-header-right">
-            <n-dropdown trigger="click" :options="userOptions" @select="handleUserMenu">
-              <span class="user-chip"><AppIcon name="user" :size="13" /> {{ auth.username || 'admin' }}</span>
-            </n-dropdown>
-            <span class="ws-info" :class="wsConnected?'ok':'bad'">
-              <span class="ws-dot"></span>{{ wsConnected?'已连接':'连接失败' }}
+            <span class="ws-info" :class="wsConnected?'ok':'bad'" :title="wsConnected ? '实时连接' : '连接失败'">
+              <span class="ws-dot"></span><span class="ws-text">{{ wsConnected?'已连接':'连接失败' }}</span>
             </span>
-            <n-button v-if="!wsConnected" size="tiny" text class="ws-reconnect" @click="connectWebSocket">重连</n-button>
-            <n-button size="tiny" text class="theme-toggle" @click="toggleNotif" :title="notifHint"><AppIcon :name="notifEnabled ? 'bell' : 'bell-off'" :size="13" /> {{ notifEnabled ? '通知开' : '通知关' }}</n-button>
-            <n-button size="tiny" text class="theme-toggle" @click="theme.toggle" :title="'当前' + theme.modeHint + '，点击切换'"><AppIcon :name="theme.modeLabel" :size="13" /> {{ theme.modeHint }}</n-button>
+            <button v-if="!wsConnected" type="button" class="header-icon-btn" title="重新连接" aria-label="重新连接" @click="connectWebSocket">
+              <AppIcon name="refresh" :size="16" />
+            </button>
+            <button type="button" class="header-icon-btn notif-btn" :title="notifHint" :aria-label="notifEnabled ? '关闭通知' : '开启通知'" @click="toggleNotif">
+              <AppIcon :name="notifEnabled ? 'bell' : 'bell-off'" :size="16" />
+            </button>
+            <button type="button" class="header-icon-btn theme-btn" :title="'当前' + theme.modeHint + '，点击切换'" aria-label="切换主题" @click="theme.toggle">
+              <AppIcon :name="theme.modeLabel" :size="16" />
+            </button>
+            <n-dropdown trigger="click" :options="userOptions" @select="handleUserMenu">
+              <span class="user-chip" title="账户"><AppIcon name="user" :size="14" /><span class="user-name">{{ auth.username || 'admin' }}</span></span>
+            </n-dropdown>
           </div>
         </div>
 
@@ -115,7 +123,6 @@ import { useAuthStore } from './stores/auth'
 import { useNavStore } from './stores/nav'
 import { useThemeStore } from './stores/theme'
 import { useViewport } from './utils/viewport'
-import LogoFull from './components/LogoFull.vue'
 import AppIcon from './components/AppIcon.vue'
 
 import { connectWebSocket, wsState, addWsListener } from './utils/ws'
@@ -188,6 +195,22 @@ const nav = useNavStore()
 // ── 响应式视口 + 导航定义 ──
 const { isNarrow } = useViewport()
 const showAdmin = ref(false)
+const now = ref(new Date())
+function fmtHeaderDate(d) {
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return ymd + ' 周' + '日一二三四五六'[d.getDay()]
+}
+const headerDateLabel = ref('—')
+let clockTimer = null
+const marketStatus = computed(() => {
+  const d = now.value
+  const day = d.getDay()
+  const mins = d.getHours() * 60 + d.getMinutes()
+  if (day === 0 || day === 6) return '沪深 已收盘'
+  if ((mins >= 570 && mins < 690) || (mins >= 780 && mins < 900)) return '沪深 交易中'
+  if (mins < 570) return '沪深 未开盘'
+  return '沪深 已收盘'
+})
 
 
 
@@ -196,7 +219,7 @@ const primaryTabs = [
   { key: 'm', label: '选股' },
   { key: 's', label: '信号' },
   { key: 'l', label: '个股', icon: 'filter' },
-  { key: 'n', label: '资讯', icon: 'news' },
+  { key: 'n', label: '资讯', icon: 'n' },
   { key: 'i', label: '问答', icon: 'compass' },
   { key: 'x', label: '状态' },
 ]
@@ -281,6 +304,7 @@ const updateReady = ref(false)
 let stopVersionWatch = null
 function reloadNow() { location.reload() }
 onMounted(() => {
+  clockTimer = setInterval(() => { now.value = new Date() }, 60000)
   stopVersionWatch = startVersionWatch({
     onUpdate: () => {
       if (canAutoReload()) { location.reload(); return }
@@ -288,7 +312,10 @@ onMounted(() => {
     },
   })
 })
-onUnmounted(() => { if (stopVersionWatch) stopVersionWatch() })
+onUnmounted(() => {
+  if (stopVersionWatch) stopVersionWatch()
+  if (clockTimer) clearInterval(clockTimer)
+})
 
 const showLogin = computed(() => !auth.token)
 
@@ -341,8 +368,8 @@ if (!showLogin.value) {
     try {
       const r = await axios.get(window.location.origin + '/api/data_status')
       if (r.data.overview && r.data.overview.latest_date) {
-        const el = document.getElementById('header-date')
-        if (el) el.textContent = r.data.overview.latest_date
+        const latest = r.data.overview.latest_date
+        headerDateLabel.value = fmtHeaderDate(new Date(latest + 'T00:00:00'))
       }
     } catch(e) {}
   }, 200)
@@ -358,7 +385,8 @@ if (!showLogin.value) {
 
 .app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 /* 组合按钮：合并组内圆角与边框（naive ButtonGroup 子按钮圆角样式未生效，全局兜底） */
-.n-button-group { display: inline-flex; gap: 2px; padding: 2px; background: var(--c-card-bg); border-radius: 8px; }
+.n-button-group { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-2); border-radius: 8px; }
+.n-button-group .n-button__border, .n-button-group .n-button__state-border { display: none !important; }
 .n-button-group > .n-button { border-radius: 6px !important; border: 0 !important; margin: 0 !important; }
 .n-button-group > .n-button:not(.n-button--primary-type) { background: transparent !important; }
 
@@ -385,14 +413,20 @@ if (!showLogin.value) {
 
 .app-header { display: flex; align-items: center; justify-content: space-between; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border); padding: 0 24px; height: 56px; }
 .app-header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.brand { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--c-text); display: flex; align-items: center; gap: 7px; }
+.brand { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--c-text); display: flex; align-items: center; gap: 8px; white-space: nowrap; flex-shrink: 0; }
+.brand-mark { width: 4px; height: 20px; border-radius: 2px; background: var(--c-accent); display: inline-block; }
+.header-sep { width: 1px; height: 12px; background: var(--c-border); }
 .header-date { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
-.app-header-right { display: flex; align-items: center; gap: 10px; }
-.user-chip { font-size: 12px; color: var(--c-text-dim); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; }
+.market-status { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
+.app-header-right { display: flex; align-items: center; gap: 6px; }
+.header-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--c-text-dim); cursor: pointer; }
+.header-icon-btn:hover { background: var(--c-card-bg-hover); color: var(--c-text); }
+.user-chip { height: 32px; padding: 0 10px; font-size: 12px; color: var(--c-text); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-header); }
+.user-chip:hover { background: var(--c-card-bg-hover); }
 .user-chip .nav-svg { margin-right: 4px; flex-shrink: 0; }
 .ws-info { font-size: 12px; display: flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--c-text-dim); }
 .ws-info .ws-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--c-error); }
-.ws-info.ok { color: var(--c-accent); }
+.ws-info.ok { color: var(--c-text-dim); }
 .ws-info.ok .ws-dot { background: var(--c-accent); }
 
 .app-nav { display: flex; align-items: stretch; gap: 0; padding: 0 20px; height: 46px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-header); overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
@@ -402,6 +436,8 @@ if (!showLogin.value) {
 .app-nav .n-button--primary-type { color: var(--c-accent) !important; font-weight: 600 !important; }
 .app-nav .n-button--primary-type::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 1px; background: var(--c-accent); }
 .app-nav .n-button .n-button__border, .app-nav .n-button .n-button__state-border { display: none !important; }
+.app-nav .n-button:focus-visible { outline: none !important; }
+.app-nav .n-button .n-base-wave, .n-button-group .n-button .n-base-wave { display: none !important; }
 .app-nav .n-button .nav-svg { margin-right: 6px; }
 .nav-divider { width: 1px; height: 18px; background: var(--c-border); margin: auto 10px; flex-shrink: 0; }
 
@@ -448,8 +484,14 @@ if (!showLogin.value) {
 
 @media (max-width: 768px) {
   .app-root { --h5-tabbar-h: 80px; }  /* 底部 TabBar(52px)+safe-area 供页面图高扣减 */
-  .app-header { padding: 0 14px; }
-  .app-header-left { gap: 8px; }
-  .header-date { font-size: 11px; }
+  .app-header { padding: 0 12px; }
+  .app-header-left { gap: 8px; min-width: 0; overflow: hidden; }
+  .app-header-right { gap: 2px; }
+  .brand { font-size: 16px; gap: 6px; }
+  .brand-mark { height: 18px; }
+  .header-date { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+  .market-status, .header-sep, .notif-btn, .ws-text { display: none; }
+  .user-name { display: none; }
+  .user-chip { padding: 0 8px; }
 }
 </style>
