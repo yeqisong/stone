@@ -20,16 +20,16 @@
     </div>
   </div>
 
-  <div v-if="editMode && validation" :style="{flexShrink:0,marginBottom:'6px',padding:'6px 10px',borderRadius:'6px',fontSize:'11px',background:validation.ok?'rgba(10,122,90,.08)':'rgba(194,43,63,.08)',border:'1px solid '+(validation.ok?'rgba(10,122,90,.2)':'rgba(194,43,63,.2)')}">
-    <span v-if="validation.ok" style="color:#0a7a5a"><AppIcon name="check" :size="13" />  校验通过</span>
-    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:#c22b3f;margin-right:12px"><AppIcon name="x-circle" :size="13" />  {{ e }}</span>
+  <div v-if="editMode && validation" :style="{flexShrink:0,marginBottom:'6px',padding:'6px 10px',borderRadius:'6px',fontSize:'11px',background:validation.ok?'color-mix(in srgb, var(--c-down) 8%, transparent)':'color-mix(in srgb, var(--c-up) 8%, transparent)',border:'1px solid '+(validation.ok?'color-mix(in srgb, var(--c-down) 20%, transparent)':'color-mix(in srgb, var(--c-up) 20%, transparent)')}">
+    <span v-if="validation.ok" style="color:var(--c-down)"><AppIcon name="check" :size="13" />  校验通过</span>
+    <span v-else v-for="(e,i) in validation.errors" :key="i" style="color:var(--c-up);margin-right:12px"><AppIcon name="x-circle" :size="13" />  {{ e }}</span>
   </div>
 
-  <div v-if="editMode && flowStatus==='published'" style="padding:6px 12px;margin-bottom:6px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;font-size:11px;color:#f59e0b;flex-shrink:0"><AppIcon name="alert" :size="13" />  此流程已发布，修改后将影响线上执行</div>
+  <div v-if="editMode && flowStatus==='published'" style="padding:6px 12px;margin-bottom:6px;background:color-mix(in srgb, var(--c-warn) 10%, transparent);border:1px solid color-mix(in srgb, var(--c-warn) 30%, transparent);border-radius:6px;font-size: var(--text-meta);color:var(--c-warn);flex-shrink:0"><AppIcon name="alert" :size="13" />  此流程已发布，修改后将影响线上执行</div>
 
-  <div v-if="editMode" style="display:flex;flex:1;min-height:0;gap:0;border:1px solid var(--c-border);border-radius:8px;overflow:hidden">
+  <div v-if="editMode" style="display:flex;flex:1;min-height:0;gap:0;border:1px solid var(--c-border);border-radius:var(--radius);overflow:hidden">
     <div v-if="!isNarrow" class="dfe-palette" style="width:160px;flex-shrink:0;background:var(--c-card-bg);border-right:1px solid var(--c-border);padding:10px;overflow-y:auto">
-      <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">节点类型</div>
+      <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:8px">节点类型</div>
       <div v-for="nt in nodeTypes.filter(t => t.node_name !== 'cron')" :key="nt.name"
         :style="{padding:'8px 10px',marginBottom:'4px',borderRadius:'6px',border:'1px solid var(--c-border)',cursor:'pointer',fontSize:'11px',background:'var(--c-bg)',color:'var(--c-text)'}"
         @click="addNode(nt)">
@@ -51,42 +51,42 @@
         :default-edge-options="defaultEdgeOpts"
 >
         <Background variant="dots" :gap="20" />
-        <MiniMap position="bottom-left" pannable zoomable node-color="#94a3b8" mask-color="rgba(200,200,200,0.45)" />
+        <MiniMap position="bottom-left" pannable zoomable node-color="var(--c-text-faint)" mask-color="color-mix(in srgb, var(--c-text-faint) 45%, transparent)" />
         <Controls position="bottom-right" />
-        <div style="position:absolute;bottom:12px;right:52px;z-index:10;font-size:11px;color:var(--c-text-dim);background:var(--c-card-bg);padding:2px 6px;border-radius:4px;border:1px solid var(--c-border);pointer-events:none">
+        <div style="position:absolute;bottom:12px;right:52px;z-index:10;font-size: var(--text-meta);color:var(--c-text-dim);background:var(--c-card-bg);padding:2px 6px;border-radius:4px;border:1px solid var(--c-border);pointer-events:none">
           {{ Math.round(viewport.zoom * 100) }}%
         </div>
       </VueFlow>
     </div>
 
-    <div v-if="sidebarMode" class="dfe-sidebar" style="width:280px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
+    <div v-if="sidebarMode" class="dfe-sidebar" style="width:280px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:12px;overflow-y:auto;font-size:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span style="font-weight:600;color:var(--c-text)">{{ sidebarMode==='flow' ? '流程属性' : (nodeDetail?.label || nodeDetail?.node_name || '') }}</span>
         <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="sidebarMode=null"><AppIcon name="close" :size="13" /> </span>
       </div>
       <template v-if="sidebarMode==='flow'">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px"><AppIcon name="l" :size="13" />  流程名</div>
+        <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px"><AppIcon name="l" :size="13" />  流程名</div>
         <n-input v-model:value="flowName" size="small" placeholder="流程名称" />
-        <div style="margin-top:12px;font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">⏰ 定时执行 (Cron)</div>
+        <div style="margin-top:12px;font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px"><AppIcon name="clock" :size="13" />  定时执行 (Cron)</div>
         <n-select v-model:value="cronTab" :options="cronTabs" size="small" style="width:100%" @update:value="onCronTab" />
         <div style="margin-top:6px">
           <!-- 每 N 分钟 -->
           <div v-if="cronTab==='min'" style="display:flex;gap:4px;align-items:center">
-            <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">每</span>
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap">每</span>
             <n-input-number v-model:value="cronInterval" :min="1" :max="60" size="tiny" style="flex:1;min-width:0" />
-            <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">分钟</span>
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap">分钟</span>
           </div>
           <!-- 每 N 小时 -->
           <div v-if="cronTab==='hour'" style="display:flex;flex-direction:column;gap:4px">
             <div style="display:flex;gap:4px;align-items:center">
-              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">每</span>
+              <span style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap">每</span>
               <n-input-number v-model:value="cronInterval" :min="1" :max="12" size="tiny" style="flex:1;min-width:0" />
-              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">小时</span>
+              <span style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap">小时</span>
             </div>
             <div style="display:flex;gap:4px;align-items:center">
-              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">在第</span>
+              <span style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap">在第</span>
               <n-select v-model:value="cronMin" :options="minOpts" size="tiny" style="flex:1;min-width:0" />
-              <span style="font-size:11px;color:var(--c-text-dim);white-space:nowrap">分</span>
+              <span style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap">分</span>
             </div>
           </div>
           <!-- 每天 / 每周 / 每月：n-time-picker 统一时间选择 -->
@@ -95,29 +95,29 @@
           </div>
           <!-- 每周（多选） -->
           <div v-if="cronTab==='week'">
-            <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:2px">选择工作日</div>
+            <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-bottom:2px">选择工作日</div>
             <div style="display:flex;flex-wrap:wrap;gap:2px">
               <n-tag v-for="d in weekOpts" :key="d.value" size="tiny" :type="cronWeekDays.includes(d.value)?'primary':'default'" :bordered="false" style="cursor:pointer" @click="toggleWeekDay(d.value)">{{ d.label }}</n-tag>
             </div>
           </div>
           <!-- 每月（多选） -->
           <div v-if="cronTab==='month'">
-            <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:2px">选择日期</div>
+            <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-bottom:2px">选择日期</div>
             <n-select v-model:value="cronMonthDays" :options="monthDayOpts" multiple size="tiny" style="width:100%" :max-tag-count="3" />
           </div>
           <!-- 自定义 -->
           <div v-if="cronTab==='custom'"><n-input v-model:value="cronCustomVal" size="small" placeholder="0 8 * * 1-5" @update:value="applyCustom" /></div>
         </div>
-        <div v-if="cronError" style="margin-top:4px;font-size:11px;color:#c22b3f">{{ cronError }}</div>
-        <div v-if="cronPreview && !cronError" style="margin-top:4px;font-size:11px;color:var(--c-text-dim)"> {{ cronPreview }}</div>
+        <div v-if="cronError" style="margin-top:4px;font-size: var(--text-meta);color:var(--c-up)">{{ cronError }}</div>
+        <div v-if="cronPreview && !cronError" style="margin-top:4px;font-size: var(--text-meta);color:var(--c-text-dim)"> {{ cronPreview }}</div>
       </template>
       <template v-else-if="sidebarMode==='node' && nodeDetail">
         <n-tag size="tiny" :type="nodeDetail.has_function?'success':'default'" style="margin-bottom:8px">{{ nodeDetail.has_function ? '✓ 已注册' : '⏸ 未注册' }}</n-tag>
         <div v-if="nodeDetail.sub_steps?.length">
           <div style="color:var(--c-text-dim);margin-bottom:4px">内部步骤</div>
-          <div v-for="(s,i) in nodeDetail.sub_steps" :key="i" style="padding:5px 0;border-bottom:1px solid var(--c-border)">
+          <div v-for="(s,i) in nodeDetail.sub_steps" :key="i" style="padding:4px 0;border-bottom:1px solid var(--c-border)">
             <div style="font-weight:600;color:var(--c-text)">{{ i+1 }}. {{ s.name }}</div>
-            <div style="font-size:11px;color:var(--c-text-dim)">{{ s.desc }}</div>
+            <div style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ s.desc }}</div>
           </div>
         </div>
       </template>
@@ -125,7 +125,7 @@
   </div>
 
   <div v-else class="fill-table" style="display:flex;flex-direction:column">
-    <n-data-table class="fill-table" flex-height :columns="flowCols" :data="flows" size="small" :loading="loading" scroll-x="700" />
+    <n-data-table class="fill-table" flex-height :columns="flowCols" :data="flows" size="small" :loading="loading" scroll-x="700" :bordered="false" />
     <n-empty v-if="!loading && !flows.length" description="暂无流程，点击「+ 新建」创建" style="padding:40px" />
   </div>
 
@@ -133,9 +133,9 @@
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">选择执行日期（默认今天）</div>
       <n-date-picker v-model:value="execDate" type="date" size="small" style="width:100%" />
-      <div v-if="execResult" style="margin-top:8px;padding:8px;background:var(--c-card-bg);border-radius:6px;font-size:11px">
-        <div v-if="execResult.ok" style="color:#0a7a5a"><AppIcon name="send" :size="13" />  已触发 — {{ execResult.task_id }}</div>
-        <div v-else style="color:#c22b3f"><AppIcon name="x-circle" :size="13" />  {{ execResult.error }}</div>
+      <div v-if="execResult" style="margin-top:8px;padding:8px;background:var(--c-card-bg);border-radius:6px;font-size: var(--text-meta)">
+        <div v-if="execResult.ok" style="color:var(--c-down)"><AppIcon name="send" :size="13" />  已触发，任务 {{ execResult.task_id }}</div>
+        <div v-else style="color:var(--c-up)"><AppIcon name="x-circle" :size="13" />  {{ execResult.error }}</div>
       </div>
     </n-space>
     <template #footer>
@@ -319,16 +319,16 @@ function cronReadable(c) {
 
 const flowCols = [
   { title:'流程名', key:'flow_name', width:150, fixed:'left' },
-  { title:'状态', key:'status', width:65, render(r){ return r.status==='published'?'已发布':r.status } },
+  { title:'状态', key:'status', width:65, render(r){ return { draft:'草稿', published:'已发布', archived:'已归档' }[r.status] || r.status } },
   { title:'节点', key:'node_count', width:45, align:'center', render(r){ return r.node_count||0 } },
   { title:'Cron', key:'cron_expr', width:130, render(r){ return cronReadable(r.cron_expr) } },
-  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'var(--c-warning)',fontSize:'11px'}},'⟳ 执行中') } },
+  { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'var(--c-warning)',fontSize:'var(--text-meta)'}},'执行中') } },
   { title:'操作', key:'actions', width:240, fixed:'right', render(r){
     const hasRun = taskStatuses.value[r.id] && taskStatuses.value[r.id].status === 'running'
     return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},[
       h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'编辑'),
-      r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doPublishList(r.id)},()=>'▶ 发布') : null,
-      r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'⏸ 下线') : null,
+      r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doPublishList(r.id)},()=>'发布') : null,
+      r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'下线') : null,
       r.status==='published' && !hasRun ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'执行') : null,
       h(NButton,{size:'tiny',quaternary:true,onClick:()=>{ nav.flowId = r.id; nav.tab = 'r' }},()=>'查看'),
       h(NButton,{size:'tiny',quaternary:true,onClick:()=>showFlowLog(r.id, r.flow_name)},()=>'日志'),
@@ -439,7 +439,7 @@ function doSave() {
   // 新建流程必须先命名：名字输入框在侧栏「流程属性」（点 cron 节点弹出），
   // 空名直接提交会被后端 ≥2 字符校验打回（曾让用户对着 422 一头雾水）
   if (!selectedFlow.value && (!flowName.value || flowName.value.trim().length < 2)) {
-    message.warning('请先填写流程名：点击画布上的 ⏰ cron 节点，在右侧「流程属性」里输入')
+    message.warning('请先填写流程名：点击画布上的时钟节点，在右侧「流程属性」里输入')
     sidebarMode.value = 'flow'
     nextTick(() => document.querySelector('.dfe-sidebar input')?.focus())
     return
@@ -479,7 +479,7 @@ async function doExecute() {
     const fd = (d) => { if (!d) return ''; const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0') }
     const r = await axios.post(API + `/api/dag/flows/${fid}/execute`, { trade_date: fd(execDate.value) })
     // 成功即关弹窗，任务号走全局 toast（WS 会推送进度）；失败留在弹窗内可重试
-    message.success('已触发执行 · ' + (r.data.task_id || ''))
+    message.success('已触发执行 / ' + (r.data.task_id || ''))
     showExecModal.value = false
     loadTaskStatuses()
   } catch(e) { execResult.value = { ok: false, error: e.response?.data?.detail || e.message } }

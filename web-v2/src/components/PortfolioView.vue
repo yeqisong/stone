@@ -5,7 +5,7 @@
     <n-button-group size="tiny">
       <n-button size="tiny" :type="activeTab==='pos'?'primary':'default'" @click="activeTab='pos'">持仓</n-button>
       <n-button v-for="g in groups" :key="g.id" size="tiny" :type="activeTab===g.id?'primary':'default'" @click="activeTab=g.id">
-        {{ g.name }}<span v-if="g.count" style="font-size:11px;opacity:0.75"> {{ g.count }}</span>
+        {{ g.name }}<span v-if="g.count" style="font-size: var(--text-meta);opacity:0.75"> {{ g.count }}</span>
       </n-button>
     </n-button-group>
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
@@ -75,13 +75,28 @@
 
 <n-modal v-model:show="showEdit">
   <n-card style="width:450px" :title="isAdding ? '新增持仓' : '编辑持仓'" role="dialog" aria-modal="true">
-    <n-space vertical>
-      <StockSuggestInput v-if="isAdding" v-model:value="editForm.code" placeholder="代码/名称/拼音首字母" @select="onSuggestFill" />
-      <n-input-number v-model:value="editForm.qty" :min="100" :step="100" :precision="0" />
-      <n-input-number v-model:value="editForm.cost" :min="0" :step="0.01" :precision="2" />
-      <n-date-picker v-model:formatted-value="editForm.date" type="date" value-format="yyyy-MM-dd" placeholder="建仓日期" clearable />
-      <n-input v-model:value="editForm.note" type="textarea" :rows="2" placeholder="备注" />
-    </n-space>
+    <div class="edit-fields">
+      <label v-if="isAdding" class="edit-field">
+        <span class="edit-label">股票</span>
+        <StockSuggestInput v-model:value="editForm.code" placeholder="代码 / 名称 / 拼音首字母" @select="onSuggestFill" />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">数量（股）</span>
+        <n-input-number v-model:value="editForm.qty" :min="100" :step="100" :precision="0" style="width:100%" />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">成本价（元）</span>
+        <n-input-number v-model:value="editForm.cost" :min="0" :step="0.01" :precision="2" style="width:100%" />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">建仓日期</span>
+        <n-date-picker v-model:formatted-value="editForm.date" type="date" value-format="yyyy-MM-dd" placeholder="选择日期" clearable style="width:100%" />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">备注</span>
+        <n-input v-model:value="editForm.note" type="textarea" :rows="2" placeholder="可选，如买入理由" />
+      </label>
+    </div>
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showEdit=false">取消</n-button>
@@ -105,13 +120,13 @@
 <!-- History Modal -->
 <n-modal v-model:show="showHistoryModal">
   <n-card style="width:600px" title="持仓明细" role="dialog" aria-modal="true">
-    <div v-if="historyLoading" style="text-align:center;padding:20px">加载中...</div>
+    <div v-if="historyLoading" style="text-align:center;padding:20px">加载中…</div>
     <template v-else>
-      <div v-if="historyPos" style="display:flex;gap:20px;justify-content:center;padding:6px 0;margin-bottom:10px;background:var(--c-card-bg-hover);border-radius:8px">
-        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">代码</div><div style="font-size:16px;font-weight:600">{{historyPos.stock_code}}</div></div>
-        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">名称</div><div style="font-size:16px;font-weight:600">{{historyPos.stock_name}}</div></div>
-        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">持仓</div><div style="font-size:16px;font-weight:600">{{historyPos.quantity}}股</div></div>
-        <div style="text-align:center"><div style="font-size:11px;color:var(--c-text-dim)">成本价</div><div style="font-size:16px;font-weight:600">¥{{historyPos.cost_price.toFixed(2)}}</div></div>
+      <div v-if="historyPos" style="display:flex;gap:20px;justify-content:center;padding:6px 0;margin-bottom:10px;background:var(--c-card-bg-hover);border-radius:var(--radius)">
+        <div style="text-align:center"><div style="font-size: var(--text-meta);color:var(--c-text-dim)">代码</div><div style="font-size:16px;font-weight:600">{{historyPos.stock_code}}</div></div>
+        <div style="text-align:center"><div style="font-size: var(--text-meta);color:var(--c-text-dim)">名称</div><div style="font-size:16px;font-weight:600">{{historyPos.stock_name}}</div></div>
+        <div style="text-align:center"><div style="font-size: var(--text-meta);color:var(--c-text-dim)">持仓</div><div style="font-size:16px;font-weight:600">{{historyPos.quantity}}股</div></div>
+        <div style="text-align:center"><div style="font-size: var(--text-meta);color:var(--c-text-dim)">成本价</div><div style="font-size:16px;font-weight:600">¥{{historyPos.cost_price.toFixed(2)}}</div></div>
       </div>
       <h4 style="margin:8px 0"><AppIcon name="file-text" :size="13" />  加减仓记录</h4>
       <div v-if="historyRecords.length" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
@@ -215,7 +230,7 @@ const signalCount = computed(() => (data.positions || []).filter(p => p.signal_d
 const statItems = computed(() => [
   { label: '持仓', value: data.count },
   { label: '总市值', value: '¥' + fmt(data.total_value) },
-  { label: '浮动盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? '#c22b3f' : '#0a7a5a' },
+  { label: '浮动盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? 'var(--c-up)' : 'var(--c-down)' },
   { label: '今日信号', value: signalCount.value },
 ])
 const columns = [
@@ -227,13 +242,13 @@ const columns = [
   { title:'市值', key:'market_value', width:105, align:'right', render(r){return '¥'+fmt(r.market_value)} },
   { title:'盈亏', key:'pnl', width:130, align:'right', ellipsis:{tooltip:true}, render(r){
     const pnl=r.pnl||0, pct=(r.pnl_pct||0).toFixed(1)
-    return h('span',{style:{color:pnl>=0?'#c22b3f':'#0a7a5a',whiteSpace:'nowrap'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
+    return h('span',{style:{color:pnl>=0?'var(--c-up)':'var(--c-down)',whiteSpace:'nowrap'}}, `¥${fmt(pnl)} (${pnl>=0?'+':''}${pct}%)`)
   }},
   { title:'今日信号', key:'signal_direction', width:115, align:'center', render(r){
     if (!r.signal_direction) return h('span',{style:{color:'var(--c-text-faint)'}},'—')
     const isBuy = r.signal_direction === 'buy'
     const dateStr = (r.signal_date||'').slice(5)
-    return h('span',{style:{color:isBuy?'#c22b3f':'#0a7a5a',fontSize:'12px',whiteSpace:'nowrap'}},
+    return h('span',{style:{color:isBuy?'var(--c-up)':'var(--c-down)',fontSize:'12px',whiteSpace:'nowrap'}},
       (isBuy?'买入':'卖出') + ' ★'.repeat(r.signal_strength||0) + ' ' + dateStr)
   }},
   // 固定窄列 + 溢出 tooltip：原 minWidth 弹性列会吃光剩余宽度（空备注也占满），挤得盈亏列裁字
@@ -271,8 +286,12 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* 弹窗表单：可见标签（placeholder 不能当标签，输入后即消失） */
+.edit-fields { display: flex; flex-direction: column; gap: var(--space-3); }
+.edit-field { display: flex; flex-direction: column; gap: 6px; }
+.edit-label { font-size: var(--text-meta); color: var(--c-text-dim); }
 .pos-cards { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding-bottom: 8px; }
-.pos-card { background: var(--c-bg-header); border: 1px solid var(--c-border); border-radius: 6px; padding: 12px 14px; }
+.pos-card { background: var(--c-bg-header); border: 1px solid var(--c-border); border-radius: 6px; padding: 12px 12px; }
 .pos-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .pos-name { font-size: 15px; font-weight: 600; }
 .pos-code { margin-left: 8px; font-size: 12px; color: var(--c-text-dim); }
@@ -281,10 +300,10 @@ onMounted(load)
 .pos-pnl.up { color: var(--c-up); }
 .pos-pnl.down { color: var(--c-down); }
 .pos-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--c-border); }
-.pos-grid span { display: block; font-size: 11px; color: var(--c-text-dim); }
+.pos-grid span { display: block; font-size: var(--text-meta); color: var(--c-text-dim); }
 .pos-grid b { display: block; margin-top: 2px; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .pos-card-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-.pos-signal { font-size: 11px; color: var(--c-text-dim); }
+.pos-signal { font-size: var(--text-meta); color: var(--c-text-dim); }
 .pos-signal.muted { color: var(--c-text-faint); }
 .pos-actions { margin-left: auto; display: flex; gap: 4px; }
 </style>

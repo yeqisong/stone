@@ -34,7 +34,7 @@
   padding: 36px 32px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 .login-logo { display: flex; justify-content: center; color: var(--ink); }
@@ -64,6 +64,7 @@
   background: var(--accent);
   color: var(--accent-ink);
   font: 500 14px var(--font-sans);
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color .15s;
 }

@@ -10,7 +10,7 @@
       <span style="font-size:12px;color:var(--c-text-dim)">统计版本:</span>
       <n-select v-model:value="selVersion" :options="versionOptions" size="tiny" style="width:200px"
         @update:value="load" />
-      <span style="font-size:11px;color:var(--c-text-faint)">近 {{ stats.days }} 天 · model_signal</span>
+      <span style="font-size: var(--text-meta);color:var(--c-text-faint)">近 {{ stats.days }} 天 / model_signal</span>
     </n-space>
     <!-- Overview -->
     <StatStrip :items="overviews" />
@@ -45,6 +45,8 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import { ref, watch, onMounted, nextTick } from 'vue'
+import { useThemeStore } from '../stores/theme'
+import { chartColors as T } from '../utils/chart'
 import { NSpin, NDataTable, NButton, NSpace, NSelect } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
@@ -61,26 +63,27 @@ const indCols = [
   { title:'行业', key:'industry', width:120, fixed:'left', ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:55 },
   { title:'已了结', key:'closed_i', width:58, render(r){ return r.closed ? r.closed : h('span',{style:{color:'var(--c-text-faint)'}},'0') } },
-  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#0a7a5a':v>=0.45?'#f59e0b':'#c22b3f'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
-  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?T.down:v>=0.45?T.warn:T.up; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
+  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?T.up:T.down}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 const stkCols = [
   { title:'代码', key:'stock_code', width:65, fixed:'left' },
   { title:'名称', key:'stock_name', width:72, ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:45 },
   { title:'已了结', key:'closed_s', width:58, render(r){ return r.closed ? r.closed : h('span',{style:{color:'var(--c-text-faint)'}},'0') } },
-  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#0a7a5a':v>=0.45?'#f59e0b':'#c22b3f'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
-  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?T.down:v>=0.45?T.warn:T.up; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
+  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?T.up:T.down}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 
 import { h } from 'vue'
+const _theme = useThemeStore()
 
 const selVersion = ref(props.version || 'active')
 const versionOptions = ref([{ label: '当前 ACTIVE 模型', value: 'active' }, { label: '全部模型', value: 'all' }])
 
 // null=尚无到期/了结样本（渲染 —，不渲染 0 造成「0% 胜率」误读）
 const fmtPct = (v, digits = 2) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(digits) + '%'
-const floatColor = v => v == null ? 'var(--c-text-faint)' : (v >= 0 ? '#c22b3f' : '#0a7a5a')
+const floatColor = v => v == null ? 'var(--c-text-faint)' : (v >= 0 ? T.up : T.down)
 
 watch(() => props.version, (v) => { if (v && v !== selVersion.value) { selVersion.value = v; load() } })
 
@@ -102,7 +105,7 @@ async function load() {
       { label:'已了结', value: o.closed, color: 'var(--c-text)' },
       { label:'跟踪中', value: o.open, color: 'var(--c-text)' },
       { label:'浮动均收益', value: fmtPct(o.avg_float_return), color: floatColor(o.avg_float_return) },
-      { label:'胜率(已了结)', value: fmtPct(o.win_rate, 1), color: o.win_rate==null?'var(--c-text-faint)':o.win_rate>=0.5?'#0a7a5a':'#c22b3f' },
+      { label:'胜率(已了结)', value: fmtPct(o.win_rate, 1), color: o.win_rate==null?'var(--c-text-faint)':o.win_rate>=0.5?T.down:T.up },
       { label:'均收益(已了结)', value: fmtPct(o.avg_return), color: floatColor(o.avg_return) },
       { label:'前5日均', value: fmtPct(o.avg_forward_5d), color: floatColor(o.avg_forward_5d) },
       { label:'前10日均', value: fmtPct(o.avg_forward_10d), color: floatColor(o.avg_forward_10d) },
@@ -133,17 +136,17 @@ function drawTrend() {
   const floats = t.map(d => d.avg_float == null ? null : +(d.avg_float * 100).toFixed(2))
   makeChart('st-chart-trend', {
     tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : v },
-    legend: { data: ['信号数', '胜率%', '浮动均%'], bottom: 0, textStyle: { fontSize: 10, color: 'var(--c-text-dim)' } },
+    legend: { data: ['信号数', '胜率%', '浮动均%'], bottom: 0, textStyle: { fontSize: 11, color: 'var(--c-text-dim)' } },
     grid: { left: '8%', right: '8%', top: 10, bottom: 30 },
     xAxis: { type: 'category', data: dates, axisLabel: { show: false } },
     yAxis: [
-      { type: 'value', name: '信号数', splitLine: { lineStyle: { color: 'rgba(128,128,128,0.1)' } } },
+      { type: 'value', name: '信号数', splitLine: { lineStyle: { color: T.line } } },
       { type: 'value', name: '%', splitLine: { show: false } }
     ],
     series: [
-      { name: '信号数', type: 'bar', data: signals, itemStyle: { color: 'rgba(194,43,63,0.3)' }, barWidth: '60%' },
-      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: '#0a7a5a', width: 2 }, symbol: 'none', smooth: true, connectNulls: true },
-      { name: '浮动均%', type: 'line', yAxisIndex: 1, data: floats, lineStyle: { color: '#f59e0b', width: 1.5, type: 'dashed' }, symbol: 'none', smooth: true, connectNulls: true }
+      { name: '信号数', type: 'bar', data: signals, itemStyle: { color: T.up, opacity: .45 }, barWidth: '60%' },
+      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: T.down, width: 2 }, symbol: 'none', smooth: true, connectNulls: true },
+      { name: '浮动均%', type: 'line', yAxisIndex: 1, data: floats, lineStyle: { color: T.warn, width: 1.5, type: 'dashed' }, symbol: 'none', smooth: true, connectNulls: true }
     ]
   })
 }
@@ -155,16 +158,18 @@ function drawDist() {
   makeChart('st-chart-dist', {
     tooltip: { trigger: 'axis', formatter: p => p[0] ? p[0].name + '<br/>' + p[0].value + ' 个 (' + data[p[0].dataIndex].pct + '%)' : '' },
     grid: { left: '8%', right: '3%', top: 10, bottom: 20 },
-    xAxis: { type: 'category', data: d.buckets, axisLabel: { fontSize: 9 } },
-    yAxis: { splitLine: { lineStyle: { color: 'rgba(128,128,128,0.1)' } } },
+    xAxis: { type: 'category', data: d.buckets, axisLabel: { fontSize: 11 } },
+    yAxis: { splitLine: { lineStyle: { color: T.line } } },
     series: [{
       type: 'bar', data: d.counts,
       // 按桶位置着色：index>=5（0% 桶覆盖 [0,+3%) 及以上）为正收益→红，负收益桶→绿（A股红涨绿跌）
-      itemStyle: { color: p => p.dataIndex >= 5 ? '#c22b3f' : '#0a7a5a' },
+      itemStyle: { color: p => p.dataIndex >= 5 ? T.up : T.down },
       barWidth: '80%'
     }]
   })
 }
+
+watch(() => _theme.isDark, () => nextTick(() => { if (stats.value?.daily_trend?.length) drawTrend(); if (stats.value?.return_distribution?.counts?.length) drawDist() }))
 
 onMounted(load)
 </script>

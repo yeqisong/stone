@@ -1,5 +1,5 @@
 <template>
-  <div ref="container" :style="`width:100%;height:${height}px;border:1px solid var(--c-border);border-radius:4px`"></div>
+  <div ref="container" :style="`width:100%;height:${height}px;border:1px solid 'var(--c-border)';border-radius:4px`"></div>
 </template>
 
 <script setup>

@@ -7,29 +7,29 @@
 
   <!-- Data Source Health + 全局交易偏好（右对齐，model_signal 阈值 + 飞书 AI 上下文在用） -->
   <div style="display:flex;align-items:center;gap:12px;padding:0 0 10px;flex-wrap:wrap">
-    <span style="font-size:11px;color:var(--c-text-dim)">数据源</span>
-    <div v-for="src in dataSources" :key="src.name" style="display:flex;align-items:center;gap:4px;padding:3px 10px;border-radius:12px;font-size:11px" :style="{background: src.name===activeSource ? 'rgba(194,43,63,0.1)' : 'var(--c-card-bg)', border: src.name===activeSource ? '1px solid rgba(194,43,63,0.3)' : '1px solid var(--c-border)'}">
-      <span :style="{background: src.healthy ? '#0a7a5a' : '#c22b3f', width:'8px', height:'8px', borderRadius:'50%', display:'inline-block', flexShrink:0}"></span>
+    <span style="font-size: var(--text-meta);color:var(--c-text-dim)">数据源</span>
+    <div v-for="src in dataSources" :key="src.name" style="display:flex;align-items:center;gap:4px;padding:3px 10px;border-radius:var(--radius);font-size: var(--text-meta)" :style="{background: src.name===activeSource ? 'color-mix(in srgb, var(--c-up) 10%, transparent)' : 'var(--c-card-bg)', border: src.name===activeSource ? '1px solid color-mix(in srgb, var(--c-up) 30%, transparent)' : '1px solid var(--c-border)'}">
+      <span :style="{background: src.healthy ? 'var(--c-down)' : 'var(--c-up)', width:'8px', height:'8px', borderRadius:'50%', display:'inline-block', flexShrink:0}"></span>
       <span style="color:var(--c-text)">{{src.name}}</span>
-      <span v-if="src.name===activeSource" style="font-size:11px;color:#c22b3f;font-weight:600">活跃</span>
-      <span v-if="src.name==='baostock'" style="font-size:11px;color:var(--c-text-faint)">补充</span>
+      <span v-if="src.name===activeSource" style="font-size: var(--text-meta);color:var(--c-up);font-weight:600">活跃</span>
+      <span v-if="src.name==='baostock'" style="font-size: var(--text-meta);color:var(--c-text-faint)">补充</span>
     </div>
     <!-- tushare 当日配额 -->
-    <div v-if="quota.calls_limit" style="display:flex;align-items:center;gap:8px;padding:3px 12px;border-radius:12px;font-size:11px;background:var(--c-card-bg);border:1px solid var(--c-border)">
+    <div v-if="quota.calls_limit" style="display:flex;align-items:center;gap:8px;padding:3px 12px;border-radius:var(--radius);font-size: var(--text-meta);background:var(--c-card-bg);border:1px solid var(--c-border)">
       <span style="color:var(--c-text-dim)">tushare 配额</span>
       <span :style="{color: quotaColor, fontSize:'12px', fontWeight:600}">{{quota.remaining}}</span>
       <span style="color:var(--c-text-faint)">/ {{quota.calls_limit}} 次</span>
-      <div style="width:80px;height:5px;border-radius:3px;background:var(--c-border-light);overflow:hidden">
+      <div style="width:80px;height:5px;border-radius:var(--radius-sm);background:var(--c-border-light);overflow:hidden">
         <div :style="{width: Math.min(quota.used_pct,100)+'%', height:'100%', background: quotaColor}"></div>
       </div>
-      <span v-if="quota.exhausted" style="color:#c22b3f;font-weight:600"><AppIcon name="alert" :size="13" />  已用尽</span>
-      <span v-else-if="quota.risk_level==='high'" style="color:#c22b3f;font-weight:600"><AppIcon name="alert" :size="13" />  高风险</span>
-      <span v-else-if="quota.risk_level==='medium'" style="color:#f59e0b">注意</span>
+      <span v-if="quota.exhausted" style="color:var(--c-up);font-weight:600"><AppIcon name="alert" :size="13" />  已用尽</span>
+      <span v-else-if="quota.risk_level==='high'" style="color:var(--c-up);font-weight:600"><AppIcon name="alert" :size="13" />  高风险</span>
+      <span v-else-if="quota.risk_level==='medium'" style="color:var(--c-warn)">注意</span>
       <span style="color:var(--c-text-faint)">分钟 {{quota.minute_calls}}/{{quota.minute_limit}}</span>
     </div>
     <!-- 全局交易偏好（右侧右对齐） -->
     <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
-      <span style="font-size:11px;color:var(--c-text-dim)"><AppIcon name="target" :size="13" />  交易偏好</span>
+      <span style="font-size: var(--text-meta);color:var(--c-text-dim)"><AppIcon name="target" :size="13" />  交易偏好</span>
       <n-button-group size="tiny">
         <n-button size="tiny" :type="prefMode==='left'?'primary':'default'" @click="setPref('left')">左侧</n-button>
         <n-button size="tiny" :type="prefMode==='balanced'?'primary':'default'" @click="setPref('balanced')">均衡</n-button>
@@ -41,23 +41,23 @@
   <!-- 数据明细（通栏：≥1440px 3列，以下 2列） -->
   <div>
     <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="w" :size="13" />  数据明细
-      <span v-if="statsTime" style="font-size:11px;color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
+      <span v-if="statsTime" style="font-size: var(--text-meta);color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
       <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
     </div>
     <div class="sv-dt-grid">
-      <div v-for="dt in dataTables" :key="dt.label" class="sv-dt-card" style="display:flex;align-items:baseline;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
+      <div v-for="dt in dataTables" :key="dt.label" class="sv-dt-card" style="display:flex;align-items:baseline;justify-content:space-between;padding:4px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
         <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
           <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">{{dt.label}}</span>
-          <span v-if="dt.items!=null" style="font-size:11px;color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
+          <span v-if="dt.items!=null" style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:14px;font-weight:600;color:var(--c-text)"><span v-if="dt.detail" style="font-size:11px;font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} · </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
-          <div v-if="dt.start" style="font-size:11px;color:var(--c-text-faint);white-space:nowrap"><span v-if="dt.sub">{{dt.sub}} · </span>{{dt.start}} ~ {{dt.end}}</div>
-          <div v-else style="font-size:11px;color:var(--c-text-faint)">暂无数据</div>
+          <div style="font-size:14px;font-weight:600;color:var(--c-text)"><span v-if="dt.detail" style="font-size: var(--text-meta);font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} / </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
+          <div v-if="dt.start" style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap"><span v-if="dt.sub">{{dt.sub}} / </span>{{dt.start}} ~ {{dt.end}}</div>
+          <div v-else style="font-size: var(--text-meta);color:var(--c-text-faint)">暂无数据</div>
         </div>
       </div>
       <!-- 雪球情绪采集：常驻进程指示灯 + 数据累积（设计 06） -->
-      <div v-if="xq" class="sv-dt-card" style="display:flex;align-items:baseline;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :title="`常驻采集进程状态：${xqLight.label} · 登录模式 ${xq.login_mode?'开':'关'} · 池 ${xq.pool_size} 只 · 洗白 ${xq.washes_total??0} 次 · 被动触发 ${xq.challenged_total??0}`">
+      <div v-if="xq" class="sv-dt-card" style="display:flex;align-items:baseline;justify-content:space-between;padding:4px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :title="`常驻采集进程状态：${xqLight.label} / 登录模式 ${xq.login_mode?'开':'关'} / 池 ${xq.pool_size} 只 / 洗白 ${xq.washes_total??0} 次 / 被动触发 ${xq.challenged_total??0}`">
         <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
           <span style="display:inline-flex;align-items:center;gap:4px;position:relative;top:1px">
             <span :style="{width:'7px',height:'7px',borderRadius:'50%',background:xqLight.color,animation:xqLight.pulse?'xqPulse 2s infinite':'none',flexShrink:0}"></span>
@@ -66,12 +66,12 @@
           <span :style="{fontSize:'11px',color:xqLight.color,whiteSpace:'nowrap',fontWeight:600}">{{xqLight.label}}</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:14px;font-weight:600;color:var(--c-text)">{{ xq.total_posts ?? '-' }} <span style="font-size:11px;font-weight:400;color:var(--c-text-dimmer)">条</span></div>
-          <div style="font-size:11px;color:var(--c-text-faint);white-space:nowrap">{{ xqSub }}</div>
+          <div style="font-size:14px;font-weight:600;color:var(--c-text)">{{ xq.total_posts ?? '-' }} <span style="font-size: var(--text-meta);font-weight:400;color:var(--c-text-dimmer)">条</span></div>
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap">{{ xqSub }}</div>
         </div>
       </div>
       <!-- 新闻资讯采集：DAG 定时流程（每 20 分钟一轮），灯色取各源最差态（设计 07） -->
-      <div v-if="news" style="display:flex;align-items:baseline;justify-content:space-between;padding:5px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :title="newsTip">
+      <div v-if="news" style="display:flex;align-items:baseline;justify-content:space-between;padding:4px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :title="newsTip">
         <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
           <span style="display:inline-flex;align-items:center;gap:4px;position:relative;top:1px">
             <span :style="{width:'7px',height:'7px',borderRadius:'50%',background:newsLight.color,animation:newsLight.pulse?'xqPulse 2s infinite':'none',flexShrink:0}"></span>
@@ -80,25 +80,25 @@
           <span :style="{fontSize:'11px',color:newsLight.color,whiteSpace:'nowrap',fontWeight:600}">{{newsLight.label}}</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:14px;font-weight:600;color:var(--c-text)">{{ news.total ?? '-' }} <span style="font-size:11px;font-weight:400;color:var(--c-text-dimmer)">条</span></div>
-          <div style="font-size:11px;color:var(--c-text-faint);white-space:nowrap" :style="news.pending_summary>0?{color:'#f59e0b'}:{}">{{ newsSub }}</div>
+          <div style="font-size:14px;font-weight:600;color:var(--c-text)">{{ news.total ?? '-' }} <span style="font-size: var(--text-meta);font-weight:400;color:var(--c-text-dimmer)">条</span></div>
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap" :style="news.pending_summary>0?{color:'var(--c-warn)'}:{}">{{ newsSub }}</div>
         </div>
       </div>
     </div>
   </div>
 
   <!-- 服务器监控（左） + 交易日历（右） -->
-  <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;margin-top:14px">
+  <div style="display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;margin-top:12px">
     <!-- 左：服务器监控 -->
     <div class="sv-half sv-half-l" style="flex:1;min-width:420px;display:flex;flex-direction:column">
       <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="monitor" :size="13" />  服务器监控</div>
       <div class="sv-metric-grid">
         <div v-for="m in sysMetrics" :key="m.label" style="padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)" :style="{cursor: m.clickable?'pointer':'default'}" @click="m.clickable && openDbDetail()">
-          <div style="font-size:11px;color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size:11px"></span></div>
-          <div style="font-size:16px;font-weight:600;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size:11px;font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
-          <div v-if="m.sub" style="font-size:11px;color:var(--c-text-dim)">{{ m.sub }}</div>
-          <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
-            <div :style="{width:m.pct+'%',height:'100%',background:m.pct>80?'#c22b3f':m.pct>50?'#f59e0b':'#0a7a5a',borderRadius:'2px'}"></div>
+          <div style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ m.label }}<span v-if="m.clickable" style="margin-left:2px;font-size: var(--text-meta)"></span></div>
+          <div style="font-size:16px;font-weight:600;color:var(--c-text);margin:2px 0">{{ m.value }}<span style="font-size: var(--text-meta);font-weight:400;color:var(--c-text-dim)"> {{ m.unit }}</span></div>
+          <div v-if="m.sub" style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ m.sub }}</div>
+          <div v-if="m.pct!=null" style="margin-top:4px;height:3px;background:var(--c-neutral-weak);border-radius:var(--radius-sm);overflow:hidden">
+            <div :style="{width:m.pct+'%',height:'100%',background:m.pct>80?'var(--c-up)':m.pct>50?'var(--c-warn)':'var(--c-down)',borderRadius:'2px'}"></div>
           </div>
         </div>
       </div>
@@ -119,26 +119,26 @@
       <!-- Calendar grid + legend side by side -->
       <div style="display:flex;gap:6px;flex:1">
         <div style="flex:1">
-          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:11px;color:var(--c-text-faint);margin-bottom:2px;text-align:center">
-            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#c22b3f">六</span><span style="color:#c22b3f">日</span>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:2px;text-align:center">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:var(--c-up)">六</span><span style="color:var(--c-up)">日</span>
           </div>
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
-            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'#94a3b8','cursor':d.td&&d.detail?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="d.td&&d.detail?showCalDetail(d):null">
-              <span v-if="d.day!==null" style="font-size:11px;font-weight:500">{{d.day}}</span>
-              <div v-if="d.syncing" style="position:absolute;top:0;right:2px;font-size:8px;color:#c22b3f">⟳</div>
+            <div v-for="d in cal" :key="d.date" :style="{'padding':'3px 1px','borderRadius':'4px','fontSize':'9px','textAlign':'center','background':calBg(d),'color':d.td?'var(--c-text)':'var(--c-text-faint)','cursor':d.td&&d.detail?'pointer':'default','border':d.td?'1px solid '+calBd(d):'1px solid transparent','opacity':d.future?0.35:1,'position':'relative'}" :title="calTitle(d)" @click="d.td&&d.detail?showCalDetail(d):null">
+              <span v-if="d.day!==null" style="font-size: var(--text-meta);font-weight:500">{{d.day}}</span>
+              <div v-if="d.syncing" style="position:absolute;top:0;right:2px;font-size:8px;color:var(--c-up)">⟳</div>
               <div v-if="d.td&&d.cp&&!d.syncing" style="font-size:8px;line-height:1.1">
                 <div v-if="d.cp.rows>0" style="color:var(--c-text-dim)">{{d.cp.rows}}只</div>
-                <div :style="{color:d.cp.pct>=80?'#0a7a5a':d.cp.pct>=50?'#f59e0b':'#c22b3f'}">{{d.cp.pct}}%</div>
+                <div :style="{color:d.cp.pct>=80?'var(--c-down)':d.cp.pct>=50?'var(--c-warn)':'var(--c-up)'}">{{d.cp.pct}}%</div>
               </div>
             </div>
           </div>
         </div>
         <!-- Vertical legend -->
-        <div style="display:flex;flex-direction:column;justify-content:center;gap:4px;font-size:11px;color:var(--c-text-faint);white-space:nowrap;padding-left:4px">
-          <span><span style="background:#0a7a5a;width:7px;height:7px;border-radius:50%;display:inline-block"></span> ≥80%</span>
-          <span><span style="background:#f59e0b;width:7px;height:7px;border-radius:50%;display:inline-block"></span> 50-80%</span>
-          <span><span style="background:#c22b3f;width:7px;height:7px;border-radius:50%;display:inline-block"></span> &lt;50%</span>
-          <span><span style="background:#475569;width:7px;height:7px;border-radius:50%;display:inline-block"></span> 非/未来</span>
+        <div style="display:flex;flex-direction:column;justify-content:center;gap:4px;font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap;padding-left:4px">
+          <span><span style="background:var(--c-down);width:7px;height:7px;border-radius:50%;display:inline-block"></span> ≥80%</span>
+          <span><span style="background:var(--c-warn);width:7px;height:7px;border-radius:50%;display:inline-block"></span> 50-80%</span>
+          <span><span style="background:var(--c-up);width:7px;height:7px;border-radius:50%;display:inline-block"></span> &lt;50%</span>
+          <span><span style="background:var(--c-text-dim);width:7px;height:7px;border-radius:50%;display:inline-block"></span> 非/未来</span>
         </div>
       </div>
 
@@ -146,12 +146,12 @@
   </div>
 
   <!-- 大模型配置（通栏：左表单 / 右实时指标） -->
-  <div style="margin-top:14px">
+  <div style="margin-top:12px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
       <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="target" :size="13" />  大模型配置</span>
-      <span v-if="llmCfg.key_tail" style="font-size:11px;color:var(--c-text-faint)">已配置 · 尾号 {{llmCfg.key_tail }}</span>
-      <span v-else style="font-size:11px;color:#c22b3f">未配置</span>
-      <span style="font-size:11px;color:var(--c-text-faint)">新闻总结 / 雪球打分 / 问答 Agent / 连通性测试 共用</span>
+      <span v-if="llmCfg.key_tail" style="font-size: var(--text-meta);color:var(--c-text-faint)">已配置，尾号 {{llmCfg.key_tail }}</span>
+      <span v-else style="font-size: var(--text-meta);color:var(--c-up)">未配置</span>
+      <span style="font-size: var(--text-meta);color:var(--c-text-faint)">新闻总结 / 雪球打分 / 问答 Agent / 连通性测试 共用</span>
     </div>
     <div class="sv-llm">
       <!-- 左：表单 -->
@@ -173,9 +173,9 @@
         </div>
         <span class="sv-llm-lb">操作</span>
         <div class="sv-llm-span3" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <n-button size="tiny" type="primary" :loading="llmSaving" @click="saveLlm">保存</n-button>
+          <n-button class="cta" size="tiny" type="primary" :loading="llmSaving" @click="saveLlm">保存</n-button>
           <n-button size="tiny" :loading="llmTesting" @click="testLlm">测试连接</n-button>
-          <span v-if="llmTestMsg" :style="{fontSize:'10.5px',color:llmTestMsg.ok?'#0a7a5a':'#c22b3f'}">
+          <span v-if="llmTestMsg" :style="{fontSize:'10.5px',color:llmTestMsg.ok?'var(--c-down)':'var(--c-up)'}">
             {{ llmTestMsg.ok ? `✓ ${llmTestMsg.model} 通（${llmTestMsg.latency_ms}ms）` : `✕ ${llmTestMsg.error}` }}
           </span>
         </div>
@@ -185,12 +185,12 @@
       <div class="sv-llm-metrics">
         <div class="sv-llm-mhead">
           实时调用
-          <span style="font-size:11px;color:var(--c-text-faint);font-weight:400">5 秒刷新 · 进程内计数</span>
+          <span style="font-size: var(--text-meta);color:var(--c-text-faint);font-weight:400">5 秒刷新 / 进程内计数</span>
         </div>
         <div class="sv-llm-mgrid">
-          <div class="sv-llm-mt" :style="{ borderColor: llmM.saturated ? 'rgba(245,158,11,0.5)' : 'var(--c-card-bg-hover)' }">
+          <div class="sv-llm-mt" :style="{ borderColor: llmM.saturated ? 'color-mix(in srgb, var(--c-warn) 50%, transparent)' : 'var(--c-card-bg-hover)' }">
             <div class="sv-llm-ml">在途并发</div>
-            <div class="sv-llm-mv" :style="{ color: llmM.saturated ? '#f59e0b' : 'var(--c-text)' }">
+            <div class="sv-llm-mv" :style="{ color: llmM.saturated ? 'var(--c-warn)' : 'var(--c-text)' }">
               {{ llmM.active ?? '-' }}<span class="sv-llm-ms">/ {{ llmM.config?.workers ?? '-' }}</span>
             </div>
           </div>
@@ -204,7 +204,7 @@
           </div>
           <div class="sv-llm-mt">
             <div class="sv-llm-ml">成功 / 失败</div>
-            <div class="sv-llm-mv">{{ llmM.ok ?? 0 }}<span class="sv-llm-ms" :style="{ color: (llmM.fail ? '#c22b3f' : 'var(--c-text-faint)') }">/ {{ llmM.fail ?? 0 }}</span></div>
+            <div class="sv-llm-mv">{{ llmM.ok ?? 0 }}<span class="sv-llm-ms" :style="{ color: (llmM.fail ? 'var(--c-up)' : 'var(--c-text-faint)') }">/ {{ llmM.fail ?? 0 }}</span></div>
           </div>
           <div class="sv-llm-mt">
             <div class="sv-llm-ml">平均时延</div>
@@ -217,7 +217,7 @@
         </div>
         <div v-if="llmM.recent_errors && llmM.recent_errors.length" class="llm-err">
           <span v-for="e in llmM.recent_errors.slice(-2)" :key="e.at + e.code">
-            {{ e.at }} · {{ e.code }} · {{ e.msg.slice(0, 46) }}
+            {{ e.at }} / {{ e.code }} / {{ e.msg.slice(0, 46) }}
           </span>
         </div>
       </div>
@@ -226,7 +226,7 @@
 
   <!-- ══════════════════════════════════════════ -->
   <!--  历史补数                                            -->
-  <div style="margin-top:14px">
+  <div style="margin-top:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="download" :size="13" />  历史补数</span>
       <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()"><AppIcon name="file-text" :size="13" />  日志</n-button>
@@ -240,35 +240,35 @@
     <!-- Running / recent task progress -->
     <div v-if="bfTask" style="margin-top:4px">
       <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
-        <span style="font-size:16px">{{ bfTask.status==='running'?'●':bfTask.status==='completed'?'✓':bfTask.status==='failed'?'✕':'⏹'}}</span>
+        <span :style="{fontSize:'var(--text-meta)',fontWeight:600,color: bfTask.status==='failed'?'var(--c-up)':bfTask.status==='completed'?'var(--c-down)':'var(--c-text-dim)'}">{{ bfTask.status==='running'?'运行中':bfTask.status==='completed'?'已完成':bfTask.status==='failed'?'失败':'已停止' }}</span>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:600;color:var(--c-text)">
             {{ bfTask.task_label }}
-            <span :style="{fontSize:'11px',color:bfTask.status==='running'?'#f59e0b':bfTask.status==='cancelling'?'#f59e0b':bfTask.status==='completed'?'#0a7a5a':'#c22b3f'}">{{ STATUS_LABELS[bfTask.status] || bfTask.status }}</span>
+            <span :style="{fontSize:'11px',color:bfTask.status==='running'?'var(--c-warn)':bfTask.status==='cancelling'?'var(--c-warn)':bfTask.status==='completed'?'var(--c-down)':'var(--c-up)'}">{{ STATUS_LABELS[bfTask.status] || bfTask.status }}</span>
           </div>
           <div v-if="bfTask.progress" style="margin-top:4px">
-            <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
-              <div :style="{width:bfPct+'%',height:'100%',background:bfTask.status==='running'?'#c22b3f':bfTask.status==='cancelling'?'#f59e0b':'#0a7a5a',borderRadius:'2px',transition:'width .3s'}"></div>
+            <div style="height:4px;background:var(--c-neutral-weak);border-radius:var(--radius-sm);overflow:hidden">
+              <div :style="{width:bfPct+'%',height:'100%',background:bfTask.status==='running'?'var(--c-up)':bfTask.status==='cancelling'?'var(--c-warn)':'var(--c-down)',borderRadius:'2px',transition:'width .3s'}"></div>
             </div>
-            <div style="display:flex;gap:12px;font-size:11px;color:var(--c-text-dim);margin-top:3px;flex-wrap:wrap">
+            <div style="display:flex;gap:12px;font-size: var(--text-meta);color:var(--c-text-dim);margin-top:3px;flex-wrap:wrap">
               <span v-if="bfTask.progress.total_batches">批次 {{ bfTask.progress.current_batch }}/{{ bfTask.progress.total_batches }}</span>
               <span v-if="bfTask.progress.stocks_total">{{ bfTask.progress.stocks_done }}/{{ bfTask.progress.stocks_total }} 只</span>
               <span v-if="bfTask.progress.rows">{{ bfTask.progress.rows.toLocaleString() }} 行</span>
-              <span v-if="bfTask.progress.errors" style="color:#c22b3f">失败 {{ bfTask.progress.errors }} 只</span>
+              <span v-if="bfTask.progress.errors" style="color:var(--c-up)">失败 {{ bfTask.progress.errors }} 只</span>
               <span>耗时 {{fmtDuration(bfTask.elapsed_seconds)}}</span>
               <span v-if="bfTask.status==='running' && bfTask.eta_seconds">预计剩余 {{fmtDuration(bfTask.eta_seconds)}}</span>
             </div>
           </div>
-          <div v-if="bfTask.error_message" style="font-size:11px;color:#c22b3f;margin-top:2px">{{ bfTask.error_message }}</div>
+          <div v-if="bfTask.error_message" style="font-size: var(--text-meta);color:var(--c-up);margin-top:2px">{{ bfTask.error_message }}</div>
         </div>
         <n-button v-if="bfTask.status==='running'||bfTask.status==='cancelling'" size="tiny" type="warning" :disabled="bfTask.status==='cancelling'" @click="cancelBackfill">{{ bfTask.status==='cancelling'?'取消中…':'取消' }}</n-button>
       </div>
     </div>
 
     <!-- Last completed task (if different from current) -->
-    <div v-if="bfLastTask && bfLastTask.task_id !== (bfTask?.task_id)" style="margin-top:6px;font-size:11px;color:var(--c-text-dim)">
+    <div v-if="bfLastTask && bfLastTask.task_id !== (bfTask?.task_id)" style="margin-top:6px;font-size: var(--text-meta);color:var(--c-text-dim)">
       <span>{{ bfLastTask.task_label }}</span>
-      <span :style="{color:bfLastTask.status==='completed'?'#0a7a5a':'#c22b3f',marginLeft:'6px'}">{{ bfLastTask.status==='completed'?'已完成':'失败'}}</span>
+      <span :style="{color:bfLastTask.status==='completed'?'var(--c-down)':'var(--c-up)',marginLeft:'6px'}">{{ bfLastTask.status==='completed'?'已完成':'失败'}}</span>
       <span style="margin-left:8px">{{ bfLastTask.progress?.rows?.toLocaleString() || 0 }} 行</span>
       <span style="margin-left:8px">耗时 {{fmtDuration(bfLastTask.elapsed_seconds)}}</span>
     </div>
@@ -277,7 +277,7 @@
   <!-- Backfill Log Modal -->
   <n-modal v-model:show="showBfLogModal" preset="card" title="补数日志" style="width:900px;max-width:92vw" :mask-closable="false" :segmented="{content:true}" @after-show="loadBfLogs">
     <n-space vertical>
-      <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中...</div>
+      <div v-if="bfLogLoading" style="text-align:center;padding:20px;color:var(--c-text-faint)">加载中…</div>
       <div v-else style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <n-data-table :columns="bfLogColumns" :data="bfLogItems" size="small" :row-props="bfLogRowProps" :max-height="360" scroll-x="860" />
       </div>
@@ -288,7 +288,7 @@
   <!-- DB 表大小弹窗 -->
   <n-modal v-model:show="showDbDetail" preset="card" title="️ 数据库表大小" style="width:500px;max-width:92vw" :mask-closable="false">
     <n-data-table v-if="dbTables.length" :columns="dbTableCols" :data="dbTables" size="small" />
-    <n-empty v-else description="加载中..." />
+    <n-empty v-else description="加载中…" />
   </n-modal>
 
   <!-- Backfill Modal -->
@@ -298,7 +298,7 @@
     <n-data-table v-if="calDtlData" :columns="calDtlCols" :data="calDtlRows" size="small" :bordered="false" :single-line="false" />
     <div v-else style="padding:20px;text-align:center;color:var(--c-text-dim);font-size:12px">无明细数据</div>
     <template v-if="extRows.length">
-      <div style="font-size:11px;color:var(--c-text-dimmer);margin:10px 0 5px">拓展数据 · 当日{{ extHint }}</div>
+      <div style="font-size: var(--text-meta);color:var(--c-text-dimmer);margin:10px 0 4px">拓展数据，当日{{ extHint }}</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px">
         <span v-for="e in extRows" :key="e.label" :style="{'font-size':'10px','padding':'2px 6px','border-radius':'4px','background':'var(--c-card-bg-hover)','color':e.n>0?'var(--c-text)':'var(--c-text-dimmer)','opacity':e.n>0?1:0.55}">{{e.label}} {{e.n<0?'-':e.n}}</span>
       </div>
@@ -350,9 +350,9 @@ const dataSources = ref([])
 const activeSource = ref(null)
 const quota = ref({})
 const quotaColor = computed(() => {
-  if (quota.value.exhausted || quota.value.risk_level === 'high') return '#c22b3f'
-  if (quota.value.risk_level === 'medium') return '#f59e0b'
-  return '#0a7a5a'
+  if (quota.value.exhausted || quota.value.risk_level === 'high') return 'var(--c-up)'
+  if (quota.value.risk_level === 'medium') return 'var(--c-warn)'
+  return 'var(--c-down)'
 })
 const calDtlDate = ref('')
 const calDtlData = ref(null)
@@ -374,19 +374,19 @@ const overviewItems = computed(() => [
   { label: '股票数', value: overview.value.total_stocks },
   { label: '最新数据', value: overview.value.latest_date || '-' },
   { label: '数据明细', value: fmt(dtRowsSum.value) },
-  { label: '漏数据日期', value: missingDates.value.length, color: missingDates.value.length > 0 ? '#f59e0b' : undefined },
+  { label: '漏数据日期', value: missingDates.value.length, color: missingDates.value.length > 0 ? 'var(--c-warn)' : undefined },
 ])
 
 const calBg = d => {
   if(d.day===null) return 'transparent'
-  if(d.td && d.cp) { const p=d.cp.pct; return p>=80?'rgba(10,122,90,0.12)':p>=50?'rgba(251,191,36,0.12)':'rgba(194,43,63,0.12)' }
-  if(d.td && !d.cp) return 'rgba(194,43,63,0.08)'
+  if(d.td && d.cp) { const p=d.cp.pct; return p>=80?'color-mix(in srgb, var(--c-down) 12%, transparent)':p>=50?'color-mix(in srgb, var(--c-warn) 12%, transparent)':'color-mix(in srgb, var(--c-up) 12%, transparent)' }
+  if(d.td && !d.cp) return 'color-mix(in srgb, var(--c-up) 8%, transparent)'
   return 'transparent'
 }
 const calBd = d => {
   if(d.day===null) return 'transparent'
-  if(d.td && d.cp) { const p=d.cp.pct; return p>=80?'rgba(10,122,90,0.25)':p>=50?'rgba(251,191,36,0.2)':'rgba(194,43,63,0.25)' }
-  if(d.td && !d.cp) return 'rgba(194,43,63,0.2)'
+  if(d.td && d.cp) { const p=d.cp.pct; return p>=80?'color-mix(in srgb, var(--c-down) 25%, transparent)':p>=50?'color-mix(in srgb, var(--c-warn) 20%, transparent)':'color-mix(in srgb, var(--c-up) 25%, transparent)' }
+  if(d.td && !d.cp) return 'color-mix(in srgb, var(--c-up) 20%, transparent)'
   return 'transparent'
 }
 
@@ -520,9 +520,9 @@ async function loadQuota() {
 const xq = ref(null)
 const xqLight = computed(() => {
   const s = xq.value?.status
-  if (s === 'ok') return { color: '#0a7a5a', label: '采集中', pulse: true }
-  if (s === 'degraded') return { color: '#f59e0b', label: '延迟', pulse: true }
-  return { color: '#c22b3f', label: '已停摆', pulse: false }
+  if (s === 'ok') return { color: 'var(--c-down)', label: '采集中', pulse: true }
+  if (s === 'degraded') return { color: 'var(--c-warn)', label: '延迟', pulse: true }
+  return { color: 'var(--c-up)', label: '已停摆', pulse: false }
 })
 const xqSub = computed(() => {
   const d = xq.value
@@ -531,7 +531,7 @@ const xqSub = computed(() => {
   const parts = []
   if (d.posts_today != null) parts.push(`今日 ${d.posts_today} 帖`)
   if (d.heartbeat_at) parts.push(`心跳 ${d.heartbeat_at.slice(11)}`)
-  return parts.join(' · ')
+  return parts.join(' / ')
 })
 
 async function loadXq() {
@@ -551,9 +551,9 @@ const NSRC_NAME = { cls:'财联社', em724:'东财7×24', wscn:'华尔街见闻'
 // 灯色取 health 的 status（各源最差态，后端已按各源轮询节奏换算成时间阈值）
 const newsLight = computed(() => {
   const s = news.value?.status
-  if (s === 'ok') return { color: '#0a7a5a', label: '采集中', pulse: true }
-  if (s === 'degraded') return { color: '#f59e0b', label: '延迟', pulse: true }
-  return { color: '#c22b3f', label: '已停摆', pulse: false }
+  if (s === 'ok') return { color: 'var(--c-down)', label: '采集中', pulse: true }
+  if (s === 'degraded') return { color: 'var(--c-warn)', label: '延迟', pulse: true }
+  return { color: 'var(--c-up)', label: '已停摆', pulse: false }
 })
 const newsSub = computed(() => {
   const d = news.value
@@ -562,16 +562,16 @@ const newsSub = computed(() => {
   if (d.today != null) parts.push(`今日 ${d.today} 条`)
   // 未总结积压要显性：总结节点被中断/LLM 失败时 backlog 会一直涨（本卡唯一的滞后信号）
   if (d.pending_summary > 0) parts.push(`待总结 ${d.pending_summary}`)
-  return parts.join(' · ')
+  return parts.join(' / ')
 })
 const newsTip = computed(() => {
   const d = news.value
   if (!d) return ''
   const lines = (d.sources || []).map(s =>
     `${NSRC_NAME[s.source] || s.source}：${s.age_min != null ? s.age_min + ' 分钟前' : '未采集'}`
-    + `${s.last_ok ? '' : `（连续失败 ${s.fail_streak}）`}${s.note ? ' · ' + s.note : ''}`)
-  lines.push(`累计 ${d.total} 条 · 今日 ${d.today} 条（快讯 ${d.today_flash}）· 已总结 ${d.summarized}（今日 ${d.summarized_today}）`)
-  lines.push(`待总结 ${d.pending_summary} · 关注池 ${d.focus_n} 只`)
+    + `${s.last_ok ? '' : `（连续失败 ${s.fail_streak}）`}${s.note ? ' / ' + s.note : ''}`)
+  lines.push(`累计 ${d.total} 条 / 今日 ${d.today} 条（快讯 ${d.today_flash}）· 已总结 ${d.summarized}（今日 ${d.summarized_today}）`)
+  lines.push(`待总结 ${d.pending_summary} / 关注池 ${d.focus_n} 只`)
   return lines.join('\n')
 })
 
@@ -841,7 +841,7 @@ const bfLogColumns = [
 function bfLogRowProps(row) {
   return {
     style: {
-      color: row.status === 'running' ? '#f59e0b' : row.status === 'failed' ? '#c22b3f' : 'var(--c-text)',
+      color: row.status === 'running' ? 'var(--c-warn)' : row.status === 'failed' ? 'var(--c-up)' : 'var(--c-text)',
     }
   }
 }
@@ -872,20 +872,20 @@ async function loadBfLogs() {
 .sv-llm-form { flex: 1.6; min-width: 420px; display: grid; grid-template-columns: 58px minmax(0, 1.2fr) 58px minmax(0, 1fr);
   gap: 8px 8px; align-items: center; padding: 10px 12px; background: var(--c-card-bg);
   border: 1px solid var(--c-card-bg-hover); border-radius: 6px; }
-.sv-llm-lb { font-size: 11px; color: var(--c-text-dim); text-align: right; white-space: nowrap; }
-.sv-llm-unit { font-size: 11px; color: var(--c-text-faint); white-space: nowrap; }
+.sv-llm-lb { font-size: var(--text-meta); color: var(--c-text-dim); text-align: right; white-space: nowrap; }
+.sv-llm-unit { font-size: var(--text-meta); color: var(--c-text-faint); white-space: nowrap; }
 .sv-llm-span3 { grid-column: span 3; }
 .sv-llm-metrics { flex: 1; min-width: 320px; padding: 10px 12px; background: var(--c-card-bg);
   border: 1px solid var(--c-card-bg-hover); border-radius: 6px; display: flex; flex-direction: column; }
-.sv-llm-mhead { font-size: 11px; font-weight: 600; color: var(--c-text); margin-bottom: 8px;
+.sv-llm-mhead { font-size: var(--text-meta); font-weight: 600; color: var(--c-text); margin-bottom: 8px;
   display: flex; align-items: baseline; gap: 6px; }
 .sv-llm-mgrid { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.sv-llm-mt { padding: 6px 8px; border: 1px solid var(--c-card-bg-hover); border-radius: 5px;
+.sv-llm-mt { padding: 6px 8px; border: 1px solid var(--c-card-bg-hover); border-radius: var(--radius-sm);
   background: var(--c-bg); min-width: 0; }
-.sv-llm-ml { font-size: 11px; color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sv-llm-ml { font-size: var(--text-meta); color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sv-llm-mv { font-size: 15px; font-weight: 600; color: var(--c-text); line-height: 1.3; }
-.sv-llm-ms { font-size: 11px; font-weight: 400; color: var(--c-text-faint); margin-left: 2px; }
-.llm-err { margin-top: 6px; font-size: 11px; color: #c22b3f; line-height: 1.5;
+.sv-llm-ms { font-size: var(--text-meta); font-weight: 400; color: var(--c-text-faint); margin-left: 2px; }
+.llm-err { margin-top: 6px; font-size: var(--text-meta); color: var(--c-up); line-height: 1.5;
   display: flex; flex-direction: column; gap: 1px; }
 
 /* 状态页：数据明细通栏网格（≥1440px 3列，以下 2列，手机 1列） */

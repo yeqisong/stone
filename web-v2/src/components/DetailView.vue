@@ -1,9 +1,9 @@
 <template>
 <div>
-  <n-space align="center" :wrap="isNarrow" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
+  <n-space align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
     <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
     <StockSuggestInput v-model:value="code" size="tiny" width="170px" @select="load" @enter="load" />
-    <n-button type="primary" size="tiny" @click="load">查询</n-button>
+    <n-button class="cta" type="primary" size="tiny" @click="load">查询</n-button>
     <n-select v-model:value="adj" @update:value="reloadChart" size="tiny" style="width:105px" :options="adjOptions" />
     <n-button-group size="tiny">
       <n-button v-for="p in PERIODS" :key="p.v" size="tiny" :type="period===p.v?'primary':'default'" @click="switchPeriod(p.v)">{{ p.t }}</n-button>
@@ -22,7 +22,7 @@
   <template v-else-if="detail">
     <!-- 分组状态：持仓为 portfolio 固有状态（不可移除）；自选/动态组 hover 出 ✕ 点击确认移除；末尾 + 加组 -->
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-      <span style="font-size:11px;color:var(--c-text-dim)">分组</span>
+      <span style="font-size: var(--text-meta);color:var(--c-text-dim)">分组</span>
       <n-tag v-if="stockGroups.in_portfolio" size="small" type="info" :bordered="false">持仓</n-tag>
       <n-tag v-for="g in stockGroups.groups" :key="g.id" size="small" closable :bordered="false"
         class="dt-grp-tag" :type="g.is_default ? 'warning' : 'default'"
@@ -38,14 +38,14 @@
     <div style="margin-bottom:12px;min-height:50px">
       <h4 class="side-title"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
       <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:8px;flex-wrap:wrap">
-        <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:8px;padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
+        <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:var(--radius);padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
             <n-tag :type="s.direction==='buy'?'error':s.direction==='sell'?'success':'default'" size="small" :bordered="false">{{dirName(s.direction)}}</n-tag>
             <span v-if="s.combined_signal" style="color:var(--c-accent);font-size:13px;font-weight:600">{{s.strength}}</span>
             <span v-else style="font-size:12px">{{''.repeat(s.strength)}}</span>
           </div>
           <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
-          <div v-if="s.model_version" style="font-size:11px;color:var(--c-text-faint);margin-top:2px"><AppIcon name="f" :size="13" />  {{s.model_version}}</div>
+          <div v-if="s.model_version" style="font-size: var(--text-meta);color:var(--c-text-faint);margin-top:2px"><AppIcon name="f" :size="13" />  {{s.model_version}}</div>
         </div>
       </div>
       <n-empty v-else description="暂无信号" style="padding:10px" />
@@ -55,7 +55,7 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size:11px;color:var(--c-text-dim)">腾讯实时 · 不复权 · 30s 刷新</span>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 30s 刷新</span>
             <n-button-group size="tiny" style="margin-left:8px">
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
@@ -63,7 +63,7 @@
           <div :id="'c0'" style="width:100%;height:260px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
         <div style="margin-bottom:12px">
@@ -83,28 +83,28 @@
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
         <div v-if="benchData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="sliders" :size="13" />  相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="sliders" :size="13" />  相对强弱 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
           <div :id="'c8'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="refresh" :size="13" />  换手率 <span style="font-size:11px;color:var(--c-text-dim)">%（含分位线）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="refresh" :size="13" />  换手率 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">%（含分位线）</span></h4>
           <div :id="'c9'" style="width:100%;height:140px"></div>
         </div>
         <div v-if="marginData.length > 2" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="arrow-left-right" :size="13" />  两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="arrow-left-right" :size="13" />  两融余额 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
           <div :id="'c10'" style="width:100%;height:140px"></div>
         </div>
         <!-- 带右侧 Y 轴的图统一殿后（PE分位%/资金流累计/ATR%），避免中段双轴观感错乱 -->
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="percent" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="percent" :size="13" />  PE历史分位 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
         <div v-if="mfData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="dollar-sign" :size="13" />  资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="dollar-sign" :size="13" />  资金流 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
           <div :id="'c7'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="maximize" :size="13" />  ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="maximize" :size="13" />  ATR <span style="font-size: var(--text-meta);color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
           <div :id="'c11'" style="width:100%;height:140px"></div>
         </div>
       </div>
@@ -116,7 +116,7 @@
           <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
           <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" class="side-table">
             <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
-              <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px;text-align:left">{{row.lbl}}</td>
+              <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta);text-align:left">{{row.lbl}}</td>
               <td style="padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text);text-align:left">{{row.val}}</td>
             </tr>
           </table>
@@ -125,45 +125,45 @@
         <div class="side-panel">
           <h4 class="side-title"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
           <table class="side-table">
-            <tr><td>日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(194,43,63,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">开盘</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最高</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#c22b3f':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最低</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#0a7a5a':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">收盘</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'#c22b3f':'#0a7a5a'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size:11px;margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'#c22b3f':'#0a7a5a'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size:11px;margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交额</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
+            <tr><td>日期</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'var(--c-up-faint)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">开盘</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">最高</td><td style="padding:4px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'var(--c-up)':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">最低</td><td style="padding:4px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'var(--c-down)':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">收盘</td><td style="padding:4px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'var(--c-up)':'var(--c-down)'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size: var(--text-meta);margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'var(--c-up)':'var(--c-down)'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size: var(--text-meta);margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交量</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交额</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">换手率</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
           </table>
         </div>
         <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
-          <h4 class="side-title"><AppIcon name="pie-chart" :size="13" />  筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
+          <h4 class="side-title"><AppIcon name="pie-chart" :size="13" />  筹码分布 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> / {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
-          <div v-if="chipData.profit_ratio!=null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px">
-            现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#c22b3f':'#0a7a5a',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
+          <div v-if="chipData.profit_ratio!=null" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:2px">
+            现价 ¥{{chipData.current}} / 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'var(--c-up)':'var(--c-down)',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
           </div>
         </div>
         <div v-if="sigStats" class="side-panel">
           <h4 class="side-title"><AppIcon name="list" :size="13" />  信号回看</h4>
-          <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim)">
+          <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim)">
             近{{sigStats.years}}年 <b style="color:var(--c-text)">{{sigStats.n}}</b> 条信号（buy {{sigStats.buys}}/sell {{sigStats.sells}}）<br/>
-            平均前瞻：5d <span :style="{color:sigStats.f5>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f5*100).toFixed(1)}}%</span> ·
-            10d <span :style="{color:sigStats.f10>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f10*100).toFixed(1)}}%</span> ·
-            20d <span :style="{color:sigStats.f20>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
+            平均前瞻：5d <span :style="{color:sigStats.f5>=0?'var(--c-up)':'var(--c-down)'}">{{(sigStats.f5*100).toFixed(1)}}%</span>
+            10d <span :style="{color:sigStats.f10>=0?'var(--c-up)':'var(--c-down)'}">{{(sigStats.f10*100).toFixed(1)}}%</span>
+            20d <span :style="{color:sigStats.f20>=0?'var(--c-up)':'var(--c-down)'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
           </div>
         </div>
         <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色；
              情绪方向由 LLM 打分给出（红多绿空），与 mark 徽标相互独立 -->
         <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)" class="side-panel">
-          <h4 class="side-title"><AppIcon name="message-circle" :size="13" />  雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
-          <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
-            今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖 ·
-            标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b> ·
+          <h4 class="side-title"><AppIcon name="message-circle" :size="13" />  雪球讨论 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 / 热帖精选</span></h4>
+          <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
+            今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖
+            标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b>
             7日互动 <b style="color:var(--c-text)">{{xqData.interactions_7d}}</b>
           </div>
           <!-- LLM 情绪构成（design/06 §9.10）：只统计已打分帖（夜间任务，按热度取） -->
           <div v-if="xqData.sentiment && xqData.sentiment.scored"
                class="side-well">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-bottom:5px">
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size: var(--text-meta);margin-bottom:4px">
               <span style="color:var(--c-text-dim)">
                 LLM 情绪
                 <span style="color:var(--c-text-faint)">· {{xqData.sentiment.scored}} 帖已打分</span>
@@ -173,11 +173,11 @@
               </span>
             </div>
             <!-- 占比条：红=看多 灰=中性 绿=看空（方向域，与全站一致） -->
-            <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--c-border)">
+            <div style="display:flex;height:6px;border-radius:var(--radius-sm);overflow:hidden;background:var(--c-border)">
               <div v-for="seg in sentiSegs" :key="seg.k" :title="seg.t+' '+seg.n+' 帖'"
                    :style="{width:seg.w+'%', background:seg.c}"></div>
             </div>
-            <div style="display:flex;gap:10px;font-size:11px;margin-top:4px">
+            <div style="display:flex;gap:10px;font-size: var(--text-meta);margin-top:4px">
               <span v-for="seg in sentiSegs" :key="seg.k" style="color:var(--c-text-dim)">
                 <span :style="{color:seg.c,fontWeight:600}">{{seg.t}}</span> {{seg.n}}
               </span>
@@ -185,13 +185,13 @@
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
             <div v-for="(p,i) in xqData.hot.slice(0, 6)" :key="i" class="side-item">
-              <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-faint);margin-bottom:3px">
+              <div style="display:flex;align-items:center;gap:6px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{p.created_at.slice(5)}}</span>
                 <span v-if="p.source">{{p.source}}</span>
                 <span v-if="sentiOf(p.sentiment)" :title="p.reason||''"
-                      :style="{color:sentiOf(p.sentiment).c, background:'rgba(148,163,184,0.18)', borderRadius:'8px', padding:'0 5px', fontWeight:600}">{{sentiOf(p.sentiment).t}}</span>
-                <span v-if="p.mark" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">标</span>
-                <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} · 评 {{p.reply_count}}</span>
+                      :style="{color:sentiOf(p.sentiment).c, background:'var(--c-neutral-weak)', borderRadius:'8px', padding:'0 5px', fontWeight:600}">{{sentiOf(p.sentiment).t}}</span>
+                <span v-if="p.mark" style="background:var(--c-neutral-weak);border-radius:var(--radius);padding:0 4px">标</span>
+                <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} / 评 {{p.reply_count}}</span>
               </div>
               <div class="side-text" :title="p.text">{{p.text}}</div>
             </div>
@@ -201,20 +201,20 @@
         <!-- 相关资讯（design/07）：与「雪球讨论」并列——第 3 层（资讯 × 雪球交叉分析）的落点。
              未总结条目 summary/sentiment 为 NULL 而非 0，显示「待总结」不可当「中性」 -->
         <div v-if="newsData && newsData.count > 0" class="side-panel">
-          <h4 class="side-title"><AppIcon name="file-text" :size="13" />  相关资讯 <span style="font-size:11px;color:var(--c-text-dim)">{{newsData.count}} 条 · 近 {{newsData.days}} 天</span></h4>
-          <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
+          <h4 class="side-title"><AppIcon name="file-text" :size="13" />  相关资讯 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{newsData.count}} 条 / 近 {{newsData.days}} 天</span></h4>
+          <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
             <span v-for="(v,k) in newsData.by_category" :key="k" style="margin-right:8px">{{NEWS_CAT_NAME[k]||k}} <b style="color:var(--c-text)">{{v}}</b></span>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
             <div v-for="n in newsData.data.slice(0, 8)" :key="n.id" class="side-item">
-              <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-faint);margin-bottom:3px">
+              <div style="display:flex;align-items:center;gap:6px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{(n.published_at||'').slice(5)}}</span>
                 <span :style="{color:NEWS_CAT_COLOR[n.category]||'var(--c-text-dim)',fontWeight:600}">{{NEWS_CAT_NAME[n.category]||n.category}}</span>
-                <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:rgba(194,43,63,0.16);color:#c22b3f;border-radius:8px;padding:0 5px;font-weight:600">重</span>
-                <span v-else-if="n.importance===2" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">中</span>
+                <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:var(--c-up-weak);color:var(--c-up);border-radius:var(--radius);padding:0 4px;font-weight:600">重</span>
+                <span v-else-if="n.importance===2" style="background:var(--c-neutral-weak);border-radius:var(--radius);padding:0 4px">中</span>
                 <!-- 未总结才显示「待总结」：imp=1 是合法等级（不显示徽标），不能落到 else 里被当成未总结 -->
-                <span v-else-if="n.importance===null" style="background:rgba(148,163,184,0.13);border-radius:8px;padding:0 5px">待总结</span>
-                <span v-if="newsSentiOf(n.sentiment)" :style="{color:newsSentiOf(n.sentiment).c,background:'rgba(148,163,184,0.18)',borderRadius:'8px',padding:'0 5px',fontWeight:600}">{{newsSentiOf(n.sentiment).t}}</span>
+                <span v-else-if="n.importance===null" style="background:var(--c-neutral-weaker);border-radius:var(--radius);padding:0 4px">待总结</span>
+                <span v-if="newsSentiOf(n.sentiment)" :style="{color:newsSentiOf(n.sentiment).c,background:'var(--c-neutral-weak)',borderRadius:'8px',padding:'0 5px',fontWeight:600}">{{newsSentiOf(n.sentiment).t}}</span>
                 <a v-if="n.url" :href="n.url" target="_blank" rel="noopener" style="margin-left:auto;flex-shrink:0;color:var(--c-info)">原文</a>
               </div>
               <div class="side-text" :title="n.title">{{n.title}}</div>
@@ -231,7 +231,7 @@
   <n-modal v-model:show="showAddGroup">
     <n-card style="width:400px;max-width:92vw" title="加入分组" role="dialog" aria-modal="true">
       <n-space vertical size="small">
-        <div style="font-size:11px;color:var(--c-text-dim)">自选与自定义分组可多选；持仓请到持仓页维护</div>
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim)">自选与自定义分组可多选；持仓请到持仓页维护</div>
         <n-checkbox-group v-model:value="pickedGroups">
           <n-space size="small">
             <n-checkbox v-for="g in allGroups" :key="g.id" :value="g.id" :label="g.name" />
@@ -262,7 +262,9 @@ import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
 import { useAuthStore } from '../stores/auth'
+import { useThemeStore } from '../stores/theme'
 import { useViewport } from '../utils/viewport'
+import { chartColors as T } from '../utils/chart'
 import StatStrip from './StatStrip.vue'
 
 const props = defineProps({ code: String })
@@ -416,7 +418,7 @@ const summaryItems = computed(() => {
   if (!d) return []
   return [
     { label: d.stock_code, value: d.stock_name },
-    { label: '最新价', value: '¥' + (d.close || 0).toFixed(2) + (priceChg.value != null ? (priceChg.value >= 0 ? '+' : '') + priceChg.value.toFixed(2) + '%' : ''), color: priceChg.value != null ? priceColor.value : undefined },
+    { label: '最新价', value: '¥' + (d.close || 0).toFixed(2) + (priceChg.value != null ? '  ' + (priceChg.value >= 0 ? '+' : '') + priceChg.value.toFixed(2) + '%' : ''), color: priceChg.value != null ? priceColor.value : undefined },
     { label: '数据日期', value: d.latest_trade_date },
     { label: '历史信号', value: hcnt.value },
   ]
@@ -448,7 +450,7 @@ const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未�
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
 // 资讯分类标识色属「质量/状态域」，不表达涨跌方向，故不受红绿铁律约束
 const NEWS_CAT_NAME = { flash:'快讯', stock_news:'个股', report:'研报', notice:'公告' }
-const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'var(--c-text-dim)', notice:'#f59e0b' }
+const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'var(--c-text-dim)', notice:'var(--c-warn)' }
 // 资讯情绪（对个股的利好/利空）与雪球帖的看多/看空同属方向域，用同一套红绿、文案各异
 const NEWS_SENTI = {1:{t:'利好',c:UP_COLOR}, 0:{t:'中性',c:'var(--c-text-faint)'}, '-1':{t:'利空',c:DOWN_COLOR}}
 const newsSentiOf = s => (s===null||s===undefined) ? null : (NEWS_SENTI[s] || null)
@@ -517,12 +519,12 @@ function makeChart(id, opt, notMerge = true){
 }
 
 function calcPriceChange(kd){
-  if(!kd||!kd.kline||kd.kline.length<2) { priceChg.value=null; priceColor.value='#fff'; return }
+  if(!kd||!kd.kline||kd.kline.length<2) { priceChg.value=null; priceColor.value='var(--c-text)'; return }
   const kl = kd.kline
   const last = kl[kl.length-1], prev = kl[kl.length-2]
   if(last.close && prev.close){
     priceChg.value = (last.close - prev.close) / prev.close * 100
-    priceColor.value = priceChg.value >= 0 ? '#c22b3f' : '#0a7a5a'
+    priceColor.value = priceChg.value >= 0 ? T.up : T.down
   }
 }
 
@@ -593,22 +595,22 @@ async function load(){
 
 // dataZoom 滑块统一低调样式：ECharts 画在 canvas 上，颜色必须字面量（CSS 变量不生效，
 // 会回退默认配色反而刺眼）；填充/手柄/数据剪影全部弱化，滑块只做窗口提示不抢图表主体
-const DZ_SLIDER = {
+const dzSlider = () => ({
   height:16, bottom:4, handleSize:6,
   borderColor:'transparent',
-  backgroundColor:'rgba(128,128,128,0.08)',
-  fillerColor:'rgba(96,165,250,0.10)',
-  dataBackground:{lineStyle:{color:'transparent'},areaStyle:{color:'rgba(128,128,128,0.05)'}},
-  selectedDataBackground:{lineStyle:{color:'rgba(96,165,250,0.35)'},areaStyle:{color:'rgba(96,165,250,0.06)'}},
-  handleStyle:{color:'rgba(148,163,184,0.45)',borderColor:'rgba(148,163,184,0.35)'},
-  moveHandleStyle:{color:'rgba(148,163,184,0.2)'},
-  textStyle:{color:'rgba(148,163,184,0.6)',fontSize:9},
+  backgroundColor:T.line,
+  fillerColor:T.line,
+  dataBackground:{lineStyle:{color:'transparent'},areaStyle:{color:T.line}},
+  selectedDataBackground:{lineStyle:{color:T.series[3]},areaStyle:{color:T.line}},
+  handleStyle:{color:T.faint,borderColor:T.line},
+  moveHandleStyle:{color:T.line},
+  textStyle:{color:T.dim,fontSize:11},
   labelStyle:{color:'transparent'},
-}
+})
 
 // 联动图组统一 grid：固定像素边距让 11 张图绘图区严格同宽（带右轴的图右边距留在
 // 轴标签，无右轴的图留白——对齐优先于零留白）
-const GRID_STD = { left:54, right:48, bottom:30 }
+const GRID_STD = { left:64, right:48, bottom:34 }
 
 function drawCharts(kd){
   const dates = kd.kline.map(d=>d.trade_date)
@@ -622,10 +624,10 @@ function drawCharts(kd){
   // 均线 MA5/10/20/30/60/120/180（前端按 close 计算，前 N-1 点为 null）
   const MA = (n) => closes.map((_, i) => { if (i < n - 1) return null; let s = 0; for (let j = 0; j < n; j++) s += closes[i - j]; return +(s / n).toFixed(2); })
   const ma5 = MA(5), ma10 = MA(10), ma20 = MA(20), ma30 = MA(30), ma60 = MA(60), ma120 = MA(120), ma180 = MA(180)
-  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)')
-  const bc = ba.map(v=>v>=0?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)')
+  const vc = ohlc.map(d=>d[1]>=d[0]?T.up:T.down)
+  const bc = ba.map(v=>v>=0?T.up:T.down)
   // 浅灰色网格线（比默认的 --c-border-light 更浅）
-  const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
+  const gl = {lineStyle:{color:T.line}}
 
   dateRange.value = dates[0]+' ~ '+dates[dates.length-1]
   // 默认显示最近 1 年（约 250 交易日；不足则全显示）
@@ -635,10 +637,10 @@ function drawCharts(kd){
     // 滚轮缩放时间窗（普通滚轮=以鼠标为中心缩放，Shift+滚轮=平移）；
     // 五图同组（echarts.connect），任一图滚轮缩放全组同步
     {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
-    {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...DZ_SLIDER}
+    {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...dzSlider()}
   ]
   const xA = {type:'category',data:dates,axisLabel:{show:false},
-    axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},
+    axisLine:{lineStyle:{color:T.line}},
     axisTick:{show:false}}
   const tt = {trigger:'axis',axisPointer:{type:'cross'}}
 
@@ -657,21 +659,21 @@ function drawCharts(kd){
     const d = p[0]; const idx = d.dataIndex; const o = ohlc[idx]
     if(!o) return ''
     const chg = o[1] && ohlc[idx-1] ? ((o[1]-ohlc[idx-1][1])/ohlc[idx-1][1]*100).toFixed(2) : '—'
-    const color = chg>=0?'#c22b3f':'#0a7a5a'
+    const color = chg>=0?T.up:T.down
     const mid = bmid[idx], up = bup[idx], lo = blo[idx]
     // 信号/龙虎榜叠加信息（数据晚于主图到达也不怕：formatter 每次悬停现查 ref）
     const s = sigData.value.find(x=>x.date===dates[idx])
     const t = toplistData.value.find(x=>x.date===dates[idx])
     let extra = ''
-    if(s) extra += `<br/><span style="color:${s.direction==='buy'?'#c22b3f':'#0a7a5a'}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} @¥${s.price!=null?s.price.toFixed(2):'—'}</span>`
-      + (s.f10d!=null ? ` <span style="font-size:11px">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
-    if(t) extra += `<br/><span style="color:#f59e0b">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
+    if(s) extra += `<br/><span style="color:${s.direction==='buy'?T.up:T.down}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} @¥${s.price!=null?s.price.toFixed(2):'—'}</span>`
+      + (s.f10d!=null ? ` <span style="font-size: var(--text-meta)">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
+    if(t) extra += `<br/><span style="color:${T.warn}">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
     return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
       开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
       高: ${o[3].toFixed(2)}  低: ${o[2].toFixed(2)}  量: ${(vols[idx]/1e6).toFixed(1)}M<br/>
-      <span style="color:#f59e0b">BOLL上轨: ${up!=null?up.toFixed(2):'—'}</span>
-      <span style="color:#60a5fa"> 中轨: ${mid!=null?mid.toFixed(2):'—'}</span>
-      <span style="color:#f59e0b"> 下轨: ${lo!=null?lo.toFixed(2):'—'}</span>${extra}</div>`
+      <span style="color:${T.warn}">BOLL上轨: ${up!=null?up.toFixed(2):'—'}</span>
+      <span style="color:${T.series[3]}"> 中轨: ${mid!=null?mid.toFixed(2):'—'}</span>
+      <span style="color:${T.warn}"> 下轨: ${lo!=null?lo.toFixed(2):'—'}</span>${extra}</div>`
   }
 
   const c1 = make('c1', {
@@ -680,10 +682,10 @@ function drawCharts(kd){
     xAxis:xA, yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
-      {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:'#c22b3f',color0:'#0a7a5a',borderColor:'#c22b3f',borderColor0:'#0a7a5a'}},
-      {name:'上轨',type:'line',data:bup,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true},
-      {name:'中轨',type:'line',data:bmid,lineStyle:{color:'#60a5fa',width:2},symbol:'none',smooth:true},
-      {name:'下轨',type:'line',data:blo,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true}
+      {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}},
+      {name:'上轨',type:'line',data:bup,lineStyle:{color:T.warn,width:2},symbol:'none',smooth:true},
+      {name:'中轨',type:'line',data:bmid,lineStyle:{color:T.series[3],width:2},symbol:'none',smooth:true},
+      {name:'下轨',type:'line',data:blo,lineStyle:{color:T.warn,width:2},symbol:'none',smooth:true}
     ]
   })
   // 成交量分位线（P20/P50/P80）：基于**当前显示窗口**计算——回答"今天的天量/
@@ -699,17 +701,17 @@ function drawCharts(kd){
     const w = vols.slice(i0, i1 + 1).filter(v => v > 0)
     const mk = (q, name, color) => {
       const v = quantile(w, q)
-      return { yAxis: v, label: { formatter: `${name} ${(v / 1e6).toFixed(1)}M`, position: 'insideEndTop', fontSize: 9, color },
+      return { yAxis: v, label: { formatter: `${name} ${(v / 1e6).toFixed(1)}M`, position: 'insideEndTop', fontSize: 11, color },
                lineStyle: { color, type: 'dashed', width: 1 } }
     }
     return { silent: true, symbol: 'none', animation: false,
-             data: [mk(0.2, 'P20', 'rgba(156,163,175,0.8)'), mk(0.5, 'P50', '#60a5fa'), mk(0.8, 'P80', 'rgba(156,163,175,0.8)')] }
+             data: [mk(0.2, 'P20', T.faint), mk(0.5, 'P50', T.series[3]), mk(0.8, 'P80', T.faint)] }
   }
   const initI0 = Math.max(0, Math.round((totalDays - 1) * (parseFloat(SHOW) || 0) / 100))
 
   const c2 = make('c2', {
     tooltip:tt, grid:{...GRID_STD, top:8},
-    xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
+    xAxis:xA, yAxis:{axisLabel:{fontSize: 11,formatter:v=>(v/1e6).toFixed(0)+'M'},splitLine:gl},
     dataZoom:dz,
     series:[{name:'量',type:'bar',data:vols,itemStyle:{color:p=>vc[p.dataIndex]},
       markLine: volMarkLines(initI0, totalDays - 1)}]
@@ -736,7 +738,7 @@ function drawCharts(kd){
     dataZoom:dz,
     series:[
       {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]}},
-      {name:'DIF',type:'line',data:di,lineStyle:{color:'#f59e0b',width:1},symbol:'none',smooth:true},
+      {name:'DIF',type:'line',data:di,lineStyle:{color:T.warn,width:1},symbol:'none',smooth:true},
       {name:'DEA',type:'line',data:de,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true}
     ]
   })
@@ -744,8 +746,8 @@ function drawCharts(kd){
     tooltip:tt, grid:{...GRID_STD, top:8},
     xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
-    series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(139,92,246,0.1)'},
-      markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:'#c22b3f',type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:'#0a7a5a',type:'dashed'}}]}}
+    series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:T.series[4],width:1.5},symbol:'none',smooth:true,areaStyle:{color:T.series[4],opacity:.12},
+      markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:T.up,type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:T.down,type:'dashed'}}]}}
     ]
   })
   calcPriceChange(kd)
@@ -764,17 +766,17 @@ function drawCharts(kd){
   const c6 = make('c6', {
     tooltip: tt,
     legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
-            textStyle:{fontSize:9, color:'#9ca3af'}},
+            textStyle:{fontSize: 11, color:T.faint}},
     grid:{...GRID_STD, top:26},
-    xAxis: { ...xA, axisLabel: { show: true, fontSize: 9, interval: 'auto' } },
+    xAxis: { ...xA, axisLabel: { show: true, fontSize: 11, interval: 'auto' } },
     yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
-      {name:'MA5',type:'line',data:ma5,lineStyle:{color:'#c22b3f',width:1},symbol:'none',smooth:true},
-      {name:'MA10',type:'line',data:ma10,lineStyle:{color:'#f59e0b',width:1},symbol:'none',smooth:true},
+      {name:'MA5',type:'line',data:ma5,lineStyle:{color:T.up,width:1},symbol:'none',smooth:true},
+      {name:'MA10',type:'line',data:ma10,lineStyle:{color:T.warn,width:1},symbol:'none',smooth:true},
       {name:'MA20',type:'line',data:ma20,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true},
-      {name:'MA30',type:'line',data:ma30,lineStyle:{color:'#0a7a5a',width:1},symbol:'none',smooth:true},
-      {name:'MA60',type:'line',data:ma60,lineStyle:{color:'#8b5cf6',width:1},symbol:'none',smooth:true},
+      {name:'MA30',type:'line',data:ma30,lineStyle:{color:T.down,width:1},symbol:'none',smooth:true},
+      {name:'MA60',type:'line',data:ma60,lineStyle:{color:T.series[4],width:1},symbol:'none',smooth:true},
       {name:'MA120',type:'line',data:ma120,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
       {name:'MA180',type:'line',data:ma180,lineStyle:{color:'#64748b',width:1},symbol:'none',smooth:true},
     ]
@@ -809,15 +811,15 @@ function drawAuxCharts(kd){
   const trns = kd.kline.map(d=>d.turnover)
   const idxOf = new Map(dates.map((d,i)=>[d,i]))
   const reindex = (arr, key) => { const m=new Map(arr.map(x=>[x.date,x[key]])); return dates.map(d=>m.has(d)?m.get(d):null) }
-  const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
+  const gl = {lineStyle:{color:T.line}}
   const totalDays = dates.length
   const SHOW = totalDays<=250?0:((totalDays-250)/totalDays*100).toFixed(1)
   const dz = [
     {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
-    {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...DZ_SLIDER}
+    {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...dzSlider()}
   ]
   const xA = {type:'category',data:dates,axisLabel:{show:false},
-    axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}}, axisTick:{show:false}}
+    axisLine:{lineStyle:{color:T.line}}, axisTick:{show:false}}
   const tt = {trigger:'axis',axisPointer:{type:'cross'}}
   const newCharts = []
 
@@ -828,12 +830,12 @@ function drawAuxCharts(kd){
     const c7 = makeChart('c7', {
       tooltip:tt, grid:{...GRID_STD, top:8},
       xAxis:xA, yAxis:[
-        {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(1)+'亿'},splitLine:gl},
-        {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(0)+'亿'},splitLine:{show:false}}],
+        {axisLabel:{fontSize: 11,formatter:v=>(v/1e4).toFixed(1)+'亿'},splitLine:gl},
+        {axisLabel:{fontSize: 11,formatter:v=>(v/1e4).toFixed(0)+'亿'},splitLine:{show:false}}],
       dataZoom:dz,
       series:[
-        {name:'主力净流入',type:'bar',data:nm,itemStyle:{color:p=>(nm[p.dataIndex]??0)>=0?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)'}},
-        {name:'累计(右轴)',type:'line',yAxisIndex:1,data:cum,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none'}
+        {name:'主力净流入',type:'bar',data:nm,itemStyle:{color:p=>(nm[p.dataIndex]??0)>=0?T.up:T.down}},
+        {name:'累计(右轴)',type:'line',yAxisIndex:1,data:cum,lineStyle:{color:T.series[3],width:1.5},symbol:'none'}
       ]
     })
     if(c7) newCharts.push(c7)
@@ -854,13 +856,13 @@ function drawAuxCharts(kd){
       const exc = rel.map((v,i)=>v!=null&&ben[i]!=null?+(v-ben[i]).toFixed(4):null)
       const c8 = makeChart('c8', {
         tooltip:tt, grid:{...GRID_STD, top:18},
-        legend:{show:true,top:0,itemWidth:14,itemHeight:8,itemGap:6,textStyle:{fontSize:9,color:'#9ca3af'}},
-        xAxis:xA, yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize:9}},
+        legend:{show:true,top:0,itemWidth:14,itemHeight:8,itemGap:6,textStyle:{fontSize: 11,color:T.faint}},
+        xAxis:xA, yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize: 11}},
         dataZoom:dz,
         series:[
-          {name:'个股',type:'line',data:rel,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none'},
-          {name:'沪深300',type:'line',data:ben,lineStyle:{color:'#94a3b8',width:1},symbol:'none'},
-          {name:'超额',type:'line',data:exc,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'}
+          {name:'个股',type:'line',data:rel,lineStyle:{color:T.series[3],width:1.5},symbol:'none'},
+          {name:'沪深300',type:'line',data:ben,lineStyle:{color:T.faint,width:1},symbol:'none'},
+          {name:'超额',type:'line',data:exc,lineStyle:{color:T.warn,width:1,type:'dashed'},symbol:'none'}
         ]
       })
       if(c8) newCharts.push(c8)
@@ -872,15 +874,15 @@ function drawAuxCharts(kd){
     const pctl = (arr,q)=>{ const s=arr.filter(v=>v!=null&&v>0).sort((a,b)=>a-b); if(!s.length) return 0
       const pos=(s.length-1)*q, lo=Math.floor(pos), hi=Math.ceil(pos); return s[lo]+(s[hi]-s[lo])*(pos-lo) }
     const marks = (i0,i1)=>{ const w=trns.slice(i0,i1+1); return {silent:true,symbol:'none',animation:false,
-      data:[{yAxis:pctl(w,0.2),label:{formatter:`P20 ${pctl(w,0.2).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'rgba(156,163,175,0.8)'},lineStyle:{color:'rgba(156,163,175,0.8)',type:'dashed',width:1}},
-            {yAxis:pctl(w,0.5),label:{formatter:`P50 ${pctl(w,0.5).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'#60a5fa'},lineStyle:{color:'#60a5fa',type:'dashed',width:1}},
-            {yAxis:pctl(w,0.8),label:{formatter:`P80 ${pctl(w,0.8).toFixed(1)}%`,position:'insideEndTop',fontSize:9,color:'rgba(156,163,175,0.8)'},lineStyle:{color:'rgba(156,163,175,0.8)',type:'dashed',width:1}}]} }
+      data:[{yAxis:pctl(w,0.2),label:{formatter:`P20 ${pctl(w,0.2).toFixed(1)}%`,position:'insideEndTop',fontSize: 11,color:T.faint},lineStyle:{color:T.faint,type:'dashed',width:1}},
+            {yAxis:pctl(w,0.5),label:{formatter:`P50 ${pctl(w,0.5).toFixed(1)}%`,position:'insideEndTop',fontSize: 11,color:T.series[3]},lineStyle:{color:T.series[3],type:'dashed',width:1}},
+            {yAxis:pctl(w,0.8),label:{formatter:`P80 ${pctl(w,0.8).toFixed(1)}%`,position:'insideEndTop',fontSize: 11,color:T.faint},lineStyle:{color:T.faint,type:'dashed',width:1}}]} }
     const initI0 = Math.max(0, Math.round((totalDays-1)*(parseFloat(SHOW)||0)/100))
     const c9 = makeChart('c9', {
       tooltip:tt, grid:{...GRID_STD, top:8},
-      xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:'{value}%'},splitLine:gl},
+      xAxis:xA, yAxis:{axisLabel:{fontSize: 11,formatter:'{value}%'},splitLine:gl},
       dataZoom:dz,
-      series:[{name:'换手率',type:'bar',data:trns,itemStyle:{color:'rgba(96,165,250,0.6)'},markLine:marks(initI0,totalDays-1)}]
+      series:[{name:'换手率',type:'bar',data:trns,itemStyle:{color:T.series[3]},markLine:marks(initI0,totalDays-1)}]
     })
     if(c9){
       newCharts.push(c9)
@@ -902,11 +904,11 @@ function drawAuxCharts(kd){
     const fin = reindex(marginData.value,'fin'), tot = reindex(marginData.value,'total')
     const c10 = makeChart('c10', {
       tooltip:tt, grid:{...GRID_STD, top:8},
-      xAxis:xA, yAxis:{axisLabel:{fontSize:9,formatter:v=>(v/1e8).toFixed(0)+'亿'},splitLine:gl},
+      xAxis:xA, yAxis:{axisLabel:{fontSize: 11,formatter:v=>(v/1e8).toFixed(0)+'亿'},splitLine:gl},
       dataZoom:dz,
       series:[
-        {name:'融资余额',type:'line',data:fin,lineStyle:{color:'#f59e0b',width:1.5},symbol:'none',connect:'none'},
-        {name:'两融合计',type:'line',data:tot,lineStyle:{color:'#8b5cf6',width:1},symbol:'none',connect:'none'}
+        {name:'融资余额',type:'line',data:fin,lineStyle:{color:T.warn,width:1.5},symbol:'none',connect:'none'},
+        {name:'两融合计',type:'line',data:tot,lineStyle:{color:T.series[4],width:1},symbol:'none',connect:'none'}
       ]
     })
     if(c10) newCharts.push(c10)
@@ -922,12 +924,12 @@ function drawAuxCharts(kd){
     const c11 = makeChart('c11', {
       tooltip:tt, grid:{...GRID_STD, top:8},
       xAxis:xA, yAxis:[
-        {axisLabel:{fontSize:9},splitLine:gl,scale:true},
-        {axisLabel:{fontSize:9,formatter:'{value}%'},splitLine:{show:false}}],
+        {axisLabel:{fontSize: 11},splitLine:gl,scale:true},
+        {axisLabel:{fontSize: 11,formatter:'{value}%'},splitLine:{show:false}}],
       dataZoom:dz,
       series:[
-        {name:'ATR14',type:'line',data:atr,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none'},
-        {name:'占价比(右轴)',type:'line',yAxisIndex:1,data:atrPct,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none'}
+        {name:'ATR14',type:'line',data:atr,lineStyle:{color:T.series[4],width:1.5},symbol:'none'},
+        {name:'占价比(右轴)',type:'line',yAxisIndex:1,data:atrPct,lineStyle:{color:T.warn,width:1,type:'dashed'},symbol:'none'}
       ]
     })
     if(c11) newCharts.push(c11)
@@ -940,11 +942,11 @@ function drawAuxCharts(kd){
       const i = idxOf.get(s.date); if(i==null) return null
       const y = s.direction==='buy' ? ohlc[i][2]*0.985 : ohlc[i][3]*1.015
       return {value:[i,y], symbolRotate: s.direction==='buy'?0:180,
-              itemStyle:{color: s.direction==='buy'?'#c22b3f':'#0a7a5a'}}
+              itemStyle:{color: s.direction==='buy'?T.up:T.down}}
     }).filter(Boolean)
     const topPts = toplistData.value.map(t=>{
       const i = idxOf.get(t.date); if(i==null) return null
-      return {value:[i, ohlc[i][2]*0.96], itemStyle:{color:'#f59e0b'}}
+      return {value:[i, ohlc[i][2]*0.96], itemStyle:{color:T.warn}}
     }).filter(Boolean)
     // 按 id 合并追加（notMerge=false）：不触碰 K 线/BOLL 既有系列，重绘时按 id 原位替换
     c1.setOption({series:[
@@ -967,16 +969,16 @@ function drawChip(){
   const vols = d.buckets.map(b=>b.vol/1e8)   // 亿股
   const nearest = prices.reduce((best,p,i)=>Math.abs(p-d.current)<Math.abs(prices[best]-d.current)?i:best,0)
   c.setOption({
-    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},textStyle:{fontSize:10},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},textStyle:{fontSize: 11},
       formatter: ps=>{ const p=ps[0]; return `¥${p.name}<br/>成交 ${p.value} 亿股` }},
     grid:{left:6,right:34,top:6,bottom:20,containLabel:true},
-    xAxis:{type:'value',axisLabel:{fontSize:9,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
-    yAxis:{type:'category',data:prices.map(p=>p.toFixed(2)),axisLabel:{fontSize:9}},
+    xAxis:{type:'value',axisLabel:{fontSize: 11,formatter:'{value}亿'},splitLine:{lineStyle:{color:T.line}}},
+    yAxis:{type:'category',data:prices.map(p=>p.toFixed(2)),axisLabel:{fontSize: 11}},
     series:[{type:'bar',barWidth:'72%',
       // A 股约定红盈绿亏：现价下方=获利盘(红)，上方=套牢盘(绿)
-      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?'rgba(194,43,63,0.7)':'rgba(10,122,90,0.45)'}})),
+      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?T.up:T.down}})),
       markLine:{silent:true,symbol:'none',
-        data:[{yAxis:nearest,label:{formatter:'现价',fontSize:9,color:'#60a5fa'},lineStyle:{color:'#60a5fa',type:'dashed',width:1}}]}}
+        data:[{yAxis:nearest,label:{formatter:'现价',fontSize: 11,color:T.series[3]},lineStyle:{color:T.series[3],type:'dashed',width:1}}]}}
     ]
   }, {notMerge:true})
 }
@@ -1013,27 +1015,27 @@ function drawPeChart(){
   c5.setOption({
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     legend:{show:true, top:0, left:'center', itemWidth:14, itemHeight:8, itemGap:6,
-            textStyle:{fontSize:9, color:'#9ca3af'}},
+            textStyle:{fontSize: 11, color:T.faint}},
     grid:{...GRID_STD, top:26},
     xAxis:{type:'category',data:peDates,axisLabel:{show:false},
-      axisLine:{lineStyle:{color:'rgba(128,128,128,0.15)'}},axisTick:{show:false}},
+      axisLine:{lineStyle:{color:T.line}},axisTick:{show:false}},
     yAxis:[
-      {type:'value',name:'PE',splitLine:{lineStyle:{color:'rgba(128,128,128,0.1)'}}},
+      {type:'value',name:'PE',splitLine:{lineStyle:{color:T.line}}},
       {type:'value',name:'%',min:0,max:100,splitLine:{show:false}}
     ],
     dataZoom:[
       // 滚轮独立缩放保留；窗口与 K 线组经「日历翻译」双向联动（见 syncPe/syncKline），
       // 不直接进 connect 组——两轴日期集不同，百分比联动会对到不同日历时段
       {type:'inside', zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
-      {type:'slider',start:0,end:100,...DZ_SLIDER}
+      {type:'slider',start:0,end:100,...dzSlider()}
     ],
     series:[
-      {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
+      {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:T.series[3],width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
       {name:'PB',type:'line',data:pbVals,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
-      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none',smooth:true,
+      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:T.warn,width:1,type:'dashed'},symbol:'none',smooth:true,
         markLine:{silent:true,symbol:'none',data:[
-          {yAxis:30,label:{formatter:'低估30',fontSize:9,position:'insideEndTop',color:'#0a7a5a'},lineStyle:{color:'#0a7a5a',type:'dashed',width:1}},
-          {yAxis:70,label:{formatter:'高估70',fontSize:9,position:'insideEndBottom',color:'#c22b3f'},lineStyle:{color:'#c22b3f',type:'dashed',width:1}}]}}
+          {yAxis:30,label:{formatter:'低估30',fontSize: 11,position:'insideEndTop',color:T.down},lineStyle:{color:T.down,type:'dashed',width:1}},
+          {yAxis:70,label:{formatter:'高估70',fontSize: 11,position:'insideEndBottom',color:T.up},lineStyle:{color:T.up,type:'dashed',width:1}}]}}
     ]
   })
   // 反向联动：拖 PE 滑块 → 日历窗翻译 → K 线组；绘制完成即按当前 K 线窗口对齐一次
@@ -1082,44 +1084,50 @@ function drawMink(){
   const ohlc = bars.map(b=>[b.open, b.close, b.low, b.high])
   const vols = bars.map(b=>b.volume)
   // 分时成交量柱：红涨绿跌 per-bar（对齐日线成交量惯例）
-  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)')
+  const vc = ohlc.map(d=>d[1]>=d[0]?T.up:T.down)
   const closes = bars.map(b=>b.close)
   const ma = (n) => closes.map((_,i)=> i<n ? null : +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2))
-  const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
+  const gl = {lineStyle:{color:T.line}}
   makeChart('c0', {
     axisPointer:{link:[{xAxisIndex:'all'}]},
     grid:[
-      {left:54,right:16,top:8,height:'56%'},
-      {left:54,right:16,top:'72%',height:'22%'},
+      {left:66,right:16,top:8,height:'56%'},
+      {left:66,right:16,top:'72%',height:'22%'},
     ],
     tooltip:{trigger:'axis',axisPointer:{type:'cross'},
       formatter(ps){
         const b = bars[ps[0].dataIndex]; if(!b) return ''
         const chg = ((b.close-b.open)/b.open*100)
-        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手 · 换手 ${b.turnover_rate_pct!=null?b.turnover_rate_pct+'%':'-'}`
+        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手 / 换手 ${b.turnover_rate_pct!=null?b.turnover_rate_pct+'%':'-'}`
       }},
     xAxis:[
-      {type:'category',data:dates,gridIndex:0,axisLabel:{show:false},axisLine:{lineStyle:{color:'rgba(128,128,128,0.2)'}}},
-      {type:'category',data:dates,gridIndex:1,axisLabel:{fontSize:9,color:'#94a3b8'},axisLine:{lineStyle:{color:'rgba(128,128,128,0.2)'}}},
+      {type:'category',data:dates,gridIndex:0,axisLabel:{show:false},axisLine:{lineStyle:{color:T.line}}},
+      {type:'category',data:dates,gridIndex:1,axisLabel:{fontSize: 11,color:T.faint,hideOverlap:true},axisLine:{lineStyle:{color:T.line}}},
     ],
     yAxis:[
-      {scale:true,gridIndex:0,splitLine:gl,axisLabel:{fontSize:9,color:'#94a3b8'}},
-      {gridIndex:1,splitLine:{show:false},axisLabel:{fontSize:9,color:'#94a3b8',formatter:v=>(v/1e3).toFixed(0)+'千手'}},
+      {scale:true,gridIndex:0,splitLine:gl,axisLabel:{fontSize: 11,color:T.faint,hideOverlap:true}},
+      {gridIndex:1,splitLine:{show:false},axisLabel:{fontSize: 11,color:T.faint,formatter:v=>(v/1e3).toFixed(0)+'千手'}},
     ],
     dataZoom:[
       {type:'inside',xAxisIndex:[0,1],start:60,end:100},
-      {type:'slider',xAxisIndex:[0,1],height:13,bottom:2,borderColor:'transparent',backgroundColor:'rgba(128,128,128,0.08)',fillerColor:'rgba(96,165,250,0.10)',handleSize:'60%'},
+      {type:'slider',xAxisIndex:[0,1],height:13,bottom:2,borderColor:'transparent',backgroundColor:T.line,fillerColor:T.line,handleSize:'60%'},
     ],
     series:[
-      {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:'#c22b3f',color0:'#0a7a5a',borderColor:'#c22b3f',borderColor0:'#0a7a5a'}},
-      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),lineStyle:{color:'#f59e0b',width:1},symbol:'none'},
-      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),lineStyle:{color:'#60a5fa',width:1},symbol:'none'},
+      {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}},
+      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),lineStyle:{color:T.warn,width:1},symbol:'none'},
+      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),lineStyle:{color:T.series[3],width:1},symbol:'none'},
       {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,itemStyle:{color:p=>vc[p.dataIndex]}},
     ]
   })
 }
 
 watch(minkPeriod, ()=>loadMink())
+
+const _theme = useThemeStore()
+watch(() => _theme.isDark, () => nextTick(() => {
+  if (!lastKline) return
+  drawCharts(lastKline); drawAuxCharts(lastKline); drawChip(); drawPeChart(); drawMink()
+}))
 
 onMounted(() => {
   _resizeHandler = window.addEventListener ? window.addEventListener('resize', resizeAll) : null
@@ -1150,7 +1158,7 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()
 .side-panel {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 12px;
 }
 .side-title {
@@ -1174,20 +1182,20 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()
 .side-table td:first-child {
   width: 85px;
   color: var(--c-text-dim) !important;
-  font-size: 11px !important;
+  font-size: var(--text-meta) !important;
   white-space: nowrap;
 }
 .side-item { padding: 8px 0; border-top: 1px solid var(--c-border-light); }
 .side-item:first-child { padding-top: 0; border-top: 0; }
 .side-well { margin-bottom: 8px; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; }
-.side-more { margin-top: 8px; font-size: 11px; color: var(--c-text-faint); }
+.side-more { margin-top: 8px; font-size: var(--text-meta); color: var(--c-text-faint); }
 @media (max-width: 1100px) {
   .detail-sidebar { position: static; max-height: none; overflow: visible; padding-right: 0; }
 }
 
 /* 侧栏文本块（雪球热帖 / 相关资讯标题与摘要）：两行截断，全文 hover title */
 .side-text {
-  font-size: 11px; line-height: 1.55; color: var(--c-text);
+  font-size: var(--text-meta); line-height: 1.55; color: var(--c-text);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; word-break: break-word;
 }

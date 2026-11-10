@@ -3,22 +3,22 @@
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-shrink:0">
     <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回</n-button>
     <span style="font-size:17px;font-weight:600;color:var(--c-text)"><AppIcon name="file-text" :size="13" />  执行日志</span>
-    <n-button size="tiny" :type="filterFlow ? 'primary' : 'default'" @click="toggleFilter" style="margin-left:auto;font-size:11px">
+    <n-button size="tiny" :type="filterFlow ? 'primary' : 'default'" @click="toggleFilter" style="margin-left:auto;font-size: var(--text-meta)">
       {{ filterFlow ? '仅当前流程' : '全部流程' }}
     </n-button>
   </div>
   <div class="flv-split" style="display:flex;flex:1;min-height:0;gap:12px">
     <!-- Left: Task List -->
     <div class="flv-list" style="width:280px;flex-shrink:0;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
-      <div v-if="!tasks.length" style="font-size:11px;color:var(--c-text-faint);padding:20px;text-align:center">暂无任务记录</div>
+      <div v-if="!tasks.length" style="font-size: var(--text-meta);color:var(--c-text-faint);padding:20px;text-align:center">暂无任务记录</div>
       <div v-for="t in tasks" :key="t.task_id"
-        :style="{padding:'10px 12px',borderRadius:'8px',border:'1px solid var(--c-border)',cursor:'pointer',fontSize:'11px',background:selectedTask?.task_id===t.task_id?'rgba(194,43,63,.08)':'var(--c-card-bg)'}"
+        :style="{padding:'10px 12px',borderRadius:'8px',border:'1px solid var(--c-border)',cursor:'pointer',fontSize:'11px',background:selectedTask?.task_id===t.task_id?'color-mix(in srgb, var(--c-up) 8%, transparent)':'var(--c-card-bg)'}"
         @click="selectTask(t)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
           <span style="font-weight:600;color:var(--c-text)">{{ t.flow_name || t.task_id }}</span>
           <span :style="{fontSize:'11px',color:stC(t.status)}">{{ stL(t.status) }}</span>
         </div>
-        <div style="font-size:11px;color:var(--c-text-dim)">{{ t.created_at }} · {{ t.progress_pct }}%</div>
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ t.created_at }} / {{ t.progress_pct }}%</div>
         <div v-if="t.nodes?.length" style="display:flex;flex-wrap:wrap;gap:2px;margin-top:4px">
           <span v-for="n in t.nodes" :key="n.node_name" :style="{fontSize:'11px',padding:'1px 4px',borderRadius:'3px',background:stBg(n.status),color:stC(n.status)}">{{ n.node_name }}</span>
         </div>
@@ -27,27 +27,27 @@
     </div>
 
     <!-- Right: Node Details -->
-    <div class="flv-detail" style="flex:1;overflow-y:auto;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px;font-size:12px">
+    <div class="flv-detail" style="flex:1;overflow-y:auto;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px;font-size:12px">
       <div v-if="!selectedTask" style="text-align:center;padding:40px;color:var(--c-text-faint);font-size:12px">选择左侧任务查看详情</div>
       <template v-else>
         <div style="font-weight:600;color:var(--c-text);margin-bottom:4px">{{ selectedTask.flow_name || selectedTask.task_id }}</div>
-        <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:12px">任务ID: {{ selectedTask.task_id }} · 创建: {{ selectedTask.created_at }}<span v-if="selectedTask.trade_date" style="margin-left:12px"><AppIcon name="calendar" :size="13" />  业务日期: {{ selectedTask.trade_date }}</span></div>
-        <div v-if="selectedTask.error" style="padding:8px;background:rgba(194,43,63,.08);border-radius:6px;font-size:11px;color:var(--c-error);margin-bottom:12px;word-break:break-all;white-space:pre-wrap">{{ selectedTask.error }}</div>
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-bottom:12px">任务ID: {{ selectedTask.task_id }} / 创建: {{ selectedTask.created_at }}<span v-if="selectedTask.trade_date" style="margin-left:12px"><AppIcon name="calendar" :size="13" />  业务日期: {{ selectedTask.trade_date }}</span></div>
+        <div v-if="selectedTask.error" style="padding:8px;background:color-mix(in srgb, var(--c-up) 8%, transparent);border-radius:6px;font-size: var(--text-meta);color:var(--c-error);margin-bottom:12px;word-break:break-all;white-space:pre-wrap">{{ selectedTask.error }}</div>
         <!-- Node List -->
         <div v-for="n in selectedTask.nodes" :key="n.node_name" style="padding:8px 0;border-bottom:1px solid var(--c-border)">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <span style="font-weight:600;color:var(--c-text)">{{ n.node_name }}</span>
             <span :style="{fontSize:'11px',color:stC(n.status)}">
-              {{ n.status==='success'?'✓':n.status==='running'?'⟳':n.status==='failed'?'✕':'◻' }} {{ n.status }}
+              {{ n.status==='success'?'成功':n.status==='running'?'运行中':n.status==='failed'?'失败':'等待' }}
             </span>
           </div>
-          <div style="font-size:11px;color:var(--c-text-faint);margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 12px">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 12px">
             <span v-if="n.started_at"><AppIcon name="play" :size="13" />  {{ n.started_at }}</span>
             <span v-if="n.finished_at"> {{ n.finished_at }}</span>
           </div>
-          <div v-if="n.rows !== undefined && n.rows !== null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px"><AppIcon name="bar-chart-2" :size="13" />  行数: {{ n.rows }}</div>
-          <div v-if="n.detail" style="font-size:11px;color:var(--c-text-dim);margin-top:2px"><AppIcon name="file-text" :size="13" />  {{ n.detail }}</div>
-          <div v-if="n.error" style="font-size:11px;color:#c22b3f;margin-top:2px"><AppIcon name="x-circle" :size="13" />  {{ n.error }}</div>
+          <div v-if="n.rows !== undefined && n.rows !== null" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:2px"><AppIcon name="bar-chart-2" :size="13" />  行数: {{ n.rows }}</div>
+          <div v-if="n.detail" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:2px"><AppIcon name="file-text" :size="13" />  {{ n.detail }}</div>
+          <div v-if="n.error" style="font-size: var(--text-meta);color:var(--c-up);margin-top:2px"><AppIcon name="x-circle" :size="13" />  {{ n.error }}</div>
         </div>
       </template>
     </div>

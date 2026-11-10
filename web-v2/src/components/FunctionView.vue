@@ -29,14 +29,14 @@
           <n-select v-model:value="form.category" :options="catOpts" placeholder="分类" />
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
             <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">函数定义（Python def，第一个参数必须是 df）</div>
-            <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size:11px"><AppIcon name="a" :size="13" />  AI 生成</n-button>
+            <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size: var(--text-meta)"><AppIcon name="a" :size="13" />  AI 生成</n-button>
           </div>
           <MonacoEditor v-model="form.source_code" @update:modelValue="parseParams" />
           <!-- 动态参数表 -->
           <div v-if="formParams.length" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:10px">
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">参数配置（从函数签名自动解析）</div>
+            <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:6px">参数配置（从函数签名自动解析）</div>
             <div v-for="(p, i) in formParams" :key="i" style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
-              <span style="font-size:11px;color:var(--c-text);min-width:60px">{{ p.name }}</span>
+              <span style="font-size: var(--text-meta);color:var(--c-text);min-width:60px">{{ p.name }}</span>
               <n-select v-model:value="p.type" :options="paramTypeOpts" size="tiny" style="width:130px" :consistent-menu-width="false" />
               <n-input v-model:value="p.default" size="tiny" placeholder="默认值" style="width:60px" />
               <n-input v-model:value="p.desc" size="tiny" placeholder="说明" style="flex:1" />
@@ -45,38 +45,38 @@
         </n-space>
       </div>
       <!-- 编码规则侧边栏 -->
-      <div style="width:220px;flex-shrink:0;border-left:1px solid var(--c-border);padding-left:12px;font-size:11px;color:var(--c-text-dim);overflow-y:auto;max-height:520px">
+      <div style="width:220px;flex-shrink:0;border-left:1px solid var(--c-border);padding-left:12px;font-size: var(--text-meta);color:var(--c-text-dim);overflow-y:auto;max-height:520px">
         <div style="font-weight:600;color:var(--c-text);margin-bottom:8px"> 编码规则</div>
         <div style="margin-bottom:10px">
-          <div style="color:#f59e0b;font-weight:600;margin-bottom:3px">函数签名</div>
+          <div style="color:var(--c-warn);font-weight:600;margin-bottom:3px">函数签名</div>
           <div>• 第一个参数必须是 <b>df</b>（接收数据列）</div>
           <div>• 后续参数名小写字母开头</div>
           <div>• 用 <b>默认值</b> 声明可选参数</div>
-          <div style="background:var(--c-card-bg);padding:4px 6px;border-radius:4px;margin-top:3px;font-family:monospace;font-size:11px;word-break:break-all">
+          <div style="background:var(--c-card-bg);padding:4px 6px;border-radius:4px;margin-top:3px;font-family:monospace;font-size: var(--text-meta);word-break:break-all">
             def func(df, window=5)
           </div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#c22b3f;font-weight:600;margin-bottom:3px"><AppIcon name="shield" :size="13" />  代码安全</div>
+          <div style="color:var(--c-up);font-weight:600;margin-bottom:3px"><AppIcon name="shield" :size="13" />  代码安全</div>
           <div>禁止: import, exec, eval, open, os.system, subprocess, __import__</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#f59e0b;font-weight:600;margin-bottom:3px"><AppIcon name="zap" :size="13" />  性能约束</div>
+          <div style="color:var(--c-warn);font-weight:600;margin-bottom:3px"><AppIcon name="zap" :size="13" />  性能约束</div>
           <div>• 沙箱限时 2s，超时禁止发布</div>
           <div>• 超过 500ms 黄色警告</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#c22b3f;font-weight:600;margin-bottom:3px"><AppIcon name="bar-chart-2" :size="13" />  向量化要求</div>
+          <div style="color:var(--c-up);font-weight:600;margin-bottom:3px"><AppIcon name="bar-chart-2" :size="13" />  向量化要求</div>
           <div>• 必须用 Pandas/NumPy 向量化</div>
           <div>• 禁止 for 循环逐行处理</div>
           <div>• 返回值长度 = 输入长度</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#0a7a5a;font-weight:600;margin-bottom:3px"><AppIcon name="e" :size="13" />  参数类型体系</div>
+          <div style="color:var(--c-down);font-weight:600;margin-bottom:3px"><AppIcon name="e" :size="13" />  参数类型体系</div>
           <div>• <b>标量</b> <AppIcon name="arrow-right" :size="13" />  传入默认值，如 5 / 0.05</div>
           <div>• <b>序列</b> <AppIcon name="arrow-right" :size="13" />  一维随机数组，如收盘价</div>
           <div>• <b>矩阵</b> <AppIcon name="arrow-right" :size="13" />  二维 DataFrame，如多股票表</div>
-          <div style="margin-top:3px;font-size:11px;color:var(--c-text-faint)">函数不耦合股票字段，通过类型绑定业务数据</div>
+          <div style="margin-top:3px;font-size: var(--text-meta);color:var(--c-text-faint)">函数不耦合股票字段，通过类型绑定业务数据</div>
         </div>
       </div>
     </div>
@@ -106,21 +106,21 @@
       </div>
       <div v-if="testResult" style="margin-top:8px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-          <span style="font-size:11px;color:var(--c-text-dim)">耗时：</span>
-          <span :style="{fontSize:'14px',fontWeight:600,color:testResult.elapsed_ms<500?'#0a7a5a':testResult.elapsed_ms<2000?'#f59e0b':'#c22b3f'}">
+          <span style="font-size: var(--text-meta);color:var(--c-text-dim)">耗时：</span>
+          <span :style="{fontSize:'14px',fontWeight:600,color:testResult.elapsed_ms<500?'var(--c-down)':testResult.elapsed_ms<2000?'var(--c-warn)':'var(--c-up)'}">
             {{ testResult.elapsed_ms }}ms
           </span>
           <n-tag :type="testResult.elapsed_ms<500?'success':testResult.elapsed_ms<2000?'warning':'error'" size="small">
             {{ testResult.elapsed_ms<500 ? '✓ 通过' : testResult.elapsed_ms<2000 ? '! 警告' : '✕ 不合格' }}
           </n-tag>
         </div>
-        <div v-if="testResult.error" style="background:rgba(194,43,63,.08);border:1px solid rgba(194,43,63,.2);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#c22b3f;white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ testResult.error }}</div>
+        <div v-if="testResult.error" style="background:color-mix(in srgb, var(--c-up) 8%, transparent);border:1px solid color-mix(in srgb, var(--c-up) 20%, transparent);border-radius:6px;padding:8px;font-family:monospace;font-size: var(--text-meta);color:var(--c-up);white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ testResult.error }}</div>
         <div v-else-if="testResult.preview" style="margin-top:8px">
-          <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:4px">输出预览（前10行）</div>
-          <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;max-height:200px;overflow-y:auto">
+          <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-bottom:4px">输出预览（前10行）</div>
+          <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size: var(--text-meta);max-height:200px;overflow-y:auto">
             <div v-for="(v, i) in testResult.preview" :key="i">{{ i }}: {{ v }}</div>
           </div>
-          <div v-if="testResult.rows" style="font-size:11px;color:var(--c-text-faint);margin-top:4px">共 {{ testResult.rows }} 行</div>
+          <div v-if="testResult.rows" style="font-size: var(--text-meta);color:var(--c-text-faint);margin-top:4px">共 {{ testResult.rows }} 行</div>
         </div>
       </div>
     </n-space>
@@ -132,8 +132,8 @@
       <div style="font-size:12px;color:var(--c-text-dim)">描述你想要的函数功能，AI 会根据编码规则和已有函数自动生成代码。</div>
       <n-input v-model:value="aiRequirement" type="textarea" placeholder="例如：计算N日价格变化率，即 (今日收盘 - N日前收盘) / N日前收盘" :rows="4" />
       <div v-if="aiResult" style="margin-top:8px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
-        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ aiResult }}</div>
+        <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size: var(--text-meta);white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ aiResult }}</div>
         <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入编辑器</n-button>
       </div>
     </n-space>
@@ -151,20 +151,20 @@
       <table style="width:100%;border-collapse:collapse">
         <tr><td style="width:60px;padding:3px 8px 3px 0;color:var(--c-text-faint);text-align:right;vertical-align:top">中文名</td><td style="padding:3px 0;color:var(--c-text)">{{ detailItem.display_name }}</td></tr>
         <tr><td style="padding:3px 8px 3px 0;color:var(--c-text-faint);text-align:right;vertical-align:top">描述</td><td style="padding:3px 0;color:var(--c-text)">{{ detailItem.description || '—' }}</td></tr>
-        <tr><td style="padding:3px 8px 3px 0;color:var(--c-text-faint);text-align:right">分类</td><td style="padding:3px 0;color:var(--c-text)">{{ detailItem.category }}</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;color:var(--c-text-faint);text-align:right">分类</td><td style="padding:3px 0;color:var(--c-text)">{{ catMap[detailItem.category] || detailItem.category }}</td></tr>
         <tr><td style="padding:3px 8px 3px 0;color:var(--c-text-faint);text-align:right">状态</td><td style="padding:3px 0;color:var(--c-text)">{{ detailItem.status_text }}</td></tr>
       </table>
 
       <!-- 函数定义（语法高亮） -->
       <div v-if="detailItem.source_code" style="margin-top:10px">
-        <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px">函数定义</div>
-        <div ref="codeBlock" style="background:#1e1e1e;color:#d4d4d4;border-radius:6px;padding:10px;font-family:'SF Mono',Monaco,Menlo,monospace;font-size:11px;line-height:1.5;white-space:pre;overflow-x:auto;max-height:240px;overflow-y:auto">{{ detailItem.source_code }}</div>
+        <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px">函数定义</div>
+        <div ref="codeBlock" style="background:var(--c-code-bg);color:var(--c-code-ink);border-radius:6px;padding:10px;font-family:'SF Mono',Monaco,Menlo,monospace;font-size: var(--text-meta);line-height:1.5;white-space:pre;overflow-x:auto;max-height:240px;overflow-y:auto">{{ detailItem.source_code }}</div>
       </div>
 
       <!-- 入参表格 -->
       <div style="margin-top:12px">
-        <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px">入参</div>
-        <table v-if="detailItem.parameters?.length" style="width:100%;border-collapse:collapse;font-size:11px">
+        <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px">入参</div>
+        <table v-if="detailItem.parameters?.length" style="width:100%;border-collapse:collapse;font-size: var(--text-meta)">
           <thead>
             <tr style="color:var(--c-text-dim);text-align:left;border-bottom:1px solid var(--c-border)">
               <th style="padding:3px 6px">名称</th>
@@ -184,13 +184,13 @@
             </tr>
           </tbody>
         </table>
-        <div v-else style="color:var(--c-text-dim);font-size:11px">无</div>
+        <div v-else style="color:var(--c-text-dim);font-size: var(--text-meta)">无</div>
       </div>
 
       <!-- 出参表格 -->
       <div style="margin-top:12px">
-        <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px">出参</div>
-        <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px">出参</div>
+        <table style="width:100%;border-collapse:collapse;font-size: var(--text-meta)">
           <thead>
             <tr style="color:var(--c-text-dim);text-align:left;border-bottom:1px solid var(--c-border)">
               <th style="padding:3px 6px;width:60px">类型</th>
@@ -214,7 +214,7 @@
   <!-- 字段注册表弹窗 -->
   <n-modal v-model:show="showFields" preset="card" title="字段注册表（KEPL 公式可引用的原始字段）" style="width:640px;max-width:92vw" :mask-closable="true">
     <n-space vertical>
-      <div style="font-size:11px;color:var(--c-text-dim)">公式中直接引用以下字段名；基本面字段来自个股基本面日度历史表（stock_fundamentals_history），缺失日为空值。覆盖率 = 近 35 天非空占比。</div>
+      <div style="font-size: var(--text-meta);color:var(--c-text-dim)">公式中直接引用以下字段名；基本面字段来自个股基本面日度历史表（stock_fundamentals_history），缺失日为空值。覆盖率 = 近 35 天非空占比。</div>
       <n-data-table :columns="fieldCols" :data="fieldRows" size="small" :max-height="420" scroll-x="700" />
     </n-space>
   </n-modal>
@@ -236,10 +236,10 @@ const showFields = ref(false)
 const fieldRows = ref([])
 const fieldCols = [
   { title: '字段名', key: 'name', width: 140, fixed: 'left', render: r => h('code', { style: 'font-size:12px' }, r.name) },
-  { title: '来源表', key: 'source', width: 220, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.source) },
+  { title: '来源表', key: 'source', width: 220, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size: var(--text-meta);color:var(--c-text-dim)' }, r.source) },
   { title: '说明', key: 'desc', minWidth: 240, ellipsis: { tooltip: true } },
   { title: '近月覆盖', key: 'coverage', width: 90, align: 'right', render: r =>
-      r.coverage == null ? '—' : h('span', { style: `color:${r.coverage >= 0.9 ? '#0a7a5a' : r.coverage >= 0.5 ? '#f59e0b' : '#c22b3f'}` },
+      r.coverage == null ? '—' : h('span', { style: `color:${r.coverage >= 0.9 ? 'var(--c-down)' : r.coverage >= 0.5 ? 'var(--c-warn)' : 'var(--c-up)'}` },
         (r.coverage * 100).toFixed(0) + '%') },
 ]
 
@@ -310,6 +310,7 @@ const catOptions = [
   { label:'其他', value:'other' },
 ]
 const catOpts = catOptions.filter(c => c.value !== 'all' && c.value !== 'builtin_kepl')
+const catMap = Object.fromEntries(catOptions.filter(c => c.value !== 'all').map(c => [c.value, c.label]))
 const statusOptions = [
   { label:'全部状态', value:'all' },
   { label:'草稿', value:'draft' },
@@ -321,8 +322,8 @@ const statusMap = { draft:'草稿', published:'已发布', deprecated:'已弃用
 
 const columns = [
   { title:'名称', key:'name', width:160, fixed:'left' },
-  { title:'中文名', key:'display_name', width:100 },
-  { title:'分类', key:'category', width:80 },
+  { title:'签名 / 中文名', key:'display_name', width:200, ellipsis:{tooltip:true} },
+  { title:'分类', key:'category', width:110, render:(r) => catMap[r.category] || r.category },
   { title:'状态', key:'status_text', width:60 },
   {
     title:'', key:'actions', width:80, fixed:'right',
@@ -330,11 +331,11 @@ const columns = [
       if (r.is_builtin) return ''
       return h('div', { style:'display:flex;gap:8px;align-items:center' }, [
         h('span', { 
-          style:'cursor:pointer;color:#c22b3f;font-size:14px',
+          style:'cursor:pointer;color:var(--c-text-dim);font-size:14px',
           onClick: (e) => { e.stopPropagation(); openEdit(r) }
         }, () => h(AppIcon, { name: 'edit', size: 13 })),
         h('span', {
-          style:'cursor:pointer;color:#c22b3f;font-size:14px',
+          style:'cursor:pointer;color:var(--c-text-dim);font-size:14px',
           onClick: (e) => { e.stopPropagation(); confirmDel(r) }
         }, () => h(AppIcon, { name: 'close', size: 13 })),
       ])
@@ -661,7 +662,7 @@ const verCols = [
   { title:'版本', key:'version', width:60 },
   { title:'时间', key:'created_at', width:150 },
   { title:'操作', key:'actions', width:60, render(r) {
-    return h('span', { style:'cursor:pointer;color:#c22b3f', onClick:() => doRollback(r.version) }, '回滚')
+    return h('span', { style:'cursor:pointer;color:var(--c-up)', onClick:() => doRollback(r.version) }, '回滚')
   }},
 ]
 

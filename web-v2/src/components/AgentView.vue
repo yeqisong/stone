@@ -29,8 +29,8 @@
       </div>
     </div>
     <div class="agent-side-foot">
-      <span v-if="info && !info.configured" style="color:#c22b3f">未配置大模型 Key</span>
-      <span v-else>{{ info?.model || '-' }} · {{ info?.tools?.length || 0 }} 工具 · {{ skills.length }} 技能</span>
+      <span v-if="info && !info.configured" style="color:var(--c-up)">未配置大模型 Key</span>
+      <span v-else>{{ info?.model || '-' }}，{{ info?.tools?.length || 0 }} 个工具，{{ skills.length }} 项技能</span>
     </div>
   </aside>
 
@@ -76,7 +76,7 @@
           <div v-for="t in b.tools" :key="t.id" class="agent-tool" :class="{ fail: t.result && !t.result.ok }">
             <div class="agent-tool-head" @click="toggleTool(t.id)">
               <AppIcon :name="t.result ? (t.result.ok ? 'check' : 'alert') : 'refresh'" :size="11"
-                       :style="{ color: t.result ? (t.result.ok ? '#0a7a5a' : '#c22b3f') : 'var(--c-text-dim)' }" />
+                       :style="{ color: t.result ? (t.result.ok ? 'var(--c-down)' : 'var(--c-up)') : 'var(--c-text-dim)' }" />
               <span class="agent-tool-name">{{ toolLabel(t.name) }}</span>
               <span class="agent-tool-sum">{{ argsSummary(t) }}</span>
               <span class="agent-tool-meta">{{ t.result ? `${t.result.elapsed_ms}ms` : '运行中…' }}</span>
@@ -109,7 +109,7 @@
                @keydown="onKey" />
       <div class="agent-composer-bar">
         <span class="agent-hint">
-          {{ running ? statusText : '数据查库 · 沙箱可跑 Python/Node · 能建 DAG 流程' }}
+          {{ running ? statusText : '数据查库，沙箱可跑 Python/Node，能建 DAG 流程' }}
         </span>
         <n-button v-if="running" size="small" type="error" secondary @click="stopRun">
           <AppIcon name="close" :size="12" /> 停止
@@ -125,7 +125,7 @@
   <n-modal v-model:show="showSkills" preset="card" title="技能（可复用的分析方法）" style="width:780px;max-width:94vw">
     <div class="agent-sk-wrap">
       <div class="agent-sk-list">
-        <n-button size="tiny" type="primary" block style="margin-bottom:4px" @click="startNewSkill">
+        <n-button class="cta" size="tiny" type="primary" block style="margin-bottom:4px" @click="startNewSkill">
           <AppIcon name="plus" :size="12" /> 新建技能
         </n-button>
         <n-button size="tiny" block style="margin-bottom:6px" @click="startImport">
@@ -171,17 +171,17 @@
           <div class="agent-card-t">{{ importPreview.title }} <span style="font-weight:400;color:var(--c-text-faint)">/ {{ importPreview.repo }}</span></div>
           <div class="agent-card-d">{{ importPreview.description || '（无描述）' }}</div>
           <div class="agent-card-d" style="margin-top:4px">
-            {{ importPreview.body_chars }} 字正文 · {{ importPreview.file_count }} 个文件 · {{ importPreview.size_mb }} MB
+            {{ importPreview.body_chars }} 字正文，{{ importPreview.file_count }} 个文件，{{ importPreview.size_mb }} MB
           </div>
         </div>
         <pre class="agent-tool-body" style="max-height:200px">{{ importPreview.body_preview }}…</pre>
         <div style="display:flex;gap:6px;align-items:center">
-          <span style="font-size:11.5px;color:var(--c-text-dim);flex-shrink:0">安装名</span>
+          <span style="font-size: var(--text-meta);color:var(--c-text-dim);flex-shrink:0">安装名</span>
           <n-input v-model:value="importSlug" size="small" style="width:200px" placeholder="英文技能名" />
         </div>
-        <div style="font-size:11px;color:#f59e0b">第三方内容会进入模型上下文，请确认来源可信后再导入</div>
+        <div style="font-size: var(--text-meta);color:var(--c-warn)">第三方内容会进入模型上下文，请确认来源可信后再导入</div>
       </template>
-      <div v-if="importErr" style="font-size:11px;color:#c22b3f">{{ importErr }}</div>
+      <div v-if="importErr" style="font-size: var(--text-meta);color:var(--c-up)">{{ importErr }}</div>
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
@@ -477,7 +477,7 @@ function handleEvent(ev) {
     running.value = false
   } else if (t === 'error') {
     running.value = false
-    blocks.value.push({ role: 'assistant', text: '⚠️ ' + (ev.error || '未知错误'), tools: [] })
+    blocks.value.push({ role: 'assistant', text: '错误：' + (ev.error || '未知错误'), tools: [] })
     scrollDown()
   }
 }
@@ -586,23 +586,23 @@ onMounted(async () => {
 .agent-sess { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 6px;
   cursor: pointer; font-size: 12px; color: var(--c-text); border-left: 2px solid transparent; }
 .agent-sess:hover { background: var(--c-card-bg-hover); }
-.agent-sess.active { background: rgba(194,43,63,0.10); border-left-color: #c22b3f; }
+.agent-sess.active { background: color-mix(in srgb, var(--c-up) 10%, transparent); border-left-color: var(--c-up); }
 .agent-sess-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .agent-sess-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-sess-time { font-size: 11px; color: var(--c-text-faint); }
-.agent-sess-tools { display: none; gap: 5px; flex-shrink: 0; }
+.agent-sess-time { font-size: var(--text-meta); color: var(--c-text-faint); }
+.agent-sess-tools { display: none; gap: 4px; flex-shrink: 0; }
 .agent-sess:hover .agent-sess-tools { display: flex; }
 .agent-ico { color: var(--c-text-faint); cursor: pointer; }
-.agent-ico:hover { color: #c22b3f; }
-.agent-ico-danger:hover { color: #c22b3f; }
-.agent-side-empty { font-size: 11px; color: var(--c-text-faint); padding: 12px 8px; line-height: 1.6; }
-.agent-side-foot { flex-shrink: 0; padding-top: 6px; margin-top: 4px; font-size: 11px;
+.agent-ico:hover { color: var(--c-up); }
+.agent-ico-danger:hover { color: var(--c-up); }
+.agent-side-empty { font-size: var(--text-meta); color: var(--c-text-faint); padding: 12px 8px; line-height: 1.6; }
+.agent-side-foot { flex-shrink: 0; padding-top: 6px; margin-top: 4px; font-size: var(--text-meta);
   color: var(--c-text-faint); border-top: 1px solid var(--c-border-light); }
 
 /* ── 主区 ── */
 .agent-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column;
   background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 6px; overflow: hidden; }
-.agent-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+.agent-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--c-border-light); flex-shrink: 0; }
 .agent-head-title { font-size: 13px; font-weight: 600; color: var(--c-text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -613,25 +613,30 @@ onMounted(async () => {
   .agent-head-meta .n-tag { display: none; }
   .agent-head-meta { gap: 2px; }
 }
-.agent-thread { flex: 1; overflow-y: auto; padding: 14px 16px 8px; min-height: 0; }
+.agent-thread { flex: 1; overflow-y: auto; padding: 12px 16px 8px; min-height: 0; }
 
-.agent-empty { padding: 18px 4px 8px; }
-.agent-empty-title { font-size: 13px; color: var(--c-text); margin-bottom: 14px; }
+.agent-empty { padding: 16px 4px 8px; }
+.agent-empty-title { font-size: 13px; color: var(--c-text); margin-bottom: 12px; }
 .agent-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
-.agent-card { padding: 9px 11px; background: var(--c-bg); border: 1px solid var(--c-border-light); border-radius: 7px; }
-.agent-card-t { font-size: 11.5px; font-weight: 600; color: var(--c-text); display: flex; align-items: center; gap: 5px; }
-.agent-card-d { font-size: 11px; color: var(--c-text-dim); margin-top: 3px; line-height: 1.5; }
-.agent-empty-sub { font-size: 11px; color: var(--c-text-dim); margin-bottom: 7px; }
+.agent-card { padding: 8px 12px; background: var(--c-bg); border: 1px solid var(--c-border-light); border-radius: var(--radius-sm); }
+.agent-card-t { font-size: var(--text-meta); font-weight: 600; color: var(--c-text); display: flex; align-items: center; gap: 4px; }
+.agent-card-d { font-size: var(--text-meta); color: var(--c-text-dim); margin-top: 3px; line-height: 1.5; }
+.agent-empty-sub { font-size: var(--text-meta); color: var(--c-text-dim); margin-bottom: 8px; }
 .agent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.agent-chip { font-size: 11px; padding: 5px 11px; border-radius: 12px; cursor: pointer;
-  background: var(--c-bg); border: 1px solid var(--c-border); color: var(--c-text-dim); transition: all .15s; }
-.agent-chip:hover { color: var(--c-text); border-color: #c22b3f; }
+.agent-chip { font-size: var(--text-meta); padding: 4px 12px; border-radius: var(--radius); cursor: pointer;
+  background: var(--c-bg); border: 1px solid var(--c-border); color: var(--c-text-dim); transition: color .15s, border-color .15s, background-color .15s; }
+.agent-chip:hover { color: var(--c-text); border-color: var(--c-up); }
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chip, .agent-tool-head { transition: none !important; }
+  .agent-live-dot { animation: none !important; }
+}
 
 .agent-block { margin-bottom: 12px; display: flex; flex-direction: column; }
 .agent-block.user { align-items: flex-end; }
-.agent-bubble { font-size: 13px; line-height: 1.7; padding: 8px 12px; border-radius: 8px;
+.agent-bubble { font-size: var(--text-body); line-height: 1.75; padding: 8px 12px; border-radius: var(--radius);
   word-break: break-word; }
-.agent-bubble.user { background: rgba(194,43,63,0.13); color: var(--c-text); white-space: pre-wrap;
+.agent-bubble.user { background: color-mix(in srgb, var(--c-up) 13%, transparent); color: var(--c-text); white-space: pre-wrap;
   max-width: 82%; border-bottom-right-radius: 3px; }
 .agent-ans { position: relative; max-width: 86%; }
 .agent-bubble.assistant { background: var(--c-bg); color: var(--c-text);
@@ -644,70 +649,75 @@ onMounted(async () => {
 /* Markdown 排版 */
 .agent-bubble.assistant :deep(.agent-p) { margin: 0 0 6px; }
 .agent-bubble.assistant :deep(.agent-p:last-child) { margin-bottom: 0; }
-.agent-bubble.assistant :deep(.agent-h) { font-weight: 600; color: var(--c-text); margin: 10px 0 5px; }
+.agent-bubble.assistant :deep(.agent-h) { font-weight: 600; color: var(--c-text); margin: 10px 0 4px; }
 .agent-bubble.assistant :deep(.agent-h1) { font-size: 14px; }
 .agent-bubble.assistant :deep(.agent-h2) { font-size: 13px; }
 .agent-bubble.assistant :deep(.agent-h3),
 .agent-bubble.assistant :deep(.agent-h4) { font-size: 12.5px; }
-.agent-bubble.assistant :deep(.agent-list) { margin: 4px 0 6px; padding-left: 18px; }
+.agent-bubble.assistant :deep(.agent-list) { margin: 4px 0 6px; padding-left: 16px; }
 .agent-bubble.assistant :deep(.agent-list li) { margin: 2px 0; }
+.agent-bubble.assistant :deep(.agent-quote) {
+  margin: 6px 0; padding: 6px 10px; border-left: 2px solid var(--c-border);
+  color: var(--c-text-dim); font-size: var(--text-meta);
+}
 .agent-bubble.assistant :deep(.agent-code) { display: block; margin: 6px 0; padding: 8px 10px;
-  font-size: 11px; background: var(--c-card-bg); border-radius: 6px; overflow-x: auto; white-space: pre; }
-.agent-bubble.assistant :deep(.agent-inline) { font-size: 11.5px; padding: 1px 4px;
+  font-size: var(--text-meta); background: var(--c-card-bg); border-radius: 6px; overflow-x: auto; white-space: pre; }
+.agent-bubble.assistant :deep(.agent-list li::marker) { color: var(--c-text-faint); }
+.agent-bubble.assistant :deep(.agent-inline) { font-size: var(--text-meta); padding: 1px 4px; background: var(--c-neutral-weak) !important; color: var(--c-text) !important;
   background: var(--c-card-bg); border-radius: 4px; }
-.agent-bubble.assistant :deep(.agent-table-wrap) { overflow-x: auto; margin: 7px 0; }
-.agent-bubble.assistant :deep(.agent-table) { border-collapse: collapse; font-size: 11.5px; width: 100%; }
+.agent-bubble.assistant :deep(.agent-table-wrap) { overflow-x: auto; margin: 8px 0; }
+.agent-bubble.assistant :deep(.agent-table) { border-collapse: collapse; font-size: var(--text-body); width: 100%; }
 .agent-bubble.assistant :deep(.agent-table th) { text-align: left; padding: 4px 8px; font-weight: 600;
   color: var(--c-text); background: var(--c-card-bg-hover); border: 1px solid var(--c-border-light); white-space: nowrap; }
 .agent-bubble.assistant :deep(.agent-table td) { padding: 4px 8px; color: var(--c-text-dim);
   border: 1px solid var(--c-border-light); }
-.agent-bubble.assistant :deep(.agent-table tr:nth-child(even) td) { background: rgba(128,128,128,0.03); }
+.agent-bubble.assistant :deep(.agent-table tr:nth-child(even) td) { background: color-mix(in srgb, var(--c-text-faint) 3%, transparent); }
 
 /* 回答中的股票代码（可点击跳详情） */
-.agent-bubble.assistant :deep(.agent-stock-link) { color: #c22b3f; cursor: pointer;
-  border-bottom: 1px dashed rgba(194,43,63,0.5); }
-.agent-bubble.assistant :deep(.agent-stock-link:hover) { color: #4c9aff; }
+.agent-bubble.assistant :deep(.agent-stock-link) { color: var(--c-up); cursor: pointer;
+  border-bottom: 1px dashed color-mix(in srgb, var(--c-up) 50%, transparent); }
+.agent-bubble.assistant :deep(.agent-stock-link:hover) { color: var(--c-series-4); }
 
 /* 工具生成的图表缩略图 */
 .agent-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-width: 88%; }
 .agent-imgs a { display: block; border: 1px solid var(--c-border-light); border-radius: 6px; overflow: hidden; }
-.agent-imgs img { display: block; max-width: 200px; max-height: 140px; object-fit: contain; background: #fff; }
+.agent-imgs img { display: block; max-width: 200px; max-height: 140px; object-fit: contain; background: var(--c-card-bg); }
 
 /* 工具卡片 */
 .agent-tool { margin-top: 6px; border: 1px solid var(--c-border-light); border-radius: 6px;
   background: var(--c-bg); overflow: hidden; max-width: 88%; }
-.agent-tool.fail { border-color: rgba(194,43,63,0.35); }
-.agent-tool-head { display: flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer; }
+.agent-tool.fail { border-color: color-mix(in srgb, var(--c-up) 35%, transparent); }
+.agent-tool-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; }
 .agent-tool-head:hover { background: var(--c-card-bg-hover); }
-.agent-tool-name { font-size: 11px; font-weight: 600; color: var(--c-text); flex-shrink: 0; }
-.agent-tool-sum { font-size: 11px; color: var(--c-text-faint); flex: 1; overflow: hidden;
+.agent-tool-name { font-size: var(--text-meta); font-weight: 600; color: var(--c-text); flex-shrink: 0; }
+.agent-tool-sum { font-size: var(--text-meta); color: var(--c-text-faint); flex: 1; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
-.agent-tool-meta { font-size: 11px; color: var(--c-text-faint); flex-shrink: 0; }
-.agent-tool-fold { font-size: 11px; color: var(--c-text-dimmer); flex-shrink: 0; }
-.agent-tool-body { margin: 0; padding: 8px 10px; font-size: 11.5px; line-height: 1.55;
+.agent-tool-meta { font-size: var(--text-meta); color: var(--c-text-faint); flex-shrink: 0; }
+.agent-tool-fold { font-size: var(--text-meta); color: var(--c-text-dimmer); flex-shrink: 0; }
+.agent-tool-body { margin: 0; padding: 8px 10px; font-size: var(--text-meta); line-height: 1.55;
   max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all;
   border-top: 1px solid var(--c-border-light); color: var(--c-text-dim); background: var(--c-card-bg); }
 
-.agent-running { display: flex; align-items: center; font-size: 11px; color: var(--c-text-dim); padding: 4px 2px 10px; }
-.agent-dot { width: 6px; height: 6px; border-radius: 50%; background: #c22b3f; margin-right: 6px;
+.agent-running { display: flex; align-items: center; font-size: var(--text-meta); color: var(--c-text-dim); padding: 4px 2px 10px; }
+.agent-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-up); margin-right: 6px;
   animation: agent-pulse 1s infinite; }
 @keyframes agent-pulse { 0%,100% { opacity: 0.3 } 50% { opacity: 1 } }
 
-.agent-jump { position: absolute; right: 22px; bottom: 88px; z-index: 5; font-size: 11px;
-  padding: 5px 10px; border-radius: 14px; cursor: pointer; color: var(--c-text-dim);
-  background: var(--c-card-bg-hover); border: 1px solid var(--c-border); box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+.agent-jump { position: absolute; right: 22px; bottom: 88px; z-index: 5; font-size: var(--text-meta);
+  padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--c-text-dim);
+  background: var(--c-card-bg-hover); border: 1px solid var(--c-border); box-shadow: 0 2px 8px var(--c-shadow-color); }
 .agent-jump:hover { color: var(--c-text); }
 
 .agent-composer { flex-shrink: 0; padding: 8px 12px 10px; border-top: 1px solid var(--c-border-light); }
 .agent-composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.agent-hint { font-size: 11px; color: var(--c-text-faint); flex: 1; overflow: hidden;
+.agent-hint { font-size: var(--text-meta); color: var(--c-text-faint); flex: 1; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 
 /* 技能面板 */
 .agent-sk-wrap { display: flex; gap: 12px; min-height: 380px; }
 .agent-sk-list { width: 224px; flex-shrink: 0; border-right: 1px solid var(--c-border-light); padding-right: 8px; }
 .agent-sk-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.agent-sk-code :deep(textarea) { font-family: ui-monospace, monospace; font-size: 11.5px; }
+.agent-sk-code :deep(textarea) { font-family: ui-monospace, monospace; font-size: var(--text-meta); }
 .agent-sk-actions { display: flex; align-items: center; gap: 8px; }
 
 @media (max-width: 900px) {

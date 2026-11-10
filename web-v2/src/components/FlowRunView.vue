@@ -12,18 +12,18 @@
         <template v-else-if="taskInfo.status==='failed'"><AppIcon name="x-circle" :size="13" /> 失败</template>
         <template v-else>空闲</template>
       </span>
-      <n-button v-if="!taskInfo || taskInfo.status!=='running'" size="tiny" type="primary" @click="doExecute"><AppIcon name="play" :size="13" />  执行</n-button>
+      <n-button v-if="!taskInfo || taskInfo.status!=='running'" class="cta" size="tiny" type="primary" @click="doExecute"><AppIcon name="play" :size="13" />  执行</n-button>
       <n-button size="small" @click="goLogs"><AppIcon name="file-text" :size="13" />  日志</n-button>
     </div>
   </div>
 
   <div v-if="taskInfo" style="padding:4px 0;margin-bottom:6px;flex-shrink:0">
-    <div style="height:4px;background:var(--c-border);border-radius:2px;overflow:hidden">
+    <div style="height:4px;background:var(--c-border);border-radius:var(--radius-sm);overflow:hidden">
       <div :style="{height:'100%',width:(taskInfo.progress_pct||0)+'%',background:taskInfo.status==='failed'?'var(--c-error)':'var(--c-warning)',transition:'width 0.3s',borderRadius:'2px'}"></div>
     </div>
   </div>
 
-  <div style="flex:1;min-height:0;display:flex;gap:0;border:1px solid var(--c-border);border-radius:8px;overflow:hidden">
+  <div style="flex:1;min-height:0;display:flex;gap:0;border:1px solid var(--c-border);border-radius:var(--radius);overflow:hidden">
     <div style="flex:1;min-width:0;position:relative">
       <VueFlow v-model:nodes="nodes" v-model:edges="edges" id="flow-run-view"
         :node-types="customNodeTypes"
@@ -36,13 +36,13 @@
       </VueFlow>
     </div>
 
-    <div v-if="selectedNode" style="width:260px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:14px;overflow-y:auto;font-size:12px">
+    <div v-if="selectedNode" style="width:260px;flex-shrink:0;background:var(--c-card-bg);border-left:1px solid var(--c-border);padding:12px;overflow-y:auto;font-size:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span style="font-weight:600;color:var(--c-text)">{{ selectedNode.data?.label || selectedNode.id }}</span>
         <span style="cursor:pointer;font-size:16px;color:var(--c-text-dim)" @click="selectedNode=null"><AppIcon name="close" :size="13" /> </span>
       </div>
       <div v-if="selectedNodeInfo" style="display:flex;flex-direction:column;gap:6px">
-        <div style="font-size:11px;color:var(--c-text-dim)">
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim)">
           <span :style="{color:selectedNodeInfo.status==='success'?'var(--c-success)':selectedNodeInfo.status==='running'?'var(--c-warning)':selectedNodeInfo.status==='failed'?'var(--c-error)':'var(--c-text-faint)'}">
             <template v-if="selectedNodeInfo.status==='success'"><AppIcon name="check" :size="13" /> </template>
             <template v-else-if="selectedNodeInfo.status==='running'">⟳ </template>
@@ -50,13 +50,13 @@
             {{ selectedNodeInfo.status }}
           </span>
         </div>
-        <div v-if="selectedNodeInfo.started_at" style="font-size:11px;color:var(--c-text-faint)"><AppIcon name="play" :size="13" />  {{ selectedNodeInfo.started_at }}</div>
-        <div v-if="selectedNodeInfo.finished_at" style="font-size:11px;color:var(--c-text-faint)"> {{ selectedNodeInfo.finished_at }}</div>
-        <div v-if="selectedNodeInfo.rows !== undefined && selectedNodeInfo.rows !== null" style="font-size:11px;color:var(--c-text-dim)"><AppIcon name="bar-chart-2" :size="13" />  行数: {{ selectedNodeInfo.rows }}</div>
-        <div v-if="selectedNodeInfo.detail" style="font-size:11px;color:var(--c-text-dim)"><AppIcon name="file-text" :size="13" />  {{ selectedNodeInfo.detail }}</div>
-        <div v-if="selectedNodeInfo.error" style="font-size:11px;color:#c22b3f"><AppIcon name="x-circle" :size="13" />  {{ selectedNodeInfo.error }}</div>
+        <div v-if="selectedNodeInfo.started_at" style="font-size: var(--text-meta);color:var(--c-text-faint)"><AppIcon name="play" :size="13" />  {{ selectedNodeInfo.started_at }}</div>
+        <div v-if="selectedNodeInfo.finished_at" style="font-size: var(--text-meta);color:var(--c-text-faint)"> {{ selectedNodeInfo.finished_at }}</div>
+        <div v-if="selectedNodeInfo.rows !== undefined && selectedNodeInfo.rows !== null" style="font-size: var(--text-meta);color:var(--c-text-dim)"><AppIcon name="bar-chart-2" :size="13" />  行数: {{ selectedNodeInfo.rows }}</div>
+        <div v-if="selectedNodeInfo.detail" style="font-size: var(--text-meta);color:var(--c-text-dim)"><AppIcon name="file-text" :size="13" />  {{ selectedNodeInfo.detail }}</div>
+        <div v-if="selectedNodeInfo.error" style="font-size: var(--text-meta);color:var(--c-up)"><AppIcon name="x-circle" :size="13" />  {{ selectedNodeInfo.error }}</div>
       </div>
-      <div v-else style="font-size:11px;color:var(--c-text-faint)">暂无执行数据</div>
+      <div v-else style="font-size: var(--text-meta);color:var(--c-text-faint)">暂无执行数据</div>
     </div>
   </div>
 </div>

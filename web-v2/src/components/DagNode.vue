@@ -15,26 +15,26 @@ defineProps(['id', 'data', 'selected'])
 .dag-node {
   background: var(--c-card-bg);
   border: 1px solid var(--c-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 10px 16px;
   text-align: center;
   min-width: 100px;
-  font-size: 11px;
+  font-size: var(--text-meta);
   font-weight: 600;
   color: var(--c-text);
   position: relative;
 }
 .dag-node.selected {
   border-color: var(--c-warning);
-  box-shadow: 0 0 0 2px rgba(194,43,63,0.2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-up) 20%, transparent);
 }
 .dag-node-label {
   display: block;
 }
-.dag-node.status-pending { border-color: #94a3b8; }
+.dag-node.status-pending { border-color: var(--c-text-faint); }
 .dag-node.status-running { border-color: var(--c-warning); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-warning) 30%, transparent); }
-.dag-node.status-success { border-color: #0a7a5a; }
-.dag-node.status-failed { border-color: #c22b3f; }
+.dag-node.status-success { border-color: var(--c-down); }
+.dag-node.status-failed { border-color: var(--c-up); }
 .dag-node :deep(.vue-flow__handle) {
   width: 6px !important;
   height: 6px !important;

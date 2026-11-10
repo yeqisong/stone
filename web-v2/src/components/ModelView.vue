@@ -10,7 +10,7 @@
           <div style="display:flex;gap:4px">
             <n-button size="tiny" type="primary" ghost @click="showCreate=true">+ 创建</n-button>
             <n-button v-if="isMobile" size="tiny" quaternary @click="showSidebar=false" style="padding:0 4px" title="收起列表">
-            <svg viewBox="0 0 1024 1024" width="18" height="18" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
+            <svg viewBox="0 0 1024 1024" width="18" height="18" aria-hidden="true" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
           </n-button>
           </div>
         </div>
@@ -38,11 +38,11 @@
                 <n-button v-if="v.status!=='ACTIVE'" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="trash" :size="13" /> </n-button>
               </div>
             </div>
-            <div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
-            <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--c-text-faint)">
+            <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
+            <div style="display:flex;gap:12px;margin-top:6px;font-size: var(--text-meta);color:var(--c-text-faint)">
               <span v-if="v.sharpe!=null"><AppIcon name="trending-up" :size="13" />  夏普 {{v.sharpe}}</span>
               <span v-if="v.win_rate!=null"><AppIcon name="check" :size="13" />  {{(v.win_rate*100).toFixed(0)}}%</span>
-              <span><AppIcon name="calendar" :size="13" />  {{(v.created_at||'').slice(5)}}</span>
+              <span><AppIcon name="calendar" :size="13" />  {{(v.created_at||'').slice(5,16)}}</span>
             </div>
           </div>
           <n-empty v-if="!store.versions.length" description="暂无模型版本" style="padding:40px 0" />
@@ -52,12 +52,12 @@
       <!-- Right: Detail -->
       <div style="flex:1;min-width:0;overflow-y:auto;padding:16px 12px">
         <n-button v-if="isMobile && !showSidebar" size="tiny" quaternary @click="showSidebar=true" style="margin-bottom:8px" title="展开版本列表">
-          <svg viewBox="0 0 1024 1024" width="18" height="18" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
+          <svg viewBox="0 0 1024 1024" width="18" height="18" aria-hidden="true" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
           <span style="font-size:12px;margin-left:4px">版本</span>
         </n-button>
         <template v-if="store.selected">
           <div style="font-size:18px;font-weight:600;color:var(--c-text);margin-bottom:10px">
-            {{store.selected.version}} · {{store.selected.model_name}}
+            {{store.selected.version}} / {{store.selected.model_name}}
           </div>
           <div class="model-metrics">
             <div><span>状态</span><b>{{ roleLabel(store.selected) }}</b></div>
@@ -68,36 +68,36 @@
 
           <div style="display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--c-border);overflow-x:auto;-webkit-overflow-scrolling:touch">
             <button v-for="t in tabs" :key="t.key"
-              :style="{padding:'8px 14px',border:'none',background:'transparent',color:store.detailTab===t.key?'var(--c-text)':'var(--c-text-dim)',fontSize:'12px',cursor:'pointer',borderBottom:store.detailTab===t.key?'2px solid #c22b3f':'2px solid transparent',marginBottom:'-1px',flexShrink:0,whiteSpace:'nowrap'}"
+              :style="{padding:'8px 14px',border:'none',background:'transparent',color:store.detailTab===t.key?'var(--c-text)':'var(--c-text-dim)',fontSize:'12px',cursor:'pointer',borderBottom:store.detailTab===t.key?'2px solid var(--c-up)':'2px solid transparent',marginBottom:'-1px',flexShrink:0,whiteSpace:'nowrap'}"
               @click="store.switchTab(t.key)">{{t.label}}</button>
           </div>
 
-          <div v-if="store.detailTab==='basic'" style="display:flex;flex-direction:column;gap:14px">
+          <div v-if="store.detailTab==='basic'" style="display:flex;flex-direction:column;gap:12px">
             <div v-if="store.selected?.status==='DRAFT'" style="display:flex;gap:8px;align-items:center">
               <n-button size="tiny" @click="startEditConfig"><AppIcon name="edit" :size="13" />  编辑配置</n-button>
             </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
-              <div v-for="m in basicMetrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:80px;text-align:center">
-                <div style="font-size:11px;color:var(--c-text-faint)">{{m.label}}</div>
+              <div v-for="m in basicMetrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 12px;min-width:80px;text-align:center">
+                <div style="font-size: var(--text-meta);color:var(--c-text-faint)">{{m.label}}</div>
                 <div :style="{fontSize:'16px',fontWeight:600,color:m.color||'var(--c-text)'}">{{m.value}}</div>
               </div>
             </div>
-            <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:14px">
-              <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px">配置详情</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
+            <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px">
+              <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:8px">配置详情</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size: var(--text-meta)">
                 <div v-for="row in cfgRows" :key="row[0]"><span style="color:var(--c-text-faint)">{{row[0]}}: </span><span style="color:var(--c-text)">{{row[1]}}</span></div>
               </div>
             </div>
 
           </div>
           <div v-else-if="store.detailTab==='train'">
-            <div v-if="store.selected.status==='DRAFT' || store.selected.status==='REJECTED'" style="margin-bottom:14px">
+            <div v-if="store.selected.status==='DRAFT' || store.selected.status==='REJECTED'" style="margin-bottom:12px">
               <n-button type="primary" @click="startTrain" :loading="trainingLoading">{{ store.selected.status==='REJECTED' ? '重新训练' : '开始训练' }}</n-button>
             </div>
             <ModelTraining :version="store.selected" />
           </div>
           <div v-else-if="store.detailTab==='eval'">
-            <div v-if="store.selected.status==='PENDING'" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap">
+            <div v-if="store.selected.status==='PENDING'" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
               <n-button type="primary" @click="approveModel('primary')"><AppIcon name="zap" :size="13" />  发布为主模型</n-button>
               <n-button type="info" secondary @click="approveModel('backup')">发布为备模型</n-button>
               <n-button type="error" @click="rejectModel">拒绝</n-button>
@@ -120,7 +120,7 @@
                 <template v-else><AppIcon name="alert" :size="13" /> {{ fcResult.warnings.length }} 个问题</template>
               </div>
               <div v-if="fcResult.warnings?.length" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px">
-                <div v-for="w in fcResult.warnings" :key="w" style="font-size:11px;color:#f59e0b">{{ w }}</div>
+                <div v-for="w in fcResult.warnings" :key="w" style="font-size: var(--text-meta);color:var(--c-warn)">{{ w }}</div>
               </div>
               <n-data-table v-if="fcResult.features?.length" :columns="fcCols" :data="fcResult.features" size="small" :bordered="false" scroll-x="760" />
             </div>
@@ -136,7 +136,7 @@
           <n-input v-model:value="createName" placeholder="模型名称" />
           <n-divider style="margin:4px 0">数据配置</n-divider>
           <n-date-picker v-model:formatted-value="createForm.train_start" type="date" value-format="yyyy-MM-dd" placeholder="数据起点" />
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">标签</span>
               <n-select v-model:value="createForm.label_mode" size="small" style="flex:1"
                 :options="[{label:'超额收益（推荐）',value:'excess'},{label:'绝对收益（旧）',value:'absolute'}]" />
@@ -165,12 +165,12 @@
             <n-tag v-for="f in featureOptions" :key="f.key"
               :type="createForm.feature_names.includes(f.key)?'info':'default'"
               :style="{cursor:'pointer', opacity: f.ic_status==='excluded'?0.55:1,
-                       border: f.ic_status==='excluded' ? '1px dashed #c22b3f' : (f.traffic==='green' ? '1px solid #0a7a5a' : (f.traffic==='yellow' ? '1px solid #f59e0b' : 'none'))}"
-              @click="toggleFeature(f.key)" :bordered="false" size="small">{{ f.traffic==='green'?'●':f.traffic==='yellow'?'●':f.traffic==='red'?'●':'' }}{{f.label}}{{ f.direction==='-'?' ↩':'' }}</n-tag>
+                       border: f.ic_status==='excluded' ? '1px dashed var(--c-up)' : (f.traffic==='green' ? '1px solid var(--c-down)' : (f.traffic==='yellow' ? '1px solid var(--c-warn)' : 'none'))}"
+              @click="toggleFeature(f.key)" :bordered="false" size="small">{{f.label}}{{ f.direction==='-'?'（反向）':'' }}</n-tag>
           </n-space>
-          <div style="font-size:11px;color:var(--c-text-faint)">// = IC 体检灯（10日前瞻）； = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint)">// = IC 体检灯（10日前瞻）； = 反向因子；红虚框 = 已剔除（仍可强制加入）；新建时自动预选「已入选」因子</div>
           <n-divider style="margin:4px 0">训练参数</n-divider>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">Optuna</span><n-input-number v-model:value="createForm.optuna_trials" :min="10" :max="500" style="flex:1" size="small" /></div>
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">初始资金</span><n-input-number v-model:value="createForm.initial_cash" :min="100000" :step="100000" style="flex:1" size="small" /></div>
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">最大持仓</span><n-input-number v-model:value="createForm.max_positions" :min="3" :max="30" style="flex:1" size="small" /></div>
@@ -187,7 +187,7 @@
             </div>
           </div>
           <n-divider style="margin:4px 0">ML 买入阈值</n-divider>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">模式</span>
               <n-select v-model:value="createForm.signal_threshold_mode" size="small" style="flex:1"
                 :options="[{label:'分位数 top N%（自适应）',value:'quantile'},{label:'绝对收益率阈值',value:'absolute'}]" />
@@ -199,24 +199,24 @@
           <div style="max-height:350px;overflow-y:auto;padding-right:4px">
             <n-collapse>
               <n-collapse-item title="① 执行模型" name="exec">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">量比上限</span><n-input-number v-model:value="createForm.trading_rules.execution.volume_limit" :min="0.01" :max="0.30" :step="0.01" style="flex:1" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="② 信号过滤" name="sig">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">最低收益</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.min_pred_return" :min="-0.2" :max="0.2" :step="0.01" style="flex:1" size="small" /></div>
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">最高收益</span><n-input-number v-model:value="createForm.trading_rules.signal_filter.max_pred_return" :min="0.1" :max="0.5" :step="0.05" style="flex:1" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="③ 头寸管理" name="pos">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">单票上限</span><n-input-number v-model:value="createForm.trading_rules.position_sizing.max_single_position" :min="0.05" :max="0.50" :step="0.05" style="flex:1" size="small" /></div>
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">日换手率</span><n-input-number v-model:value="createForm.trading_rules.position_sizing.max_turnover_per_day" :min="0.10" :max="1.00" :step="0.05" style="flex:1" size="small" /></div>
                 </div>
               </n-collapse-item>
               <n-collapse-item title="④ 止盈止损" name="risk">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">止损</span><n-input-number v-model:value="createForm.trading_rules.risk_management.stop_loss" :min="0.02" :max="0.15" :step="0.01" style="flex:1" size="small" /></div>
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">止盈</span><n-input-number v-model:value="createForm.trading_rules.risk_management.take_profit" :min="0.05" :max="0.50" :step="0.01" style="flex:1" size="small" /></div>
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">移动止盈</span><n-input-number v-model:value="createForm.trading_rules.risk_management.trailing_retracement" :min="0.02" :max="0.10" :step="0.01" style="flex:1" size="small" /></div>
@@ -224,7 +224,7 @@
                 </div>
               </n-collapse-item>
               <n-collapse-item title="⑤ 市场择时" name="mkt">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
                   <div style="display:flex;align-items:center;gap:6px">
                     <n-switch v-model:value="createForm.trading_rules.market_filter.require_market_above_ma" size="small" />
                     <span style="color:var(--c-text-dim)">大盘MA以上开仓</span>
@@ -233,7 +233,7 @@
                 </div>
               </n-collapse-item>
               <n-collapse-item title="⑥ 成本模型" name="cost">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">佣金</span><n-input-number v-model:value="createForm.trading_rules.cost_model.commission_rate" :min="0.0005" :max="0.003" :step="0.0001" style="flex:1" size="small" :format="v => (v*100).toFixed(2)+'%'" :parse="v => parseFloat(v)/100" /></div>
                   <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:60px">滑点</span><n-input-number v-model:value="createForm.trading_rules.cost_model.slippage_rate" :min="0.0005" :max="0.002" :step="0.0001" style="flex:1" size="small" :format="v => (v*100).toFixed(2)+'%'" :parse="v => parseFloat(v)/100" /></div>
                 </div>
@@ -260,7 +260,7 @@
             <p style="font-size:13px;color:var(--c-text);margin:0 0 8px 0">
               模型 <b>{{ deleteTarget?.version }}</b> 已产生关联数据，删除后将标记为已删除状态，历史数据不受影响。
             </p>
-            <div style="font-size:11px;color:var(--c-text-dim);padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+            <div style="font-size: var(--text-meta);color:var(--c-text-dim);padding:8px 12px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
               <div v-if="deleteInfo.related_data.signals > 0"><AppIcon name="bar-chart-2" :size="13" />  信号数据 {{ deleteInfo.related_data.signals }} 条</div>
               <div v-if="deleteInfo.related_data.training_trials > 0"><AppIcon name="e" :size="13" />  训练试验 {{ deleteInfo.related_data.training_trials }} 次</div>
               <div v-if="deleteInfo.related_data.health_records > 0"> 健康记录 {{ deleteInfo.related_data.health_records }} 条</div>
@@ -573,15 +573,15 @@ const cfgRows = computed(() => {
     ['买入触发', trigger],
     ['大盘择时', reg.enabled ? `沪深300<MA${reg.ma_window ?? 20}空仓（${reg.max_skip_days ?? 2}天后放行）` : '不限'],
     ['组合闸门', (c.portfolio_gate?.dd ?? 0) > 0 ? `组合回撤${(c.portfolio_gate.dd * 100).toFixed(0)}%停止开仓` : '关闭'],
-    ['执行', '信号日收盘撮合 · 卖出T+1'],
+    ['执行', '信号日收盘撮合 / 卖出T+1'],
   ]
 })
 const basicMetrics = computed(() => {
   const s = store.selected
   if (!s) return []
   return [
-    { label:'状态', value: store.statusLabel(s.status), color: s.status==='ACTIVE'?'#0a7a5a':s.status==='PENDING'?'#f59e0b':s.status==='TRAINING'?'#f97316':undefined },
-    { label:'夏普', value: s.sharpe?.toFixed(2)||'—', color:'#0a7a5a' },
+    { label:'状态', value: store.statusLabel(s.status), color: s.status==='ACTIVE'?'var(--c-down)':s.status==='PENDING'?'var(--c-warn)':s.status==='TRAINING'?'#f97316':undefined },
+    { label:'夏普', value: s.sharpe?.toFixed(2)||'—', color:'var(--c-down)' },
     { label:'胜率', value: s.win_rate ? (s.win_rate*100).toFixed(0)+'%' : '—' },
     { label:'最大回撤', value: s.max_drawdown ? (s.max_drawdown*100).toFixed(1)+'%' : '—' },
     { label:'创建时间', value: (s.created_at||'').slice(0,10) },
@@ -677,7 +677,7 @@ async function handleDeleteClick(v) {
 
 // ── 主备制：角色徽标 + 切换/归档 ──
 const roleLabel = (v) => {
-  if (v.status === 'ACTIVE') return v.role === 'primary' ? '已上线 · 主' : '已上线 · 备'
+  if (v.status === 'ACTIVE') return v.role === 'primary' ? '已上线（主）' : '已上线（备）'
   return store.statusLabel(v.status)
 }
 async function handlePromote(v) {
@@ -752,15 +752,15 @@ onMounted(async () => {
 .model-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 0 0 14px;
+  margin: 0 0 12px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
   background: var(--c-bg-header);
   overflow: hidden;
 }
-.model-metrics > div { padding: 10px 14px; border-left: 1px solid var(--c-border); }
+.model-metrics > div { padding: 10px 12px; border-left: 1px solid var(--c-border); }
 .model-metrics > div:first-child { border-left: 0; }
-.model-metrics span { display: block; font-size: 11px; color: var(--c-text-dim); }
+.model-metrics span { display: block; font-size: var(--text-meta); color: var(--c-text-dim); }
 .model-metrics b { display: block; margin-top: 2px; font-size: 15px; font-weight: 600; color: var(--c-text); }
 @media (max-width: 768px) {
   .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

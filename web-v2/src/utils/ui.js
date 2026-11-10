@@ -20,8 +20,8 @@ export function statusOf(s) {
 }
 
 // A 股行情语义：涨红跌绿（质量评价用 success/error，勿混用）
-export const UP_COLOR = '#c22b3f'
-export const DOWN_COLOR = '#0a7a5a'
+export const UP_COLOR = 'var(--c-up)'
+export const DOWN_COLOR = 'var(--c-down)'
 
 // 金额缩写：≥1e8 → X.XX亿；≥1e4 → X.XX万；否则千分位
 export function fmtMoney(v, d = 2) {

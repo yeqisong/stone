@@ -10,8 +10,8 @@
       <AppIcon name="target" :size="13" /> 只看关注池
     </n-button>
     <n-input v-model:value="kw" size="tiny" style="width:180px" placeholder="标题/摘要关键词..." clearable @keyup.enter="doSearch" />
-    <n-button type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>
-    <span style="font-size:11px;color:var(--c-text-faint)">共 {{total}} 条</span>
+    <n-button class="cta" type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>
+    <span style="font-size: var(--text-meta);color:var(--c-text-faint)">共 {{total}} 条</span>
   </n-space>
 
   <div class="fill-scroll" style="flex:1;min-height:0;overflow-y:auto">
@@ -19,7 +19,7 @@
       <div v-if="!rows.length && !loading" style="padding:32px 0;text-align:center;color:var(--c-text-faint);font-size:12px">
         没有符合条件的资讯
       </div>
-      <div style="display:flex;flex-direction:column;gap:6px;padding-bottom:8px">
+      <div class="nv-list">
         <div v-for="n in rows" :key="n.id" class="nv-item" @click="open(n)">
           <div class="nv-meta">
             <span>{{ (n.published_at||'').slice(5,16) }}</span>
@@ -31,7 +31,7 @@
             <span v-if="n.summary===null && n.summary_state!=='short_skip'" class="nv-pending" title="尚未 LLM 总结（每 20 分钟一轮增量总结）">待总结</span>
             <span v-else-if="n.summary_state==='short_skip'" class="nv-pending" title="正文过短（<20 字），按规则不做 LLM 总结">短讯</span>
             <span v-if="sentiOf(n.sentiment)" :style="{color:sentiOf(n.sentiment).c,fontWeight:600}">{{ sentiOf(n.sentiment).t }}</span>
-            <span style="margin-left:auto;flex-shrink:0;display:inline-flex;gap:5px;align-items:center">
+            <span style="margin-left:auto;flex-shrink:0;display:inline-flex;gap:4px;align-items:center">
               <span v-for="s in n.stocks.slice(0,3)" :key="s.code" class="nv-stock" @click.stop="emit('show-detail', s.code)">{{ s.name }}</span>
             </span>
           </div>
@@ -70,7 +70,7 @@ const IMP_OPTS = [
 ]
 const CAT_NAME = { flash: '快讯', stock_news: '个股新闻', report: '研报', notice: '公告' }
 // 分类色属「质量/状态域」的标识色，不表达涨跌方向，故不受红绿铁律约束
-const CAT_COLOR = { flash: 'var(--c-info)', stock_news: 'var(--c-text-dim)', report: 'var(--c-text-dim)', notice: '#f59e0b' }
+const CAT_COLOR = { flash: 'var(--c-info)', stock_news: 'var(--c-text-dim)', report: 'var(--c-text-dim)', notice: 'var(--c-warn)' }
 const SRC_NAME = { cls: '财联社', em724: '东财7×24', wscn: '华尔街见闻', em_stock: '东财', em_report: '东财研报', cninfo: '巨潮' }
 const SENTI = { 1: { t: '利好', c: UP_COLOR }, 0: { t: '中性', c: 'var(--c-text-faint)' }, '-1': { t: '利空', c: DOWN_COLOR } }
 const sentiOf = s => (s === null || s === undefined) ? null : SENTI[s] || SENTI[String(s)]
@@ -139,26 +139,31 @@ onMounted(() => { parseHash(); load(); window.addEventListener('popstate', onPop
 onUnmounted(() => window.removeEventListener('popstate', onPopstate))
 </script>
 <style scoped>
-.nv-item {
-  padding: 7px 9px; background: var(--c-card-bg); border-radius: 6px;
-  border: 1px solid var(--c-border); cursor: pointer;
+.nv-list {
+  background: var(--c-card-bg); border: 1px solid var(--c-border);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: var(--space-2);
 }
-.nv-item:hover { border-color: var(--c-card-bg-hover); }
+.nv-item {
+  padding: var(--space-3) var(--space-4); cursor: pointer;
+  border-bottom: 1px solid var(--c-border-light);
+}
+.nv-item:last-child { border-bottom: 0; }
+.nv-item:hover { background: var(--c-card-bg-hover); }
 .nv-meta {
-  display: flex; align-items: center; gap: 7px; font-size: 11px;
+  display: flex; align-items: center; gap: 8px; font-size: var(--text-meta);
   color: var(--c-text-faint); margin-bottom: 3px;
 }
 .nv-cat { font-weight: 600; }
-.nv-imp { border-radius: 8px; padding: 0 5px; font-weight: 600; }
-.nv-imp3 { background: rgba(194,43,63,0.16); color: #c22b3f; }
-.nv-imp2 { background: rgba(148,163,184,0.18); color: var(--c-text-dim); }
-.nv-pending { background: rgba(148,163,184,0.13); border-radius: 8px; padding: 0 5px; }
+.nv-imp { border-radius: var(--radius); padding: 0 4px; font-weight: 600; }
+.nv-imp3 { background: color-mix(in srgb, var(--c-up) 16%, transparent); color: var(--c-up); }
+.nv-imp2 { background: color-mix(in srgb, var(--c-text-dim) 18%, transparent); color: var(--c-text-dim); }
+.nv-pending { background: color-mix(in srgb, var(--c-text-dim) 13%, transparent); border-radius: var(--radius); padding: 0 4px; }
 .nv-stock {
-  background: rgba(148,163,184,0.16); border-radius: 8px; padding: 0 5px;
+  background: color-mix(in srgb, var(--c-text-dim) 16%, transparent); border-radius: var(--radius); padding: 0 4px;
   color: var(--c-info); cursor: pointer; white-space: nowrap;
 }
-.nv-title { font-size: 12px; line-height: 1.5; color: var(--c-text); font-weight: 500; word-break: break-word; }
-.nv-summary { font-size: 11px; line-height: 1.55; color: var(--c-text-dim); margin-top: 2px; word-break: break-word; }
+.nv-title { font-size: var(--text-title); line-height: 1.55; color: var(--c-text); font-weight: 500; word-break: break-word; }
+.nv-summary { font-size: var(--text-body); line-height: 1.65; color: var(--c-text-dim); margin-top: 2px; word-break: break-word; }
 .nv-topics { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-.nv-topic { font-size: 11px; color: var(--c-text-faint); background: rgba(148,163,184,0.12); border-radius: 3px; padding: 0 4px; }
+.nv-topic { font-size: var(--text-meta); color: var(--c-text-faint); background: color-mix(in srgb, var(--c-text-dim) 12%, transparent); border-radius: var(--radius-sm); padding: 0 4px; }
 </style>

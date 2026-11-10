@@ -48,6 +48,16 @@ export function renderMarkdown(text, opts = {}) {
       continue
     }
 
+    // 引用块（模型常用 > 写数据来源/免责声明）
+    if (/^\s*>\s?/.test(line)) {
+      const buf = []
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        buf.push(lines[i].replace(/^\s*>\s?/, '')); i++
+      }
+      out.push('<blockquote class="agent-quote">' + buf.map(t => inline(t)).join('<br/>') + '</blockquote>')
+      continue
+    }
+
     // 表格（当前行有竖线 + 下一行是分隔行）
     if (isTableRow(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
       const head = splitRow(line)

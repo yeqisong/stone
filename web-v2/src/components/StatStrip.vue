@@ -83,14 +83,14 @@ onUnmounted(() => { rafs.forEach(id => cancelAnimationFrame(id)); timers.forEach
 </script>
 
 <style scoped>
-.stat-strip { display: flex; gap: 18px; justify-content: center; padding: 8px 0 12px; flex-wrap: wrap; }
+.stat-strip { display: flex; gap: 16px; justify-content: center; padding: 8px 0 12px; flex-wrap: wrap; }
 .stat-item { text-align: center; min-width: 62px; }
-.stat-label { font-size: 11px; color: var(--c-text-dim); white-space: nowrap; }
+.stat-label { font-size: var(--text-meta); color: var(--c-text-dim); white-space: nowrap; }
 .stat-value { font-size: 20px; font-weight: 600; line-height: 1.25; }
 @media (max-width: 768px) {
   .stat-strip { gap: 10px; padding: 6px 0 10px; }
   .stat-item { min-width: 56px; }
-  .stat-label { font-size: 11px; }
+  .stat-label { font-size: var(--text-meta); }
   .stat-value { font-size: 18px; }
 }
 </style>

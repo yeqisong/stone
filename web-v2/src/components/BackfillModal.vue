@@ -13,7 +13,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between">
       <div>
         <div style="font-size:13px;color:var(--c-text)">{{ forceUpdate ? ' 强制更新' : ' 断点续传' }}</div>
-        <div style="font-size:11px;color:var(--c-text-dim)">{{ forceUpdate ? '重新下载并覆盖已有数据' : '跳过已有数据，仅补全缺失部分' }}</div>
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ forceUpdate ? '重新下载并覆盖已有数据' : '跳过已有数据，仅补全缺失部分' }}</div>
       </div>
       <n-switch v-model:value="forceUpdate" />
     </div>
@@ -22,13 +22,13 @@
     <div style="display:flex;align-items:center;justify-content:space-between">
       <div>
         <div style="font-size:13px;color:var(--c-text)">并发数</div>
-        <div style="font-size:11px;color:var(--c-text-dim)">每批拉取的股票数量，默认20。减小可避免OOM</div>
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim)">每批拉取的股票数量，默认20。减小可避免OOM</div>
       </div>
       <n-input-number v-model:value="batchSize" :min="1" :max="500" size="small" style="width:80px" />
     </div>
 
     <!-- 提示信息 -->
-    <div v-if="type==='fund'" style="font-size:11px;color:var(--c-text-dim);padding:4px 8px;background:rgba(194,43,63,0.06);border-radius:6px">
+    <div v-if="type==='fund'" style="font-size: var(--text-meta);color:var(--c-text-dim);padding:4px 8px;background:color-mix(in srgb, var(--c-up) 6%, transparent);border-radius:6px">
       基本面按季度回填，日期范围自动对齐到季度起止。非强制模式跳过已有季度数据。
     </div>
   </n-space>

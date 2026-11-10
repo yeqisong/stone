@@ -15,8 +15,8 @@
       <n-button size="tiny" :type="colorMode==='volr'?'primary':'default'" @click="switchColorMode('volr')" title="量比（今日量/前20日均量）">量比</n-button>
     </n-button-group>
     <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="s" :size="13" />  只看信号</n-button>
-    <span v-if="!loading && !noData" style="font-size:11px;color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 · 蓝实线=实盘持仓 · 青虚线=纸面组合">
-      <span :style="{color:SIG_COLOR}">━</span>信号 · <span style="color:var(--c-info)">━</span>实盘 · <span style="color:var(--c-text-dim)">╌</span>纸面
+    <span v-if="!loading && !noData" style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 / 蓝实线=实盘持仓 / 青虚线=纸面组合">
+      <span style="color:var(--c-warn)">━</span>信号 / <span style="color:var(--c-info)">━</span>实盘 / <span style="color:var(--c-text-dim)">╌</span>纸面
     </span>
     <n-tag v-if="!loading && !noData && levelLabel" size="small" style="margin-left:auto">{{levelLabel}}</n-tag>
     <n-button v-if="drillStack.length>0" size="tiny" @click="goBack"><AppIcon name="arrow-left" :size="12" /> {{drillStack.length>1?drillStack[drillStack.length-2].name:'全部行业'}}</n-button>
@@ -25,7 +25,7 @@
   <n-spin v-if="loading" style="padding:60px" />
   <div v-else-if="noData" style="text-align:center;padding:60px;color:var(--c-text-dim)">
     <div style="font-size:48px;margin-bottom:12px"><AppIcon name="inbox" :size="44" style="color:var(--c-text-faint)" /></div>
-    <div style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size:11px">请等待数据采集完成后重试，或选择其他日期</span></div>
+    <div style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size: var(--text-meta)">请等待数据采集完成后重试，或选择其他日期</span></div>
   </div>
   <div v-else>
     <div :id="'treemap-chart'" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
@@ -34,7 +34,7 @@
   <!-- 生成确认弹窗 -->
   <n-modal v-model:show="showGenModal" preset="card" title="生成树图" style="width:360px;max-width:85vw" :mask-closable="false">
     <div style="text-align:center;padding:10px 0">
-      <div style="font-size:14px;color:var(--c-text);margin-bottom:16px">为 {{selDate}} 重新生成树图数据？<br><span style="font-size:11px;color:var(--c-text-dim)">已有数据将被更新，无数据将新建</span></div>
+      <div style="font-size:14px;color:var(--c-text);margin-bottom:16px">为 {{selDate}} 重新生成树图数据？<br><span style="font-size: var(--text-meta);color:var(--c-text-dim)">已有数据将被更新，无数据将新建</span></div>
       <div style="display:flex;gap:10px;justify-content:center">
         <n-button @click="showGenModal = false">取消</n-button>
         <n-button type="primary" @click="doGenerate" :loading="genLoading">生成</n-button>
@@ -47,6 +47,7 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { chartColors as T } from '../utils/chart'
 import { NSpace, NDatePicker, NTag, NButton, NButtonGroup, NSpin, NModal } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
@@ -120,7 +121,6 @@ function onDateChange() {
 const colorMode = ref('chg1d')   // chg1d | chg20d | volr
 const onlySignal = ref(false)
 const sigLive = ref({})          // 当日实时信号 {code: {strength, reason, model_version}}
-const SIG_COLOR = '#f59e0b'
 
 function switchColorMode(m) { colorMode.value = m; syncQuery(); renderChart() }
 
@@ -239,8 +239,8 @@ function buildTreemapSeries(nodes, depth, borderColor) {
     // 描边优先级：实盘持仓(蓝实线) > 纸面组合(青虚线) > 信号(金)；名字前缀兜底标注
     let bColor = borderColor, bWidth = 0.5, bType = 'solid', namePrefix = ''
     if (hold) { bColor = theme.colors.info; bWidth = 3; namePrefix = '◆' }   // canvas 不解析 CSS 变量，取真实色值
-    else if (paper) { bColor = '#06b6d4'; bWidth = 2; bType = 'dashed'; namePrefix = '◇' }
-    else if (sig) { bColor = SIG_COLOR; bWidth = 2.5 }
+    else if (paper) { bColor = T.series[5]; bWidth = 2; bType = 'dashed'; namePrefix = '◇' }
+    else if (sig) { bColor = T.warn; bWidth = 2.5 }
     const item = {
       name: namePrefix + n.name,
       value: n.value,
@@ -299,9 +299,9 @@ function renderChart() {
           if (detail.vr != null) html += `<br/>量比: ${detail.vr.toFixed(2)}`
           if (detail.tr != null) html += `<br/>换手: ${detail.tr.toFixed(2)}%`
           html += `<br/>趋势: ${detail.trend_up!==false?'↑':'↓'}`
-          if (d._sig) html += `<br/><span style="color:#f59e0b">★ 信号强度${d._sig.strength||'?'} ${d._sig.reason||''}</span>`
-          if (d._hold) html += `<br/><span style="color:#c22b3f">◆ 实盘持仓 ${d._hold.qty} 股 / 成本 ¥${Number(d._hold.cost).toFixed(2)}</span>`
-          if (d._paper) html += `<br/><span style="color:#06b6d4">◇ 纸面持仓 ${d._paper.shares} 股（模拟口径） / 买价 ¥${Number(d._paper.buy_price).toFixed(2)}</span>`
+          if (d._sig) html += `<br/><span style="color:${T.warn}">★ 信号强度${d._sig.strength||'?'} ${d._sig.reason||''}</span>`
+          if (d._hold) html += `<br/><span style="color:${T.up}">◆ 实盘持仓 ${d._hold.qty} 股 / 成本 ¥${Number(d._hold.cost).toFixed(2)}</span>`
+          if (d._paper) html += `<br/><span style="color:${T.series[5]}">◇ 纸面持仓 ${d._paper.shares} 股（模拟口径） / 买价 ¥${Number(d._paper.buy_price).toFixed(2)}</span>`
         } else {
           html += `<br/>${mLabel}: ${metric.value==='volume'?fmt(val)+'股':metric.value==='amount'?'¥'+(val/1e8).toFixed(1)+'亿':metric.value==='pe'?(100-(val||0)/100).toFixed(0)+'%':'¥'+(val/1e8).toFixed(1)+'亿'}`
           html += `<br/>涨跌: ${(d.chg_pct||0)>0?'+':''}${(d.chg_pct||0).toFixed(2)}%`
@@ -312,7 +312,7 @@ function renderChart() {
           if (up.med != null) html += `<br/>中位涨跌(${tag}): ${up.med>0?'+':''}${up.med}%`
           else if (detail.med_chg != null) html += `<br/>中位涨跌: ${detail.med_chg>0?'+':''}${detail.med_chg}%`
           if (detail.avg_tr) html += `<br/>平均换手: ${detail.avg_tr}%`
-          if (detail.sig) html += `<br/><span style="color:#f59e0b">★ 信号 ${detail.sig} 只</span>`
+          if (detail.sig) html += `<br/><span style="color:${T.warn}">★ 信号 ${detail.sig} 只</span>`
         }
         return html
       }
@@ -337,7 +337,7 @@ function renderChart() {
               return d.name
             } },
           itemStyle: { borderColor: chartBg, borderWidth: 2 } },
-        { label: { show: true, fontSize: 10, color: theme.isDark ? '#fff' : '#1a1a2e' }, itemStyle: { borderColor: chartBg, borderWidth: 0.5 } },
+        { label: { show: true, fontSize: 11, color: theme.isDark ? '#fff' : '#1a1a2e' }, itemStyle: { borderColor: chartBg, borderWidth: 0.5 } },
       ],
       data: data,
       emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 2 } }
@@ -403,6 +403,8 @@ onUnmounted(() => {
   const el = document.getElementById('treemap-chart')
   if (el && el._echart) { el._echart.dispose(); el._echart = null }
 })
+
+watch(() => theme.isDark, () => nextTick(() => { renderChart() }))
 
 onMounted(async () => {
   applyQuery()

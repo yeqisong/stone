@@ -34,18 +34,18 @@
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
         <div style="display:flex;gap:4px">
-          <n-button size="tiny" quaternary @click="showAiFormula = true" :loading="aiFormulaLoading" style="font-size:11px"><AppIcon name="a" :size="13" />  AI</n-button>
-          <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size:11px"><AppIcon name="search" :size="13" />  验证</n-button>
+          <n-button size="tiny" quaternary @click="showAiFormula = true" :loading="aiFormulaLoading" style="font-size: var(--text-meta)"><AppIcon name="a" :size="13" />  AI</n-button>
+          <n-button size="tiny" quaternary @click="doValidate" :loading="validating" style="font-size: var(--text-meta)"><AppIcon name="search" :size="13" />  验证</n-button>
         </div>
       </div>
       <MonacoEditor ref="formulaEditor" v-model="form.formula" :completions="keplCompletions" />
-      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-dim)">
+      <div style="display:flex;align-items:center;gap:8px;font-size: var(--text-meta);color:var(--c-text-dim)">
         <span><AppIcon name="file-text" :size="13" />  算子速查：输入可自动补全</span>
         <n-button size="tiny" quaternary @click="showOpsPanel = !showOpsPanel">{{ showOpsPanel ? '收起' : '展开' }}</n-button>
       </div>
       <div v-if="showOpsPanel && keplFns" style="max-height:200px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:8px">
         <div v-for="grp in opGroups" :key="grp.label" style="margin-bottom:6px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
+          <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
           <div style="display:flex;flex-wrap:wrap;gap:4px">
             <n-tag v-for="op in grp.items" :key="op.name" size="small" :bordered="false"
                    style="cursor:pointer;font-family:monospace" :title="`${op.desc}　例: ${op.eg}`"
@@ -56,7 +56,7 @@
 
       <!-- 依赖预览 -->
       <div v-if="parseDeps.length > 0" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:10px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px"><AppIcon name="link" :size="13" />  依赖项（自动提取）</div>
+        <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:6px"><AppIcon name="link" :size="13" />  依赖项（自动提取）</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px">
           <n-tag v-for="d in parseDeps" :key="d" size="tiny" :bordered="false" :type="d.includes('.') ? 'warning' : 'info'">
             <AppIcon :name="d.includes('.') ? 'file-text' : 'link'" :size="13" /> {{ d }}
@@ -66,11 +66,11 @@
 
       <!-- 校验结果 -->
       <div v-if="validateResult">
-        <div v-if="validateResult.ok" style="background:rgba(10,122,90,.08);border:1px solid rgba(10,122,90,.2);border-radius:6px;padding:8px;font-size:11px;color:#0a7a5a">
+        <div v-if="validateResult.ok" style="background:var(--c-down-weak);border:1px solid color-mix(in srgb, var(--c-down) 20%, transparent);border-radius:6px;padding:8px;font-size: var(--text-meta);color:var(--c-down)">
           <AppIcon name="check" :size="13" />  公式语法正确，共 {{ validateResult.dependencies?.length || 0 }} 个依赖项
         </div>
-        <div v-else style="background:rgba(194,43,63,.08);border:1px solid rgba(194,43,63,.2);border-radius:6px;padding:8px">
-          <div v-for="(e,i) in validateResult.errors" :key="i" style="font-size:11px;color:#c22b3f">{{ e.message }}</div>
+        <div v-else style="background:var(--c-up-faint);border:1px solid color-mix(in srgb, var(--c-up) 20%, transparent);border-radius:6px;padding:8px">
+          <div v-for="(e,i) in validateResult.errors" :key="i" style="font-size: var(--text-meta);color:var(--c-up)">{{ e.message }}</div>
         </div>
       </div>
 
@@ -94,78 +94,78 @@
     <template v-else-if="detailItem">
       <!-- 信息卡 -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint)">实体</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 12px;min-width:70px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint)">实体</div>
           <div style="font-size:15px;font-weight:600;color:var(--c-text)">{{ entityLabel[detailItem.target_entity] || detailItem.target_entity }}</div>
         </div>
-        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint)">状态</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 12px;min-width:70px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint)">状态</div>
           <n-tag :type="statusTypeMap[detailItem.status]||'default'" size="tiny" :bordered="false">{{ statusMap[detailItem.status] }}</n-tag>
         </div>
-        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint)">中文名</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 12px;min-width:70px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint)">中文名</div>
           <div style="font-size:13px;font-weight:600;color:var(--c-text)">{{ detailItem.display_name || '—' }}</div>
         </div>
-        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint)">创建</div>
+        <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 12px;min-width:70px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint)">创建</div>
           <div style="font-size:12px;color:var(--c-text)">{{ (detailItem.created_at||'').slice(0,10) }}</div>
         </div>
       </div>
 
       <!-- 公式 -->
-      <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;margin-bottom:14px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">KEPL 公式</div>
+      <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+        <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:6px">KEPL 公式</div>
         <code style="font-size:13px;color:var(--c-text);word-break:break-all">{{ detailItem.formula }}</code>
       </div>
 
       <!-- 质量仪表盘 -->
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-        <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
-          <div :style="{fontSize:'22px',fontWeight:600,color:completenessPct>=80?'#0a7a5a':completenessPct>=50?'#f59e0b':'#c22b3f'}">{{ completenessPct }}%</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
+          <div :style="{fontSize:'22px',fontWeight:600,color:completenessPct>=80?'var(--c-down)':completenessPct>=50?'var(--c-warn)':'var(--c-up)'}">{{ completenessPct }}%</div>
           <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
-            <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=80?'#0a7a5a':completenessPct>=50?'#f59e0b':'#c22b3f',borderRadius:'4px'}"></div>
+            <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=80?'var(--c-down)':completenessPct>=50?'var(--c-warn)':'var(--c-up)',borderRadius:'4px'}"></div>
           </div>
         </div>
-        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
+        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
           <div style="font-size:20px;font-weight:600;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
         </div>
-        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  异常缺失</div>
-          <div :style="{fontSize:'20px',fontWeight:600,color:detailItem.abnormal_missing_cells>0?'#c22b3f':'var(--c-text-dim)'}">{{ (detailItem.abnormal_missing_cells||0).toLocaleString() }}</div>
+        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  异常缺失</div>
+          <div :style="{fontSize:'20px',fontWeight:600,color:detailItem.abnormal_missing_cells>0?'var(--c-up)':'var(--c-text-dim)'}">{{ (detailItem.abnormal_missing_cells||0).toLocaleString() }}</div>
         </div>
-        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="calendar" :size="13" />  最近计算</div>
-          <div :style="{fontSize:'13px',fontWeight:600,color:detailStale?'#f59e0b':'var(--c-text)'}">{{ detailItem.latest_computed_date || '—' }}</div>
-          <div v-if="detailStale" style="font-size:11px;color:#f59e0b;margin-top:2px"><AppIcon name="alert" :size="13" />  超过5天未更新</div>
+        <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px;text-align:center">
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="calendar" :size="13" />  最近计算</div>
+          <div :style="{fontSize:'13px',fontWeight:600,color:detailStale?'var(--c-warn)':'var(--c-text)'}">{{ detailItem.latest_computed_date || '—' }}</div>
+          <div v-if="detailStale" style="font-size: var(--text-meta);color:var(--c-warn);margin-top:2px"><AppIcon name="alert" :size="13" />  超过5天未更新</div>
         </div>
       </div>
 
       <!-- 依赖关系 -->
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-up" :size="13" />  上游依赖（本特征依赖谁）</div>
+        <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px">
+          <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-up" :size="13" />  上游依赖（本特征依赖谁）</div>
           <div v-if="(detailItem.depends_on||[]).length">
             <n-tag v-for="d in detailItem.depends_on" :key="d" size="tiny" :bordered="false" type="info" style="margin-right:4px;margin-bottom:4px">{{ d }}</n-tag>
           </div>
-          <div v-else style="font-size:11px;color:var(--c-text-faint)">无（仅依赖原始字段）</div>
+          <div v-else style="font-size: var(--text-meta);color:var(--c-text-faint)">无（仅依赖原始字段）</div>
         </div>
-        <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px">
-          <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-down" :size="13" />  下游引用（谁依赖本特征）</div>
+        <div style="flex:1;min-width:180px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px">
+          <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:8px"><AppIcon name="trending-down" :size="13" />  下游引用（谁依赖本特征）</div>
           <div v-if="(detailItem.downstream||[]).length">
             <div v-for="ds in detailItem.downstream" :key="ds.feature_name" style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
               <span style="font-size:12px;color:var(--c-text)">{{ ds.feature_name }}</span>
               <n-tag :type="statusTypeMap[ds.status]||'default'" size="tiny" :bordered="false">{{ statusMap[ds.status] }}</n-tag>
             </div>
           </div>
-          <div v-else style="font-size:11px;color:var(--c-text-faint)">无下游引用</div>
+          <div v-else style="font-size: var(--text-meta);color:var(--c-text-faint)">无下游引用</div>
         </div>
       </div>
     </template>
     <template #footer>
       <n-space justify="space-between">
-        <span v-if="detailItem?.description" style="font-size:11px;color:var(--c-text-dim)">{{ detailItem.description }}</span>
+        <span v-if="detailItem?.description" style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ detailItem.description }}</span>
         <div style="display:flex;gap:8px">
           <n-button size="small" @click="showDetail=false">关闭</n-button>
           <n-button v-if="detailItem" size="small" type="primary" @click="showDetail=false; openEdit(detailItem)"><AppIcon name="edit" :size="13" />  编辑</n-button>
@@ -180,7 +180,7 @@
       <div style="font-size:12px;color:var(--c-text-dim)">描述计算逻辑，AI 根据 KEPL 语法和已注册函数生成公式。</div>
       <n-input v-model:value="aiFormulaText" type="textarea" placeholder="例如：收盘价相对5日均线的偏离度" :rows="4" />
       <div v-if="aiFormulaResult" style="margin-top:8px">
-        <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
+        <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:160px;overflow-y:auto">{{ aiFormulaResult }}</div>
         <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiFormula"><AppIcon name="check" :size="13" />  填入公式框</n-button>
       </div>
@@ -197,16 +197,16 @@
   <n-modal v-model:show="showCompute" preset="card" title="特征补数" style="width:420px;max-width:92vw" :mask-closable="false">
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text)">特征：<b>{{ computeTarget?.feature_name }}</b></div>
-      <div style="font-size:11px;color:var(--c-text-dim)">选择补数日期范围，系统将对该特征在指定日期内重新计算并入库。</div>
+      <div style="font-size: var(--text-meta);color:var(--c-text-dim)">选择补数日期范围，系统将对该特征在指定日期内重新计算并入库。</div>
       <n-date-picker v-model:value="computeDateRange" type="daterange" size="small" style="width:100%" clearable />
       <n-checkbox v-model:checked="computeForce">强制更新（覆盖已有数据）</n-checkbox>
       <div v-if="computeProgress" style="margin-top:8px">
-        <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:4px">
+        <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-bottom:4px">
           {{ computeProgress.current_date || '计算中...' }}
         </div>
         <n-progress type="line" :percentage="computeProgress.progress_pct || 0" :height="8" :border-radius="4"
           :status="computeProgress.status === 'failed' ? 'error' : computeProgress.status === 'completed' ? 'success' : 'default'" />
-        <div v-if="computeProgress.status === 'failed'" style="margin-top:8px;padding:10px;background:var(--c-error-bg, #fff0f0);border-radius:4px;font-size:12px;color:var(--c-error, #d03050)">
+        <div v-if="computeProgress.status === 'failed'" style="margin-top:8px;padding:10px;background:var(--c-up-weak);border-radius:4px;font-size:12px;color:var(--c-up)">
           <AppIcon name="x-circle" :size="13" />  计算失败：{{ computeProgress.error || '未知错误' }}
         </div>
       </div>
@@ -229,7 +229,7 @@
     <n-space vertical>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <n-select v-model:value="dedupHorizon" :options="[1,5,10,20].map(h=>({label:h+'日前瞻',value:h}))" size="small" style="width:110px" />
-        <span style="font-size:11px;color:var(--c-text-dim)">近 3 年 · ≤120 个抽样截面 · 相关 > 0.7 视为冗余 · |ICIR| ≥ 0.10 才推荐</span>
+        <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 3 年，≤120 个抽样截面，相关 &gt; 0.7 视为冗余，|ICIR| ≥ 0.10 才推荐</span>
         <div style="flex:1" />
         <n-button size="small" type="primary" :loading="dedupLoading" @click="loadDedup">计算</n-button>
       </div>
@@ -237,11 +237,11 @@
       <template v-if="dedup">
         <div style="display:flex;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:380px">
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:4px">截面相关矩阵（逐日 Spearman 的时间平均）</div>
+            <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px">截面相关矩阵（逐日 Spearman 的时间平均）</div>
             <div ref="dedupHeatmap" style="width:100%;height:420px"></div>
           </div>
           <div style="flex:1;min-width:300px">
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">
+            <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:6px">
               <AppIcon name="check" :size="13" />  推荐入选（{{ dedup.recommended.length }} 个，按 |ICIR| 贪心）
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">
@@ -250,11 +250,11 @@
                 {{ dedup.traffic[f]==='green'?'':dedup.traffic[f]==='yellow'?'':'' }}{{ f }}
               </n-tag>
             </div>
-            <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px">⏭ 跳过（{{ dedup.skipped.length }} 个）</div>
+            <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:6px">⏭ 跳过（{{ dedup.skipped.length }} 个）</div>
             <n-data-table :columns="dedupSkipCols" :data="dedup.skipped" size="tiny" :max-height="240" />
             <n-button size="small" type="primary" style="margin-top:12px" :loading="dedupApplying"
               @click="applyRecommended"><AppIcon name="check" :size="13" />  推荐组设为入选</n-button>
-            <div style="font-size:11px;color:var(--c-text-faint);margin-top:8px;line-height:1.7">
+            <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-top:8px;line-height:1.7">
               口径：相关性 = 因子逐日截面排名（cs_rank）后的 pooled Pearson，等价于逐日截面 Spearman
               的时间平均，回答"两个因子是否在挑同一批股票"；贪心按 |ICIR| 降序，与已选因子相关
               超阈值即跳过，同簇保留 ICIR 最高者。入选决策仍由你确认，批量按钮只改推荐组成员。
@@ -270,7 +270,10 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
-import { ref, computed, h, onMounted, onUnmounted } from 'vue'
+import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
+import { useThemeStore } from '../stores/theme'
+const _theme = useThemeStore()
+import { chartColors as T } from '../utils/chart'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress, NEmpty, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
@@ -309,7 +312,8 @@ async function loadIcBoard() {
 }
 
 // IC 红绿灯：渲染为彩色 CSS 圆点（canvas/文本皆不依赖彩色 emoji）
-const TRAFFIC_COLOR = { green:'#0a7a5a', yellow:'#f59e0b', red:'#c22b3f' }
+// 每次渲染时取值，跟随暗色主题（模块级对象会在主题变量写入前冻结）
+const trafficColor = t => ({ green: T.down, yellow: T.warn, red: T.up }[t]) || 'var(--c-text-faint)'
 const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'default' }, excluded:{ label:'已剔除', type:'error' } }
 
 // ── 去冗推荐 ──
@@ -349,7 +353,7 @@ function renderDedupHeatmap() {
     xAxis: { type: 'category', data: factors, axisLabel: { fontSize: 8, rotate: 60 } },
     yAxis: { type: 'category', data: factors, axisLabel: { fontSize: 8 } },
     visualMap: { min: -1, max: 1, calculable: true, orient: 'horizontal', left: 'center', bottom: 0,
-                 inRange: { color: ['#c22b3f', '#ffffff', '#c22b3f'] }, textStyle: { fontSize: 9 } },
+                 inRange: { color: [T.up, T.surface, T.up] }, textStyle: { fontSize: 11 } },
     series: [{ type: 'heatmap', data, label: { show: factors.length <= 15, fontSize: 8, formatter: p => p.data[2].toFixed(2) } }],
   })
 }
@@ -487,6 +491,8 @@ async function loadKeplFunctions() {
     keplFns.value = r.data
   } catch (e) { console.warn('算子目录加载失败', e) }
 }
+watch(() => _theme.isDark, () => nextTick(() => { renderDedupHeatmap() }))
+
 onMounted(loadKeplFunctions)
 
 // AI 上下文：语法规则 + 全部内置算子（动态生成，与注册表一致）
@@ -626,7 +632,7 @@ async function openDepGraph() {
     const r = await axios.get(API + '/api/features/dependency-graph')
     const { nodes, edges } = r.data
     const chart = echarts.init(depGraphContainer.value)
-    const colors = {0:'#9ca3af',1:'#c22b3f',2:'#f59e0b',3:'#c22b3f'}
+    const colors = {0:T.faint,1:T.up,2:T.warn,3:T.up}
     chart.setOption({
       tooltip: { formatter(p) { return p.data.name + (p.data.display_name?'<br/>'+p.data.display_name:'') } },
       series: [{
@@ -634,8 +640,8 @@ async function openDepGraph() {
         force: { repulsion: 200, edgeLength: [80,200] },
         data: nodes.map(n => ({ name:n.id, display_name:n.display_name, itemStyle:{color:colors[n.level]||colors[0]}, symbolSize:12 })),
         links: edges.map(e => ({ source: e.source, target: e.target })),
-        lineStyle: { color:'#6b7280', curveness:0.1, opacity:0.4 },
-        label: { show:true, fontSize:9, color:'var(--c-text)' },
+        lineStyle: { color:T.faint, curveness:0.1, opacity:0.4 },
+        label: { show:true, fontSize: 11, color:'var(--c-text)' },
       }]
     })
   } catch(e) { console.error(e) }
@@ -731,15 +737,15 @@ const entityOpts = Object.entries(entityLabel).map(([k,v]) => ({ label:v, value:
 
 const columns = [
   { title:'英文名', key:'feature_name', width:150, fixed:'left', ellipsis:{tooltip:true}, render(row) {
-    return h('span', { style:{cursor:'pointer',color:'#c22b3f',textDecoration:'underline'}, onClick:() => openDetail(row.id) }, row.feature_name)
+    return h('span', { class:'feat-link', style:{cursor:'pointer'}, onClick:() => openDetail(row.id) }, row.feature_name)
   }},
   { title:'中文名', key:'display_name', width:100, fixed:'left', ellipsis:{tooltip:true} },
-  { title:'族', key:'feature_group', width:70, render:(row) => row.feature_group || '—' },
+  { title:'族', key:'feature_group', width:100, ellipsis:{tooltip:true}, render:(row) => row.feature_group || '—' },
   { title:'实体', key:'target_entity', width:60, render:(row) => entityLabel[row.target_entity] || row.target_entity },
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
   { title:'完整度', key:'data_completeness', width:80, render:(row) => {
     const pct = Math.round((row.data_completeness||0)*1000)/10
-    const color = pct >= 60 ? '#0a7a5a' : pct >= 30 ? '#f59e0b' : '#c22b3f'
+    const color = pct >= 60 ? T.down : pct >= 30 ? T.warn : T.up
     return h('div', {}, [
       h('div', { style:{fontSize:'11px',color:'var(--c-text-dim)',marginBottom:'2px'} }, pct+'%'),
       h('div', { style:{background:'var(--c-border)',borderRadius:'3px',height:'4px',overflow:'hidden'} },
@@ -752,10 +758,10 @@ const columns = [
     if (!b || b.rank_ic == null) return h('span', { style:{color:'var(--c-text-faint)',fontSize:'11px'} }, '○ 未检验')
     return h('div', { style:{display:'flex',alignItems:'center',gap:'6px'} }, [
       h('span', { style:{display:'inline-block', width:'8px', height:'8px', borderRadius:'50%',
-        background: TRAFFIC_COLOR[b.traffic] || 'var(--c-text-faint)', verticalAlign:'middle', marginRight:'2px'} }, ''),
+        background: trafficColor(b.traffic), verticalAlign:'middle', marginRight:'2px'} }, ''),
       h('span', { style:{fontSize:'11px',color:'var(--c-text)'} }, (b.rank_ic>=0?'+':'') + b.rank_ic.toFixed(4)),
       h('span', { style:{fontSize:'11px',color:'var(--c-text-dim)'} }, 'IR ' + (b.icir>=0?'+':'') + (b.icir??0).toFixed(2)),
-      b.direction === '-' ? h('span', { style:{fontSize:'11px',color:'#f59e0b'} }, '↩') : null,
+      b.direction === '-' ? h('span', { style:{fontSize:'var(--text-meta)',color:T.warn} }, '反向') : null,
     ])
   }},
   { title:'决策', key:'ic_status', width:74, render(row) {
@@ -776,7 +782,7 @@ const columns = [
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 function rowProps(row) {
-  const colors = { enabled:'#0a7a5a', draft:'#f59e0b', pending_recalc:'#c22b3f', deprecated:'#9ca3af', data_anomaly:'#c22b3f' }
+  const colors = { enabled:T.down, draft:T.warn, pending_recalc:T.up, deprecated:T.faint, data_anomaly:T.up }
   return { style: { borderLeft: '3px solid ' + (colors[row.status]||'transparent') } }
 }
 

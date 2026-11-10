@@ -45,11 +45,11 @@
         <!-- 宽屏顶部导航：核心 | 管理 分组 -->
         <div v-if="!isNarrow" class="app-nav">
           <template v-for="t in primaryTabs" :key="t.key">
-            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
+            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" :title="t.label" :aria-label="t.label" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
           </template>
           <span class="nav-divider"></span>
           <template v-for="t in adminTabs" :key="t.key">
-            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
+            <n-button :type="nav.tab===t.key?'primary':'default'" size="small" :title="t.label" :aria-label="t.label" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
           </template>
         </div>
 
@@ -85,7 +85,7 @@
             <span class="h5-tab-label">{{ t.label }}</span>
           </button>
           <button class="h5-tab" :class="{ active: isAdminTab }" @click="showAdmin = !showAdmin">
-            <span class="h5-tab-icon">⋮</span>
+            <span class="h5-tab-icon"><AppIcon name="sliders" :size="20" /></span>
             <span class="h5-tab-label">管理</span>
           </button>
         </div>
@@ -158,7 +158,7 @@ addWsListener(data => {
   if (data && data.type === 'risk_alert' && notifEnabled.value
       && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     for (const a of (data.alerts || [])) {
-      const n = new Notification(`风控告警 · ${a.title}`, { body: a.body || '', tag: 'risk-' + a.id })
+      const n = new Notification(`风控告警：${a.title}`, { body: a.body || '', tag: 'risk-' + a.id })
       n.onclick = () => { window.focus(); nav.switchTab('x'); n.close() }
     }
   }
@@ -286,10 +286,14 @@ const themeOverrides = computed(() => {
   return overrides
 })
 
-// 主题落到 <html>，让登录页/全局 token 也跟随深浅色
+// 主题落到 <html>：登录页、Teleport 到 body 的弹窗/下拉/提示都要能读到 --c-*
+// （只挂在 .app-root 上时，n-modal 等传送到 body 的内容拿不到变量）
 watchEffect(() => {
   const el = document.documentElement
   el.dataset.theme = theme.isDark ? 'dark' : 'light'
+  for (const [k, v] of Object.entries(theme.colors)) {
+    el.style.setProperty('--c-' + k.replace(/[A-Z]/g, m => '-' + m.toLowerCase()), v)
+  }
 })
 
 // 关闭管理抽屉：切到非管理 tab 时收起
@@ -382,8 +386,8 @@ if (!showLogin.value) {
 /* 新版本提示条（右下角悬浮，不遮挡主内容） */
 .app-update { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display: flex;
   align-items: center; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--c-text);
-  background: var(--c-card-bg); border: 1px solid rgba(194,43,63,0.45); border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
+  background: var(--c-card-bg); border: 1px solid color-mix(in srgb, var(--c-up) 45%, transparent); border-radius: var(--radius);
+  box-shadow: 0 4px 16px var(--c-shadow-color); }
 
 .app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 /* 组合按钮：合并组内圆角与边框（naive ButtonGroup 子按钮圆角样式未生效，全局兜底） */
@@ -405,7 +409,7 @@ if (!showLogin.value) {
   .n-data-table-th--fixed-left ~ .n-data-table-th--fixed-left { position: static !important; }
 }
 .page-titlebar { display: flex; align-items: flex-end; gap: 12px; margin: 2px 0 16px; flex-shrink: 0; }
-.page-titlebar h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; color: var(--c-text); }
+.page-titlebar h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; color: var(--c-text); text-wrap: balance; }
 .page-titlebar span { margin-bottom: 3px; font-size: 12px; color: var(--c-text-dim); }
 @media (max-width: 768px) {
   .page-titlebar { margin: 0 0 12px; }
@@ -414,9 +418,9 @@ if (!showLogin.value) {
 }
 
 .app-header { display: flex; align-items: center; justify-content: space-between; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border); padding: 0 24px; height: 56px; }
-.app-header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.app-header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--c-text); display: flex; align-items: center; gap: 8px; white-space: nowrap; flex-shrink: 0; }
-.brand-mark { width: 4px; height: 20px; border-radius: 2px; background: var(--c-accent); display: inline-block; }
+.brand-mark { width: 4px; height: 20px; border-radius: var(--radius-sm); background: var(--c-accent); display: inline-block; }
 .header-sep { width: 1px; height: 12px; background: var(--c-border); }
 .header-date { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
 .market-status { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
@@ -426,7 +430,7 @@ if (!showLogin.value) {
 .user-chip { height: 32px; padding: 0 10px; font-size: 12px; color: var(--c-text); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 4px; background: var(--c-bg-header); }
 .user-chip:hover { background: var(--c-card-bg-hover); }
 .user-chip .nav-svg { margin-right: 4px; flex-shrink: 0; }
-.ws-info { font-size: 12px; display: flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--c-text-dim); }
+.ws-info { font-size: 12px; display: flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--c-text-dim); }
 .ws-info .ws-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--c-error); }
 .ws-info.ok { color: var(--c-text-dim); }
 .ws-info.ok .ws-dot { background: var(--c-accent); }
@@ -438,7 +442,7 @@ if (!showLogin.value) {
 .app-nav .n-button--primary-type { color: var(--c-accent) !important; font-weight: 600 !important; }
 .app-nav .n-button--primary-type::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 1px; background: var(--c-accent); }
 .app-nav .n-button .n-button__border, .app-nav .n-button .n-button__state-border { display: none !important; }
-.app-nav .n-button:focus-visible { outline: none !important; }
+.app-nav .n-button:focus-visible { outline: 2px solid var(--c-accent) !important; outline-offset: -4px !important; border-radius: var(--radius-sm) !important; }
 .app-nav .n-button .n-base-wave, .n-button-group .n-button .n-base-wave { display: none !important; }
 .app-nav .n-button .nav-svg { margin-right: 6px; }
 .nav-divider { width: 1px; height: 18px; background: var(--c-border); margin: auto 10px; flex-shrink: 0; }
@@ -470,19 +474,19 @@ if (!showLogin.value) {
 .h5-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; height: 58px; padding-bottom: env(safe-area-inset-bottom); background: var(--c-bg-header); border-top: 1px solid var(--c-border); }
 .h5-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--c-text-dim); min-width: 0; }
 .h5-tab-icon { font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center; }
-.h5-tab-label { font-size: 11px; line-height: 1.2; }
+.h5-tab-label { font-size: var(--text-meta); line-height: 1.2; }
 .h5-tab.active { color: var(--c-accent); }
 .h5-tab.active .h5-tab-label { font-weight: 600; }
 
 /* H5 管理抽屉 */
-.admin-sheet-mask { position: fixed; inset: 0; z-index: 120; background: rgba(0, 0, 0, .4); display: flex; align-items: flex-end; }
-.admin-sheet { width: 100%; background: var(--c-bg-header); border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 20px rgba(0,0,0,.15); }
+.admin-sheet-mask { position: fixed; inset: 0; z-index: 120; background: var(--c-scrim); display: flex; align-items: flex-end; }
+.admin-sheet { width: 100%; background: var(--c-bg-header); border-radius: var(--radius) var(--radius) 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 20px var(--c-shadow-color); }
 .admin-sheet-title { font-size: 13px; font-weight: 600; color: var(--c-text); text-align: center; margin-bottom: 12px; }
 .admin-sheet-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 12px; }
-.admin-sheet-item { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 14px 0; border-radius: 10px; background: var(--c-card-bg); border: 1px solid var(--c-border); color: var(--c-text); font-size: 13px; cursor: pointer; }
+.admin-sheet-item { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 12px 0; border-radius: var(--radius); background: var(--c-card-bg); border: 1px solid var(--c-border); color: var(--c-text); font-size: 13px; cursor: pointer; }
 .admin-sheet-item.active { color: var(--c-accent); border-color: var(--c-accent); background: var(--c-accent-weak); }
 .admin-sheet-icon { font-size: 18px; display: flex; align-items: center; }
-.admin-sheet-close { width: 100%; padding: 12px 0; border-radius: 10px; background: var(--c-card-bg); border: 1px solid var(--c-border); color: var(--c-text-dim); font-size: 13px; cursor: pointer; }
+.admin-sheet-close { width: 100%; padding: 12px 0; border-radius: var(--radius); background: var(--c-card-bg); border: 1px solid var(--c-border); color: var(--c-text-dim); font-size: 13px; cursor: pointer; }
 
 @media (max-width: 768px) {
   .app-root { --h5-tabbar-h: 80px; }  /* 底部 TabBar(52px)+safe-area 供页面图高扣减 */
@@ -491,7 +495,7 @@ if (!showLogin.value) {
   .app-header-right { gap: 2px; }
   .brand { font-size: 16px; gap: 6px; }
   .brand-mark { height: 18px; }
-  .header-date { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+  .header-date { font-size: var(--text-meta); overflow: hidden; text-overflow: ellipsis; }
   .market-status, .header-sep, .notif-btn, .ws-text { display: none; }
   .user-name { display: none; }
   .user-chip { padding: 0 8px; }

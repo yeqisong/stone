@@ -30,7 +30,7 @@ const signalLine = computed(() => {
   if (s.limit_up_blocked) parts.push('涨停股不发信号')
   if (s.regime?.enabled) parts.push(`沪深300 跌破 MA${s.regime.ma_window} 空仓闸门（连续 ${s.regime.max_skip_days} 天后放行）`)
   parts.push('模型仅产生买入信号，卖出由纸面持仓管理触发')
-  return parts.join(' · ')
+  return parts.join(' / ')
 })
 
 const closureLine = computed(() => {
@@ -50,7 +50,7 @@ const paperLine = computed(() => {
   parts.push(`最大持仓 ${p.max_positions} 只`)
   if (p.portfolio_gate_dd) parts.push(`组合回撤 ${pct(p.portfolio_gate_dd)} 熔断停止开仓`)
   parts.push('T+1 / 涨停不买 / 跌停不卖')
-  return parts.join(' · ')
+  return parts.join(' / ')
 })
 
 async function load() {

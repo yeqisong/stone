@@ -5,18 +5,18 @@
     <div style="margin-bottom:20px">
       <div style="font-size:12px;font-weight:600;color:var(--c-text-dim);margin-bottom:10px">训练进度</div>
       <div v-for="s in trainSteps" :key="s.idx" style="display:flex;align-items:center;gap:10px;padding:6px 0">
-        <div :style="{width:'22px',height:'22px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:600,background:s.done?'#0a7a5a':s.active?'rgba(194,43,63,.15)':'rgba(255,255,255,.05)',color:s.done?'#fff':s.active?'#c22b3f':'var(--c-text-faint)',border:s.active&&!s.done?'2px solid #c22b3f':'2px solid transparent'}">
+        <div :style="{width:'22px',height:'22px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:600,background:s.done?'var(--c-down)':s.active?'color-mix(in srgb, var(--c-up) 15%, transparent)':'var(--c-neutral-weaker)',color:s.done?'var(--c-bg)':s.active?'var(--c-up)':'var(--c-text-faint)',border:s.active&&!s.done?'2px solid var(--c-up)':'2px solid transparent'}">
           {{ s.done ? '✓' : s.idx }}
         </div>
         <span :style="{fontSize:'12px',color:s.done||s.active?'var(--c-text)':'var(--c-text-faint)'}">{{ s.label }}</span>
-        <span v-if="s.active && !s.done" style="font-size:11px;color:#c22b3f;animation:pulse 1.5s infinite">⟳</span>
+        <span v-if="s.active && !s.done" style="font-size: var(--text-meta);color:var(--c-up);animation:pulse 1.5s infinite">⟳</span>
       </div>
     </div>
-    <div v-if="errorDetail" style="margin-top:16px;padding:10px 14px;background:rgba(194,43,63,.08);border:1px solid rgba(194,43,63,.2);border-radius:8px;font-size:11px">
-      <div style="color:#c22b3f;font-weight:600;margin-bottom:4px"><AppIcon name="x-circle" :size="13" />  训练失败</div>
+    <div v-if="errorDetail" style="margin-top:16px;padding:10px 12px;background:color-mix(in srgb, var(--c-up) 8%, transparent);border:1px solid color-mix(in srgb, var(--c-up) 20%, transparent);border-radius:var(--radius);font-size: var(--text-meta)">
+      <div style="color:var(--c-up);font-weight:600;margin-bottom:4px"><AppIcon name="x-circle" :size="13" />  训练失败</div>
       <div style="color:var(--c-text-dim);word-break:break-all;max-height:200px;overflow-y:auto">{{ errorDetail }}</div>
     </div>
-    <div style="font-size:11px;color:var(--c-text-faint);text-align:center;margin-top:12px">
+    <div style="font-size: var(--text-meta);color:var(--c-text-faint);text-align:center;margin-top:12px">
       Started: {{ version.trained_at?.slice(0,19) || '—' }}
     </div>
     <div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center">
@@ -25,8 +25,8 @@
     </div>
   </div>
   <div v-else-if="version.status==='PENDING'||version.status==='ACTIVE'" style="display:flex;gap:16px;flex-wrap:wrap">
-    <div v-for="c in cards" :key="c.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:10px;padding:14px 18px;min-width:100px">
-      <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px">{{c.label}}</div>
+    <div v-for="c in cards" :key="c.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:12px 16px;min-width:100px">
+      <div style="font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:4px">{{c.label}}</div>
       <div :style="{fontSize:'20px',fontWeight:600,color:c.color||'var(--c-text)'}">{{c.value}}</div>
     </div>
   </div>
@@ -112,8 +112,8 @@ const cards = computed(() => {
   const s = props.version
   if (!s || s.status === 'DRAFT') return []
   return [
-    { label:'状态', value: s.status, color: s.status==='ACTIVE'?'#0a7a5a':s.status==='PENDING'?'#f59e0b':undefined },
-    { label:'夏普', value: s.sharpe?.toFixed(2)||'—', color:'#0a7a5a' },
+    { label:'状态', value: s.status, color: s.status==='ACTIVE'?'var(--c-down)':s.status==='PENDING'?'var(--c-warn)':undefined },
+    { label:'夏普', value: s.sharpe?.toFixed(2)||'—', color:'var(--c-down)' },
     { label:'胜率', value: s.win_rate ? (s.win_rate*100).toFixed(0)+'%' : '—' },
     { label:'创建', value: (s.created_at||'').slice(0,10) },
   ]

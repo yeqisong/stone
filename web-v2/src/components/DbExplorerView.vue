@@ -2,11 +2,12 @@
 <div class="dbx-root">
   <!-- 顶部：库概览 -->
   <div class="dbx-top">
-    <div v-for="m in overviewCards" :key="m.label" class="ov-card">
-      <div class="ov-label">{{ m.label }}</div>
-      <div class="ov-value">{{ m.value }}</div>
+    <div class="stat-strip dbx-stats">
+      <div v-for="m in overviewCards" :key="m.label" class="stat-item">
+        <div class="stat-label">{{ m.label }}</div>
+        <div class="stat-value">{{ m.value }}</div>
+      </div>
     </div>
-    <div style="flex:1" />
     <n-button size="small" quaternary @click="loadAll"><AppIcon name="refresh" :size="13" />  刷新</n-button>
   </div>
 
@@ -21,7 +22,7 @@
                :class="{ active: t.name === selected }" @click="selectTable(t.name)">
             <div class="tbl-item-top">
               <span class="tbl-name">{{ t.name }}</span>
-              <span class="tbl-size">{{ t.size }}</span>
+              <span class="tbl-size">{{ normSize(t.size) }}</span>
             </div>
             <div class="tbl-sub">{{ t.comment || (t.rows_est.toLocaleString() + ' 行(估)') }}</div>
           </div>
@@ -37,7 +38,7 @@
           <div class="dbx-title">
             <span class="dbx-table-name">{{ selected }}</span>
             <span v-if="currentComment" class="dbx-table-comment">{{ currentComment }}</span>
-            <span class="dbx-rows">{{ totalRows.toLocaleString() }} 行 · 只读</span>
+            <span class="dbx-rows">{{ totalRows.toLocaleString() }} 行 / 只读</span>
           </div>
           <div class="dbx-tools">
             <n-button size="tiny" quaternary @click="showSchema = true"><AppIcon name="folder" :size="13" />  字段 ({{ columns.length }})</n-button>
@@ -85,7 +86,7 @@
 
   <!-- 字段元数据抽屉（按钮入口） -->
   <n-drawer v-model:show="showSchema" placement="right" :width="isNarrow ? '100%' : 480">
-    <n-drawer-content :title="`字段定义 · ${selected}`" closable>
+    <n-drawer-content :title="`字段定义 / ${selected}`" closable>
       <n-data-table :columns="schemaCols" :data="columns" size="small" :max-height="560"
         :row-key="r => r.name" scroll-x="680" />
     </n-drawer-content>
@@ -120,11 +121,19 @@ const orderBy = ref(null)
 const orderDir = ref('desc')
 const showSchema = ref(false)
 
+function normSize(s) {
+  const m = String(s || '').match(/^([\d.]+)\s*(TB|GB|MB|KB|B)$/i)
+  if (!m) return s || '—'
+  const n = parseFloat(m[1]); const u = m[2].toUpperCase()
+  const mb = n * ({ B: 1 / 1048576, KB: 1 / 1024, MB: 1, GB: 1024, TB: 1048576 }[u] || 1)
+  return mb >= 1000 ? (mb / 1024).toFixed(mb / 1024 >= 100 ? 0 : 1) + ' GB' : Math.round(mb) + ' MB'
+}
+
 const overviewCards = computed(() => {
   const o = overview.value || {}
   return [
     { label: '数据库', value: o.database || '—' },
-    { label: '库大小', value: o.size || '—' },
+    { label: '库大小', value: normSize(o.size) },
     { label: '表数量', value: o.n_tables ?? '—' },
     { label: 'PostgreSQL', value: o.version || '—' },
   ]
@@ -152,8 +161,8 @@ function fmt(v) {
 }
 
 const schemaCols = [
-  { title: '字段', key: 'name', width: 170, fixed: 'left', render: r => h('code', { style: 'font-size:11px' }, r.name) },
-  { title: '类型', key: 'type', width: 140, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.type) },
+  { title: '字段', key: 'name', width: 170, fixed: 'left', render: r => h('code', { style: 'font-size: var(--text-meta)' }, r.name) },
+  { title: '类型', key: 'type', width: 140, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size: var(--text-meta);color:var(--c-text-dim)' }, r.type) },
   { title: '可空', key: 'nullable', width: 56, align: 'center', render: r => (r.nullable ? '✓' : '') },
   { title: '默认值', key: 'default', width: 110, ellipsis: { tooltip: true }, render: r => r.default || '—' },
   { title: '注释', key: 'comment', minWidth: 200, ellipsis: { tooltip: true }, render: r => r.comment || '—' },
@@ -203,33 +212,33 @@ onMounted(loadAll)
 <style scoped>
 .dbx-root { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
 
-/* 顶部概览 */
-.dbx-top { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.ov-card { background: var(--c-card-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 8px 14px; text-align: center; min-width: 86px; }
-.ov-label { font-size: 11px; color: var(--c-text-faint); }
-.ov-value { font-size: 14px; font-weight: 600; color: var(--c-text); margin-top: 2px; }
+/* 顶部概览：沿用全站统计条 */
+.dbx-top { display: flex; gap: var(--space-3); align-items: center; }
+.dbx-top .dbx-stats { flex: 1; min-width: 0; margin: 0; }
+.dbx-top .stat-value { font-size: var(--text-page) !important; }
 
 /* 主体：左清单 + 右数据，各自独立滚动，页面不滚动 */
 .dbx-body { flex: 1; min-height: 0; display: flex; gap: 12px; }
 
 .dbx-left { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.dbx-table-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding-right: 2px; }
+.dbx-table-list { flex: 1; min-height: 0; overflow-y: auto; background: var(--c-card-bg); border: 1px solid var(--c-border); border-radius: var(--radius); }
 
-.tbl-item { cursor: pointer; padding: 7px 10px; border-radius: 6px; background: var(--c-card-bg); border: 1px solid var(--c-border); transition: border-color .15s; flex-shrink: 0; }
-.tbl-item:hover { border-color: #c22b3f; }
-.tbl-item.active { border-color: #c22b3f; background: rgba(32, 128, 240, .10); }
+.tbl-item { cursor: pointer; padding: 10px 12px; border-bottom: 1px solid var(--c-border-light); flex-shrink: 0; }
+.tbl-item:last-child { border-bottom: 0; }
+.tbl-item:hover { background: var(--c-card-bg-hover); }
+.tbl-item.active { background: var(--c-accent-weak); box-shadow: inset 2px 0 0 var(--c-accent); }
 .tbl-item-top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .tbl-name { font-size: 12px; font-weight: 600; color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tbl-size { font-size: 11px; color: var(--c-text-faint); flex-shrink: 0; }
-.tbl-sub { font-size: 11px; color: var(--c-text-faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbl-size { font-size: var(--text-meta); color: var(--c-text-faint); flex-shrink: 0; }
+.tbl-sub { font-size: var(--text-meta); color: var(--c-text-faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 右侧数据区 */
-.dbx-right { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; background: var(--c-card-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 10px 12px; }
+.dbx-right { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; background: var(--c-card-bg); border: 1px solid var(--c-border); border-radius: var(--radius); padding: 10px 12px; }
 .dbx-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .dbx-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .dbx-table-name { font-size: 13px; font-weight: 600; color: var(--c-text); }
-.dbx-table-comment { font-size: 11px; color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
-.dbx-rows { font-size: 11px; color: var(--c-text-dim); flex-shrink: 0; }
+.dbx-table-comment { font-size: var(--text-meta); color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.dbx-rows { font-size: var(--text-meta); color: var(--c-text-dim); flex-shrink: 0; }
 .dbx-tools { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 
 /* 数据表 */
@@ -238,12 +247,12 @@ onMounted(loadAll)
 .dbx-table thead th {
   position: sticky; top: 0; z-index: 1;
   background: var(--c-bg); color: var(--c-text-dim);
-  font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap;
+  font-size: var(--text-meta); font-weight: 600; text-align: left; white-space: nowrap;
   padding: 8px 12px; border-bottom: 1px solid var(--c-border);
 }
 .dbx-table thead th.num, .dbx-table tbody td.num { text-align: right; }
 .dbx-table tbody td {
-  padding: 7px 12px; color: var(--c-text);
+  padding: 8px 12px; color: var(--c-text);
   border-bottom: 1px solid var(--c-border-light);
   white-space: nowrap; max-width: 360px;
 }
@@ -259,15 +268,15 @@ onMounted(loadAll)
 .th-q {
   display: inline-flex; align-items: center; justify-content: center;
   width: 13px; height: 13px; border-radius: 50%;
-  font-size: 11px; line-height: 1; cursor: help;
-  color: #c22b3f; background: rgba(32, 128, 240, .12);
+  font-size: var(--text-meta); line-height: 1; cursor: help;
+  color: var(--c-up); background: color-mix(in srgb, var(--c-series-4) 12%, transparent);
   vertical-align: 1px;
 }
-.dbx-table thead th:hover .th-q { background: rgba(32, 128, 240, .25); }
+.dbx-table thead th:hover .th-q { background: color-mix(in srgb, var(--c-series-4) 25%, transparent); }
 
 /* 分页 */
 .dbx-pager { display: flex; justify-content: center; align-items: center; min-height: 28px; }
-.pager-hint { font-size: 11px; color: var(--c-text-faint); }
+.pager-hint { font-size: var(--text-meta); color: var(--c-text-faint); }
 </style>
 
 /* H5：左清单 300px 固定宽在窄屏挤压数据区 → 纵向布局，清单收成顶部横向列表 */
@@ -275,5 +284,5 @@ onMounted(loadAll)
   .dbx-body { flex-direction: column; }
   .dbx-left { width: 100%; flex-shrink: 1; max-height: 30vh; }
   .dbx-table-list { flex-direction: row; flex-wrap: wrap; }
-  .tbl-item { font-size: 11px; padding: 4px 8px; }
+  .tbl-item { font-size: var(--text-meta); padding: 4px 8px; }
 }
