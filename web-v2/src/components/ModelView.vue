@@ -754,7 +754,7 @@ onMounted(async () => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0 0 14px;
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--c-bg-header);
   overflow: hidden;
 }

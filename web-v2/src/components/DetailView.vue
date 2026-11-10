@@ -1,6 +1,6 @@
 <template>
 <div>
-  <n-space align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap">
+  <n-space align="center" :wrap="isNarrow" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
     <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
     <StockSuggestInput v-model:value="code" size="tiny" width="170px" @select="load" @enter="load" />
     <n-button type="primary" size="tiny" @click="load">查询</n-button>
@@ -36,7 +36,7 @@
 
     <!-- Strategy Signals -->
     <div style="margin-bottom:12px;min-height:50px">
-      <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
+      <h4 class="side-title"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
       <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:8px;flex-wrap:wrap">
         <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:8px;padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
@@ -55,7 +55,7 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  分钟K线 <span style="font-size:11px;color:var(--c-text-dim)">腾讯实时 · 不复权 · 30s 刷新</span>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size:11px;color:var(--c-text-dim)">腾讯实时 · 不复权 · 30s 刷新</span>
             <n-button-group size="tiny" style="margin-left:8px">
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
@@ -63,7 +63,7 @@
           <div :id="'c0'" style="width:100%;height:260px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
         <div style="margin-bottom:12px">
@@ -75,46 +75,46 @@
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="s" :size="13" />  MACD</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="zap" :size="13" />  MACD</h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> RSI</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="activity" :size="13" />  RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
         <div v-if="benchData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="sliders" :size="13" />  相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
           <div :id="'c8'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 换手率 <span style="font-size:11px;color:var(--c-text-dim)">%（含分位线）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="refresh" :size="13" />  换手率 <span style="font-size:11px;color:var(--c-text-dim)">%（含分位线）</span></h4>
           <div :id="'c9'" style="width:100%;height:140px"></div>
         </div>
         <div v-if="marginData.length > 2" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="arrow-left-right" :size="13" />  两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
           <div :id="'c10'" style="width:100%;height:140px"></div>
         </div>
         <!-- 带右侧 Y 轴的图统一殿后（PE分位%/资金流累计/ATR%），避免中段双轴观感错乱 -->
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="percent" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
         <div v-if="mfData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="dollar-sign" :size="13" />  资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
           <div :id="'c7'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="maximize" :size="13" />  ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
           <div :id="'c11'" style="width:100%;height:140px"></div>
         </div>
       </div>
 
       <!-- Right: Fundamentals & Overview -->
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
-        <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 基本面</h4>
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="w" :size="13" />  基本面</h4>
           <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
-          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" style="width:100%;border-collapse:collapse;font-size:12px">
+          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" class="side-table">
             <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
               <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px;text-align:left">{{row.lbl}}</td>
               <td style="padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text);text-align:left">{{row.val}}</td>
@@ -122,10 +122,10 @@
           </table>
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
-        <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(194,43,63,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
+          <table class="side-table">
+            <tr><td>日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(194,43,63,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">开盘</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最高</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#c22b3f':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最低</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#0a7a5a':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
@@ -135,15 +135,15 @@
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
           </table>
         </div>
-        <div v-if="chipData && chipData.buckets && chipData.buckets.length">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
+        <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
+          <h4 class="side-title"><AppIcon name="pie-chart" :size="13" />  筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
           <div v-if="chipData.profit_ratio!=null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px">
             现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#c22b3f':'#0a7a5a',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
           </div>
         </div>
-        <div v-if="sigStats">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 信号回看</h4>
+        <div v-if="sigStats" class="side-panel">
+          <h4 class="side-title"><AppIcon name="list" :size="13" />  信号回看</h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim)">
             近{{sigStats.years}}年 <b style="color:var(--c-text)">{{sigStats.n}}</b> 条信号（buy {{sigStats.buys}}/sell {{sigStats.sells}}）<br/>
             平均前瞻：5d <span :style="{color:sigStats.f5>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f5*100).toFixed(1)}}%</span> ·
@@ -153,8 +153,8 @@
         </div>
         <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色；
              情绪方向由 LLM 打分给出（红多绿空），与 mark 徽标相互独立 -->
-        <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
+        <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)" class="side-panel">
+          <h4 class="side-title"><AppIcon name="message-circle" :size="13" />  雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
             今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖 ·
             标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b> ·
@@ -162,7 +162,7 @@
           </div>
           <!-- LLM 情绪构成（design/06 §9.10）：只统计已打分帖（夜间任务，按热度取） -->
           <div v-if="xqData.sentiment && xqData.sentiment.scored"
-               style="margin-bottom:8px;padding:7px 9px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+               class="side-well">
             <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-bottom:5px">
               <span style="color:var(--c-text-dim)">
                 LLM 情绪
@@ -184,7 +184,7 @@
             </div>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
-            <div v-for="(p,i) in xqData.hot" :key="i" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+            <div v-for="(p,i) in xqData.hot.slice(0, 6)" :key="i" class="side-item">
               <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{p.created_at.slice(5)}}</span>
                 <span v-if="p.source">{{p.source}}</span>
@@ -196,16 +196,17 @@
               <div class="side-text" :title="p.text">{{p.text}}</div>
             </div>
           </div>
+          <div v-if="xqData.hot.length > 6" class="side-more">仅显示前 6 条热帖</div>
         </div>
         <!-- 相关资讯（design/07）：与「雪球讨论」并列——第 3 层（资讯 × 雪球交叉分析）的落点。
              未总结条目 summary/sentiment 为 NULL 而非 0，显示「待总结」不可当「中性」 -->
-        <div v-if="newsData && newsData.count > 0">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 相关资讯 <span style="font-size:11px;color:var(--c-text-dim)">{{newsData.count}} 条 · 近 {{newsData.days}} 天</span></h4>
+        <div v-if="newsData && newsData.count > 0" class="side-panel">
+          <h4 class="side-title"><AppIcon name="file-text" :size="13" />  相关资讯 <span style="font-size:11px;color:var(--c-text-dim)">{{newsData.count}} 条 · 近 {{newsData.days}} 天</span></h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
             <span v-for="(v,k) in newsData.by_category" :key="k" style="margin-right:8px">{{NEWS_CAT_NAME[k]||k}} <b style="color:var(--c-text)">{{v}}</b></span>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
-            <div v-for="n in newsData.data" :key="n.id" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+            <div v-for="n in newsData.data.slice(0, 8)" :key="n.id" class="side-item">
               <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{(n.published_at||'').slice(5)}}</span>
                 <span :style="{color:NEWS_CAT_COLOR[n.category]||'var(--c-text-dim)',fontWeight:600}">{{NEWS_CAT_NAME[n.category]||n.category}}</span>
@@ -220,6 +221,7 @@
               <div v-if="n.summary" class="side-text" style="color:var(--c-text-dim);margin-top:2px" :title="n.summary">{{n.summary}}</div>
             </div>
           </div>
+          <div v-if="newsData.data.length > 8" class="side-more">仅显示前 8 条，完整列表见资讯页</div>
         </div>
       </div>
     </div>
@@ -260,9 +262,11 @@ import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
 import { useAuthStore } from '../stores/auth'
+import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
 
 const props = defineProps({ code: String })
+const { isNarrow } = useViewport()
 const emit = defineEmits(['back'])
 const API = window.location.origin
 const _nav = useNavStore()
@@ -1131,6 +1135,55 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()
 /* 详情页分组标签：✕ 平时隐去，hover 才出现（naive-ui n-tag closable 默认常显） */
 .dt-grp-tag .n-tag__close { opacity: 0; transition: opacity .15s; }
 .dt-grp-tag:hover .n-tag__close { opacity: 1; }
+
+/* 右侧栏：独立粘性滚动区，页面高度由左侧图表决定 */
+.detail-sidebar {
+  position: sticky;
+  top: 8px;
+  align-self: flex-start;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.detail-sidebar::-webkit-scrollbar { width: 6px; }
+.side-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.side-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.side-title .nav-svg { color: var(--muted); }
+.side-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.side-table tr { background: transparent !important; }
+.side-table td {
+  border: 0 !important;
+  border-bottom: 1px solid var(--c-border-light) !important;
+  padding: 6px 4px !important;
+}
+.side-table tr:last-child td { border-bottom: 0 !important; }
+.side-table td:first-child {
+  width: 85px;
+  color: var(--c-text-dim) !important;
+  font-size: 11px !important;
+  white-space: nowrap;
+}
+.side-item { padding: 8px 0; border-top: 1px solid var(--c-border-light); }
+.side-item:first-child { padding-top: 0; border-top: 0; }
+.side-well { margin-bottom: 8px; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; }
+.side-more { margin-top: 8px; font-size: 11px; color: var(--c-text-faint); }
+@media (max-width: 1100px) {
+  .detail-sidebar { position: static; max-height: none; overflow: visible; padding-right: 0; }
+}
 
 /* 侧栏文本块（雪球热帖 / 相关资讯标题与摘要）：两行截断，全文 hover title */
 .side-text {

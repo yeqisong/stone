@@ -257,8 +257,8 @@ const themeOverrides = computed(() => {
       infoColor: dark ? '#a6abb3' : '#5b6068',
       infoColorHover: dark ? '#bcc1c8' : '#4a4f56',
       infoColorPressed: dark ? '#8b9199' : '#3a3f45',
-      borderRadius: '8px',
-      borderRadiusSmall: '6px',
+      borderRadius: '6px',
+      borderRadiusSmall: '4px',
       fontFamily: '"Inter", "Segoe UI Variable", "Segoe UI", -apple-system, "PingFang SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
     },
     Button: {
@@ -385,9 +385,9 @@ if (!showLogin.value) {
 
 .app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 /* 组合按钮：合并组内圆角与边框（naive ButtonGroup 子按钮圆角样式未生效，全局兜底） */
-.n-button-group { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-2); border-radius: 8px; }
+.n-button-group { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-2); border-radius: 6px; }
 .n-button-group .n-button__border, .n-button-group .n-button__state-border { display: none !important; }
-.n-button-group > .n-button { border-radius: 6px !important; border: 0 !important; margin: 0 !important; }
+.n-button-group > .n-button { border-radius: 4px !important; border: 0 !important; margin: 0 !important; }
 .n-button-group > .n-button:not(.n-button--primary-type) { background: transparent !important; }
 
 /* 数字防跳动：全站表格与统计值统一等宽数字 */
@@ -419,9 +419,9 @@ if (!showLogin.value) {
 .header-date { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
 .market-status { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
 .app-header-right { display: flex; align-items: center; gap: 6px; }
-.header-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--c-text-dim); cursor: pointer; }
+.header-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--c-text-dim); cursor: pointer; }
 .header-icon-btn:hover { background: var(--c-card-bg-hover); color: var(--c-text); }
-.user-chip { height: 32px; padding: 0 10px; font-size: 12px; color: var(--c-text); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-header); }
+.user-chip { height: 32px; padding: 0 10px; font-size: 12px; color: var(--c-text); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg-header); }
 .user-chip:hover { background: var(--c-card-bg-hover); }
 .user-chip .nav-svg { margin-right: 4px; flex-shrink: 0; }
 .ws-info { font-size: 12px; display: flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--c-text-dim); }

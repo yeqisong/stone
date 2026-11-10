@@ -34,7 +34,7 @@
   padding: 36px 32px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow: var(--shadow);
 }
 .login-logo { display: flex; justify-content: center; color: var(--ink); }
@@ -46,7 +46,7 @@
   margin-bottom: 16px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface-2);
   color: var(--ink);
   font: 14px var(--font-sans);
@@ -60,7 +60,7 @@
   height: 40px;
   margin-top: 4px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--accent);
   color: var(--accent-ink);
   font: 500 14px var(--font-sans);

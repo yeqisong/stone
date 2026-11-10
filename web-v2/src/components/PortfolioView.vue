@@ -272,7 +272,7 @@ onMounted(load)
 
 <style scoped>
 .pos-cards { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding-bottom: 8px; }
-.pos-card { background: var(--c-bg-header); border: 1px solid var(--c-border); border-radius: 10px; padding: 12px 14px; }
+.pos-card { background: var(--c-bg-header); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px 14px; }
 .pos-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .pos-name { font-size: 15px; font-weight: 600; }
 .pos-code { margin-left: 8px; font-size: 12px; color: var(--c-text-dim); }

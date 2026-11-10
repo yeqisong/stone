@@ -25,7 +25,7 @@
   --warn: #8a5a00;
   --warn-weak: #fdf2dc;
 
-  --radius: 10px;
+  --radius: 8px;
   --radius-sm: 6px;
   --shadow: 0 1px 2px rgba(20, 22, 26, .05), 0 10px 28px rgba(20, 22, 26, .06);
 
@@ -88,8 +88,8 @@ h1, h2, h3, h4 { letter-spacing: -0.01em; }
 
 /* ── 按钮 ── */
 .n-button {
-  --n-border-radius: 8px !important;
-  border-radius: 8px !important;
+  --n-border-radius: 6px !important;
+  border-radius: 6px !important;
   font-weight: 500;
 }
 .n-button .n-button__content { gap: 6px; }
@@ -137,16 +137,16 @@ h1, h2, h3, h4 { letter-spacing: -0.01em; }
 .n-data-table .n-data-table-base-table-body { background: transparent !important; }
 
 /* ── 输入 / 选择 / 日期 ── */
-.n-input, .n-base-selection, .n-date-picker { --n-border-radius: 8px !important; }
+.n-input, .n-base-selection, .n-date-picker { --n-border-radius: 6px !important; }
 .n-input .n-input__border, .n-input .n-input__state-border,
 .n-base-selection .n-base-selection__border,
-.n-base-selection .n-base-selection__state-border { border-radius: 8px !important; }
+.n-base-selection .n-base-selection__state-border { border-radius: 6px !important; }
 .n-input .n-input__input-el, .n-input .n-input__textarea-el { font-size: 13px; }
 
 /* ── 卡片 / 弹窗 ── */
 .n-card {
-  --n-border-radius: 12px !important;
-  border-radius: 12px !important;
+  --n-border-radius: 10px !important;
+  border-radius: 10px !important;
   border: 1px solid var(--line) !important;
   background: var(--surface) !important;
 }
