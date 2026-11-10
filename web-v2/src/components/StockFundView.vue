@@ -3,7 +3,7 @@
   <!-- Header -->
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0;flex-wrap:wrap">
     <n-button size="tiny" quaternary @click="$emit('back')"><AppIcon name="arrow-left" :size="13" />  返回</n-button>
-    <span style="font-size:17px;font-weight:700;color:var(--c-text)">{{ title }}</span>
+    <span style="font-size:17px;font-weight:600;color:var(--c-text)">{{ title }}</span>
     <n-select v-model:value="filterType" :options="typeOpts" size="tiny" style="width:100px" @update:value="onTypeChange" />
     <n-input v-model:value="search" size="tiny" placeholder="搜索代码/名称" style="width:180px" clearable @keyup.enter="loadData(1)" />
   </div>
@@ -85,7 +85,7 @@ onMounted(() => {
 })
 
 // Columns - all stock_master + fundamentals（前2列固定左 + 跳详情超链接）
-const linkStyle = { color: '#2080f0', cursor: 'pointer', textDecoration: 'underline' }
+const linkStyle = { color: 'var(--c-text-dim)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--c-border)', textUnderlineOffset: '2px' }
 // render 列文本统一省略号（naive ellipsis 属性对 render 列不生效，需自行控制），title 悬浮全文
 const ell = (txt, extra = {}) => {
   const s = String(txt ?? '')
@@ -100,7 +100,7 @@ const cols = [
     return h('span', { style: linkStyle, onClick: () => emit('show-detail', r.stock_code) }, r.stock_code)
   } },
   { title: '名称', key: 'stock_name', width: 150, fixed: 'left', render(r) {
-    return ell(r.stock_name || r.stock_code, { maxWidth: '138px', ...linkStyle, textDecoration: 'none', color: '#2080f0', cursor: 'pointer', onClick: () => emit('show-detail', r.stock_code) })
+    return ell(r.stock_name || r.stock_code, { maxWidth: '138px', ...linkStyle, textDecoration: 'none', color: 'var(--c-text)', cursor: 'pointer', onClick: () => emit('show-detail', r.stock_code) })
   } },
   { title: '类型', key: 'stock_type', width: 50, render(r) { return { stock: '股', index: '指', etf: 'ETF' }[r.stock_type] || r.stock_type } },
   { title: '交易所', key: 'exchange', width: 60 },

@@ -11,14 +11,19 @@
     </n-button-group>
     <n-select v-if="tab==='list'" v-model:value="sigStatus" :options="sigStatusOptions" size="tiny" style="width:104px"
       @update:value="onStatusChange" />
-    <n-button size="tiny" type="warning" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" />  生成</n-button>
+    <n-button size="tiny" type="primary" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" />  生成</n-button>
   </n-space>
 
   <!-- Tab1: 信号列表（该模型全部信号，按日期倒序分页） -->
   <template v-if="tab==='list'">
     <div class="fill-table" style="display:flex;flex-direction:column">
-      <n-data-table v-if="sig.signals" class="fill-table" flex-height :columns="sigColumns" :data="sig.signals" size="small" :scroll-x="1080" />
-      <n-empty v-else description="暂无信号" style="flex:1" />
+      <n-data-table v-if="sig.signals && sig.signals.length" class="fill-table" flex-height :columns="sigColumns" :data="sig.signals" size="small" :scroll-x="1080" />
+      <div v-else class="signal-empty">
+        <AppIcon name="trending-up" :size="40" style="color:var(--c-text-faint)" />
+        <h3>暂无信号记录</h3>
+        <p>当前筛选条件下没有信号。模型在每个交易日收盘后生成买入信号；如果今天还没生成，可以手动触发一次。</p>
+        <n-button type="primary" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" /> 立即生成</n-button>
+      </div>
       <TradeRulesNote :version="selModel" />
       <ListPagination :total="sig.total" :page="sigPage" :page-size="sigPageSize" @change="p=>{sigPage=p; loadSignals()}" />
     </div>
@@ -48,7 +53,7 @@
 
       <n-data-table v-if="trd.trades" class="fill-table" flex-height :columns="trdColumns" :data="trd.trades" size="small" :scroll-x="1180" />
       <n-empty v-else description="暂无模拟成交" style="flex:1" />
-      <div class="no-shrink" style="font-size:10px;color:var(--c-text-faint);padding:4px 2px 0;line-height:1.7">
+      <div class="no-shrink" style="font-size:11px;color:var(--c-text-faint);padding:4px 2px 0;line-height:1.7">
         口径：持仓表价格为真实市价、收益率/浮盈/市值为后复权模拟口径（与统计区一致）；成交单价为真实市价（撮合价除以同日复权因子）；股数/金额/盈亏/总资产为后复权模拟口径，
         与初始资金同量级可比，比率类指标不受复权影响。
       </div>
@@ -118,13 +123,13 @@ function predRender(key) {
     if (v == null) return '—'
     if (predictFmt.prob) return h('span',{style:{color:'var(--c-text-dim)',fontSize:'11px'}},(v*100).toFixed(0)+'%↑')
     if (predictFmt.rank) return h('span',{style:{color:'var(--c-text-dim)',fontSize:'11px'}},'P'+(v*100).toFixed(0))
-    return h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%')
+    return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a',fontSize:'11px'}},(v>=0?'+':'')+(v*100).toFixed(1)+'%')
   }
 }
 const sigColumns = computed(() => {
   const base = [
     { title:'信号日期', key:'signal_date', width:88, render(r){ return h('span',{style:{color:'var(--c-text-dim)'}}, (r.signal_date||'').slice(5)) } },
-    { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
+    { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
     { title:'名称', key:'stock_name', width:100, fixed:'left', render(r){return h('span',{style:{cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_name)} },
     { title:'现价', key:'real_close', width:95, align:'right', render(r){ return r.real_close!=null ? '¥'+r.real_close.toFixed(2) : '—' } },
     { title:'方向', key:'direction', width:55, render(){return h(NTag,{type:'error',size:'small',bordered:false},{default:()=>'买'})} },
@@ -136,8 +141,8 @@ const sigColumns = computed(() => {
         }
         return h('span',{style:{color:'var(--c-text-faint)',fontSize:'11px'}},'跟踪中')
       } },
-    { title:'效果收益率', key:'actual_return', width:86, align:'right', render(r){ const v=r.actual_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') } },
-    { title:'触发条件', key:'reason', width:118, ellipsis:{tooltip:true}, render(r){ return h('span',{style:{fontSize:'10px',color:'var(--c-text-dim)'}}, r.reason || '—') } },
+    { title:'效果收益率', key:'actual_return', width:86, align:'right', render(r){ const v=r.actual_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') } },
+    { title:'触发条件', key:'reason', width:118, ellipsis:{tooltip:true}, render(r){ return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}}, r.reason || '—') } },
     { title:'预测5d', key:'predict_5d', width:70, align:'right', render: predRender('predict_5d') },
   ]
   if (isNarrow.value) return base
@@ -167,7 +172,7 @@ const wanSigned = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v / 1e4).toFix
 const trdStats = computed(() => {
   const s = trdStatsRaw.value
   if (!s) return []
-  const pnlColor = v => v == null ? 'var(--c-text)' : (v >= 0 ? '#ef4444' : '#10b981')
+  const pnlColor = v => v == null ? 'var(--c-text)' : (v >= 0 ? '#c22b3f' : '#0a7a5a')
   const asOf = s.as_of ? `（截至${s.as_of.slice(5)}）` : ''
   return [
     { label: '初始资金', value: wan(s.initial_cash) },
@@ -176,7 +181,7 @@ const trdStats = computed(() => {
     { label: '已实现盈亏', value: wanSigned(s.realized_pnl), color: pnlColor(s.realized_pnl) },
     { label: '浮动盈亏', value: wanSigned(s.floating_pnl), color: pnlColor(s.floating_pnl) },
     { label: '胜率', value: s.win_rate == null ? '—' : `${(s.win_rate * 100).toFixed(0)}% (${s.win_count}/${s.sell_count})`,
-      color: s.win_rate == null ? 'var(--c-text)' : (s.win_rate >= 0.5 ? '#10b981' : '#ef4444') },
+      color: s.win_rate == null ? 'var(--c-text)' : (s.win_rate >= 0.5 ? '#0a7a5a' : '#c22b3f') },
     { label: '持仓', value: `${s.npos}/${s.max_positions ?? '—'}` },
   ]
 })
@@ -188,37 +193,37 @@ const fmtPctCol = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFix
 const posOpen = ref(true)
 function posRowProps(row) { return { style: 'cursor:pointer', onClick: () => emit('show-detail', row.stock_code) } }
 const posColumns = [
-  { title:'代码', key:'stock_code', width:78, render(r){ return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code) } },
+  { title:'代码', key:'stock_code', width:78, render(r){ return h('span',{style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code) } },
   { title:'名称', key:'stock_name', width:92 },
-  { title:'持有', key:'hold_days', width:96, render(r){ return h('span',{style:{fontSize:'10px',color:'var(--c-text-dim)'}}, `${r.hold_days}天 · ${(r.buy_date||'').slice(5)}`) } },
+  { title:'持有', key:'hold_days', width:96, render(r){ return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}}, `${r.hold_days}天 · ${(r.buy_date||'').slice(5)}`) } },
   { title:'股数', key:'shares', width:64, align:'right', render(r){ return (r.shares||0).toLocaleString() } },
   { title:'买入价', key:'buy_price', width:78, align:'right', render(r){ return r.buy_price!=null ? r.buy_price.toFixed(2) : '—' } },
-  { title:'现价', key:'current_price', width:78, align:'right', render(r){ const v=r.current_price; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const up=r.buy_price!=null && v>=r.buy_price; return h('span',{style:{color:up?'#ef4444':'#10b981',fontWeight:600}}, v.toFixed(2)) } },
-  { title:'浮动收益率', key:'float_pnl_pct', width:90, align:'right', render(r){ const v=r.float_pnl_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981',fontWeight:600}}, fmtPctCol(v)) } },
-  { title:'浮盈(模拟)', key:'float_pnl', width:92, align:'right', render(r){ const v=r.float_pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
+  { title:'现价', key:'current_price', width:78, align:'right', render(r){ const v=r.current_price; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const up=r.buy_price!=null && v>=r.buy_price; return h('span',{style:{color:up?'#c22b3f':'#0a7a5a',fontWeight:600}}, v.toFixed(2)) } },
+  { title:'浮动收益率', key:'float_pnl_pct', width:90, align:'right', render(r){ const v=r.float_pnl_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a',fontWeight:600}}, fmtPctCol(v)) } },
+  { title:'浮盈(模拟)', key:'float_pnl', width:92, align:'right', render(r){ const v=r.float_pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}}, fmtAmt(v)) } },
   { title:'市值(模拟)', key:'market_value', width:102, align:'right', render(r){ return r.market_value==null ? '—' : r.market_value.toLocaleString(undefined,{maximumFractionDigits:0}) } },
   { title:'止损价', key:'stop_price', width:78, align:'right', render(r){ return r.stop_price!=null ? h('span',{style:{color:'var(--c-text-dim)'}}, r.stop_price.toFixed(2)) : '—' } },
-  { title:'距止损', key:'dist_to_stop_pct', width:82, align:'right', render(r){ const v=r.dist_to_stop_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const danger = v<=0.02; return h('span',{style:{color: danger?'#ef4444':'var(--c-text-dim)',fontWeight: danger?600:400}}, v<=0 ? '已破位' : '+'+(v*100).toFixed(1)+'pp') } },
+  { title:'距止损', key:'dist_to_stop_pct', width:82, align:'right', render(r){ const v=r.dist_to_stop_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const danger = v<=0.02; return h('span',{style:{color: danger?'#c22b3f':'var(--c-text-dim)',fontWeight: danger?600:400}}, v<=0 ? '已破位' : '+'+(v*100).toFixed(1)+'pp') } },
   { title:'峰值回撤', key:'peak_dd_pct', width:84, align:'right', render(r){ const v=r.peak_dd_pct; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color: v<=-(r.trailing_pct||0.05)?'#f59e0b':'var(--c-text-dim)'}}, (v*100).toFixed(1)+'%') } },
 ]
 const trdColumns = [
   { title:'日期', key:'date', width:78, render(r){ return h('span',{style:{color:'var(--c-text-dim)'}}, (r.date||'').slice(5)) } },
-  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){return h('span',{style:{color:'var(--n-color-target)',cursor:'pointer'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
+  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){return h('span',{style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'},onClick:()=>emit('show-detail',r.stock_code)},r.stock_code)} },
   { title:'名称', key:'stock_name', width:92, fixed:'left' },
-  { title:'操作', key:'action', width:58, render(r){ return h('span',{style:{color:r.action==='BUY'?'#ef4444':'#10b981',fontWeight:600}}, r.action==='BUY'?'买入':'卖出') } },
+  { title:'操作', key:'action', width:58, render(r){ return h('span',{style:{color:r.action==='BUY'?'#c22b3f':'#0a7a5a',fontWeight:600}}, r.action==='BUY'?'买入':'卖出') } },
   { title:'股数', key:'shares', width:64, align:'right', render(r){ return (r.shares||0).toLocaleString() } },
   { title:'成交单价', key:'price', width:80, align:'right', render(r){ return r.price!=null ? r.price.toFixed(2) : '—' } },
   { title:'操作前仓位', key:'pre_npos', width:70, align:'right', render(r){ return r.pre_npos==null?'—':r.pre_npos } },
   { title:'操作前总资产', key:'pre_equity', width:96, align:'right', render(r){ return r.pre_equity==null?'—':r.pre_equity.toLocaleString(undefined,{maximumFractionDigits:0}) } },
   { title:'操作后仓位', key:'post_npos', width:70, align:'right', render(r){ return r.post_npos==null?'—':r.post_npos } },
   { title:'操作后总资产', key:'post_equity', width:96, align:'right', render(r){ return r.post_equity==null?'—':r.post_equity.toLocaleString(undefined,{maximumFractionDigits:0}) } },
-  { title:'了结盈亏额', key:'pnl', width:84, align:'right', render(r){ const v=r.pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
+  { title:'了结盈亏额', key:'pnl', width:84, align:'right', render(r){ const v=r.pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}}, fmtAmt(v)) } },
   // 了结盈亏率必须用后复权价：pnl/股数/金额同属后复权口径，混入真实价会算错倍数
-  { title:'了结盈亏率', key:'pnl_pct', width:78, align:'right', render(r){ const p=r.pnl, s=r.shares, pr=r.price_hfq; if(p==null||!s||!pr) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=p/(pr*s); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtPctCol(v)) } },
-  { title:'浮动盈亏', key:'float_pnl', width:84, align:'right', render(r){ const v=r.float_pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
-  { title:'了结后总资产盈亏额', key:'tot_pnl_amt', width:110, align:'right', render(r){ const e=r.post_equity; if(e==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=e-trd.initial_cash; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtAmt(v)) } },
-  { title:'了结后总资产盈亏率', key:'tot_pnl_pct', width:110, align:'right', render(r){ const e=r.post_equity; if(e==null||!trd.initial_cash) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=e/trd.initial_cash-1; return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}}, fmtPctCol(v)) } },
-  { title:'原因', key:'reason', width:74, render(r){ return h('span',{style:{fontSize:'10px',color:'var(--c-text-dim)'}}, REASON_CN[r.reason]||r.reason||'—') } },
+  { title:'了结盈亏率', key:'pnl_pct', width:78, align:'right', render(r){ const p=r.pnl, s=r.shares, pr=r.price_hfq; if(p==null||!s||!pr) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=p/(pr*s); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}}, fmtPctCol(v)) } },
+  { title:'浮动盈亏', key:'float_pnl', width:84, align:'right', render(r){ const v=r.float_pnl; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}}, fmtAmt(v)) } },
+  { title:'了结后总资产盈亏额', key:'tot_pnl_amt', width:110, align:'right', render(r){ const e=r.post_equity; if(e==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=e-trd.initial_cash; return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}}, fmtAmt(v)) } },
+  { title:'了结后总资产盈亏率', key:'tot_pnl_pct', width:110, align:'right', render(r){ const e=r.post_equity; if(e==null||!trd.initial_cash) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const v=e/trd.initial_cash-1; return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}}, fmtPctCol(v)) } },
+  { title:'原因', key:'reason', width:74, render(r){ return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}}, REASON_CN[r.reason]||r.reason||'—') } },
 ]
 
 async function loadTrades() {
@@ -290,7 +295,12 @@ onMounted(async () => { await loadModels(); await loadSignals() })
 .paper-pos { margin: 2px 0 8px; border: 1px solid var(--c-card-bg-hover); border-radius: 6px; background: var(--c-card-bg); }
 .paper-pos-head { display: flex; align-items: center; gap: 10px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
 .paper-pos-head b { font-size: 13px; }
-.paper-pos-mini { flex: 1; font-size: 10px; color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.paper-pos-toggle { font-size: 10px; color: var(--c-text-dimmer); flex-shrink: 0; }
+.paper-pos-mini { flex: 1; font-size: 11px; color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paper-pos-toggle { font-size: 11px; color: var(--c-text-dimmer); flex-shrink: 0; }
 .paper-pos-body { border-top: 1px solid var(--c-border-light); padding: 2px; }
+
+.signal-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 48px 24px; text-align: center;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 1px 2px rgba(20,22,26,.03); }
+.signal-empty h3 { margin: 4px 0 0; font-size: 16px; font-weight: 600; color: var(--c-text); }
+.signal-empty p { margin: 0 0 8px; max-width: 46ch; font-size: 13px; line-height: 1.65; color: var(--c-text-dim); }
 </style>

@@ -15,8 +15,8 @@
       <n-button size="tiny" :type="colorMode==='volr'?'primary':'default'" @click="switchColorMode('volr')" title="量比（今日量/前20日均量）">量比</n-button>
     </n-button-group>
     <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="s" :size="13" />  只看信号</n-button>
-    <span v-if="!loading && !noData" style="font-size:10px;color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 · 蓝实线=实盘持仓 · 青虚线=纸面组合">
-      <span :style="{color:SIG_COLOR}">━</span>信号 · <span style="color:var(--c-info)">━</span>实盘 · <span style="color:#06b6d4">╌</span>纸面
+    <span v-if="!loading && !noData" style="font-size:11px;color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 · 蓝实线=实盘持仓 · 青虚线=纸面组合">
+      <span :style="{color:SIG_COLOR}">━</span>信号 · <span style="color:var(--c-info)">━</span>实盘 · <span style="color:var(--c-text-dim)">╌</span>纸面
     </span>
     <n-tag v-if="!loading && !noData && levelLabel" size="small" style="margin-left:auto">{{levelLabel}}</n-tag>
     <n-button v-if="drillStack.length>0" size="tiny" @click="goBack"><AppIcon name="arrow-left" :size="12" /> {{drillStack.length>1?drillStack[drillStack.length-2].name:'全部行业'}}</n-button>
@@ -28,7 +28,7 @@
     <div style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size:11px">请等待数据采集完成后重试，或选择其他日期</span></div>
   </div>
   <div v-else>
-    <div :id="'treemap-chart'" style="width:100%;height:calc(100vh - 130px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
+    <div :id="'treemap-chart'" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
   </div>
 
   <!-- 生成确认弹窗 -->
@@ -300,7 +300,7 @@ function renderChart() {
           if (detail.tr != null) html += `<br/>换手: ${detail.tr.toFixed(2)}%`
           html += `<br/>趋势: ${detail.trend_up!==false?'↑':'↓'}`
           if (d._sig) html += `<br/><span style="color:#f59e0b">★ 信号强度${d._sig.strength||'?'} ${d._sig.reason||''}</span>`
-          if (d._hold) html += `<br/><span style="color:#2080f0">◆ 实盘持仓 ${d._hold.qty} 股 / 成本 ¥${Number(d._hold.cost).toFixed(2)}</span>`
+          if (d._hold) html += `<br/><span style="color:#c22b3f">◆ 实盘持仓 ${d._hold.qty} 股 / 成本 ¥${Number(d._hold.cost).toFixed(2)}</span>`
           if (d._paper) html += `<br/><span style="color:#06b6d4">◇ 纸面持仓 ${d._paper.shares} 股（模拟口径） / 买价 ¥${Number(d._paper.buy_price).toFixed(2)}</span>`
         } else {
           html += `<br/>${mLabel}: ${metric.value==='volume'?fmt(val)+'股':metric.value==='amount'?'¥'+(val/1e8).toFixed(1)+'亿':metric.value==='pe'?(100-(val||0)/100).toFixed(0)+'%':'¥'+(val/1e8).toFixed(1)+'亿'}`

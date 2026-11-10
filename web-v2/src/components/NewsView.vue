@@ -70,7 +70,7 @@ const IMP_OPTS = [
 ]
 const CAT_NAME = { flash: '快讯', stock_news: '个股新闻', report: '研报', notice: '公告' }
 // 分类色属「质量/状态域」的标识色，不表达涨跌方向，故不受红绿铁律约束
-const CAT_COLOR = { flash: 'var(--c-info)', stock_news: 'var(--c-text-dim)', report: '#a78bfa', notice: '#f59e0b' }
+const CAT_COLOR = { flash: 'var(--c-info)', stock_news: 'var(--c-text-dim)', report: 'var(--c-text-dim)', notice: '#f59e0b' }
 const SRC_NAME = { cls: '财联社', em724: '东财7×24', wscn: '华尔街见闻', em_stock: '东财', em_report: '东财研报', cninfo: '巨潮' }
 const SENTI = { 1: { t: '利好', c: UP_COLOR }, 0: { t: '中性', c: 'var(--c-text-faint)' }, '-1': { t: '利空', c: DOWN_COLOR } }
 const sentiOf = s => (s === null || s === undefined) ? null : SENTI[s] || SENTI[String(s)]
@@ -145,12 +145,12 @@ onUnmounted(() => window.removeEventListener('popstate', onPopstate))
 }
 .nv-item:hover { border-color: var(--c-card-bg-hover); }
 .nv-meta {
-  display: flex; align-items: center; gap: 7px; font-size: 10px;
+  display: flex; align-items: center; gap: 7px; font-size: 11px;
   color: var(--c-text-faint); margin-bottom: 3px;
 }
 .nv-cat { font-weight: 600; }
 .nv-imp { border-radius: 8px; padding: 0 5px; font-weight: 600; }
-.nv-imp3 { background: rgba(239,68,68,0.16); color: #ef4444; }
+.nv-imp3 { background: rgba(194,43,63,0.16); color: #c22b3f; }
 .nv-imp2 { background: rgba(148,163,184,0.18); color: var(--c-text-dim); }
 .nv-pending { background: rgba(148,163,184,0.13); border-radius: 8px; padding: 0 5px; }
 .nv-stock {
@@ -160,5 +160,5 @@ onUnmounted(() => window.removeEventListener('popstate', onPopstate))
 .nv-title { font-size: 12px; line-height: 1.5; color: var(--c-text); font-weight: 500; word-break: break-word; }
 .nv-summary { font-size: 11px; line-height: 1.55; color: var(--c-text-dim); margin-top: 2px; word-break: break-word; }
 .nv-topics { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-.nv-topic { font-size: 10px; color: var(--c-text-faint); background: rgba(148,163,184,0.12); border-radius: 3px; padding: 0 4px; }
+.nv-topic { font-size: 11px; color: var(--c-text-faint); background: rgba(148,163,184,0.12); border-radius: 3px; padding: 0 4px; }
 </style>

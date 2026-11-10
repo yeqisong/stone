@@ -1,5 +1,5 @@
 <template>
-  <div v-if="r" class="no-shrink" style="font-size:10px;color:var(--c-text-faint);padding:4px 2px 0;line-height:1.7">
+  <div v-if="r" class="no-shrink" style="font-size:12px;color:var(--c-text-dim);padding:4px 2px 0;line-height:1.7">
     <div>信号触发：{{ signalLine }}</div>
     <div>了结规则（效果追踪）：{{ closureLine }}</div>
     <div>纸面交易：{{ paperLine }}</div>

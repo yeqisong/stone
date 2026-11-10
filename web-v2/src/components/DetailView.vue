@@ -1,6 +1,6 @@
 <template>
 <div>
-  <n-space align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap">
+  <n-space align="center" :wrap="isNarrow" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
     <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
     <StockSuggestInput v-model:value="code" size="tiny" width="170px" @select="load" @enter="load" />
     <n-button type="primary" size="tiny" @click="load">查询</n-button>
@@ -36,16 +36,16 @@
 
     <!-- Strategy Signals -->
     <div style="margin-bottom:12px;min-height:50px">
-      <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
+      <h4 class="side-title"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
       <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:8px;flex-wrap:wrap">
         <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:8px;padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
             <n-tag :type="s.direction==='buy'?'error':s.direction==='sell'?'success':'default'" size="small" :bordered="false">{{dirName(s.direction)}}</n-tag>
-            <span v-if="s.combined_signal" style="color:var(--n-color-target);font-size:13px;font-weight:600">{{s.strength}}</span>
+            <span v-if="s.combined_signal" style="color:var(--c-accent);font-size:13px;font-weight:600">{{s.strength}}</span>
             <span v-else style="font-size:12px">{{''.repeat(s.strength)}}</span>
           </div>
           <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
-          <div v-if="s.model_version" style="font-size:10px;color:var(--c-text-faint);margin-top:2px"><AppIcon name="f" :size="13" />  {{s.model_version}}</div>
+          <div v-if="s.model_version" style="font-size:11px;color:var(--c-text-faint);margin-top:2px"><AppIcon name="f" :size="13" />  {{s.model_version}}</div>
         </div>
       </div>
       <n-empty v-else description="暂无信号" style="padding:10px" />
@@ -55,7 +55,7 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  分钟K线 <span style="font-size:11px;color:var(--c-text-dim)">腾讯实时 · 不复权 · 30s 刷新</span>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size:11px;color:var(--c-text-dim)">腾讯实时 · 不复权 · 30s 刷新</span>
             <n-button-group size="tiny" style="margin-left:8px">
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
@@ -63,7 +63,7 @@
           <div :id="'c0'" style="width:100%;height:260px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size:11px;color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
         <div style="margin-bottom:12px">
@@ -75,46 +75,46 @@
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="s" :size="13" />  MACD</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="zap" :size="13" />  MACD</h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> RSI</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="activity" :size="13" />  RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
         <div v-if="benchData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="sliders" :size="13" />  相对强弱 <span style="font-size:11px;color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
           <div :id="'c8'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 换手率 <span style="font-size:11px;color:var(--c-text-dim)">%（含分位线）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="refresh" :size="13" />  换手率 <span style="font-size:11px;color:var(--c-text-dim)">%（含分位线）</span></h4>
           <div :id="'c9'" style="width:100%;height:140px"></div>
         </div>
         <div v-if="marginData.length > 2" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="arrow-left-right" :size="13" />  两融余额 <span style="font-size:11px;color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
           <div :id="'c10'" style="width:100%;height:140px"></div>
         </div>
         <!-- 带右侧 Y 轴的图统一殿后（PE分位%/资金流累计/ATR%），避免中段双轴观感错乱 -->
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="percent" :size="13" />  PE历史分位 <span style="font-size:11px;color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
         <div v-if="mfData.length" style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> 资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="dollar-sign" :size="13" />  资金流 <span style="font-size:11px;color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
           <div :id="'c7'" style="width:100%;height:160px"></div>
         </div>
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"> ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="maximize" :size="13" />  ATR <span style="font-size:11px;color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
           <div :id="'c11'" style="width:100%;height:140px"></div>
         </div>
       </div>
 
       <!-- Right: Fundamentals & Overview -->
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
-        <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 基本面</h4>
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="w" :size="13" />  基本面</h4>
           <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
-          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" style="width:100%;border-collapse:collapse;font-size:12px">
+          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" class="side-table">
             <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
               <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px;text-align:left">{{row.lbl}}</td>
               <td style="padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text);text-align:left">{{row.val}}</td>
@@ -122,39 +122,39 @@
           </table>
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
-        <div>
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(32,128,240,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
+          <table class="side-table">
+            <tr><td>日期</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'rgba(194,43,63,0.06)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">开盘</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最高</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#ef4444':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最低</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#10b981':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">收盘</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'#ef4444':'#10b981'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size:10px;margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'#ef4444':'#10b981'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size:10px;margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最高</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#c22b3f':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">最低</td><td style="padding:5px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'#0a7a5a':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">收盘</td><td style="padding:5px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'#c22b3f':'#0a7a5a'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size:11px;margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'#c22b3f':'#0a7a5a'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size:11px;margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交量</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">成交额</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size:11px">换手率</td><td style="padding:5px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
           </table>
         </div>
-        <div v-if="chipData && chipData.buckets && chipData.buckets.length">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
+        <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
+          <h4 class="side-title"><AppIcon name="pie-chart" :size="13" />  筹码分布 <span style="font-size:11px;color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> · {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
           <div v-if="chipData.profit_ratio!=null" style="font-size:11px;color:var(--c-text-dim);margin-top:2px">
-            现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#ef4444':'#10b981',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
+            现价 ¥{{chipData.current}} · 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'#c22b3f':'#0a7a5a',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
           </div>
         </div>
-        <div v-if="sigStats">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 信号回看</h4>
+        <div v-if="sigStats" class="side-panel">
+          <h4 class="side-title"><AppIcon name="list" :size="13" />  信号回看</h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim)">
             近{{sigStats.years}}年 <b style="color:var(--c-text)">{{sigStats.n}}</b> 条信号（buy {{sigStats.buys}}/sell {{sigStats.sells}}）<br/>
-            平均前瞻：5d <span :style="{color:sigStats.f5>=0?'#ef4444':'#10b981'}">{{(sigStats.f5*100).toFixed(1)}}%</span> ·
-            10d <span :style="{color:sigStats.f10>=0?'#ef4444':'#10b981'}">{{(sigStats.f10*100).toFixed(1)}}%</span> ·
-            20d <span :style="{color:sigStats.f20>=0?'#ef4444':'#10b981'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
+            平均前瞻：5d <span :style="{color:sigStats.f5>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f5*100).toFixed(1)}}%</span> ·
+            10d <span :style="{color:sigStats.f10>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f10*100).toFixed(1)}}%</span> ·
+            20d <span :style="{color:sigStats.f20>=0?'#c22b3f':'#0a7a5a'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
           </div>
         </div>
         <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色；
              情绪方向由 LLM 打分给出（红多绿空），与 mark 徽标相互独立 -->
-        <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
+        <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)" class="side-panel">
+          <h4 class="side-title"><AppIcon name="message-circle" :size="13" />  雪球讨论 <span style="font-size:11px;color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 · 热帖精选</span></h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
             今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖 ·
             标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b> ·
@@ -162,7 +162,7 @@
           </div>
           <!-- LLM 情绪构成（design/06 §9.10）：只统计已打分帖（夜间任务，按热度取） -->
           <div v-if="xqData.sentiment && xqData.sentiment.scored"
-               style="margin-bottom:8px;padding:7px 9px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
+               class="side-well">
             <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-bottom:5px">
               <span style="color:var(--c-text-dim)">
                 LLM 情绪
@@ -177,15 +177,15 @@
               <div v-for="seg in sentiSegs" :key="seg.k" :title="seg.t+' '+seg.n+' 帖'"
                    :style="{width:seg.w+'%', background:seg.c}"></div>
             </div>
-            <div style="display:flex;gap:10px;font-size:10px;margin-top:4px">
+            <div style="display:flex;gap:10px;font-size:11px;margin-top:4px">
               <span v-for="seg in sentiSegs" :key="seg.k" style="color:var(--c-text-dim)">
                 <span :style="{color:seg.c,fontWeight:600}">{{seg.t}}</span> {{seg.n}}
               </span>
             </div>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
-            <div v-for="(p,i) in xqData.hot" :key="i" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
-              <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-text-faint);margin-bottom:3px">
+            <div v-for="(p,i) in xqData.hot.slice(0, 6)" :key="i" class="side-item">
+              <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{p.created_at.slice(5)}}</span>
                 <span v-if="p.source">{{p.source}}</span>
                 <span v-if="sentiOf(p.sentiment)" :title="p.reason||''"
@@ -196,20 +196,21 @@
               <div class="side-text" :title="p.text">{{p.text}}</div>
             </div>
           </div>
+          <div v-if="xqData.hot.length > 6" class="side-more">仅显示前 6 条热帖</div>
         </div>
         <!-- 相关资讯（design/07）：与「雪球讨论」并列——第 3 层（资讯 × 雪球交叉分析）的落点。
              未总结条目 summary/sentiment 为 NULL 而非 0，显示「待总结」不可当「中性」 -->
-        <div v-if="newsData && newsData.count > 0">
-          <h4 style="margin-bottom:6px;font-size:14px;color:var(--c-text)"> 相关资讯 <span style="font-size:11px;color:var(--c-text-dim)">{{newsData.count}} 条 · 近 {{newsData.days}} 天</span></h4>
+        <div v-if="newsData && newsData.count > 0" class="side-panel">
+          <h4 class="side-title"><AppIcon name="file-text" :size="13" />  相关资讯 <span style="font-size:11px;color:var(--c-text-dim)">{{newsData.count}} 条 · 近 {{newsData.days}} 天</span></h4>
           <div style="font-size:11px;line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
             <span v-for="(v,k) in newsData.by_category" :key="k" style="margin-right:8px">{{NEWS_CAT_NAME[k]||k}} <b style="color:var(--c-text)">{{v}}</b></span>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
-            <div v-for="n in newsData.data" :key="n.id" style="padding:6px 8px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-border)">
-              <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-text-faint);margin-bottom:3px">
+            <div v-for="n in newsData.data.slice(0, 8)" :key="n.id" class="side-item">
+              <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-faint);margin-bottom:3px">
                 <span>{{(n.published_at||'').slice(5)}}</span>
                 <span :style="{color:NEWS_CAT_COLOR[n.category]||'var(--c-text-dim)',fontWeight:600}">{{NEWS_CAT_NAME[n.category]||n.category}}</span>
-                <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:rgba(239,68,68,0.16);color:#ef4444;border-radius:8px;padding:0 5px;font-weight:600">重</span>
+                <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:rgba(194,43,63,0.16);color:#c22b3f;border-radius:8px;padding:0 5px;font-weight:600">重</span>
                 <span v-else-if="n.importance===2" style="background:rgba(148,163,184,0.18);border-radius:8px;padding:0 5px">中</span>
                 <!-- 未总结才显示「待总结」：imp=1 是合法等级（不显示徽标），不能落到 else 里被当成未总结 -->
                 <span v-else-if="n.importance===null" style="background:rgba(148,163,184,0.13);border-radius:8px;padding:0 5px">待总结</span>
@@ -220,6 +221,7 @@
               <div v-if="n.summary" class="side-text" style="color:var(--c-text-dim);margin-top:2px" :title="n.summary">{{n.summary}}</div>
             </div>
           </div>
+          <div v-if="newsData.data.length > 8" class="side-more">仅显示前 8 条，完整列表见资讯页</div>
         </div>
       </div>
     </div>
@@ -260,9 +262,11 @@ import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
 import { useAuthStore } from '../stores/auth'
+import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
 
 const props = defineProps({ code: String })
+const { isNarrow } = useViewport()
 const emit = defineEmits(['back'])
 const API = window.location.origin
 const _nav = useNavStore()
@@ -444,7 +448,7 @@ const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未�
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
 // 资讯分类标识色属「质量/状态域」，不表达涨跌方向，故不受红绿铁律约束
 const NEWS_CAT_NAME = { flash:'快讯', stock_news:'个股', report:'研报', notice:'公告' }
-const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'#a78bfa', notice:'#f59e0b' }
+const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'var(--c-text-dim)', notice:'#f59e0b' }
 // 资讯情绪（对个股的利好/利空）与雪球帖的看多/看空同属方向域，用同一套红绿、文案各异
 const NEWS_SENTI = {1:{t:'利好',c:UP_COLOR}, 0:{t:'中性',c:'var(--c-text-faint)'}, '-1':{t:'利空',c:DOWN_COLOR}}
 const newsSentiOf = s => (s===null||s===undefined) ? null : (NEWS_SENTI[s] || null)
@@ -518,7 +522,7 @@ function calcPriceChange(kd){
   const last = kl[kl.length-1], prev = kl[kl.length-2]
   if(last.close && prev.close){
     priceChg.value = (last.close - prev.close) / prev.close * 100
-    priceColor.value = priceChg.value >= 0 ? '#ef4444' : '#10b981'
+    priceColor.value = priceChg.value >= 0 ? '#c22b3f' : '#0a7a5a'
   }
 }
 
@@ -618,8 +622,8 @@ function drawCharts(kd){
   // 均线 MA5/10/20/30/60/120/180（前端按 close 计算，前 N-1 点为 null）
   const MA = (n) => closes.map((_, i) => { if (i < n - 1) return null; let s = 0; for (let j = 0; j < n; j++) s += closes[i - j]; return +(s / n).toFixed(2); })
   const ma5 = MA(5), ma10 = MA(10), ma20 = MA(20), ma30 = MA(30), ma60 = MA(60), ma120 = MA(120), ma180 = MA(180)
-  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
-  const bc = ba.map(v=>v>=0?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
+  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)')
+  const bc = ba.map(v=>v>=0?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)')
   // 浅灰色网格线（比默认的 --c-border-light 更浅）
   const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
 
@@ -653,14 +657,14 @@ function drawCharts(kd){
     const d = p[0]; const idx = d.dataIndex; const o = ohlc[idx]
     if(!o) return ''
     const chg = o[1] && ohlc[idx-1] ? ((o[1]-ohlc[idx-1][1])/ohlc[idx-1][1]*100).toFixed(2) : '—'
-    const color = chg>=0?'#ef4444':'#10b981'
+    const color = chg>=0?'#c22b3f':'#0a7a5a'
     const mid = bmid[idx], up = bup[idx], lo = blo[idx]
     // 信号/龙虎榜叠加信息（数据晚于主图到达也不怕：formatter 每次悬停现查 ref）
     const s = sigData.value.find(x=>x.date===dates[idx])
     const t = toplistData.value.find(x=>x.date===dates[idx])
     let extra = ''
-    if(s) extra += `<br/><span style="color:${s.direction==='buy'?'#ef4444':'#10b981'}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} @¥${s.price!=null?s.price.toFixed(2):'—'}</span>`
-      + (s.f10d!=null ? ` <span style="font-size:10px">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
+    if(s) extra += `<br/><span style="color:${s.direction==='buy'?'#c22b3f':'#0a7a5a'}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} @¥${s.price!=null?s.price.toFixed(2):'—'}</span>`
+      + (s.f10d!=null ? ` <span style="font-size:11px">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
     if(t) extra += `<br/><span style="color:#f59e0b">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
     return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
       开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
@@ -676,7 +680,7 @@ function drawCharts(kd){
     xAxis:xA, yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
-      {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
+      {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:'#c22b3f',color0:'#0a7a5a',borderColor:'#c22b3f',borderColor0:'#0a7a5a'}},
       {name:'上轨',type:'line',data:bup,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true},
       {name:'中轨',type:'line',data:bmid,lineStyle:{color:'#60a5fa',width:2},symbol:'none',smooth:true},
       {name:'下轨',type:'line',data:blo,lineStyle:{color:'#f59e0b',width:2},symbol:'none',smooth:true}
@@ -741,7 +745,7 @@ function drawCharts(kd){
     xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
     series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:'#8b5cf6',width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(139,92,246,0.1)'},
-      markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:'#ef4444',type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:'#10b981',type:'dashed'}}]}}
+      markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:'#c22b3f',type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:'#0a7a5a',type:'dashed'}}]}}
     ]
   })
   calcPriceChange(kd)
@@ -766,10 +770,10 @@ function drawCharts(kd){
     yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
-      {name:'MA5',type:'line',data:ma5,lineStyle:{color:'#ef4444',width:1},symbol:'none',smooth:true},
+      {name:'MA5',type:'line',data:ma5,lineStyle:{color:'#c22b3f',width:1},symbol:'none',smooth:true},
       {name:'MA10',type:'line',data:ma10,lineStyle:{color:'#f59e0b',width:1},symbol:'none',smooth:true},
       {name:'MA20',type:'line',data:ma20,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true},
-      {name:'MA30',type:'line',data:ma30,lineStyle:{color:'#10b981',width:1},symbol:'none',smooth:true},
+      {name:'MA30',type:'line',data:ma30,lineStyle:{color:'#0a7a5a',width:1},symbol:'none',smooth:true},
       {name:'MA60',type:'line',data:ma60,lineStyle:{color:'#8b5cf6',width:1},symbol:'none',smooth:true},
       {name:'MA120',type:'line',data:ma120,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
       {name:'MA180',type:'line',data:ma180,lineStyle:{color:'#64748b',width:1},symbol:'none',smooth:true},
@@ -828,7 +832,7 @@ function drawAuxCharts(kd){
         {axisLabel:{fontSize:9,formatter:v=>(v/1e4).toFixed(0)+'亿'},splitLine:{show:false}}],
       dataZoom:dz,
       series:[
-        {name:'主力净流入',type:'bar',data:nm,itemStyle:{color:p=>(nm[p.dataIndex]??0)>=0?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)'}},
+        {name:'主力净流入',type:'bar',data:nm,itemStyle:{color:p=>(nm[p.dataIndex]??0)>=0?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)'}},
         {name:'累计(右轴)',type:'line',yAxisIndex:1,data:cum,lineStyle:{color:'#60a5fa',width:1.5},symbol:'none'}
       ]
     })
@@ -936,7 +940,7 @@ function drawAuxCharts(kd){
       const i = idxOf.get(s.date); if(i==null) return null
       const y = s.direction==='buy' ? ohlc[i][2]*0.985 : ohlc[i][3]*1.015
       return {value:[i,y], symbolRotate: s.direction==='buy'?0:180,
-              itemStyle:{color: s.direction==='buy'?'#ef4444':'#10b981'}}
+              itemStyle:{color: s.direction==='buy'?'#c22b3f':'#0a7a5a'}}
     }).filter(Boolean)
     const topPts = toplistData.value.map(t=>{
       const i = idxOf.get(t.date); if(i==null) return null
@@ -970,7 +974,7 @@ function drawChip(){
     yAxis:{type:'category',data:prices.map(p=>p.toFixed(2)),axisLabel:{fontSize:9}},
     series:[{type:'bar',barWidth:'72%',
       // A 股约定红盈绿亏：现价下方=获利盘(红)，上方=套牢盘(绿)
-      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?'rgba(239,68,68,0.7)':'rgba(16,185,129,0.45)'}})),
+      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?'rgba(194,43,63,0.7)':'rgba(10,122,90,0.45)'}})),
       markLine:{silent:true,symbol:'none',
         data:[{yAxis:nearest,label:{formatter:'现价',fontSize:9,color:'#60a5fa'},lineStyle:{color:'#60a5fa',type:'dashed',width:1}}]}}
     ]
@@ -1028,8 +1032,8 @@ function drawPeChart(){
       {name:'PB',type:'line',data:pbVals,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
       {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:'#f59e0b',width:1,type:'dashed'},symbol:'none',smooth:true,
         markLine:{silent:true,symbol:'none',data:[
-          {yAxis:30,label:{formatter:'低估30',fontSize:9,position:'insideEndTop',color:'#10b981'},lineStyle:{color:'#10b981',type:'dashed',width:1}},
-          {yAxis:70,label:{formatter:'高估70',fontSize:9,position:'insideEndBottom',color:'#ef4444'},lineStyle:{color:'#ef4444',type:'dashed',width:1}}]}}
+          {yAxis:30,label:{formatter:'低估30',fontSize:9,position:'insideEndTop',color:'#0a7a5a'},lineStyle:{color:'#0a7a5a',type:'dashed',width:1}},
+          {yAxis:70,label:{formatter:'高估70',fontSize:9,position:'insideEndBottom',color:'#c22b3f'},lineStyle:{color:'#c22b3f',type:'dashed',width:1}}]}}
     ]
   })
   // 反向联动：拖 PE 滑块 → 日历窗翻译 → K 线组；绘制完成即按当前 K 线窗口对齐一次
@@ -1078,7 +1082,7 @@ function drawMink(){
   const ohlc = bars.map(b=>[b.open, b.close, b.low, b.high])
   const vols = bars.map(b=>b.volume)
   // 分时成交量柱：红涨绿跌 per-bar（对齐日线成交量惯例）
-  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(239,68,68,0.85)':'rgba(16,185,129,0.85)')
+  const vc = ohlc.map(d=>d[1]>=d[0]?'rgba(194,43,63,0.85)':'rgba(10,122,90,0.85)')
   const closes = bars.map(b=>b.close)
   const ma = (n) => closes.map((_,i)=> i<n ? null : +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2))
   const gl = {lineStyle:{color:'rgba(128,128,128,0.1)'}}
@@ -1107,7 +1111,7 @@ function drawMink(){
       {type:'slider',xAxisIndex:[0,1],height:13,bottom:2,borderColor:'transparent',backgroundColor:'rgba(128,128,128,0.08)',fillerColor:'rgba(96,165,250,0.10)',handleSize:'60%'},
     ],
     series:[
-      {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:'#ef4444',color0:'#10b981',borderColor:'#ef4444',borderColor0:'#10b981'}},
+      {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:'#c22b3f',color0:'#0a7a5a',borderColor:'#c22b3f',borderColor0:'#0a7a5a'}},
       {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),lineStyle:{color:'#f59e0b',width:1},symbol:'none'},
       {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),lineStyle:{color:'#60a5fa',width:1},symbol:'none'},
       {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,itemStyle:{color:p=>vc[p.dataIndex]}},
@@ -1131,6 +1135,55 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()
 /* 详情页分组标签：✕ 平时隐去，hover 才出现（naive-ui n-tag closable 默认常显） */
 .dt-grp-tag .n-tag__close { opacity: 0; transition: opacity .15s; }
 .dt-grp-tag:hover .n-tag__close { opacity: 1; }
+
+/* 右侧栏：独立粘性滚动区，页面高度由左侧图表决定 */
+.detail-sidebar {
+  position: sticky;
+  top: 8px;
+  align-self: flex-start;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.detail-sidebar::-webkit-scrollbar { width: 6px; }
+.side-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.side-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.side-title .nav-svg { color: var(--muted); }
+.side-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.side-table tr { background: transparent !important; }
+.side-table td {
+  border: 0 !important;
+  border-bottom: 1px solid var(--c-border-light) !important;
+  padding: 6px 4px !important;
+}
+.side-table tr:last-child td { border-bottom: 0 !important; }
+.side-table td:first-child {
+  width: 85px;
+  color: var(--c-text-dim) !important;
+  font-size: 11px !important;
+  white-space: nowrap;
+}
+.side-item { padding: 8px 0; border-top: 1px solid var(--c-border-light); }
+.side-item:first-child { padding-top: 0; border-top: 0; }
+.side-well { margin-bottom: 8px; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; }
+.side-more { margin-top: 8px; font-size: 11px; color: var(--c-text-faint); }
+@media (max-width: 1100px) {
+  .detail-sidebar { position: static; max-height: none; overflow: visible; padding-right: 0; }
+}
 
 /* 侧栏文本块（雪球热帖 / 相关资讯标题与摘要）：两行截断，全文 hover title */
 .side-text {

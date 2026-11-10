@@ -1,5 +1,6 @@
 // Monaco Editor worker setup — 必须在 monaco-editor import 之前加载
 import './utils/monaco-worker.js'
+import './styles/tokens.css'
 
 // Axios 全局拦截器
 import axios from 'axios'

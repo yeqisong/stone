@@ -29,7 +29,7 @@
       </div>
     </div>
     <div class="agent-side-foot">
-      <span v-if="info && !info.configured" style="color:#ef4444">未配置大模型 Key</span>
+      <span v-if="info && !info.configured" style="color:#c22b3f">未配置大模型 Key</span>
       <span v-else>{{ info?.model || '-' }} · {{ info?.tools?.length || 0 }} 工具 · {{ skills.length }} 技能</span>
     </div>
   </aside>
@@ -76,7 +76,7 @@
           <div v-for="t in b.tools" :key="t.id" class="agent-tool" :class="{ fail: t.result && !t.result.ok }">
             <div class="agent-tool-head" @click="toggleTool(t.id)">
               <AppIcon :name="t.result ? (t.result.ok ? 'check' : 'alert') : 'refresh'" :size="11"
-                       :style="{ color: t.result ? (t.result.ok ? '#10b981' : '#ef4444') : 'var(--c-text-dim)' }" />
+                       :style="{ color: t.result ? (t.result.ok ? '#0a7a5a' : '#c22b3f') : 'var(--c-text-dim)' }" />
               <span class="agent-tool-name">{{ toolLabel(t.name) }}</span>
               <span class="agent-tool-sum">{{ argsSummary(t) }}</span>
               <span class="agent-tool-meta">{{ t.result ? `${t.result.elapsed_ms}ms` : '运行中…' }}</span>
@@ -176,12 +176,12 @@
         </div>
         <pre class="agent-tool-body" style="max-height:200px">{{ importPreview.body_preview }}…</pre>
         <div style="display:flex;gap:6px;align-items:center">
-          <span style="font-size:10.5px;color:var(--c-text-dim);flex-shrink:0">安装名</span>
+          <span style="font-size:11.5px;color:var(--c-text-dim);flex-shrink:0">安装名</span>
           <n-input v-model:value="importSlug" size="small" style="width:200px" placeholder="英文技能名" />
         </div>
-        <div style="font-size:10px;color:#f59e0b">第三方内容会进入模型上下文，请确认来源可信后再导入</div>
+        <div style="font-size:11px;color:#f59e0b">第三方内容会进入模型上下文，请确认来源可信后再导入</div>
       </template>
-      <div v-if="importErr" style="font-size:11px;color:#ef4444">{{ importErr }}</div>
+      <div v-if="importErr" style="font-size:11px;color:#c22b3f">{{ importErr }}</div>
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
@@ -580,33 +580,39 @@ onMounted(async () => {
 
 /* ── 侧栏 ── */
 .agent-side { width: 216px; flex-shrink: 0; display: flex; flex-direction: column;
-  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 8px; padding: 8px; }
+  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 6px; padding: 8px; }
 .agent-side-head { flex-shrink: 0; }
 .agent-sess-list { flex: 1; overflow-y: auto; min-height: 0; margin-top: 6px; }
 .agent-sess { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 6px;
   cursor: pointer; font-size: 12px; color: var(--c-text); border-left: 2px solid transparent; }
 .agent-sess:hover { background: var(--c-card-bg-hover); }
-.agent-sess.active { background: rgba(32,128,240,0.10); border-left-color: #2080f0; }
+.agent-sess.active { background: rgba(194,43,63,0.10); border-left-color: #c22b3f; }
 .agent-sess-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .agent-sess-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-sess-time { font-size: 9.5px; color: var(--c-text-faint); }
+.agent-sess-time { font-size: 11px; color: var(--c-text-faint); }
 .agent-sess-tools { display: none; gap: 5px; flex-shrink: 0; }
 .agent-sess:hover .agent-sess-tools { display: flex; }
 .agent-ico { color: var(--c-text-faint); cursor: pointer; }
-.agent-ico:hover { color: #2080f0; }
-.agent-ico-danger:hover { color: #ef4444; }
+.agent-ico:hover { color: #c22b3f; }
+.agent-ico-danger:hover { color: #c22b3f; }
 .agent-side-empty { font-size: 11px; color: var(--c-text-faint); padding: 12px 8px; line-height: 1.6; }
-.agent-side-foot { flex-shrink: 0; padding-top: 6px; margin-top: 4px; font-size: 10px;
+.agent-side-foot { flex-shrink: 0; padding-top: 6px; margin-top: 4px; font-size: 11px;
   color: var(--c-text-faint); border-top: 1px solid var(--c-border-light); }
 
 /* ── 主区 ── */
 .agent-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column;
-  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 8px; overflow: hidden; }
+  background: var(--c-card-bg); border: 1px solid var(--c-card-bg-hover); border-radius: 6px; overflow: hidden; }
 .agent-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
   border-bottom: 1px solid var(--c-border-light); flex-shrink: 0; }
 .agent-head-title { font-size: 13px; font-weight: 600; color: var(--c-text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .agent-head-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+@media (max-width: 768px) {
+  .agent-head { padding: 6px 10px; gap: 6px; }
+  .agent-head-title { display: none; }
+  .agent-head-meta .n-tag { display: none; }
+  .agent-head-meta { gap: 2px; }
+}
 .agent-thread { flex: 1; overflow-y: auto; padding: 14px 16px 8px; min-height: 0; }
 
 .agent-empty { padding: 18px 4px 8px; }
@@ -614,20 +620,20 @@ onMounted(async () => {
 .agent-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
 .agent-card { padding: 9px 11px; background: var(--c-bg); border: 1px solid var(--c-border-light); border-radius: 7px; }
 .agent-card-t { font-size: 11.5px; font-weight: 600; color: var(--c-text); display: flex; align-items: center; gap: 5px; }
-.agent-card-d { font-size: 10.5px; color: var(--c-text-dim); margin-top: 3px; line-height: 1.5; }
+.agent-card-d { font-size: 11px; color: var(--c-text-dim); margin-top: 3px; line-height: 1.5; }
 .agent-empty-sub { font-size: 11px; color: var(--c-text-dim); margin-bottom: 7px; }
 .agent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .agent-chip { font-size: 11px; padding: 5px 11px; border-radius: 12px; cursor: pointer;
   background: var(--c-bg); border: 1px solid var(--c-border); color: var(--c-text-dim); transition: all .15s; }
-.agent-chip:hover { color: var(--c-text); border-color: #2080f0; }
+.agent-chip:hover { color: var(--c-text); border-color: #c22b3f; }
 
 .agent-block { margin-bottom: 12px; display: flex; flex-direction: column; }
 .agent-block.user { align-items: flex-end; }
-.agent-bubble { font-size: 12.5px; line-height: 1.72; padding: 8px 12px; border-radius: 8px;
+.agent-bubble { font-size: 13px; line-height: 1.7; padding: 8px 12px; border-radius: 8px;
   word-break: break-word; }
-.agent-bubble.user { background: rgba(32,128,240,0.13); color: var(--c-text); white-space: pre-wrap;
+.agent-bubble.user { background: rgba(194,43,63,0.13); color: var(--c-text); white-space: pre-wrap;
   max-width: 82%; border-bottom-right-radius: 3px; }
-.agent-ans { position: relative; max-width: 92%; }
+.agent-ans { position: relative; max-width: 86%; }
 .agent-bubble.assistant { background: var(--c-bg); color: var(--c-text);
   border: 1px solid var(--c-border-light); border-bottom-left-radius: 3px; }
 .agent-copy { position: absolute; top: 6px; right: 6px; opacity: 0; border: 0; cursor: pointer;
@@ -658,8 +664,8 @@ onMounted(async () => {
 .agent-bubble.assistant :deep(.agent-table tr:nth-child(even) td) { background: rgba(128,128,128,0.03); }
 
 /* 回答中的股票代码（可点击跳详情） */
-.agent-bubble.assistant :deep(.agent-stock-link) { color: #2080f0; cursor: pointer;
-  border-bottom: 1px dashed rgba(32,128,240,0.5); }
+.agent-bubble.assistant :deep(.agent-stock-link) { color: #c22b3f; cursor: pointer;
+  border-bottom: 1px dashed rgba(194,43,63,0.5); }
 .agent-bubble.assistant :deep(.agent-stock-link:hover) { color: #4c9aff; }
 
 /* 工具生成的图表缩略图 */
@@ -670,20 +676,20 @@ onMounted(async () => {
 /* 工具卡片 */
 .agent-tool { margin-top: 6px; border: 1px solid var(--c-border-light); border-radius: 6px;
   background: var(--c-bg); overflow: hidden; max-width: 88%; }
-.agent-tool.fail { border-color: rgba(239,68,68,0.35); }
+.agent-tool.fail { border-color: rgba(194,43,63,0.35); }
 .agent-tool-head { display: flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer; }
 .agent-tool-head:hover { background: var(--c-card-bg-hover); }
 .agent-tool-name { font-size: 11px; font-weight: 600; color: var(--c-text); flex-shrink: 0; }
-.agent-tool-sum { font-size: 10px; color: var(--c-text-faint); flex: 1; overflow: hidden;
+.agent-tool-sum { font-size: 11px; color: var(--c-text-faint); flex: 1; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
-.agent-tool-meta { font-size: 9.5px; color: var(--c-text-faint); flex-shrink: 0; }
-.agent-tool-fold { font-size: 9.5px; color: var(--c-text-dimmer); flex-shrink: 0; }
-.agent-tool-body { margin: 0; padding: 8px 10px; font-size: 10.5px; line-height: 1.55;
+.agent-tool-meta { font-size: 11px; color: var(--c-text-faint); flex-shrink: 0; }
+.agent-tool-fold { font-size: 11px; color: var(--c-text-dimmer); flex-shrink: 0; }
+.agent-tool-body { margin: 0; padding: 8px 10px; font-size: 11.5px; line-height: 1.55;
   max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all;
   border-top: 1px solid var(--c-border-light); color: var(--c-text-dim); background: var(--c-card-bg); }
 
 .agent-running { display: flex; align-items: center; font-size: 11px; color: var(--c-text-dim); padding: 4px 2px 10px; }
-.agent-dot { width: 6px; height: 6px; border-radius: 50%; background: #2080f0; margin-right: 6px;
+.agent-dot { width: 6px; height: 6px; border-radius: 50%; background: #c22b3f; margin-right: 6px;
   animation: agent-pulse 1s infinite; }
 @keyframes agent-pulse { 0%,100% { opacity: 0.3 } 50% { opacity: 1 } }
 
@@ -694,7 +700,7 @@ onMounted(async () => {
 
 .agent-composer { flex-shrink: 0; padding: 8px 12px 10px; border-top: 1px solid var(--c-border-light); }
 .agent-composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.agent-hint { font-size: 10px; color: var(--c-text-faint); flex: 1; overflow: hidden;
+.agent-hint { font-size: 11px; color: var(--c-text-faint); flex: 1; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 
 /* 技能面板 */

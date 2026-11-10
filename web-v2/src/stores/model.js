@@ -12,7 +12,7 @@ export const useModelStore = defineStore('model', () => {
   const selected = computed(() => versions.value.find(v => v.version === selectedId.value) || null)
 
   const statusBadge = (s) => {
-    return { DRAFT: 'info', TRAINING: 'warning', VALIDATING: 'warning', PENDING: 'warning', ACTIVE: 'success', REJECTED: 'error', ARCHIVED: 'default' }[s] || 'default'
+    return { DRAFT: 'info', TRAINING: 'warning', VALIDATING: 'warning', PENDING: 'warning', ACTIVE: 'primary', REJECTED: 'error', ARCHIVED: 'default' }[s] || 'default'
   }
 
   const statusLabel = (s) => {

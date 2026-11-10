@@ -1,7 +1,6 @@
 <template>
-<div class="page-fill" style="padding:10px 8px 4px">
-  <div class="no-shrink" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-    <div style="font-size:18px;font-weight:700;color:var(--c-text)">特征管理（Feature Registry）</div>
+<div class="page-fill" style="padding:0">
+  <div class="no-shrink" style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px">
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openDepGraph"><AppIcon name="link" :size="13" />  依赖图</n-button>
       <n-button size="small" quaternary @click="showDedup = true"><AppIcon name="compass" :size="13" />  去冗推荐</n-button>
@@ -46,7 +45,7 @@
       </div>
       <div v-if="showOpsPanel && keplFns" style="max-height:200px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:8px">
         <div v-for="grp in opGroups" :key="grp.label" style="margin-bottom:6px">
-          <div style="font-size:10px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
+          <div style="font-size:11px;font-weight:600;color:var(--c-text-faint);margin-bottom:4px">{{ grp.label }}</div>
           <div style="display:flex;flex-wrap:wrap;gap:4px">
             <n-tag v-for="op in grp.items" :key="op.name" size="small" :bordered="false"
                    style="cursor:pointer;font-family:monospace" :title="`${op.desc}　例: ${op.eg}`"
@@ -60,18 +59,18 @@
         <div style="font-size:11px;font-weight:600;color:var(--c-text-dim);margin-bottom:6px"><AppIcon name="link" :size="13" />  依赖项（自动提取）</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px">
           <n-tag v-for="d in parseDeps" :key="d" size="tiny" :bordered="false" :type="d.includes('.') ? 'warning' : 'info'">
-            {{ d.includes('.') ? '<AppIcon name="file-text" :size="13" />  ' : '<AppIcon name="link" :size="13" />  ' }}{{ d }}
+            <AppIcon :name="d.includes('.') ? 'file-text' : 'link'" :size="13" /> {{ d }}
           </n-tag>
         </div>
       </div>
 
       <!-- 校验结果 -->
       <div v-if="validateResult">
-        <div v-if="validateResult.ok" style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:6px;padding:8px;font-size:11px;color:#10b981">
+        <div v-if="validateResult.ok" style="background:rgba(10,122,90,.08);border:1px solid rgba(10,122,90,.2);border-radius:6px;padding:8px;font-size:11px;color:#0a7a5a">
           <AppIcon name="check" :size="13" />  公式语法正确，共 {{ validateResult.dependencies?.length || 0 }} 个依赖项
         </div>
-        <div v-else style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:8px">
-          <div v-for="(e,i) in validateResult.errors" :key="i" style="font-size:11px;color:#ef4444">{{ e.message }}</div>
+        <div v-else style="background:rgba(194,43,63,.08);border:1px solid rgba(194,43,63,.2);border-radius:6px;padding:8px">
+          <div v-for="(e,i) in validateResult.errors" :key="i" style="font-size:11px;color:#c22b3f">{{ e.message }}</div>
         </div>
       </div>
 
@@ -96,19 +95,19 @@
       <!-- 信息卡 -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint)">实体</div>
-          <div style="font-size:15px;font-weight:700;color:var(--c-text)">{{ entityLabel[detailItem.target_entity] || detailItem.target_entity }}</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">实体</div>
+          <div style="font-size:15px;font-weight:600;color:var(--c-text)">{{ entityLabel[detailItem.target_entity] || detailItem.target_entity }}</div>
         </div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint)">状态</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">状态</div>
           <n-tag :type="statusTypeMap[detailItem.status]||'default'" size="tiny" :bordered="false">{{ statusMap[detailItem.status] }}</n-tag>
         </div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint)">中文名</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">中文名</div>
           <div style="font-size:13px;font-weight:600;color:var(--c-text)">{{ detailItem.display_name || '—' }}</div>
         </div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px 14px;min-width:70px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint)">创建</div>
+          <div style="font-size:11px;color:var(--c-text-faint)">创建</div>
           <div style="font-size:12px;color:var(--c-text)">{{ (detailItem.created_at||'').slice(0,10) }}</div>
         </div>
       </div>
@@ -122,24 +121,24 @@
       <!-- 质量仪表盘 -->
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
         <div style="flex:1;min-width:100px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
-          <div :style="{fontSize:'22px',fontWeight:700,color:completenessPct>=80?'#10b981':completenessPct>=50?'#f59e0b':'#ef4444'}">{{ completenessPct }}%</div>
+          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="bar-chart-2" :size="13" />  数据完整度</div>
+          <div :style="{fontSize:'22px',fontWeight:600,color:completenessPct>=80?'#0a7a5a':completenessPct>=50?'#f59e0b':'#c22b3f'}">{{ completenessPct }}%</div>
           <div style="background:var(--c-border);border-radius:4px;height:6px;margin-top:4px;overflow:hidden">
-            <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=80?'#10b981':completenessPct>=50?'#f59e0b':'#ef4444',borderRadius:'4px'}"></div>
+            <div :style="{width:completenessPct+'%',height:'100%',background:completenessPct>=80?'#0a7a5a':completenessPct>=50?'#f59e0b':'#c22b3f',borderRadius:'4px'}"></div>
           </div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
-          <div style="font-size:20px;font-weight:700;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
+          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="w" :size="13" />  总格子</div>
+          <div style="font-size:20px;font-weight:600;color:var(--c-text)">{{ (detailItem.total_effective_cells||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  异常缺失</div>
-          <div :style="{fontSize:'20px',fontWeight:700,color:detailItem.abnormal_missing_cells>0?'#ef4444':'var(--c-text-dim)'}">{{ (detailItem.abnormal_missing_cells||0).toLocaleString() }}</div>
+          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="close" :size="13" />  异常缺失</div>
+          <div :style="{fontSize:'20px',fontWeight:600,color:detailItem.abnormal_missing_cells>0?'#c22b3f':'var(--c-text-dim)'}">{{ (detailItem.abnormal_missing_cells||0).toLocaleString() }}</div>
         </div>
         <div style="flex:1;min-width:80px;background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="calendar" :size="13" />  最近计算</div>
+          <div style="font-size:11px;color:var(--c-text-faint);margin-bottom:4px"><AppIcon name="calendar" :size="13" />  最近计算</div>
           <div :style="{fontSize:'13px',fontWeight:600,color:detailStale?'#f59e0b':'var(--c-text)'}">{{ detailItem.latest_computed_date || '—' }}</div>
-          <div v-if="detailStale" style="font-size:10px;color:#f59e0b;margin-top:2px"><AppIcon name="alert" :size="13" />  超过5天未更新</div>
+          <div v-if="detailStale" style="font-size:11px;color:#f59e0b;margin-top:2px"><AppIcon name="alert" :size="13" />  超过5天未更新</div>
         </div>
       </div>
 
@@ -255,7 +254,7 @@
             <n-data-table :columns="dedupSkipCols" :data="dedup.skipped" size="tiny" :max-height="240" />
             <n-button size="small" type="primary" style="margin-top:12px" :loading="dedupApplying"
               @click="applyRecommended"><AppIcon name="check" :size="13" />  推荐组设为入选</n-button>
-            <div style="font-size:10px;color:var(--c-text-faint);margin-top:8px;line-height:1.7">
+            <div style="font-size:11px;color:var(--c-text-faint);margin-top:8px;line-height:1.7">
               口径：相关性 = 因子逐日截面排名（cs_rank）后的 pooled Pearson，等价于逐日截面 Spearman
               的时间平均，回答"两个因子是否在挑同一批股票"；贪心按 |ICIR| 降序，与已选因子相关
               超阈值即跳过，同簇保留 ICIR 最高者。入选决策仍由你确认，批量按钮只改推荐组成员。
@@ -310,8 +309,8 @@ async function loadIcBoard() {
 }
 
 // IC 红绿灯：渲染为彩色 CSS 圆点（canvas/文本皆不依赖彩色 emoji）
-const TRAFFIC_COLOR = { green:'#10b981', yellow:'#f59e0b', red:'#ef4444' }
-const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'success' }, excluded:{ label:'已剔除', type:'error' } }
+const TRAFFIC_COLOR = { green:'#0a7a5a', yellow:'#f59e0b', red:'#c22b3f' }
+const icStatusTagMap = { candidate:{ label:'候选', type:'default' }, included:{ label:'已入选', type:'default' }, excluded:{ label:'已剔除', type:'error' } }
 
 // ── 去冗推荐 ──
 const showDedup = ref(false)
@@ -350,7 +349,7 @@ function renderDedupHeatmap() {
     xAxis: { type: 'category', data: factors, axisLabel: { fontSize: 8, rotate: 60 } },
     yAxis: { type: 'category', data: factors, axisLabel: { fontSize: 8 } },
     visualMap: { min: -1, max: 1, calculable: true, orient: 'horizontal', left: 'center', bottom: 0,
-                 inRange: { color: ['#2080f0', '#ffffff', '#ef4444'] }, textStyle: { fontSize: 9 } },
+                 inRange: { color: ['#c22b3f', '#ffffff', '#c22b3f'] }, textStyle: { fontSize: 9 } },
     series: [{ type: 'heatmap', data, label: { show: factors.length <= 15, fontSize: 8, formatter: p => p.data[2].toFixed(2) } }],
   })
 }
@@ -627,7 +626,7 @@ async function openDepGraph() {
     const r = await axios.get(API + '/api/features/dependency-graph')
     const { nodes, edges } = r.data
     const chart = echarts.init(depGraphContainer.value)
-    const colors = {0:'#9ca3af',1:'#2080f0',2:'#f59e0b',3:'#ef4444'}
+    const colors = {0:'#9ca3af',1:'#c22b3f',2:'#f59e0b',3:'#c22b3f'}
     chart.setOption({
       tooltip: { formatter(p) { return p.data.name + (p.data.display_name?'<br/>'+p.data.display_name:'') } },
       series: [{
@@ -717,7 +716,7 @@ async function doCreate(status) {
 
 // ── Status labels ──
 const statusMap = { draft:'草稿', enabled:'已启用', pending_recalc:'待重算', deprecated:'已弃用', data_anomaly:'数据异常' }
-const statusTypeMap = { draft:'warning', enabled:'success', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
+const statusTypeMap = { draft:'warning', enabled:'default', pending_recalc:'info', deprecated:'default', data_anomaly:'error' }
 const entityLabel = { stock:'个股', etf:'ETF', index:'指数', global:'全局' }
 
 const entityOptions = [
@@ -732,7 +731,7 @@ const entityOpts = Object.entries(entityLabel).map(([k,v]) => ({ label:v, value:
 
 const columns = [
   { title:'英文名', key:'feature_name', width:150, fixed:'left', ellipsis:{tooltip:true}, render(row) {
-    return h('span', { style:{cursor:'pointer',color:'#2080f0',textDecoration:'underline'}, onClick:() => openDetail(row.id) }, row.feature_name)
+    return h('span', { style:{cursor:'pointer',color:'#c22b3f',textDecoration:'underline'}, onClick:() => openDetail(row.id) }, row.feature_name)
   }},
   { title:'中文名', key:'display_name', width:100, fixed:'left', ellipsis:{tooltip:true} },
   { title:'族', key:'feature_group', width:70, render:(row) => row.feature_group || '—' },
@@ -740,9 +739,9 @@ const columns = [
   { title:'状态', key:'status', width:80, render:(row) => h(NTag, { type:statusTypeMap[row.status]||'default', size:'tiny', bordered:false }, () => statusMap[row.status]||row.status) },
   { title:'完整度', key:'data_completeness', width:80, render:(row) => {
     const pct = Math.round((row.data_completeness||0)*1000)/10
-    const color = pct >= 60 ? '#10b981' : pct >= 30 ? '#f59e0b' : '#ef4444'
+    const color = pct >= 60 ? '#0a7a5a' : pct >= 30 ? '#f59e0b' : '#c22b3f'
     return h('div', {}, [
-      h('div', { style:{fontSize:'10px',color:'var(--c-text-dim)',marginBottom:'2px'} }, pct+'%'),
+      h('div', { style:{fontSize:'11px',color:'var(--c-text-dim)',marginBottom:'2px'} }, pct+'%'),
       h('div', { style:{background:'var(--c-border)',borderRadius:'3px',height:'4px',overflow:'hidden'} },
         [h('div', { style:{width:pct+'%',height:'100%',background:color,borderRadius:'3px'} })])
     ])
@@ -755,8 +754,8 @@ const columns = [
       h('span', { style:{display:'inline-block', width:'8px', height:'8px', borderRadius:'50%',
         background: TRAFFIC_COLOR[b.traffic] || 'var(--c-text-faint)', verticalAlign:'middle', marginRight:'2px'} }, ''),
       h('span', { style:{fontSize:'11px',color:'var(--c-text)'} }, (b.rank_ic>=0?'+':'') + b.rank_ic.toFixed(4)),
-      h('span', { style:{fontSize:'10px',color:'var(--c-text-dim)'} }, 'IR ' + (b.icir>=0?'+':'') + (b.icir??0).toFixed(2)),
-      b.direction === '-' ? h('span', { style:{fontSize:'10px',color:'#f59e0b'} }, '↩') : null,
+      h('span', { style:{fontSize:'11px',color:'var(--c-text-dim)'} }, 'IR ' + (b.icir>=0?'+':'') + (b.icir??0).toFixed(2)),
+      b.direction === '-' ? h('span', { style:{fontSize:'11px',color:'#f59e0b'} }, '↩') : null,
     ])
   }},
   { title:'决策', key:'ic_status', width:74, render(row) {
@@ -777,7 +776,7 @@ const columns = [
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 function rowProps(row) {
-  const colors = { enabled:'#10b981', draft:'#f59e0b', pending_recalc:'#2080f0', deprecated:'#9ca3af', data_anomaly:'#ef4444' }
+  const colors = { enabled:'#0a7a5a', draft:'#f59e0b', pending_recalc:'#c22b3f', deprecated:'#9ca3af', data_anomaly:'#c22b3f' }
   return { style: { borderLeft: '3px solid ' + (colors[row.status]||'transparent') } }
 }
 

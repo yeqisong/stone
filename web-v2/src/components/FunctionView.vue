@@ -1,7 +1,6 @@
 <template>
-<div class="page-fill" style="padding:10px 8px 4px">
-  <div class="no-shrink" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-    <div style="font-size:18px;font-weight:700;color:var(--c-text)">函数管理（Operator Registry）</div>
+<div class="page-fill" style="padding:0">
+  <div class="no-shrink" style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px">
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openFields">字段注册表</n-button>
       <n-button type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
@@ -46,19 +45,19 @@
         </n-space>
       </div>
       <!-- 编码规则侧边栏 -->
-      <div style="width:220px;flex-shrink:0;border-left:1px solid var(--c-border);padding-left:12px;font-size:10px;color:var(--c-text-dim);overflow-y:auto;max-height:520px">
+      <div style="width:220px;flex-shrink:0;border-left:1px solid var(--c-border);padding-left:12px;font-size:11px;color:var(--c-text-dim);overflow-y:auto;max-height:520px">
         <div style="font-weight:600;color:var(--c-text);margin-bottom:8px"> 编码规则</div>
         <div style="margin-bottom:10px">
           <div style="color:#f59e0b;font-weight:600;margin-bottom:3px">函数签名</div>
           <div>• 第一个参数必须是 <b>df</b>（接收数据列）</div>
           <div>• 后续参数名小写字母开头</div>
           <div>• 用 <b>默认值</b> 声明可选参数</div>
-          <div style="background:var(--c-card-bg);padding:4px 6px;border-radius:4px;margin-top:3px;font-family:monospace;font-size:9px;word-break:break-all">
+          <div style="background:var(--c-card-bg);padding:4px 6px;border-radius:4px;margin-top:3px;font-family:monospace;font-size:11px;word-break:break-all">
             def func(df, window=5)
           </div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#ef4444;font-weight:600;margin-bottom:3px"><AppIcon name="shield" :size="13" />  代码安全</div>
+          <div style="color:#c22b3f;font-weight:600;margin-bottom:3px"><AppIcon name="shield" :size="13" />  代码安全</div>
           <div>禁止: import, exec, eval, open, os.system, subprocess, __import__</div>
         </div>
         <div style="margin-bottom:10px">
@@ -67,17 +66,17 @@
           <div>• 超过 500ms 黄色警告</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#2080f0;font-weight:600;margin-bottom:3px"><AppIcon name="bar-chart-2" :size="13" />  向量化要求</div>
+          <div style="color:#c22b3f;font-weight:600;margin-bottom:3px"><AppIcon name="bar-chart-2" :size="13" />  向量化要求</div>
           <div>• 必须用 Pandas/NumPy 向量化</div>
           <div>• 禁止 for 循环逐行处理</div>
           <div>• 返回值长度 = 输入长度</div>
         </div>
         <div style="margin-bottom:10px">
-          <div style="color:#10b981;font-weight:600;margin-bottom:3px"><AppIcon name="e" :size="13" />  参数类型体系</div>
+          <div style="color:#0a7a5a;font-weight:600;margin-bottom:3px"><AppIcon name="e" :size="13" />  参数类型体系</div>
           <div>• <b>标量</b> <AppIcon name="arrow-right" :size="13" />  传入默认值，如 5 / 0.05</div>
           <div>• <b>序列</b> <AppIcon name="arrow-right" :size="13" />  一维随机数组，如收盘价</div>
           <div>• <b>矩阵</b> <AppIcon name="arrow-right" :size="13" />  二维 DataFrame，如多股票表</div>
-          <div style="margin-top:3px;font-size:9px;color:var(--c-text-faint)">函数不耦合股票字段，通过类型绑定业务数据</div>
+          <div style="margin-top:3px;font-size:11px;color:var(--c-text-faint)">函数不耦合股票字段，通过类型绑定业务数据</div>
         </div>
       </div>
     </div>
@@ -108,20 +107,20 @@
       <div v-if="testResult" style="margin-top:8px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
           <span style="font-size:11px;color:var(--c-text-dim)">耗时：</span>
-          <span :style="{fontSize:'14px',fontWeight:700,color:testResult.elapsed_ms<500?'#10b981':testResult.elapsed_ms<2000?'#f59e0b':'#ef4444'}">
+          <span :style="{fontSize:'14px',fontWeight:600,color:testResult.elapsed_ms<500?'#0a7a5a':testResult.elapsed_ms<2000?'#f59e0b':'#c22b3f'}">
             {{ testResult.elapsed_ms }}ms
           </span>
           <n-tag :type="testResult.elapsed_ms<500?'success':testResult.elapsed_ms<2000?'warning':'error'" size="small">
             {{ testResult.elapsed_ms<500 ? '✓ 通过' : testResult.elapsed_ms<2000 ? '! 警告' : '✕ 不合格' }}
           </n-tag>
         </div>
-        <div v-if="testResult.error" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:8px;font-family:monospace;font-size:10px;color:#ef4444;white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ testResult.error }}</div>
+        <div v-if="testResult.error" style="background:rgba(194,43,63,.08);border:1px solid rgba(194,43,63,.2);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#c22b3f;white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ testResult.error }}</div>
         <div v-else-if="testResult.preview" style="margin-top:8px">
           <div style="font-size:11px;color:var(--c-text-dim);margin-bottom:4px">输出预览（前10行）</div>
-          <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:10px;max-height:200px;overflow-y:auto">
+          <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;max-height:200px;overflow-y:auto">
             <div v-for="(v, i) in testResult.preview" :key="i">{{ i }}: {{ v }}</div>
           </div>
-          <div v-if="testResult.rows" style="font-size:10px;color:var(--c-text-faint);margin-top:4px">共 {{ testResult.rows }} 行</div>
+          <div v-if="testResult.rows" style="font-size:11px;color:var(--c-text-faint);margin-top:4px">共 {{ testResult.rows }} 行</div>
         </div>
       </div>
     </n-space>
@@ -240,7 +239,7 @@ const fieldCols = [
   { title: '来源表', key: 'source', width: 220, ellipsis: { tooltip: true }, render: r => h('span', { style: 'font-size:11px;color:var(--c-text-dim)' }, r.source) },
   { title: '说明', key: 'desc', minWidth: 240, ellipsis: { tooltip: true } },
   { title: '近月覆盖', key: 'coverage', width: 90, align: 'right', render: r =>
-      r.coverage == null ? '—' : h('span', { style: `color:${r.coverage >= 0.9 ? '#10b981' : r.coverage >= 0.5 ? '#f59e0b' : '#ef4444'}` },
+      r.coverage == null ? '—' : h('span', { style: `color:${r.coverage >= 0.9 ? '#0a7a5a' : r.coverage >= 0.5 ? '#f59e0b' : '#c22b3f'}` },
         (r.coverage * 100).toFixed(0) + '%') },
 ]
 
@@ -331,11 +330,11 @@ const columns = [
       if (r.is_builtin) return ''
       return h('div', { style:'display:flex;gap:8px;align-items:center' }, [
         h('span', { 
-          style:'cursor:pointer;color:#2080f0;font-size:14px',
+          style:'cursor:pointer;color:#c22b3f;font-size:14px',
           onClick: (e) => { e.stopPropagation(); openEdit(r) }
         }, () => h(AppIcon, { name: 'edit', size: 13 })),
         h('span', {
-          style:'cursor:pointer;color:#ef4444;font-size:14px',
+          style:'cursor:pointer;color:#c22b3f;font-size:14px',
           onClick: (e) => { e.stopPropagation(); confirmDel(r) }
         }, () => h(AppIcon, { name: 'close', size: 13 })),
       ])
@@ -662,7 +661,7 @@ const verCols = [
   { title:'版本', key:'version', width:60 },
   { title:'时间', key:'created_at', width:150 },
   { title:'操作', key:'actions', width:60, render(r) {
-    return h('span', { style:'cursor:pointer;color:#2080f0', onClick:() => doRollback(r.version) }, '回滚')
+    return h('span', { style:'cursor:pointer;color:#c22b3f', onClick:() => doRollback(r.version) }, '回滚')
   }},
 ]
 

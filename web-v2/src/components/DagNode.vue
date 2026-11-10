@@ -25,16 +25,16 @@ defineProps(['id', 'data', 'selected'])
   position: relative;
 }
 .dag-node.selected {
-  border-color: var(--c-info);
-  box-shadow: 0 0 0 2px rgba(32,128,240,0.2);
+  border-color: var(--c-warning);
+  box-shadow: 0 0 0 2px rgba(194,43,63,0.2);
 }
 .dag-node-label {
   display: block;
 }
 .dag-node.status-pending { border-color: #94a3b8; }
-.dag-node.status-running { border-color: var(--c-info); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-info) 30%, transparent); }
-.dag-node.status-success { border-color: #10b981; }
-.dag-node.status-failed { border-color: #ef4444; }
+.dag-node.status-running { border-color: var(--c-warning); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-warning) 30%, transparent); }
+.dag-node.status-success { border-color: #0a7a5a; }
+.dag-node.status-failed { border-color: #c22b3f; }
 .dag-node :deep(.vue-flow__handle) {
   width: 6px !important;
   height: 6px !important;

@@ -61,16 +61,16 @@ const indCols = [
   { title:'行业', key:'industry', width:120, fixed:'left', ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:55 },
   { title:'已了结', key:'closed_i', width:58, render(r){ return r.closed ? r.closed : h('span',{style:{color:'var(--c-text-faint)'}},'0') } },
-  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
-  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_i', width:65, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#0a7a5a':v>=0.45?'#f59e0b':'#c22b3f'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(1)+'%') }},
+  { title:'均收益', key:'avg_return_i', width:75, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 const stkCols = [
   { title:'代码', key:'stock_code', width:65, fixed:'left' },
   { title:'名称', key:'stock_name', width:72, ellipsis:{tooltip:true} },
   { title:'信号', key:'signals', width:45 },
   { title:'已了结', key:'closed_s', width:58, render(r){ return r.closed ? r.closed : h('span',{style:{color:'var(--c-text-faint)'}},'0') } },
-  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#10b981':v>=0.45?'#f59e0b':'#ef4444'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
-  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#ef4444':'#10b981'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
+  { title:'胜率', key:'win_rate_s', width:60, render(r){ const v=r.win_rate; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); const c=v>=0.6?'#0a7a5a':v>=0.45?'#f59e0b':'#c22b3f'; return h('span',{style:{color:c,fontWeight:600}},(v*100).toFixed(0)+'%') }},
+  { title:'均收益', key:'avg_return_s', width:70, render(r){ const v=r.avg_return; if(v==null) return h('span',{style:{color:'var(--c-text-faint)'}},'—'); return h('span',{style:{color:v>=0?'#c22b3f':'#0a7a5a'}},(v>=0?'+':'')+(v*100).toFixed(2)+'%') }},
 ]
 
 import { h } from 'vue'
@@ -80,7 +80,7 @@ const versionOptions = ref([{ label: '当前 ACTIVE 模型', value: 'active' }, 
 
 // null=尚无到期/了结样本（渲染 —，不渲染 0 造成「0% 胜率」误读）
 const fmtPct = (v, digits = 2) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(digits) + '%'
-const floatColor = v => v == null ? 'var(--c-text-faint)' : (v >= 0 ? '#ef4444' : '#10b981')
+const floatColor = v => v == null ? 'var(--c-text-faint)' : (v >= 0 ? '#c22b3f' : '#0a7a5a')
 
 watch(() => props.version, (v) => { if (v && v !== selVersion.value) { selVersion.value = v; load() } })
 
@@ -102,7 +102,7 @@ async function load() {
       { label:'已了结', value: o.closed, color: 'var(--c-text)' },
       { label:'跟踪中', value: o.open, color: 'var(--c-text)' },
       { label:'浮动均收益', value: fmtPct(o.avg_float_return), color: floatColor(o.avg_float_return) },
-      { label:'胜率(已了结)', value: fmtPct(o.win_rate, 1), color: o.win_rate==null?'var(--c-text-faint)':o.win_rate>=0.5?'#10b981':'#ef4444' },
+      { label:'胜率(已了结)', value: fmtPct(o.win_rate, 1), color: o.win_rate==null?'var(--c-text-faint)':o.win_rate>=0.5?'#0a7a5a':'#c22b3f' },
       { label:'均收益(已了结)', value: fmtPct(o.avg_return), color: floatColor(o.avg_return) },
       { label:'前5日均', value: fmtPct(o.avg_forward_5d), color: floatColor(o.avg_forward_5d) },
       { label:'前10日均', value: fmtPct(o.avg_forward_10d), color: floatColor(o.avg_forward_10d) },
@@ -141,8 +141,8 @@ function drawTrend() {
       { type: 'value', name: '%', splitLine: { show: false } }
     ],
     series: [
-      { name: '信号数', type: 'bar', data: signals, itemStyle: { color: 'rgba(32,128,240,0.3)' }, barWidth: '60%' },
-      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: '#10b981', width: 2 }, symbol: 'none', smooth: true, connectNulls: true },
+      { name: '信号数', type: 'bar', data: signals, itemStyle: { color: 'rgba(194,43,63,0.3)' }, barWidth: '60%' },
+      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: '#0a7a5a', width: 2 }, symbol: 'none', smooth: true, connectNulls: true },
       { name: '浮动均%', type: 'line', yAxisIndex: 1, data: floats, lineStyle: { color: '#f59e0b', width: 1.5, type: 'dashed' }, symbol: 'none', smooth: true, connectNulls: true }
     ]
   })
@@ -160,7 +160,7 @@ function drawDist() {
     series: [{
       type: 'bar', data: d.counts,
       // 按桶位置着色：index>=5（0% 桶覆盖 [0,+3%) 及以上）为正收益→红，负收益桶→绿（A股红涨绿跌）
-      itemStyle: { color: p => p.dataIndex >= 5 ? '#ef4444' : '#10b981' },
+      itemStyle: { color: p => p.dataIndex >= 5 ? '#c22b3f' : '#0a7a5a' },
       barWidth: '80%'
     }]
   })
