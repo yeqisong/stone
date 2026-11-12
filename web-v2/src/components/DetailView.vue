@@ -4,6 +4,7 @@
     <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
     <StockSuggestInput v-model:value="code" size="tiny" width="170px" @select="load" @enter="load" />
     <n-button class="cta" type="primary" size="tiny" @click="load">查询</n-button>
+    <n-button size="tiny" title="带当前股票跳转问答页" @click="askAi"><AppIcon name="compass" :size="13" /> 问 AI</n-button>
     <n-select v-model:value="adj" @update:value="reloadChart" size="tiny" style="width:105px" :options="adjOptions" />
     <n-button-group size="tiny">
       <n-button v-for="p in PERIODS" :key="p.v" size="tiny" :type="period===p.v?'primary':'default'" @click="switchPeriod(p.v)">{{ p.t }}</n-button>
@@ -31,35 +32,103 @@
       <n-button size="tiny" dashed @click="openAddGroup"><AppIcon name="plus" :size="12" />  分组</n-button>
     </div>
 
-    <!-- Summary Cards - unified stat-row style -->
+    <!-- Summary Cards - unified stat-row style（第 5 格 = 最新策略信号，完整理由在 tooltip） -->
     <StatStrip :items="summaryItems" />
-
-    <!-- Strategy Signals -->
-    <div style="margin-bottom:12px;min-height:50px">
-      <h4 class="side-title"><AppIcon name="target" :size="13" />  策略信号 ({{detail.latest_signal_date||detail.latest_trade_date}})</h4>
-      <div v-if="detail.latest_signals&&detail.latest_signals.length" style="display:flex;gap:8px;flex-wrap:wrap">
-        <div v-for="s in detail.latest_signals" :key="s.strategy_name" style="flex:1;min-width:200px;border-radius:var(--radius);padding:10px 12px;background:var(--c-card-bg-hover);border:1px solid var(--c-border)">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-            <n-tag :type="s.direction==='buy'?'error':s.direction==='sell'?'success':'default'" size="small" :bordered="false">{{dirName(s.direction)}}</n-tag>
-            <span v-if="s.combined_signal" style="color:var(--c-accent);font-size:13px;font-weight:600">{{s.strength}}</span>
-            <span v-else style="font-size:12px">{{''.repeat(s.strength)}}</span>
-          </div>
-          <div style="font-size:12px;line-height:1.5;color:var(--c-text)">{{s.reason}}</div>
-          <div v-if="s.model_version" style="font-size: var(--text-meta);color:var(--c-text-faint);margin-top:2px"><AppIcon name="f" :size="13" />  {{s.model_version}}</div>
-        </div>
-      </div>
-      <n-empty v-else description="暂无信号" style="padding:10px" />
-    </div>
 
     <!-- Left-Right Layout -->
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 30s 刷新</span>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 分钟线 30s</span>
             <n-button-group size="tiny" style="margin-left:8px">
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
           </h4>
+          <!-- 实时报价条：盘中 5s / 非交易时段 30s；失败时回退到最近日线收盘并给出重试 -->
+          <div class="quote-bar" :class="{ 'quote-off': !quote }">
+            <div class="quote-quote">
+              <div class="quote-kicker">
+                <span>现价</span>
+                <span class="quote-help" title="现价=实时快照最新价；涨跌=相对昨收；盘中每 5 秒刷新，非交易时段 30 秒；买一/卖一为五档第一档。AI 解读=结合实时行情/分钟结构/资讯/模型信号生成，非预测、非投资建议。">?</span>
+              </div>
+              <div class="quote-price-line">
+                <span class="quote-price" :style="{color: quoteColor}">{{ quotePriceText }}</span>
+                <span class="quote-chg" :style="{color: quoteColor}">{{ quoteChgText }}</span>
+              </div>
+              <div class="quote-subline">
+                <span class="quote-status" :class="quoteTone"
+                  :title="quote?.is_realtime ? '盘中实时（红点脉冲）' : '午休/收盘/未开盘或快照不可用'">
+                  <i></i>{{ quote?.session_status || (quoteError ? '快照不可用' : '加载中') }}
+                </span>
+                <span v-if="quote?.is_realtime && quote.timestamp">{{ quote.timestamp.slice(11) }} 更新</span>
+                <span v-else-if="quote?.trade_date">{{ quote.trade_date }} 收盘</span>
+                <span v-else-if="detail">最近收盘 {{ detail.latest_trade_date }}</span>
+              </div>
+            </div>
+            <div v-if="quote" class="quote-stats">
+              <div class="quote-stat"><span class="quote-stat-label">今开</span><b class="quote-stat-value">{{ qfmt(quote.open) }}</b></div>
+              <div class="quote-stat"><span class="quote-stat-label">最高</span><b class="quote-stat-value">{{ qfmt(quote.high) }}</b></div>
+              <div class="quote-stat"><span class="quote-stat-label">最低</span><b class="quote-stat-value">{{ qfmt(quote.low) }}</b></div>
+              <div class="quote-stat"><span class="quote-stat-label">均价</span><b class="quote-stat-value">{{ qfmt(quote.avg_price) }}</b></div>
+              <div class="quote-stat"><span class="quote-stat-label">量比</span><b class="quote-stat-value">{{ qfmt(quote.volume_ratio) }}</b></div>
+              <div class="quote-stat"><span class="quote-stat-label">成交额</span><b class="quote-stat-value">{{ fmtMoney(quote.amount) }}</b></div>
+              <div class="quote-stat"><span class="quote-stat-label">换手</span><b class="quote-stat-value">{{ quote.turnover_pct != null ? quote.turnover_pct.toFixed(2) + '%' : '—' }}</b></div>
+            </div>
+            <div class="quote-actions">
+              <span class="quote-refresh" :title="quote?.is_realtime ? '盘中每 5 秒自动刷新' : '非交易时段每 30 秒自动刷新'">
+                {{ quote?.is_realtime ? '盘中 5s' : '非交易 30s' }}
+              </span>
+              <n-button size="tiny" text :loading="quoteLoading" title="立即刷新实时快照" @click="loadQuote">刷新</n-button>
+              <n-button size="tiny" secondary :loading="aiLoading"
+                title="AI 解读：结合实时行情 / 分钟结构 / 资讯 / 模型信号，非预测" @click="loadAiInsight">
+                <AppIcon name="compass" :size="12" /> AI 解读
+              </n-button>
+            </div>
+            <div v-if="quote && (quote.bids?.length || quote.asks?.length)" class="quote-depth">
+              <span class="quote-depth-label">五档</span>
+              <span class="bid">买一 <b>{{ qfmt(quote.bids?.[0]?.price) }}</b> × {{ quote.bids?.[0]?.volume ?? '—' }}</span>
+              <span class="ask">卖一 <b>{{ qfmt(quote.asks?.[0]?.price) }}</b> × {{ quote.asks?.[0]?.volume ?? '—' }}</span>
+            </div>
+            <div v-else-if="!quote" class="quote-hint">
+              实时报价接口不可用，当前显示最近日线收盘；若刚更新代码，请重启后端后点「刷新」。
+            </div>
+          </div>
+          <!-- AI 盘面解读：只解读数据，不预测涨跌；结果 90s 服务端缓存 -->
+          <div v-if="aiLoading || aiInsight || aiError" class="ai-card">
+            <div class="ai-head">
+              <span class="ai-badge">AI 盘面解读</span>
+              <span class="ai-note">非预测 · 非投资建议</span>
+              <span v-if="aiInsight?.cached" class="ai-cached">缓存</span>
+              <n-button size="tiny" text style="margin-left:auto" @click="closeAi">收起</n-button>
+            </div>
+            <div v-if="aiLoading" class="ai-loading">正在结合实时行情 / 分钟结构 / 资讯 / 模型信号生成解读…</div>
+            <div v-else-if="aiError" class="ai-error">{{ aiError }}</div>
+            <template v-else-if="aiInsight">
+              <div class="ai-stance-row">
+                <span class="ai-stance" :class="aiStanceClass">{{ aiInsight.stance }}</span>
+                <span class="ai-summary">{{ aiInsight.summary }}</span>
+              </div>
+              <ul v-if="aiInsight.observations?.length" class="ai-points">
+                <li v-for="(p, i) in aiInsight.observations" :key="'o' + i">{{ p }}</li>
+              </ul>
+              <template v-if="aiInsight.risks?.length">
+                <div class="ai-sub">风险观察</div>
+                <ul class="ai-points risk">
+                  <li v-for="(p, i) in aiInsight.risks" :key="'r' + i">{{ p }}</li>
+                </ul>
+              </template>
+              <template v-if="aiInsight.watch?.length">
+                <div class="ai-sub">观察价位</div>
+                <ul class="ai-points">
+                  <li v-for="(p, i) in aiInsight.watch" :key="'w' + i">{{ p }}</li>
+                </ul>
+              </template>
+              <div class="ai-foot">
+                数据时间 {{ aiInsight.data_time || '—' }} · 生成于 {{ aiInsight.generated_at }}
+                <span v-if="aiInsight.model"> · {{ aiInsight.model }}</span>
+              </div>
+            </template>
+          </div>
           <div :id="'c0'" style="width:100%;height:260px"></div>
         </div>
         <div style="margin-bottom:12px">
@@ -134,6 +203,21 @@
             <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交额</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
             <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">换手率</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
           </table>
+        </div>
+        <!-- 盘中提醒：后端 watcher 写 risk_alerts，30s 轮询；Chrome 通知走 WS 实时推送 -->
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="bell" :size="13" />  盘中提醒 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 8 条 / 实时推送</span></h4>
+          <div v-if="intradayAlerts.length" class="ia-list">
+            <div v-for="a in intradayAlerts" :key="a.id" class="ia-item">
+              <div class="ia-head">
+                <span :class="['ia-dot', a.level === 'critical' ? 'crit' : 'warn']"></span>
+                <span class="ia-title">{{ a.title }}</span>
+                <span class="ia-time">{{ (a.created_at || '').slice(11, 16) }}</span>
+              </div>
+              <div class="ia-body">{{ a.body }}</div>
+            </div>
+          </div>
+          <n-empty v-else description="暂无盘中提醒" style="padding:6px" />
         </div>
         <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
           <h4 class="side-title"><AppIcon name="pie-chart" :size="13" />  筹码分布 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> / {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
@@ -283,6 +367,11 @@ const notFound = ref(false)
 const hcnt = ref(0)
 
 // ── 分组状态（持仓 / 自选 / 动态组）──
+function askAi() {
+  const name = detail.value?.stock_name || ''
+  _nav.askAgent(`帮我分析 ${code.value}${name ? ' ' + name : ''}：结合行情、资金流、最近信号和资讯，给出当前值得关注的点。`)
+}
+
 const stockGroups = ref({ groups: [], in_portfolio: false })
 const allGroups = ref([])          // 加组弹窗里的全量分组
 const pickedGroups = ref([])       // 弹窗勾选
@@ -413,14 +502,43 @@ const fundRows = computed(() => {
   ]
 })
 
+// 最新策略信号 → 顶部第 5 张卡；完整理由/多策略明细放 tooltip，不再单独占一整行
+const latestSignalCard = computed(() => {
+  const d = detail.value
+  const list = d?.latest_signals || []
+  const date = (d?.latest_signal_date || d?.latest_trade_date || '').slice(5)
+  const label = `策略信号${date ? ' · ' + date : ''}`
+  if (!list.length) {
+    return { label, value: '暂无', color: 'var(--c-text-faint)', sub: '最近交易日无信号', title: '最近交易日无策略信号' }
+  }
+  const s = list[0]
+  const dir = dirName(s.direction)
+  const value = s.strength != null ? `${dir} ${s.strength}` : dir
+  const color = s.direction === 'buy' ? UP_COLOR : (s.direction === 'sell' ? DOWN_COLOR : 'var(--c-text-faint)')
+  const sub = (s.reason || '') + (list.length > 1 ? `  +${list.length - 1}` : '')
+  const title = list.map(x => {
+    const dd = dirName(x.direction)
+    const st = x.strength != null ? ` 强度 ${x.strength}` : ''
+    const mv = x.model_version ? ` / ${x.model_version}` : ''
+    return `${x.signal_date || ''} ${dd}${st}${mv}\n${x.reason || ''}`
+  }).join('\n\n')
+  return { label, value, color, sub, title: title || sub }
+})
+
 const summaryItems = computed(() => {
   const d = detail.value
   if (!d) return []
+  // 盘中优先用实时快照：原来这里固定显示上一交易日收盘，盘中会误导
+  const q = quote.value
+  const price = q?.price ?? d.close
+  const chgPct = q?.change_pct ?? priceChg.value
+  const color = chgPct == null ? undefined : (chgPct >= 0 ? UP_COLOR : DOWN_COLOR)
   return [
     { label: d.stock_code, value: d.stock_name },
-    { label: '最新价', value: '¥' + (d.close || 0).toFixed(2) + (priceChg.value != null ? '  ' + (priceChg.value >= 0 ? '+' : '') + priceChg.value.toFixed(2) + '%' : ''), color: priceChg.value != null ? priceColor.value : undefined },
-    { label: '数据日期', value: d.latest_trade_date },
+    { label: '最新价', value: '¥' + (price || 0).toFixed(2) + (chgPct != null ? '  ' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%' : ''), color },
+    { label: '数据日期', value: q?.trade_date || d.latest_trade_date },
     { label: '历史信号', value: hcnt.value },
+    latestSignalCard.value,
   ]
 })
 
@@ -533,6 +651,10 @@ async function load(){
   loading.value = true
   notFound.value = false
   detail.value = null
+  quote.value = null        // 换票先清快照，避免旧票价格挂在新票抬头
+  quoteError.value = false
+  intradayAlerts.value = []
+  aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = ''
   hoverInfo.value = null
   // 清掉上一只票的全部扩展数据：这些都是 best-effort 补的（allSettled 吞错、空数据隐藏卡片），
   // 不清会在「新票无数据/请求失败」时把上只票的内容留在侧栏与图表——跨股票串数据比空白更难察觉
@@ -575,8 +697,9 @@ async function load(){
       mfCum.value = cum
     }),
     // 基准与 K 线同窗同周期：相对强弱两条线起点才可比
+    // 注意：K线接口返回字段是 trade_date，c8 的 reindex 统一按 date 取，这里先归一化
     axios.get(API+'/api/stock/000300/kline?days='+range.value+'&period='+period.value+'&adjust=none&type=index').then(r=>{
-      benchData.value = r.data.kline||[]
+      benchData.value = (r.data.kline||[]).map(x=>({date:x.trade_date, close:x.close}))
     }),
     axios.get(API+'/api/stock/'+code.value+'/margin?days=7000').then(r=>{ marginData.value = r.data.data||[] }),
     axios.get(API+'/api/stock/'+code.value+'/top_list?days=3650').then(r=>{ toplistData.value = r.data.data||[] }),
@@ -591,6 +714,8 @@ async function load(){
   drawAuxCharts(lastKline)
   drawChip()
   loadMink()   // 容器就绪后立即画（timer 30s 兜底）
+  loadQuote()  // 实时报价条（盘中 5s / 非交易时段 30s）
+  loadIntradayAlerts()  // 该股盘中提醒（30s 轮询）
 }
 
 // dataZoom 滑块统一低调样式：ECharts 画在 canvas 上，颜色必须字面量（CSS 变量不生效，
@@ -1052,7 +1177,7 @@ async function reloadChart(){
     // 相对强弱的基准与 K 线同窗同周期，换窗必须重取（其余扩展序列是长窗 reindex）
     try{
       const rb = await axios.get(API+'/api/stock/000300/kline?days='+range.value+'&period='+period.value+'&adjust=none&type=index')
-      benchData.value = rb.data.kline||[]
+      benchData.value = (rb.data.kline||[]).map(x=>({date:x.trade_date, close:x.close}))
     }catch(e){}
   }catch(e){} finally {
     if(lastKline){ await nextTick(); drawCharts(lastKline); drawAuxCharts(lastKline); drawChip() }
@@ -1062,6 +1187,98 @@ async function reloadChart(){
 // 窗口 resize 时自适应所有图表
 function resizeAll(){ ['c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
 let _resizeHandler = null
+
+// ── 实时快照（腾讯，服务端 3s 缓存）：盘中 5s，非交易时段 30s ──
+// 分钟图只到「最近一根 bar」，报价条补上现价/涨跌幅/量比/五档，盘中不再看昨收。
+const quote = ref(null)
+const quoteError = ref(false)
+const quoteLoading = ref(false)
+let quoteTimer = null
+let quoteBusy = false
+const intradayAlerts = ref([])   // 该股近 8 条盘中提醒（后端 watcher 写 risk_alerts）
+let alertTimer = null
+const qfmt = v => (v == null || v === 0) ? '—' : Number(v).toFixed(2)
+const quotePrice = computed(() => quote.value?.price ?? detail.value?.close ?? null)
+const quoteChgPct = computed(() => quote.value?.change_pct ?? priceChg.value)
+const quoteColor = computed(() => quoteChgPct.value == null ? 'var(--c-text)'
+  : (quoteChgPct.value >= 0 ? UP_COLOR : DOWN_COLOR))
+const quoteTone = computed(() => {
+  if (!quote.value) return quoteError.value ? 'bad' : 'loading'
+  if (quote.value.is_realtime) return 'live'
+  return quote.value.session_status === '集合竞价' ? 'warn' : 'idle'
+})
+const quotePriceText = computed(() => quotePrice.value == null ? '—' : Number(quotePrice.value).toFixed(2))
+const quoteChgText = computed(() => {
+  const q = quote.value
+  if (q) {
+    if (q.change_pct == null) return ''
+    const c = q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(2) + ' ' : ''
+    return c + (q.change_pct >= 0 ? '+' : '') + q.change_pct.toFixed(2) + '%'
+  }
+  return quoteChgPct.value == null ? '' : (quoteChgPct.value >= 0 ? '+' : '') + quoteChgPct.value.toFixed(2) + '%'
+})
+
+async function loadQuote(){
+  if (quoteBusy || !code.value) return
+  quoteBusy = true; quoteLoading.value = true
+  const c = code.value
+  try{
+    const r = await axios.get(API+'/api/stock/'+c+'/quote',
+      { headers:{'Cache-Control':'no-store'} })
+    if (c !== code.value) return          // 切换股票后旧请求返回，丢掉
+    const first = !quote.value
+    quote.value = r.data
+    quoteError.value = false
+    if (first && minkBars.value.length) drawMink()   // 首帧快照补画昨收/均价/现价线
+  }catch(e){
+    if (c !== code.value) return          // 失败保留旧快照，下轮重试
+    quoteError.value = true
+  }finally{
+    quoteBusy = false; quoteLoading.value = false
+    if (c === code.value) scheduleQuote()
+  }
+}
+function scheduleQuote(){
+  clearTimeout(quoteTimer)
+  quoteTimer = setTimeout(loadQuote, quote.value?.is_realtime ? 5000 : 30000)
+}
+
+// ── AI 盘面解读（按需点击，服务端 90s 缓存；只解读不预测）──
+const aiLoading = ref(false)
+const aiInsight = ref(null)
+const aiError = ref('')
+let aiReqSeq = 0
+const aiStanceClass = computed(() => aiInsight.value?.stance === '偏强' ? 'up'
+  : (aiInsight.value?.stance === '偏弱' ? 'down' : 'flat'))
+
+async function loadAiInsight(){
+  if(aiLoading.value || !code.value) return
+  const c = code.value
+  const seq = ++aiReqSeq
+  aiLoading.value = true; aiError.value = ''; aiInsight.value = null
+  try{
+    const r = await axios.get(API+'/api/stock/'+c+'/ai-intraday')
+    if(seq !== aiReqSeq || c !== code.value) return
+    if(r.data?.ok) aiInsight.value = r.data
+    else aiError.value = r.data?.error || 'AI 解读失败'
+  }catch(e){
+    if(seq === aiReqSeq && c === code.value)
+      aiError.value = e.response?.data?.detail || 'AI 解读失败，请稍后重试'
+  }finally{
+    if(seq === aiReqSeq) aiLoading.value = false
+  }
+}
+function closeAi(){ aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = '' }
+
+// 盘中提醒列表（仅该股；Chrome 通知走全局 WS，不依赖这个轮询）
+async function loadIntradayAlerts(){
+  const c = code.value
+  if(!c) return
+  try{
+    const r = await axios.get(API+'/api/risk/alerts?code='+c+'&intraday=true&limit=8')
+    if(c === code.value) intradayAlerts.value = r.data || []   // 换票后旧请求返回，丢掉
+  }catch(e){ /* best-effort：提醒接口失败不影响行情 */ }
+}
 
 // ── 分钟K线（腾讯实时，design/06 外延）：默认 m5，30s 轮询刷新 ──
 const MINK_PERIODS = [{v:'m1',t:'1分'},{v:'m5',t:'5分'},{v:'m15',t:'15分'},{v:'m30',t:'30分'},{v:'m60',t:'60分'}]
@@ -1088,10 +1305,30 @@ function drawMink(){
   const closes = bars.map(b=>b.close)
   const ma = (n) => closes.map((_,i)=> i<n ? null : +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2))
   const gl = {lineStyle:{color:T.line}}
+  // 昨收/均价/现价线只画最近一个交易日：m5/m60 覆盖多日，整段横线会误导
+  const q = quote.value
+  const lastDay = bars[bars.length-1].datetime.slice(0,10)
+  const dayStart = Math.max(0, bars.findIndex(b=>b.datetime.slice(0,10)===lastDay))
+  const qSameDay = q && q.trade_date === lastDay ? q : null
+  const dayLine = val => (qSameDay && val != null)
+    ? bars.map((_,i)=> i>=dayStart ? val : null) : null
+  const overlays = []
+  const pushLine = (name, val, color, width=1) => {
+    const data = dayLine(val)
+    if (data) overlays.push({name,type:'line',xAxisIndex:0,yAxisIndex:0,data,
+      symbol:'none',connectNulls:false,
+      lineStyle:{color,width,type:name==='现价'?'solid':'dashed'},tooltip:{show:false}})
+  }
+  pushLine('昨收', qSameDay?.prev_close, T.faint)
+  pushLine('均价', qSameDay?.avg_price, T.warn)
+  pushLine('现价', qSameDay?.price, T.series[5], 1.2)
+  const overlayNames = overlays.map(o=>o.name)
   makeChart('c0', {
     axisPointer:{link:[{xAxisIndex:'all'}]},
+    ...(overlayNames.length ? {legend:{top:0,right:8,itemWidth:10,itemHeight:6,
+      textStyle:{fontSize:10,color:T.dim},data:overlayNames}} : {}),
     grid:[
-      {left:66,right:16,top:8,height:'56%'},
+      {left:66,right:16,top:overlayNames.length?20:8,height:overlayNames.length?'53%':'56%'},
       {left:66,right:16,top:'72%',height:'22%'},
     ],
     tooltip:{trigger:'axis',axisPointer:{type:'cross'},
@@ -1116,9 +1353,10 @@ function drawMink(){
       {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}},
       {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),lineStyle:{color:T.warn,width:1},symbol:'none'},
       {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),lineStyle:{color:T.series[3],width:1},symbol:'none'},
+      ...overlays,
       {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,itemStyle:{color:p=>vc[p.dataIndex]}},
     ]
-  })
+  }, true)   // notMerge：周期切换后昨收/均价/现价线不能残留上一轮的 series
 }
 
 watch(minkPeriod, ()=>loadMink())
@@ -1133,10 +1371,21 @@ onMounted(() => {
   _resizeHandler = window.addEventListener ? window.addEventListener('resize', resizeAll) : null
   if(code.value){ load(); loadMink() }
   minkTimer = setInterval(loadMink, 30000)
+  alertTimer = setInterval(loadIntradayAlerts, 30000)
 })
-onUnmounted(() => { if (_resizeHandler && window.removeEventListener) window.removeEventListener('resize', resizeAll); if (minkTimer) clearInterval(minkTimer) })
+onUnmounted(() => {
+  if (_resizeHandler && window.removeEventListener) window.removeEventListener('resize', resizeAll)
+  if (minkTimer) clearInterval(minkTimer)
+  if (quoteTimer) clearTimeout(quoteTimer)
+  if (alertTimer) clearInterval(alertTimer)
+})
 
-watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()}})
+watch(()=>props.code, v=>{
+  if(v && v!==code.value){
+    clearTimeout(quoteTimer); quote.value=null; quoteError.value=false
+    code.value=v; load(); loadMink()
+  }
+})
 </script>
 
 <style>
@@ -1199,4 +1448,166 @@ watch(()=>props.code, v=>{if(v && v!==code.value){code.value=v;load();loadMink()
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; word-break: break-word;
 }
+
+/* 实时报价条（分钟图上方）
+   左：价格块（kicker/大价/涨跌/状态徽标/更新时间）
+   中：7 个等宽统计格（标签在上、数值在下，列与列严格对齐）
+   右：刷新频率 + 刷新 + AI
+   下：五档或降级提示 */
+.quote-bar {
+  display: grid;
+  grid-template-columns: minmax(215px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 20px;
+  padding: 8px 12px 7px; margin-bottom: 6px;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-card-bg-hover);
+}
+.quote-bar.quote-off { border-style: dashed; }
+.quote-quote {
+  grid-column: 1; display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+}
+.quote-kicker {
+  display: flex; align-items: center; gap: 4px;
+  font-size: var(--text-meta); color: var(--c-text-faint);
+  line-height: 1.2;
+}
+.quote-help {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid var(--c-border); color: var(--c-text-faint);
+  font-size: 9px; line-height: 1; cursor: help; flex-shrink: 0;
+}
+.quote-price-line {
+  display: flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap; min-width: 0;
+}
+.quote-price {
+  font-size: 28px; font-weight: 650; line-height: 1.0;
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+.quote-chg {
+  font-size: 15px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.quote-status {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 999px;
+  font-size: var(--text-meta); font-weight: 500;
+  white-space: nowrap; line-height: 1.4;
+}
+.quote-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.quote-status.live {
+  color: var(--c-up);
+  background: color-mix(in srgb, var(--c-up) 10%, transparent);
+}
+.quote-status.live i {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-up) 14%, transparent);
+  animation: quotePulse 2s ease-in-out infinite;
+}
+.quote-status.warn { color: var(--c-warning); background: color-mix(in srgb, var(--c-warning) 10%, transparent); }
+.quote-status.idle { color: var(--c-text-dim); background: var(--c-card-bg); border: 1px solid var(--c-border); }
+.quote-status.bad { color: var(--c-error); background: color-mix(in srgb, var(--c-error) 9%, transparent); }
+.quote-status.loading { color: var(--c-text-faint); background: var(--c-card-bg); border: 1px solid var(--c-border); }
+@keyframes quotePulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+.quote-subline {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 18px; font-size: var(--text-meta);
+  color: var(--c-text-faint); line-height: 1.2; white-space: nowrap;
+}
+.quote-stats {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(52px, auto));
+  gap: 4px 18px;
+  align-items: center;
+}
+.quote-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.quote-stat-label {
+  font-size: var(--text-meta); color: var(--c-text-faint);
+  line-height: 1.2; white-space: nowrap;
+}
+.quote-stat-value {
+  font-size: 13px; font-weight: 600; color: var(--c-text);
+  line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.quote-actions {
+  grid-column: 3; display: flex; align-items: center; gap: 8px;
+  justify-self: end; white-space: nowrap;
+}
+.quote-refresh { font-size: var(--text-meta); color: var(--c-text-faint); }
+.quote-depth {
+  grid-column: 1 / -1; display: flex; align-items: baseline; gap: 16px;
+  padding-top: 5px; border-top: 1px solid var(--c-border-light);
+  font-size: var(--text-meta); font-variant-numeric: tabular-nums;
+}
+.quote-depth-label { color: var(--c-text-faint); }
+.quote-depth .bid b { color: var(--c-up); font-weight: 600; }
+.quote-depth .ask b { color: var(--c-down); font-weight: 600; }
+.quote-hint {
+  grid-column: 1 / -1; font-size: var(--text-meta);
+  line-height: 1.5; color: var(--c-text-faint);
+}
+@media (max-width: 1200px) {
+  .quote-stats { grid-template-columns: repeat(4, minmax(52px, auto)); }
+}
+@media (max-width: 900px) {
+  .quote-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .quote-stats { grid-column: 1 / -1; }
+  .quote-actions { grid-column: 2; grid-row: 1; }
+}
+@media (max-width: 720px) {
+  .quote-price { font-size: 24px; }
+  .quote-bar { gap: 6px 12px; }
+}
+
+/* 盘中提醒列表（侧栏）：critical 红点 / warn 琥珀点 */
+.ia-list { display: flex; flex-direction: column; gap: 6px; }
+.ia-item {
+  padding: 6px 8px; border-radius: 4px;
+  background: var(--c-card-bg-hover); border: 1px solid var(--c-border-light);
+}
+.ia-head { display: flex; align-items: center; gap: 5px; font-size: var(--text-meta); }
+.ia-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.ia-dot.crit { background: var(--c-error); }
+.ia-dot.warn { background: var(--c-warning); }
+.ia-title {
+  flex: 1; color: var(--c-text); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ia-time { color: var(--c-text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.ia-body { margin-top: 2px; font-size: var(--text-meta); line-height: 1.5; color: var(--c-text-dim); }
+
+/* AI 盘面解读卡片 */
+.ai-card {
+  margin-bottom: 6px; padding: 9px 11px;
+  border: 1px solid var(--c-border); border-left: 3px solid var(--c-accent);
+  border-radius: var(--radius); background: var(--c-card-bg-hover);
+}
+.ai-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.ai-badge { font-size: var(--text-meta); font-weight: 600; color: var(--c-accent); }
+.ai-note { font-size: var(--text-meta); color: var(--c-text-faint); }
+.ai-cached {
+  font-size: var(--text-meta); color: var(--c-text-faint);
+  border: 1px solid var(--c-border); border-radius: 3px; padding: 0 4px;
+}
+.ai-loading { font-size: var(--text-meta); color: var(--c-text-dim); padding: 3px 0; }
+.ai-error { font-size: var(--text-meta); color: var(--c-error); padding: 3px 0; }
+.ai-stance-row { display: flex; align-items: flex-start; gap: 8px; }
+.ai-stance {
+  flex-shrink: 0; font-size: 12px; font-weight: 600;
+  padding: 1px 6px; border-radius: 3px;
+}
+.ai-stance.up { color: var(--c-up); background: color-mix(in srgb, var(--c-up) 12%, transparent); }
+.ai-stance.down { color: var(--c-down); background: color-mix(in srgb, var(--c-down) 12%, transparent); }
+.ai-stance.flat { color: var(--c-text-dim); background: var(--c-card-bg); }
+.ai-summary { font-size: 13px; line-height: 1.55; color: var(--c-text); }
+.ai-points {
+  margin: 4px 0 0; padding-left: 18px;
+  font-size: var(--text-meta); line-height: 1.65; color: var(--c-text-dim);
+}
+.ai-points.risk li { color: var(--c-warning); }
+.ai-sub { margin-top: 6px; font-size: var(--text-meta); font-weight: 600; color: var(--c-text-dim); }
+.ai-foot { margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-faint); }
 </style>

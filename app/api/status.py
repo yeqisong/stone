@@ -499,6 +499,14 @@ async def broadcast_dag_status():
     _completed_since = None  # 记录全部完成的时间
     _sys_tracker = {"last": 0, "cpu_prev": None}  # sys metrics throttle + CPU prev
     _last_alert_id = 0  # 风控告警增量推送游标（step3）
+    # 从当前最大 id 起步：否则进程重启后会把历史告警按 id 顺序逐批重推给每个客户端
+    try:
+        _adb0 = get_sync_db()
+        _last_alert_id = _adb0.execute(text(
+            "SELECT COALESCE(MAX(id), 0) FROM risk_alerts")).scalar() or 0
+        _adb0.close()
+    except Exception:
+        _last_alert_id = 0
 
     while True:
         # 初始化在 try 外：首轮 DB 异常时 has_running 已定义，避免 NameError 杀死广播协程
@@ -507,15 +515,16 @@ async def broadcast_dag_status():
         try:
             _adb = get_sync_db()
             _arows = _adb.execute(text(
-                "SELECT id, trade_date, kind, level, title, body FROM risk_alerts "
-                "WHERE id > :last ORDER BY id LIMIT 20"
+                "SELECT id, trade_date, kind, stock_code, level, title, body "
+                "FROM risk_alerts WHERE id > :last ORDER BY id LIMIT 20"
             ), {"last": _last_alert_id}).fetchall()
             _adb.close()
             if _arows:
                 _last_alert_id = _arows[-1][0]
                 _amsg = _json.dumps({"type": "risk_alert", "alerts": [
-                    {"id": r[0], "trade_date": str(r[1]), "kind": r[2], "level": r[3],
-                     "title": r[4], "body": r[5]} for r in _arows
+                    {"id": r[0], "trade_date": str(r[1]), "kind": r[2],
+                     "stock_code": r[3], "level": r[4], "title": r[5], "body": r[6]}
+                    for r in _arows
                 ]})
                 dead_a = set()
                 for ws in list(_ws_clients):
@@ -836,6 +845,52 @@ def tushare_quota():
         return TushareQuota.get().snapshot()
     except Exception as e:
         return {"error": str(e)}
+
+
+@router.get("/minute-data")
+def minute_data_status():
+    """P3 分钟 bar 覆盖度：训练脚本/状态页判断数据是否够跑分钟级模型。
+
+    达标线默认与 scripts/train_intraday.py 一致：20 个完整交易日 + 1 万根 bar。
+    """
+    from app.db.connection import get_sync_db
+    from sqlalchemy import text
+    db = get_sync_db()
+    try:
+        row = db.execute(text("""
+            SELECT count(*), count(distinct stock_code),
+                   count(distinct bar_time::date), min(bar_time), max(bar_time),
+                   count(distinct bar_time)
+            FROM stock_minute_bar
+        """)).fetchone()
+        days = db.execute(text("""
+            SELECT count(*) FROM (
+                SELECT bar_time::date FROM stock_minute_bar
+                GROUP BY bar_time::date HAVING count(DISTINCT bar_time) >= 200
+            ) t
+        """)).scalar() or 0
+        median_x = db.execute(text("""
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY n)
+            FROM (
+                SELECT bar_time, count(distinct stock_code)::double precision AS n
+                FROM stock_minute_bar GROUP BY bar_time
+            ) t
+        """)).scalar()
+        rows = int(row[0] or 0)
+        return {
+            'rows': rows, 'stocks': int(row[1] or 0),
+            'calendar_days': int(row[2] or 0), 'days': int(days),
+            'bars': int(row[5] or 0),
+            'first': str(row[3]) if row[3] else None,
+            'last': str(row[4]) if row[4] else None,
+            'median_stocks_per_bar': float(median_x) if median_x is not None else 0,
+            'ready': int(days) >= 20 and rows >= 10000,
+            'thresholds': {'min_days': 20, 'min_bars': 10000},
+        }
+    except Exception as e:
+        return {'rows': 0, 'ready': False, 'error': str(e)[:160]}
+    finally:
+        db.close()
 
 
 @router.get("/xueqiu")

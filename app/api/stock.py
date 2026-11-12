@@ -1,9 +1,11 @@
 """个股详情 API — 最新策略信号 + 历史信号分页 + K线(含全部指标)。"""
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
+from loguru import logger
 from sqlalchemy import text
 
 from app.db.connection import get_sync_db
@@ -752,6 +754,127 @@ def get_stock_xueqiu(code: str, days: int = Query(7, ge=1, le=30),
                 "interactions_7d": inter7, "hot": hot, "sentiment": sentiment}
     finally:
         db.close()
+
+
+# ── 腾讯实时快照（详情页报价条 / 盘中监测；3s 内存缓存，非官方源必须服务端兜住）──
+
+_quote_cache: dict = {}          # (code, type) -> (ts, payload)
+_QUOTE_TTL_S = 3
+_quote_type_cache: dict = {}     # code -> (ts, stock_type)，避免 3s 缓存失效就打一次库
+_QUOTE_TYPE_TTL_S = 600
+
+
+def _quote_security_type(db, code: str, requested: str | None) -> str | None:
+    """证券类型：优先前端显式传入，否则按 stock > etf > index 查 stock_master（与详情页一致）。"""
+    if requested:
+        return requested
+    hit = _quote_type_cache.get(code)
+    now = time.time()
+    if hit and now - hit[0] < _QUOTE_TYPE_TTL_S:
+        return hit[1]
+    stype = db.execute(text(
+        "SELECT stock_type FROM stock_master WHERE stock_code=:c "
+        "ORDER BY CASE stock_type WHEN 'stock' THEN 1 WHEN 'etf' THEN 2 WHEN 'index' THEN 3 END LIMIT 1"
+    ), {"c": code}).scalar()
+    _quote_type_cache[code] = (now, stype)
+    return stype
+
+
+def _quote_session(ts_text: str | None, now: datetime | None = None):
+    """快照时间 → (交易状态, 是否实时, 滞后秒数)。时间按北京时间理解。
+
+    腾讯快照的 timestamp 在收盘后仍会随服务器时间走，不能只看 age 判实时——
+    必须叠加「当前是否处于交易时段」。午休/收盘/非交易日一律 is_realtime=False。
+    now 仅供测试注入；生产调用传 None 取北京时间。
+    """
+    try:
+        ts = datetime.strptime(ts_text, '%Y-%m-%d %H:%M:%S') if ts_text else None
+    except ValueError:
+        ts = None
+    now = now or datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    if ts is None:
+        return '未知', False, None
+    age = (now - ts).total_seconds()
+    hm = now.hour * 60 + now.minute
+    if ts.date() != now.date():
+        status = '已收盘' if (ts.hour * 60 + ts.minute) >= 15 * 60 else '非实时'
+    elif hm < 9 * 60 + 15:
+        status = '未开盘'
+    elif hm < 9 * 60 + 30:
+        status = '集合竞价'
+    elif hm <= 11 * 60 + 30:
+        status = '盘中'
+    elif hm < 13 * 60:
+        status = '午间休市'
+    elif hm <= 15 * 60:
+        status = '盘中'
+    else:
+        status = '已收盘'
+    live = bool(ts.date() == now.date() and 0 <= age <= 180
+                and status in ('盘中', '集合竞价'))
+    return status, live, max(0, int(age))
+
+
+@router.get("/stock/{code}/quote")
+def get_stock_quote(code: str, response: Response, type: str = Query(None)):
+    """实时快照（腾讯财经，不入库）。个股/指数/ETF 通用。
+
+    3s 服务端缓存：详情页 5s 轮询、多标签页共享同一结果，避免前端直连外部源。
+    """
+    response.headers['Cache-Control'] = 'no-store'
+    cache_key = (code, type or '')
+    now = time.time()
+    hit = _quote_cache.get(cache_key)
+    if hit and now - hit[0] < _QUOTE_TTL_S:
+        return hit[1]
+
+    # 类型缓存命中就别开 DB 会话：3s 缓存失效时每个 code 都会走到这里
+    stype = type
+    if not stype:
+        hit_type = _quote_type_cache.get(code)
+        if hit_type and now - hit_type[0] < _QUOTE_TYPE_TTL_S:
+            stype = hit_type[1]
+    if not stype:
+        db = get_sync_db()
+        try:
+            stype = _quote_security_type(db, code, None)
+        finally:
+            db.close()
+
+    from crawler.adapters.tencent_adapter import realtime_quote
+    try:
+        quote = realtime_quote(code, stype or 'stock')
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    status, live, stale = _quote_session(quote.get('timestamp'))
+    payload = {**quote, 'type': stype or 'stock', 'session_status': status,
+               'is_realtime': live, 'stale_seconds': stale}
+    _quote_cache[cache_key] = (now, payload)
+    if len(_quote_cache) > 500:   # 活跃 code×type 组合远小于此，超限直接清空即可
+        _quote_cache.clear()
+    return payload
+
+
+@router.get("/stock/{code}/ai-intraday")
+def get_stock_ai_intraday(code: str, type: str = Query(None),
+                          refresh: bool = Query(False)):
+    """AI 盘面解读（实时行情 + 分钟结构 + 资讯 + 日频模型观点）。
+
+    只做解读、不预测涨跌；结果进程内缓存 90s，refresh=true 强制重算。
+    """
+    from app.ai.intraday import analyze_intraday
+    try:
+        return analyze_intraday(code, type, refresh)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.warning(f"[ai-intraday] {code} 失败: {str(e)[:160]}")
+        raise HTTPException(status_code=500, detail="AI 解读失败，请稍后重试")
 
 
 # ── 腾讯分钟K线（design/06 外延：详情页盘中分钟图；不入库，30s 内存缓存防刷）──

@@ -182,7 +182,14 @@ def get_paper_portfolio(version: str = Query(None, description="模型版本；�
         pos_rows = db.execute(text("""
             SELECT p.stock_code, COALESCE(p.stock_name, sm.stock_name, '') AS sname, p.shares,
                    p.buy_price, p.cost_basis, p.buy_date, p.peak, p.model_version
-            FROM paper_positions p LEFT JOIN stock_master sm ON sm.stock_code = p.stock_code
+            FROM paper_positions p
+            -- 同上：stock_master 同码多行（stock/index/etf）会把持仓翻倍，按 stock > etf 取一行
+            LEFT JOIN LATERAL (
+                SELECT stock_name FROM stock_master
+                WHERE stock_code = p.stock_code AND stock_type IN ('stock', 'etf')
+                ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END
+                LIMIT 1
+            ) sm ON true
             WHERE p.model_version = :v
             ORDER BY p.buy_date
         """), {"v": ver}).fetchall()
@@ -339,7 +346,14 @@ def get_paper_trades(version: str, page: int = Query(1, ge=1), page_size: int = 
                      WHERE tc.is_trade_day AND tc.cal_date > p.buy_date
                        AND tc.cal_date <= COALESCE(lq.trade_date, CURRENT_DATE)) AS hold_days
             FROM paper_positions p
-            LEFT JOIN stock_master sm ON sm.stock_code = p.stock_code
+            -- stock_master 同一代码可能有多行（stock/index/etf），直接 JOIN 会把持仓翻倍；
+            -- 按 stock > etf 优先取一行名称（与详情页/风控查询同口径）
+            LEFT JOIN LATERAL (
+                SELECT stock_name FROM stock_master
+                WHERE stock_code = p.stock_code AND stock_type IN ('stock', 'etf')
+                ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END
+                LIMIT 1
+            ) sm ON true
             LEFT JOIN LATERAL (
                 SELECT close, close_hfq, trade_date FROM daily_quote q
                 WHERE q.stock_code = p.stock_code AND q.close > 0

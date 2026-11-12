@@ -16,6 +16,7 @@ export const useNavStore = defineStore('nav', () => {
   const modelTab = ref('')
   const statusMonth = ref('')
   const bfLogPage = ref(1)
+  const agentSeed = ref(null)   // 跨页面带入问答页的预填问题 { text, at }
 
   // URL hash 路由
   function parseHash() {
@@ -116,6 +117,18 @@ export const useNavStore = defineStore('nav', () => {
     tab.value = t
   }
 
+  /** 从任意页面带着问题跳到问答页（详情页「问 AI」等入口）。 */
+  function askAgent(text) {
+    agentSeed.value = { text: String(text || ''), at: Date.now() }
+    tab.value = 'i'
+  }
+
+  function takeAgentSeed() {
+    const s = agentSeed.value
+    agentSeed.value = null
+    return s
+  }
+
   function showFlowEditor(id) {
     prevTab.value = tab.value
     flowId.value = id
@@ -161,5 +174,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, switchTab, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, parseHash, syncHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, parseHash, syncHash }
 })

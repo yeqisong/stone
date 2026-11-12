@@ -927,6 +927,10 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     id          SERIAL PRIMARY KEY,
     title       VARCHAR(100) NOT NULL DEFAULT '新会话',
     status      VARCHAR(16) DEFAULT 'active',   -- active / archived
+    model       VARCHAR(64),                     -- 会话级模型覆盖（空=全局配置）
+    memo        TEXT,                            -- 早期上下文压缩摘要
+    memo_until  BIGINT DEFAULT 0,                 -- memo 已覆盖的消息 id 上限
+    pinned      BOOLEAN DEFAULT false,            -- 会话置顶
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -943,6 +947,16 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_msg_session ON agent_messages (session_id, id);
 CREATE INDEX IF NOT EXISTS idx_agent_sess_updated ON agent_sessions (updated_at DESC);
+CREATE TABLE IF NOT EXISTS agent_feedback (
+    id           BIGSERIAL PRIMARY KEY,
+    session_id   INT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    message_id   BIGINT,                        -- 被评价的 assistant 消息 id
+    rating       SMALLINT NOT NULL,             -- 1=有用, -1=没帮助
+    comment      TEXT DEFAULT '',
+    question     TEXT DEFAULT '',               -- 当时的问题（便于单独回看/沉淀技能）
+    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_created ON agent_feedback (created_at DESC);
 """
 
 # ── tushare 当日配额（状态页展示 + 补数预算策略）──
@@ -1165,7 +1179,8 @@ CREATE_RISK_ALERTS = """
 CREATE TABLE IF NOT EXISTS risk_alerts (
     id          SERIAL PRIMARY KEY,
     trade_date  DATE NOT NULL,
-    kind        VARCHAR(20) NOT NULL,       -- stop_loss / drawdown / industry_cap / node_fail
+    kind        VARCHAR(20) NOT NULL,       -- stop_loss / drawdown / industry_cap / node_fail / it_*
+    stock_code  VARCHAR(6),                 -- 盘中提醒按个股查询；日频风控告警为 NULL
     level       VARCHAR(10) DEFAULT 'warn', -- warn / critical
     title       VARCHAR(100) NOT NULL,
     body        TEXT,
@@ -1174,6 +1189,29 @@ CREATE TABLE IF NOT EXISTS risk_alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_ra_date ON risk_alerts (trade_date);
 CREATE INDEX IF NOT EXISTS idx_ra_ack ON risk_alerts (ack, id);
+CREATE INDEX IF NOT EXISTS idx_ra_stock ON risk_alerts (stock_code, created_at DESC);
+"""
+
+# ── 分钟 bar（P3 盘中研究数据）：由 watcher 的 10s 快照在分钟切换时合成，只落最终 bar。
+#    不入 daily_quote（不复权、盘中口径），当前为普通表；关注池 3 只 × 240 根/日 ≈ 72 万行/年。
+CREATE_MINUTE_BAR = """
+CREATE TABLE IF NOT EXISTS stock_minute_bar (
+    stock_code   VARCHAR(6) NOT NULL,
+    bar_time     TIMESTAMP NOT NULL,          -- 分钟起点（北京时间）
+    open         NUMERIC(12,4),
+    high         NUMERIC(12,4),
+    low          NUMERIC(12,4),
+    close        NUMERIC(12,4),
+    volume       BIGINT,                      -- 本分钟增量（手）
+    amount       NUMERIC(20,2),               -- 本分钟增量（元）
+    vwap         NUMERIC(12,4),               -- 日内累计均价（腾讯口径）
+    volume_ratio NUMERIC(8,3),                -- 日内累计量比（腾讯口径）
+    snapshots    SMALLINT DEFAULT 0,          -- 本分钟采到的 10s 快照数，训练时过滤过稀 bar
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, bar_time)
+);
+CREATE INDEX IF NOT EXISTS idx_smb_time ON stock_minute_bar (bar_time);
+CREATE INDEX IF NOT EXISTS idx_smb_code_time ON stock_minute_bar (stock_code, bar_time DESC);
 """
 
 # ── 拓展回补已核空日期登记（2026-09-04）：事件类拓展表历史上大量"真 0 行"日期
@@ -1260,6 +1298,7 @@ ALL_TABLES = [
     ("factor_ic_stats", CREATE_FACTOR_IC_STATS),
     ("paper_positions", CREATE_PAPER_POSITIONS),
     ("risk_alerts", CREATE_RISK_ALERTS),
+    ("stock_minute_bar", CREATE_MINUTE_BAR),
     ("backfill_ext_checked", CREATE_BACKFILL_EXT_CHECKED),
     ("moneyflow_hsgt", CREATE_MONEYFLOW_HSGT),
     ("block_trade", CREATE_BLOCK_TRADE),
@@ -1506,6 +1545,16 @@ def init_db(sync_session) -> None:
     # 迁移：daily_completeness 新增拓展表当日行数（JSONB，v3.8 完整度拓展）
     try:
         sync_session.execute(text("ALTER TABLE daily_completeness ADD COLUMN IF NOT EXISTS ext_stats JSONB"))
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：risk_alerts 新增 stock_code（P1 盘中提醒按个股查询；历史风控告警保持 NULL）
+    try:
+        sync_session.execute(text(
+            "ALTER TABLE risk_alerts ADD COLUMN IF NOT EXISTS stock_code VARCHAR(6)"))
+        sync_session.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_ra_stock ON risk_alerts (stock_code, created_at DESC)"))
+        sync_session.commit()
     except Exception:
         sync_session.rollback()
 
@@ -2154,5 +2203,33 @@ def init_db(sync_session) -> None:
             sync_session.execute(text(f"ALTER TABLE stock_fundamentals DROP CONSTRAINT {pk_name}"))
             sync_session.execute(text("ALTER TABLE stock_fundamentals ADD PRIMARY KEY (stock_code)"))
             sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：Agent 会话增强（会话级模型 / 上下文 memo / 置顶）+ 反馈表
+    try:
+        for col, col_type in [
+            ("model", "VARCHAR(64)"),
+            ("memo", "TEXT"),
+            ("memo_until", "BIGINT DEFAULT 0"),
+            ("pinned", "BOOLEAN DEFAULT false"),
+        ]:
+            sync_session.execute(text(
+                f"ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS {col} {col_type}"))
+        sync_session.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_agent_sess_pinned ON agent_sessions (pinned DESC, updated_at DESC)"))
+        sync_session.execute(text("""
+            CREATE TABLE IF NOT EXISTS agent_feedback (
+                id           BIGSERIAL PRIMARY KEY,
+                session_id   INT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+                message_id   BIGINT,
+                rating       SMALLINT NOT NULL,
+                comment      TEXT DEFAULT '',
+                question     TEXT DEFAULT '',
+                created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )"""))
+        sync_session.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_agent_feedback_created ON agent_feedback (created_at DESC)"))
+        sync_session.commit()
     except Exception:
         sync_session.rollback()

@@ -18,11 +18,20 @@ def main():
         raise SystemExit("usage: _child.py <python|node> <target> [args...]")
     kind, target = sys.argv[1], sys.argv[2]
     args = sys.argv[3:]
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (MEM_LIMIT, MEM_LIMIT))
-        resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT, CPU_LIMIT))
-    except Exception:
-        pass
+    # 资源上限：内存/CPU/单文件大小/进程数/核心转储。bwrap 不可用时这是最后一道闸。
+    for res, val in (
+        (getattr(resource, "RLIMIT_AS", None), MEM_LIMIT),
+        (getattr(resource, "RLIMIT_CPU", None), CPU_LIMIT),
+        (getattr(resource, "RLIMIT_FSIZE", None), 2 * 1024 ** 3),
+        (getattr(resource, "RLIMIT_NPROC", None), 256),
+        (getattr(resource, "RLIMIT_CORE", None), 0),
+    ):
+        if res is None:
+            continue
+        try:
+            resource.setrlimit(res, (val, val))
+        except Exception:
+            pass
     if kind == "python":
         os.execv(sys.executable, [sys.executable, target, *args])
     else:

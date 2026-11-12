@@ -65,10 +65,20 @@ def get_llm_settings(db=None) -> dict:
             except Exception:
                 pass
     env = settings.llm_config
+    model = cfg.get("model") or env["model"] or ""
+    # 可选模型清单：状态页可配置 models（数组或逗号分隔），用于会话级切换；
+    # 未配置时至少包含默认模型，前端仍是单选项。
+    raw_models = cfg.get("models") or cfg.get("model_list") or []
+    if isinstance(raw_models, str):
+        raw_models = [x.strip() for x in raw_models.replace("\n", ",").split(",") if x.strip()]
+    models = [str(x).strip() for x in (raw_models or []) if str(x).strip()]
+    if model and model not in models:
+        models.insert(0, model)
     return {
         "api_key": cfg.get("api_key") or env["api_key"] or "",
         "base_url": cfg.get("base_url") or env["base_url"] or "",
-        "model": cfg.get("model") or env["model"] or "",
+        "model": model,
+        "models": models,
         "rpm": int(cfg.get("rpm") or DEFAULTS["rpm"]),
         "workers": int(cfg.get("workers") or DEFAULTS["workers"]),
     }

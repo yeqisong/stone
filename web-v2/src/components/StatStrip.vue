@@ -1,8 +1,10 @@
 <template>
   <div class="stat-strip">
-    <div v-for="it in items" :key="it.label" class="stat-item">
+    <div v-for="it in items" :key="it.label" class="stat-item" :title="it.title || ''">
       <div class="stat-label">{{ it.label }}</div>
       <div class="stat-value" :style="{ color: it.color || 'var(--c-text)' }">{{ texts[it.label] ?? it.value }}</div>
+      <!-- 可选副行：策略信号等富卡片用；数值卡片不传就不渲染 -->
+      <div v-if="it.sub" class="stat-sub">{{ it.sub }}</div>
     </div>
   </div>
 </template>
@@ -11,14 +13,16 @@
 import { reactive, watch, onUnmounted } from 'vue'
 
 const props = defineProps({
-  items: { type: Array, required: true, default: () => [] }, // [{label, value, color?}]
+  items: { type: Array, required: true, default: () => [] }, // [{label, value, color?, sub?, title?}]
 })
 
 // ── 数字滚动动效 ──
 // 仅对「纯数值」项做缓动计数（支持 ¥ 前缀 / 正负号 / 千分位 / 小数 / 万·亿后缀 / % / 尾缀涨跌幅），
 // 日期、名称、比值（3/10）、带括注（62% (12/20)）等文本项原样直显。
 // 收尾帧直接渲染原始字符串，保证最终显示与传入值逐字符一致。
-const NUM_RE = /^(¥)?([+-])?([\d,]+(?:\.\d+)?)([万亿])?(%)?(?:([+-]\d+(?:\.\d+)?)%)?$/
+// \s*：最新价等值形如 "¥78.37  -2.15%"（数字与涨跌幅之间有空格）；
+// 不允许空格时 parseNum 返回 null，数字滚动会卡在旧值（实时价到了但卡片不更新）。
+const NUM_RE = /^(¥)?([+-])?([\d,]+(?:\.\d+)?)([万亿])?(%)?\s*(?:([+-]\d+(?:\.\d+)?)%)?$/
 const texts = reactive({})   // label → 当前显示文本
 const rafs = new Map()       // label → rafId
 const timers = new Map()     // label → stagger 启动延时
@@ -87,6 +91,10 @@ onUnmounted(() => { rafs.forEach(id => cancelAnimationFrame(id)); timers.forEach
 .stat-item { text-align: center; min-width: 62px; }
 .stat-label { font-size: var(--text-meta); color: var(--c-text-dim); white-space: nowrap; }
 .stat-value { font-size: 20px; font-weight: 600; line-height: 1.25; }
+.stat-sub {
+  margin-top: 2px; font-size: var(--text-meta); color: var(--c-text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 @media (max-width: 768px) {
   .stat-strip { gap: 10px; padding: 6px 0 10px; }
   .stat-item { min-width: 56px; }

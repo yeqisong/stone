@@ -117,6 +117,9 @@ async def lifespan(app: FastAPI):
     from app.signal import set_main_loop
     set_main_loop(asyncio.get_running_loop())
     broadcast_task = asyncio.create_task(broadcast_dag_status())
+    # 启动盘中实时提醒（关注池快照 → 规则 → risk_alerts → 既有 WS 推送）
+    from app.intraday_watch import intraday_watch_loop
+    intraday_task = asyncio.create_task(intraday_watch_loop())
     # 启动 Cron 定时调度器（后台线程）
     from scripts.cron_scheduler import start_cron_scheduler
     start_cron_scheduler()
@@ -124,6 +127,11 @@ async def lifespan(app: FastAPI):
     yield
 
     broadcast_task.cancel()
+    intraday_task.cancel()
+    try:
+        await intraday_task          # 让 watcher 走完 finally（线程里的请求自行结束）
+    except asyncio.CancelledError:
+        pass
     # 关闭前落盘配额计数（否则本次进程的最后一段用量丢失）
     try:
         from crawler.adapters.tushare_quota import TushareQuota

@@ -35,10 +35,24 @@ TABLE_DOCS = {
     "stock_moneyflow": "个股资金流。列 trade_date/stock_code/net_mf_amt/buy_elg_amt/sell_elg_amt/buy_lg_amt/sell_lg_amt",
     "stock_margin_detail": "两融明细。列 trade_date/stock_code/fin_amount/sec_amount/total_amount",
     "stock_top_list": "龙虎榜。列 trade_date/stock_code/reason/net",
+    "stock_holder_number": "股东户数。列 trade_date/stock_code/holder_num/holder_num_chg",
     "dag_flows": "DAG 流程定义。列 id/flow_name/nodes/edges/cron_expr/status(published/draft)/last_run_at",
+    "dag_flow_versions": "DAG 流程版本。列 flow_id/version/nodes/edges/change_log/created_at",
     "dag_run_log": "DAG 节点执行日志。列 run_id/trade_date/node_name/status/rows/detail/started_at/finished_at",
     "backfill_tasks": "补数任务。列 task_id/task_type/status/started_at/completed_at",
     "trade_calendar": "交易日历。列 cal_date/is_trade_day",
+    "model_versions": "模型版本与指标。列 version/model_name/status(DRAFT/ACTIVE/PENDING/...)/config/best_params/evaluation_report/sharpe/win_rate/max_drawdown/annual_return/trained_at/activated_at",
+    "model_health": "ACTIVE 模型健康度（滚动评估）。列 version/ic/rank_ic/... 详见 describe_table",
+    "backtest_records": "模型回测汇总。列 version/start_date/end_date/final_equity/sharpe_ratio/win_rate/max_drawdown/annual_return/total_trades",
+    "backtest_daily_records": "回测逐日净值。列 version/trade_date/equity/cash/positions",
+    "training_trials": "训练超参试验。列 version/trial_number/params/score",
+    "risk_alerts": "风控告警。列 trade_date/kind(stop_loss/drawdown/industry_cap/model_stale)/level/title/body/ack",
+    "watch_groups": "自选分组。列 id/group_name/is_default/sort_order",
+    "watch_group_items": "自选股。列 group_id/stock_code/join_price/notes",
+    "macro_indicator": "宏观指标（CPI/PPI/GDP/M0M1M2/SHIBOR）。列 indicator/trade_date/value",
+    "index_valuation": "指数估值。列 index_code/trade_date/pe/pb/total_mv/turnover_rate",
+    "data_lineage": "数据血缘台账。列 event_type/entity/trade_date/detail/created_at",
+    "tushare_quota": "tushare 当日配额。列 trade_date/calls_today/calls_limit/quota_exhausted",
 }
 
 DAG_NODE_HINT = ("常用节点：cron(定时触发)、kline(个股日K)、index、etf、fund、moneyflow、margin_daily、"
@@ -99,6 +113,24 @@ def tool_describe_table(_session_id: int, table: str = "", **kw) -> dict:
 _SQL_ALLOWED = re.compile(r"^\s*(select|with)\b", re.I)
 
 
+_SQL_BUDGET = 11000          # 结果 JSON 预算（execute_tool 还有 12KB 兜底）
+
+
+def _fit_rows(cols: list, data: list, budget: int = _SQL_BUDGET) -> tuple:
+    """按 JSON 体积裁剪行数，但保留 columns/rows 结构（前端才能渲染表格）。"""
+    if not cols:
+        return data, False
+    base = len(json.dumps({"columns": cols, "rows": []}, ensure_ascii=False))
+    used, out = base, []
+    for row in data:
+        n = len(json.dumps(row, ensure_ascii=False, default=str)) + 1
+        if out and used + n > budget:
+            return out, True
+        out.append(row)
+        used += n
+    return out, len(out) < len(data)
+
+
 def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> dict:
     """只读 SQL：单条 SELECT/WITH，只读事务 + 25s 超时 + 行数上限。"""
     q = (sql or "").strip().rstrip(";").strip()
@@ -110,7 +142,7 @@ def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> d
     if ";" in q:
         return {"error": "只允许单条 SQL（检测到分号）"}
     lim = max(1, min(int(limit or 100), 500))
-    if not re.search(r"\blimit\s+\d+\s*$", q, re.I):
+    if not re.search(r"\blimit\s+\d+(\s+offset\s+\d+)?\s*$", q, re.I):
         q = f"{q}\nLIMIT {lim}"
 
     from app.db.connection import get_sync_db
@@ -121,8 +153,10 @@ def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> d
         rows = db.execute(text(q)).fetchall()
         cols = list(rows[0]._mapping.keys()) if rows else []
         data = [[_json_safe(v) for v in r] for r in rows]
-        return {"columns": cols, "rows": data, "row_count": len(data),
-                "truncated": len(data) >= lim, "limit": lim}
+        trimmed, truncated = _fit_rows(cols, data)
+        return {"columns": cols, "rows": trimmed, "row_count": len(trimmed),
+                "total_rows": len(data), "truncated": truncated, "limit": lim,
+                "note": ("结果按体积截断，可加 WHERE/聚合或缩小 LIMIT 再查" if truncated else None)}
     except Exception as e:
         try:
             db.rollback()
@@ -130,6 +164,14 @@ def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> d
             pass
         return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
     finally:
+        # 只读事务也要显式结束，避免连接长期 idle-in-transaction 持有快照
+        try:
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         db.close()
 
 
@@ -141,6 +183,7 @@ def tool_stock_overview(_session_id: int, stock_code: str = "", **kw) -> dict:
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
+        db.execute(text("SET LOCAL statement_timeout = '20s'"))
         m = db.execute(text(
             "SELECT stock_name, exchange, industry, industry_l1, industry_l2, status, ipo_date "
             "FROM stock_master WHERE stock_code=:c AND stock_type='stock' LIMIT 1"), {"c": code}).fetchone()
@@ -188,6 +231,10 @@ def tool_stock_overview(_session_id: int, stock_code: str = "", **kw) -> dict:
             "xueqiu_sentiment_30d": {r[0]: r[1] for r in xq},
         }
     finally:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         db.close()
 
 
@@ -201,6 +248,7 @@ def tool_search_news(_session_id: int, keyword: str = "", days: int = 30, limit:
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
+        db.execute(text("SET LOCAL statement_timeout = '20s'"))
         rows = db.execute(text("""
             SELECT n.published_at, n.source, n.title, LEFT(n.content, 300), s.summary,
                    s.importance, s.sentiment
@@ -214,6 +262,10 @@ def tool_search_news(_session_id: int, keyword: str = "", days: int = 30, limit:
              "content": r[3], "summary": r[4], "importance": r[5], "sentiment": r[6]}
             for r in rows]}
     finally:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         db.close()
 
 
@@ -320,9 +372,203 @@ def tool_run_dag_flow(_session_id: int, flow_id: int = 0, trade_date: str = "", 
     try:
         r = _execute_flow_internal(int(flow_id), {"trade_date": trade_date or ""})
         return {"ok": True, "result": {k: _json_safe(v) for k, v in (r or {}).items()
-                                       if k in ("task_id", "status", "flow_name", "trade_date")}}
+                                       if k in ("task_id", "status", "flow_name", "trade_date")},
+                "hint": "后台执行中；用 get_dag_run_status(task_id=...) 查看进度与节点结果"}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+def tool_get_dag_run_status(_session_id: int, task_id: str = "", run_id: str = "",
+                            limit: int = 20, **kw) -> dict:
+    """查 DAG 任务/运行状态：给 task_id 看任务与节点；给 run_id 看节点日志；都不给看最近运行。"""
+    from app.db.connection import get_sync_db
+    lim = max(1, min(int(limit or 20), 100))
+    out = {"task": None, "run_id": run_id or None, "nodes": [], "recent_runs": []}
+    if task_id:
+        try:
+            from app.task.manager import TaskManager
+            t = TaskManager().get_task(str(task_id))
+            if not t:
+                return {"error": f"任务不存在或已过期: {task_id}", "hint": "只保留本进程内的任务；历史运行请用 run_id 查"}
+            d = t.to_dict()
+            out["task"] = {k: d.get(k) for k in (
+                "task_id", "task_type", "flow_id", "flow_name", "status", "progress_pct",
+                "current_node", "current_detail", "error", "started_at", "finished_at", "dag_run_id")}
+            out["task"]["nodes"] = [
+                {k: n.get(k) for k in ("node_name", "status", "rows", "detail", "error",
+                                       "started_at", "finished_at")}
+                for n in (d.get("nodes") or [])[:40]]
+            run_id = run_id or d.get("dag_run_id") or ""
+            out["run_id"] = run_id or None
+        except Exception as e:
+            return {"error": f"任务状态读取失败: {type(e).__name__}: {str(e)[:200]}"}
+    db = get_sync_db()
+    try:
+        db.execute(text("SET LOCAL statement_timeout = '20s'"))
+        if run_id:
+            rows = db.execute(text("""
+                SELECT node_name, status, rows, LEFT(COALESCE(detail,''), 300),
+                       started_at, finished_at
+                FROM dag_run_log WHERE run_id=:r ORDER BY id LIMIT :l"""),
+                {"r": run_id, "l": lim}).fetchall()
+            out["nodes"] = [{"node": r[0], "status": r[1], "rows": r[2], "detail": r[3],
+                             "started_at": _json_safe(r[4]), "finished_at": _json_safe(r[5])}
+                            for r in rows]
+            if not rows and not out["task"]:
+                return {"error": f"未找到 run_id={run_id} 的节点日志"}
+        else:
+            rows = db.execute(text("""
+                SELECT run_id, trade_date, COUNT(*) AS n,
+                       COUNT(*) FILTER (WHERE status='failed') AS failed,
+                       MIN(started_at), MAX(finished_at)
+                FROM dag_run_log
+                WHERE started_at > NOW() - INTERVAL '7 days'
+                GROUP BY run_id, trade_date
+                ORDER BY MAX(started_at) DESC NULLS LAST LIMIT :l"""), {"l": lim}).fetchall()
+            out["recent_runs"] = [{"run_id": r[0], "trade_date": _json_safe(r[1]),
+                                   "nodes": r[2], "failed": r[3],
+                                   "started_at": _json_safe(r[4]),
+                                   "finished_at": _json_safe(r[5])} for r in rows]
+        return out
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+    finally:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        db.close()
+
+
+def tool_model_performance(_session_id: int, version: str = "", limit: int = 5, **kw) -> dict:
+    """模型版本指标 + 最近回测汇总（回答「模型最近表现如何」）。"""
+    from app.db.connection import get_sync_db
+    lim = max(1, min(int(limit or 5), 20))
+    db = get_sync_db()
+    try:
+        db.execute(text("SET LOCAL statement_timeout = '20s'"))
+        rows = db.execute(text("""
+            SELECT version, model_name, status, sharpe, win_rate, max_drawdown,
+                   annual_return, trained_at, activated_at
+            FROM model_versions WHERE deleted_at IS NULL
+              AND (:v = '' OR version = :v)
+            ORDER BY COALESCE(activated_at, trained_at, created_at) DESC LIMIT :l"""),
+            {"v": (version or "").strip(), "l": lim}).fetchall()
+        versions = [r[0] for r in rows]
+        bts = []
+        if versions:
+            brows = db.execute(text("""
+                SELECT DISTINCT ON (version) version, start_date, end_date, sharpe_ratio,
+                       win_rate, max_drawdown, annual_return, total_trades, created_at
+                FROM backtest_records WHERE version = ANY(:vs)
+                ORDER BY version, id DESC"""), {"vs": versions}).fetchall()
+            bts = [{"version": r[0], "start": _json_safe(r[1]), "end": _json_safe(r[2]),
+                    "sharpe": float(r[3]) if r[3] is not None else None,
+                    "win_rate": float(r[4]) if r[4] is not None else None,
+                    "max_drawdown": float(r[5]) if r[5] is not None else None,
+                    "annual_return": float(r[6]) if r[6] is not None else None,
+                    "trades": r[7], "created_at": _json_safe(r[8])} for r in brows]
+        return {"models": [{"version": r[0], "name": r[1], "status": r[2],
+                            "sharpe": float(r[3]) if r[3] is not None else None,
+                            "win_rate": float(r[4]) if r[4] is not None else None,
+                            "max_drawdown": float(r[5]) if r[5] is not None else None,
+                            "annual_return": float(r[6]) if r[6] is not None else None,
+                            "trained_at": _json_safe(r[7]), "activated_at": _json_safe(r[8])}
+                           for r in rows],
+                "backtests": bts,
+                "note": "指标口径以 model_versions/backtest_records 为准；回测含成本假设，详见 evaluation_report"}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+    finally:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        db.close()
+
+
+def tool_portfolio_summary(_session_id: int, **kw) -> dict:
+    """实盘持仓 + 纸面组合现状（市值按最新收盘价，收益按成本价）。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        db.execute(text("SET LOCAL statement_timeout = '20s'"))
+        rows = db.execute(text("""
+            SELECT p.stock_code, p.stock_name, p.quantity, p.cost_price,
+                   (SELECT q.close FROM daily_quote q
+                     WHERE q.stock_code=p.stock_code AND q.close > 0
+                     ORDER BY q.trade_date DESC LIMIT 1) AS last_close
+            FROM portfolio p WHERE p.is_active ORDER BY p.stock_code""")).fetchall()
+        pos, total_cost, total_mv = [], 0.0, 0.0
+        for r in rows:
+            qty = float(r[2] or 0)
+            cost = float(r[3] or 0)
+            last = float(r[4]) if r[4] is not None else None
+            mv = (last or cost) * qty
+            pnl = ((last or cost) - cost) * qty
+            total_cost += cost * qty
+            total_mv += mv
+            pos.append({"code": r[0], "name": r[1], "shares": qty, "cost": cost,
+                        "last_close": last, "market_value": round(mv, 2),
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": round((pnl / (cost * qty) * 100), 2) if cost and qty else None})
+        eod = db.execute(text("""
+            SELECT trade_date, equity, cash, pnl FROM paper_trades
+            WHERE action='EOD' ORDER BY trade_date DESC, id DESC LIMIT 1""")).fetchone()
+        pcount = db.execute(text("SELECT COUNT(*) FROM paper_positions")).scalar()
+        return {"real": {"positions": pos, "count": len(pos),
+                         "total_cost": round(total_cost, 2),
+                         "market_value": round(total_mv, 2),
+                         "pnl": round(total_mv - total_cost, 2),
+                         "note": "市值按最近有效收盘价（停牌沿用前值）"},
+                "paper": {"positions": int(pcount or 0),
+                          "latest_eod": ({"trade_date": _json_safe(eod[0]), "equity": float(eod[1] or 0),
+                                          "cash": float(eod[2] or 0), "pnl": float(eod[3] or 0)}
+                                         if eod else None)}}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+    finally:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        db.close()
+
+
+def tool_recent_signals(_session_id: int, days: int = 5, direction: str = "",
+                        limit: int = 50, **kw) -> dict:
+    """最近信号（可按 buy/sell 过滤），含强度与模型预测分。"""
+    from app.db.connection import get_sync_db
+    d = max(1, min(int(days or 5), 120))
+    lim = max(1, min(int(limit or 50), 200))
+    dir_ = (direction or "").strip().lower()
+    if dir_ and dir_ not in ("buy", "sell"):
+        return {"error": "direction 只能是 buy / sell / 空"}
+    db = get_sync_db()
+    try:
+        db.execute(text("SET LOCAL statement_timeout = '20s'"))
+        rows = db.execute(text("""
+            SELECT s.signal_date, s.stock_code, m.stock_name, s.direction, s.strength,
+                   s.predict_score, s.reason, s.model_version, s.status
+            FROM signal_history s LEFT JOIN stock_master m
+              ON m.stock_code=s.stock_code AND m.stock_type='stock'
+            WHERE s.signal_date >= CURRENT_DATE - :d
+              AND (:dir = '' OR s.direction = :dir)
+            ORDER BY s.signal_date DESC, s.strength DESC NULLS LAST LIMIT :l"""),
+            {"d": d, "dir": dir_, "l": lim}).fetchall()
+        return {"days": d, "direction": dir_ or "all", "count": len(rows), "items": [
+            {"date": _json_safe(r[0]), "code": r[1], "name": r[2], "direction": r[3],
+             "strength": float(r[4]) if r[4] is not None else None,
+             "predict_score": float(r[5]) if r[5] is not None else None,
+             "reason": r[6], "model": r[7], "status": r[8]} for r in rows]}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+    finally:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        db.close()
 
 
 # ══════════════════════════════════════════════
@@ -389,6 +635,20 @@ TOOL_SPECS = [
     _tool("run_dag_flow", "触发某个 DAG 流程执行（后台任务）。",
           {"flow_id": {"type": "integer"}, "trade_date": {"type": "string", "description": "YYYY-MM-DD，空=今天"}},
           ["flow_id"]),
+    _tool("get_dag_run_status",
+          "查 DAG 任务/运行状态：给 task_id 看任务与节点；给 run_id 看节点日志；都不给看最近运行。",
+          {"task_id": {"type": "string", "description": "run_dag_flow 返回的 task_id"},
+           "run_id": {"type": "string", "description": "dag_run_log 的 run_id"},
+           "limit": {"type": "integer", "description": "默认 20"}}),
+    _tool("model_performance",
+          "模型版本指标与最近回测汇总（状态、Sharpe、胜率、回撤、年化）。",
+          {"version": {"type": "string", "description": "可选，指定版本如 v18.0"},
+           "limit": {"type": "integer", "description": "默认 5 个版本"}}),
+    _tool("portfolio_summary", "实盘持仓与纸面组合现状（市值/盈亏/最新净值）。", {}),
+    _tool("recent_signals", "最近信号列表（可按 buy/sell 过滤），含强度与模型预测分。",
+          {"days": {"type": "integer", "description": "回看天数，默认 5"},
+           "direction": {"type": "string", "description": "buy / sell / 空=全部"},
+           "limit": {"type": "integer", "description": "默认 50"}}),
     _tool("list_skills", "列出可用技能（可复用的分析方法包）。接到分析类任务时先看这里有没有匹配技能。", {}),
     _tool("read_skill", "读取技能全文（含步骤、SQL 模板、注意事项）。判断技能命中后必须先读再执行。",
           {"name": {"type": "string", "description": "技能名（list_skills 返回的 name）"},
@@ -409,14 +669,24 @@ _DISPATCH = {
     "pip_install": tool_pip_install, "npm_install": tool_npm_install,
     "list_workspace": tool_list_workspace,
     "list_dag_flows": tool_list_dag_flows, "create_dag_flow": tool_create_dag_flow,
-    "run_dag_flow": tool_run_dag_flow,
+    "run_dag_flow": tool_run_dag_flow, "get_dag_run_status": tool_get_dag_run_status,
+    "model_performance": tool_model_performance,
+    "portfolio_summary": tool_portfolio_summary, "recent_signals": tool_recent_signals,
     "list_skills": tool_list_skills, "read_skill": tool_read_skill,
     "save_skill": tool_save_skill,
 }
 
 
+_LIST_KEYS = ("rows", "items", "nodes", "positions", "skills", "flows", "tables",
+              "backtests", "recent_runs", "files")
+
+
 def execute_tool(session_id: int, name: str, args: dict) -> dict:
-    """执行工具并统一截断（返回给模型的内容不超过 12KB）。"""
+    """执行工具并统一截断（返回给模型的内容不超过 12KB）。
+
+    超限时优先裁剪列表字段而不是把整个结构换成 preview 字符串——否则前端
+    无法把 SQL 结果渲染成表格，模型也拿不到列名与部分行。
+    """
     fn = _DISPATCH.get(name)
     if not fn:
         return {"error": f"未知工具 {name}"}
@@ -427,6 +697,18 @@ def execute_tool(session_id: int, name: str, args: dict) -> dict:
     except Exception as e:
         return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
     s = json.dumps(r, ensure_ascii=False, default=str)
-    if len(s) > 12000:
-        return {"truncated": True, "preview": s[:12000] + "…"}
-    return r
+    if len(s) <= 12000:
+        return r
+    if isinstance(r, dict):
+        shrunk = dict(r)
+        for key in _LIST_KEYS:
+            arr = shrunk.get(key)
+            if not isinstance(arr, list) or not arr:
+                continue
+            while arr and len(json.dumps(shrunk, ensure_ascii=False, default=str)) > 11500:
+                arr.pop()
+            if len(json.dumps(shrunk, ensure_ascii=False, default=str)) <= 12000:
+                shrunk["truncated"] = True
+                shrunk.setdefault("note", "结果过多已裁剪；可缩小查询范围或分页")
+                return shrunk
+    return {"truncated": True, "preview": s[:12000] + "…"}

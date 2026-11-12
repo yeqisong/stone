@@ -131,8 +131,8 @@ const theme = useThemeStore()
 const wsConnected = ref(false)
 // ── 风控告警 → Chrome 通知（step3）──
 const notifEnabled = ref(localStorage.getItem('notif_enabled') === '1')
-const notifHint = computed(() => notifEnabled.value ? '风控告警 Chrome 通知已开启，点击关闭'
-                                      : ('开启风控告警 Chrome 通知' + (typeof Notification !== 'undefined' && Notification.permission === 'denied' ? '（浏览器已禁止，请在地址栏设置中放行）' : '')))
+const notifHint = computed(() => notifEnabled.value ? '风控/盘中提醒 Chrome 通知已开启，点击关闭'
+                                      : ('开启风控/盘中提醒 Chrome 通知' + (typeof Notification !== 'undefined' && Notification.permission === 'denied' ? '（浏览器已禁止，请在地址栏设置中放行）' : '')))
 function toggleNotif() {
   if (notifEnabled.value) {
     notifEnabled.value = false
@@ -143,13 +143,13 @@ function toggleNotif() {
   if (Notification.permission === 'granted') {
     notifEnabled.value = true
     localStorage.setItem('notif_enabled', '1')
-    new Notification('K道 风控告警已开启', { body: '止损/回撤/行业超限将实时推送' })
+    new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动将实时推送' })
   } else {
     Notification.requestPermission().then(p => {
       if (p === 'granted') {
         notifEnabled.value = true
         localStorage.setItem('notif_enabled', '1')
-        new Notification('K道 风控告警已开启', { body: '止损/回撤/行业超限将实时推送' })
+        new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动将实时推送' })
       }
     })
   }
@@ -158,8 +158,15 @@ addWsListener(data => {
   if (data && data.type === 'risk_alert' && notifEnabled.value
       && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     for (const a of (data.alerts || [])) {
-      const n = new Notification(`风控告警：${a.title}`, { body: a.body || '', tag: 'risk-' + a.id })
-      n.onclick = () => { window.focus(); nav.switchTab('x'); n.close() }
+      const isIntraday = String(a.kind || '').startsWith('it')
+      const n = new Notification(`${isIntraday ? '盘中提醒' : '风控告警'}：${a.title}`,
+        { body: a.body || '', tag: 'risk-' + a.id })
+      n.onclick = () => {
+        window.focus()
+        if (isIntraday && a.stock_code) nav.showDetail(a.stock_code)
+        else nav.switchTab('x')
+        n.close()
+      }
     }
   }
 })

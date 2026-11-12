@@ -84,6 +84,21 @@
           <div style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap" :style="news.pending_summary>0?{color:'var(--c-warn)'}:{}">{{ newsSub }}</div>
         </div>
       </div>
+      <!-- 分钟数据（P3）：watcher 盘中采集；20 个交易日 + 1 万根后训练脚本才允许跑 -->
+      <div v-if="minuteData" class="sv-dt-card" :title="minuteDataTip"
+        style="display:flex;align-items:baseline;justify-content:space-between;padding:4px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover)">
+        <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
+          <span style="display:inline-flex;align-items:center;gap:4px;position:relative;top:1px">
+            <span :style="{width:'7px',height:'7px',borderRadius:'50%',background:minuteData.ready?'var(--c-down)':'var(--c-warn)',flexShrink:0}"></span>
+            <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">分钟数据</span>
+          </span>
+          <span :style="{fontSize:'11px',color:minuteData.ready?'var(--c-down)':'var(--c-warn)',whiteSpace:'nowrap',fontWeight:600}">{{ minuteData.ready ? '可训练' : '采集中' }}</span>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:14px;font-weight:600;color:var(--c-text)">{{ fmt(minuteData.rows) }} <span style="font-size: var(--text-meta);font-weight:400;color:var(--c-text-dimmer)">根</span></div>
+          <div style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap">{{ minuteData.days }}/20 交易日 · {{ minuteData.stocks }} 只</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -585,6 +600,20 @@ async function loadNews() {
   }
 }
 
+// ── 分钟数据（P3 覆盖度）：watcher 盘中采集，达标后才允许训练 ──
+const minuteData = ref(null)
+const minuteDataTip = computed(() => minuteData.value
+  ? `P3 分钟 bar：${minuteData.value.rows} 根 / ${minuteData.value.days} 个完整交易日 / `
+    + `${minuteData.value.stocks} 只；达标线 20 日 + 10000 根。`
+    + `训练：venv/bin/python scripts/train_intraday.py`
+  : '分钟数据覆盖度')
+async function loadMinuteData() {
+  try {
+    const r = await axios.get(API + '/api/minute-data')
+    minuteData.value = r.data || {}
+  } catch(e) { minuteData.value = null }
+}
+
 
 onMounted(() => {
   loadDataStatus()
@@ -592,6 +621,7 @@ onMounted(() => {
   loadQuota()
   loadXq()
   loadNews()
+  loadMinuteData()
   loadSysMetrics()
   loadLlm()
   loadLlmMetrics()
@@ -601,6 +631,7 @@ onMounted(() => {
   quotaTimer = setInterval(loadQuota, 30000)
   xqTimer = setInterval(loadXq, 30000)
   newsTimer = setInterval(loadNews, 30000)
+  minuteTimer = setInterval(loadMinuteData, 60000)
   wsUnwatch.value = addWsListener((data) => {
     // 补数进度
     if (data.type === 'sys_metrics') {
@@ -640,7 +671,8 @@ const wsUnwatch = ref(null)
 let quotaTimer = null
 let xqTimer = null
 let newsTimer = null
-onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer); if (llmTimer) clearInterval(llmTimer) })
+let minuteTimer = null
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer); if (minuteTimer) clearInterval(minuteTimer); if (llmTimer) clearInterval(llmTimer) })
 
 // ── 历史补数 ──
 

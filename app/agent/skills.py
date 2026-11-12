@@ -9,9 +9,9 @@
 - 内置技能 skills/<slug>/SKILL.md —— 随仓库版本管理，只读；
 - 用户技能 data/skills/<slug>/SKILL.md —— 页面/Agent 创建，可删可改（同名覆盖内置）。
 """
-import json
 import re
 import shutil
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -57,7 +57,8 @@ def _load_dir(d: Path, builtin: bool) -> dict:
             logger.warning(f"[skills] 解析失败 {f}: {e}")
             continue
         name = p.name
-        desc = parsed["meta"].get("description") or parsed["body"].splitlines()[0][:80] if parsed["body"] else ""
+        first_line = parsed["body"].splitlines()[0][:80] if parsed["body"] else ""
+        desc = parsed["meta"].get("description") or first_line
         out[name] = {
             "name": name,
             "display_name": parsed["meta"].get("title") or name,
@@ -141,6 +142,8 @@ def delete_skill(name: str) -> dict:
 _IMPORT_RE = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(\.git)?/?$")
 _TMP = ROOT / "data" / "skills" / ".import-tmp"
+_IMPORT_CACHE = {}          # repo_url -> (path, repo, ts)：预览后确认导入不再 clone 一次
+_CACHE_TTL = 600
 
 
 def _clone_shallow(repo_url: str) -> tuple:
@@ -164,6 +167,17 @@ def _clone_shallow(repo_url: str) -> tuple:
     return tmp, repo
 
 
+def _clone_cached(repo_url: str) -> tuple:
+    """预览→确认共用一次浅克隆（10 分钟内有效），避免二次拉取。"""
+    key = (repo_url or "").strip()
+    hit = _IMPORT_CACHE.get(key)
+    if hit and hit[0].exists() and time.time() - hit[2] < _CACHE_TTL:
+        return hit[0], hit[1]
+    path, repo = _clone_shallow(key)
+    _IMPORT_CACHE[key] = (path, repo, time.time())
+    return path, repo
+
+
 def _find_skill_md(d: Path) -> Path:
     """根目录 SKILL.md 优先；其次 skills/<x>/SKILL.md（唯一时）。"""
     if (d / "SKILL.md").exists():
@@ -179,7 +193,7 @@ def _find_skill_md(d: Path) -> Path:
 def import_github_preview(repo_url: str) -> dict:
     """拉取并预览：不落库，只返回技能元信息与正文预览。"""
     try:
-        tmp, repo = _clone_shallow(repo_url)
+        tmp, repo = _clone_cached(repo_url)
     except ValueError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -206,11 +220,11 @@ def import_github_preview(repo_url: str) -> dict:
 
 
 def import_github_confirm(repo_url: str, slug: str = "") -> dict:
-    """确认入库：移动临时目录到 data/skills/<slug>。"""
+    """确认入库：移动临时目录到 data/skills/<slug>（优先复用预览的克隆）。"""
     if not _NAME_RE.match((slug or "").strip() or "x"):
         pass  # slug 缺省时用 repo 名再校验
     try:
-        tmp, repo = _clone_shallow(repo_url)
+        tmp, repo = _clone_cached(repo_url)
     except ValueError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -238,14 +252,19 @@ def import_github_confirm(repo_url: str, slug: str = "") -> dict:
     for item in tmp.iterdir():
         shutil.move(str(item), str(dest / item.name))
     shutil.rmtree(tmp, ignore_errors=True)
+    _IMPORT_CACHE.pop((repo_url or "").strip(), None)
     logger.info(f"[skills] 已从 GitHub 导入技能 {use}")
     return {"ok": True, "name": use}
 
 
-def skill_index_text(limit: int = 40) -> str:
-    """系统提示用的技能清单（名称 + 描述）。"""
-    items = list_skills()[:limit]
+def skill_index_text(limit: int = 120) -> str:
+    """系统提示用的技能清单（名称 + 描述）。超过上限时明确提示还有未列出的技能。"""
+    all_items = list_skills()
+    items = all_items[:limit]
     if not items:
         return "（暂无技能）"
-    return "\n".join(f"- {s['name']}：{s['description']}" + ("（内置）" if s["builtin"] else "")
+    body = "\n".join(f"- {s['name']}：{s['description']}" + ("（内置）" if s["builtin"] else "")
                      for s in items)
+    if len(all_items) > len(items):
+        body += f"\n（另有 {len(all_items) - len(items)} 个技能未列出，可用 list_skills 查看）"
+    return body
