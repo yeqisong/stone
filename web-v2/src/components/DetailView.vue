@@ -278,7 +278,8 @@
         <!-- 仓位 / R：先定止损，再定手数 -->
         <div class="side-panel">
           <h4 class="side-title"><AppIcon name="target" :size="13" />  仓位 / R
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">先定亏损，再定手数</span></h4>
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">先定亏损，再定手数</span>
+            <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('risk')">?</button></h4>
           <div class="r-grid">
             <label>入场<input type="number" step="0.01" v-model.number="rEntry" @input="touchREntry"></label>
             <label>止损<input type="number" step="0.01" v-model.number="rStop" @input="touchRStop"></label>
@@ -308,7 +309,8 @@
         <!-- 信号记分卡：提醒 → 5/15/30/60m 结果，方向调整后统计 -->
         <div class="side-panel">
           <h4 class="side-title"><AppIcon name="target" :size="13" />  信号记分卡
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 30 日 · 全池</span></h4>
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 30 日 · 全池</span>
+            <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('score')">?</button></h4>
           <template v-if="signalScoreItems.length">
             <table class="score-table">
               <thead><tr><th>信号</th><th>样本</th><th>胜率</th><th>30m</th></tr></thead>
@@ -346,6 +348,7 @@
         <div v-if="sectorRs" class="side-panel">
           <h4 class="side-title" style="flex-wrap:wrap">
             <AppIcon name="activity" :size="13" />  板块相对强弱
+            <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('sector')">?</button>
             <span style="font-size: var(--text-meta);color:var(--c-text-dim);flex-basis:100%;margin-left:19px">
               {{ sectorRs.industry }}
             </span>
@@ -369,7 +372,8 @@
         <!-- 多周期一致性：把分散的 VWAP/OR/均线/板块信号收成一个分数 -->
         <div v-if="mtfScore" class="side-panel">
           <h4 class="side-title"><AppIcon name="activity" :size="13" />  多周期一致性
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">VWAP / OR / 5-15-60m / 日线</span></h4>
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">VWAP / OR / 5-15-60m / 日线</span>
+            <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('mtf')">?</button></h4>
           <div class="mtf-score">
             <b :style="{color: mtfScore.score >= 60 ? 'var(--c-up)' : mtfScore.score <= 40 ? 'var(--c-down)' : 'var(--c-text)'}">{{ mtfScore.score }}</b>
             <span :style="{color: mtfScore.score >= 60 ? 'var(--c-up)' : mtfScore.score <= 40 ? 'var(--c-down)' : 'var(--c-text-dim)'}">{{ mtfScore.label }}</span>
@@ -693,6 +697,32 @@
     </n-card>
   </n-modal>
 
+  <!-- 新卡片用法教学 -->
+  <n-drawer v-model:show="showHelp" placement="right" :width="isNarrow ? '94%' : 460">
+    <n-drawer-content closable>
+      <template #header>
+        <div class="help-head">
+          <span class="help-q">?</span>
+          <div>
+            <div class="help-title">{{ helpData?.title }}</div>
+            <div class="help-sub">{{ helpData?.sub }}</div>
+          </div>
+        </div>
+      </template>
+      <div v-if="helpData" class="help-body">
+        <section v-for="(s, i) in helpData.sections" :key="i" class="help-section">
+          <h5>{{ s.title }}</h5>
+          <p v-if="s.text" class="help-text">{{ s.text }}</p>
+          <div v-if="s.formula" class="help-formula">{{ s.formula }}</div>
+          <ul v-if="s.bullets?.length" class="help-list">
+            <li v-for="(b, j) in s.bullets" :key="j">{{ b }}</li>
+          </ul>
+        </section>
+        <div class="help-disclaimer">这些卡片是辅助决策工具，不构成买卖建议；任何信号都要先用仓位/R 卡定义止损。</div>
+      </div>
+    </n-drawer-content>
+  </n-drawer>
+
   <!-- 本地价格提醒：上破/下破 -->
   <n-modal v-model:show="showAlarm" preset="card"
     :title="'价格提醒 · ' + (detail?.stock_name || code)">
@@ -821,7 +851,7 @@ import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import IntradayPlaybook from './IntradayPlaybook.vue'
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
-import {NCard, NButton, NInput, NInputNumber, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NSlider, NButtonGroup, NModal, NCheckboxGroup, NCheckbox, NTabs, NTabPane, useDialog, useMessage} from 'naive-ui'
+import {NCard, NButton, NInput, NInputNumber, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NSlider, NButtonGroup, NModal, NDrawer, NDrawerContent, NCheckboxGroup, NCheckbox, NTabs, NTabPane, useDialog, useMessage} from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
@@ -1215,6 +1245,7 @@ async function load(){
   vpData.value = null
   showTape.value = false
   tapeData.value = null
+  showHelp.value = false
   showAlarm.value = false
   alarmUpper.value = null; alarmLower.value = null
   showReplay.value = false
@@ -2355,6 +2386,138 @@ const tapeTitle = ref('逐笔成交 / 大单')
 let tapeTimer = null
 let tapeSeq = 0
 const TAPE_SIDE = { B: '主动买', S: '主动卖', M: '中性' }
+
+// ── 新卡片的内置教学（? 按钮 → 右侧抽屉）──
+const HELP_TOPICS = {
+  risk: {
+    title: '仓位 / R 计算',
+    sub: '先定止损，再定手数；不要先决定“买多少”。',
+    sections: [
+      { title: '这张卡解决什么', text: '把“看到信号想买”翻译成可执行的手数：先确定这笔最多亏多少，再按止损距离反推仓位。' },
+      { title: '字段怎么填', bullets: [
+        '入场：计划成交价，默认取当前价；不要在追高后还用旧价。',
+        '止损：优先用结构位（OR低、昨低、VWAP下方），不是成本价；必须低于入场价。',
+        '权益：账户总资金，用于计算风险预算，不是这只票的市值。',
+        '风险%：单笔最多亏权益的百分比；专业交易通常 0.5%–1%，不建议超过 2%。',
+      ] },
+      { title: '计算口径', formula: '可买股数 = floor(权益 × 风险% ÷ (入场 - 止损) ÷ 100) × 100\n1R = 可买股数 × (入场 - 止损)' },
+      { title: '结果怎么读', bullets: [
+        '每股风险：入场到止损的价差；越小不代表越好，可能是止损太近容易被噪声打掉。',
+        '可买：按 100 股整手向下取整；0 股表示风险预算不足一手。',
+        '止损亏损（1R）：真的触发止损时亏的钱；这才是这笔交易的风险。',
+        '五档可买 / 预计成交 / 滑点：按当前卖盘估算的成交能力与冲击成本；五档覆盖不足时滑点会明显变大。',
+      ] },
+      { title: '交易动作', bullets: [
+        '如果 1R 超过你的心理承受范围：降低风险%、收紧结构止损或放弃，不要直接放大仓位。',
+        '如果可买 0 股：说明一手都超过预算，宁可换标的，不要放宽风险%去凑整手。',
+        'T+1 下当天买不能当天卖；止损计划必须按“隔夜也能承受”来设。',
+      ] },
+      { title: '常见误区', bullets: [
+        '用成本价当止损：成本是你的历史，不是市场的结构。',
+        '先决定买 1000 股再找止损：顺序反了，风险会失控。',
+        '忽略滑点：急涨/小票/开盘几秒，提醒价和成交价可能差很多。',
+      ] },
+    ],
+  },
+  score: {
+    title: '信号记分卡',
+    sub: '用历史结果判断提醒值不值得信，而不是凭感觉。',
+    sections: [
+      { title: '数据口径', bullets: [
+        '每条盘中提醒记录 5/15/30/60 分钟后的收益，按信号方向调整：看涨信号上涨为正，看跌信号下跌为正。',
+        'hit：30 分钟方向收益 ≥ 0.2%（覆盖双边成本）；30m 缺失时退 60m/15m。',
+        '止损/止盈/量比等中性规则没有方向，不参与胜率统计。',
+      ] },
+      { title: '列怎么读', bullets: [
+        '样本 n：这条规则近 30 日触发并完成评估的次数。',
+        '胜率：方向调整后达到 0.2% 的比例。',
+        '30m：平均 30 分钟方向收益，红色为正、绿色为负。',
+        '悬停整行可看 5m/15m/60m 与 MFE/MAE（期间最大有利/不利波动）。',
+      ] },
+      { title: '样本量', bullets: [
+        'n < 20：只能当参考，不要据此删规则。',
+        'n 20–50：方向性参考，仍需结合市场环境。',
+        'n > 50：相对稳定，可以开始比较规则优劣。',
+      ] },
+      { title: 'AI 观点验证', text: '下方把事件 AI 的“偏强/偏弱/震荡”与 30 分钟原始收益对齐：偏强命中=上涨>0.2%，偏弱命中=下跌>0.2%，震荡命中=绝对波动≤0.5%。' },
+      { title: '怎么用', bullets: [
+        '胜率高 + 30m 为正 + 样本足够：这条提醒值得保留/提高权重。',
+        '胜率低或 30m 持续为负：降低对它的信任，甚至关闭该规则。',
+        'MFE/MAE 用来校准止损和目标：MAE 很大说明止损太近，MFE 很大说明目标可能太保守。',
+      ] },
+      { title: '注意', text: '记分卡是历史统计，不是预测；不同市场 regime 下同一规则表现会变。样本小的时候不要下重结论。' },
+    ],
+  },
+  sector: {
+    title: '板块相对强弱',
+    sub: '个股强不等于板块强；先看风往哪吹。',
+    sections: [
+      { title: '数据口径', bullets: [
+        '按申万行业 L2（缺失回退 L1）取同行业市值前 30 只，等权计算板块平均涨跌幅。',
+        '个股/板块为当日涨跌幅；超额 = 个股 − 板块，单位百分点（pp）。',
+        '上涨家数/总数反映板块内部广度；下方列的是板块内相对较强的几只。',
+        '30 秒缓存，盘中自动刷新。',
+      ] },
+      { title: '四种组合', bullets: [
+        '个股强 + 板块强：共振，顺势信号可信度最高。',
+        '个股强 + 板块弱：独立强势/逆势，必须有更强的量能和逻辑，否则防补跌。',
+        '个股弱 + 板块强：拖后腿，优先换到板块内更强的标的。',
+        '个股弱 + 板块弱：回避，不做左侧猜底。',
+      ] },
+      { title: '数字怎么读', bullets: [
+        '超额 > 0 且上涨家数 > 50%：板块有风，个股也强，突破更容易延续。',
+        '超额 > 0 但上涨家数很低：只有个股独立走强，持续性要打折。',
+        '超额 < 0 且板块上涨：个股是板块里的弱票，警惕“板块涨它不涨”。',
+      ] },
+      { title: '怎么用', bullets: [
+        '和盘中提醒/多周期评分一起看：板块强 + 个股突破 + 量能确认 = 提高置信度。',
+        '个股想买但板块 RS 明显为负：先问“为什么它落后”，答不上来就不做。',
+        '板块 RS 只做背景，不单独作为买卖信号。',
+      ] },
+      { title: '注意', text: '板块均值是等权，不是行业指数；同行业成分和市值排序会随数据变化，属于盘中近似口径。' },
+    ],
+  },
+  mtf: {
+    title: '多周期一致性',
+    sub: '把 VWAP、OR、均线、板块合成一个 0–100 分，判断顺风还是逆风。',
+    sections: [
+      { title: '权重', bullets: [
+        'VWAP 上/下：20 分',
+        '开盘区间上破/下破：20 分',
+        '昨高/昨低突破：10 分',
+        '5m / 15m / 60m 均线方向：各 10 分（共 30）',
+        '日线 MA20 方向：10 分',
+        '板块相对强弱：10 分',
+      ] },
+      { title: '分数区间', bullets: [
+        '80–100：强多，多个周期同向。',
+        '60–80：偏多，顺势但并非所有周期确认。',
+        '40–60：中性/分歧，等待或降低仓位。',
+        '20–40：偏空。',
+        '0–20：强空。',
+      ] },
+      { title: '分项怎么读', bullets: [
+        '红色=该项偏多，绿色=偏空，灰色=中性/区间内。',
+        'VWAP 上/下看现价相对均价；OR 看开盘区间；昨高低看结构性突破。',
+        '5m/15m/60m/日线看收盘价相对 MA20；周期越短越敏感，越长越稳定。',
+      ] },
+      { title: '怎么用', bullets: [
+        '高分 + 同方向提醒：这是“顺风+触发”，优先级最高。',
+        '高分但提醒方向相反：先视为矛盾，等价格回到同一侧再说。',
+        '分数 40–60：不做方向性下注，等 VWAP/OR 给出方向。',
+        '分数只是背景，不是入场信号；仍需仓位/R 卡和止损。',
+      ] },
+      { title: '注意', text: '均线是滞后指标，评分是规则加权，不是预测；盘中数据窗口有限，极端行情下会快速变化。' },
+    ],
+  },
+}
+const showHelp = ref(false)
+const helpTopic = ref('')
+const helpData = computed(() => HELP_TOPICS[helpTopic.value] || null)
+function openHelp(key) {
+  helpTopic.value = key
+  showHelp.value = true
+}
 const MINK_MIN = { m1: 1, m5: 5, m15: 15, m30: 30, m60: 60 }
 
 const minkLastDay = computed(() => minkBars.value[minkBars.value.length - 1]?.datetime.slice(0, 10) || '')
@@ -3678,6 +3841,46 @@ watch(()=>props.code, v=>{
   color: var(--ink);
 }
 .side-title .nav-svg { color: var(--muted); }
+.card-help {
+  margin-left: auto; flex: none; width: 17px; height: 17px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--c-border); border-radius: 50%;
+  background: transparent; color: var(--c-text-faint);
+  font-size: 11px; font-weight: 700; line-height: 1; cursor: pointer;
+}
+.card-help:hover { color: var(--c-accent); border-color: var(--c-accent); background: var(--c-accent-weak); }
+
+/* 卡片用法教学抽屉 */
+.help-head { display: flex; align-items: flex-start; gap: 9px; }
+.help-q {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--c-accent); background: var(--c-accent-weak);
+  font-size: 14px; font-weight: 700;
+}
+.help-title { font-size: 15px; font-weight: 700; color: var(--c-text); }
+.help-sub { margin-top: 2px; font-size: var(--text-meta); color: var(--c-text-dim); line-height: 1.5; }
+.help-body { display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; }
+.help-section h5 {
+  margin: 0 0 5px; font-size: 13px; font-weight: 650; color: var(--c-text);
+}
+.help-text { margin: 0; font-size: var(--text-meta); line-height: 1.75; color: var(--c-text-dim); }
+.help-list {
+  margin: 0; padding-left: 17px;
+  font-size: var(--text-meta); line-height: 1.75; color: var(--c-text-dim);
+}
+.help-list li::marker { color: var(--c-accent); }
+.help-formula {
+  margin: 2px 0 0; padding: 8px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--c-border); background: var(--c-bg);
+  font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--c-text); white-space: pre-line;
+}
+.help-disclaimer {
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  border: 1px dashed var(--c-border); color: var(--c-text-faint);
+  font-size: var(--text-meta); line-height: 1.6;
+}
 .side-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .side-table tr { background: transparent !important; }
 .side-table td {
