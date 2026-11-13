@@ -324,6 +324,15 @@
                 </tr>
               </tbody>
             </table>
+            <div v-if="signalScore.ai_items?.length" class="ai-verify">
+              <div class="ai-verify-title">AI 观点验证 · 30m 原始收益</div>
+              <div v-for="a in signalScore.ai_items" :key="a.stance" class="ai-verify-row">
+                <span>{{ a.stance }}</span>
+                <span>{{ a.n }} 次</span>
+                <span>命中 {{ a.hit_rate == null ? '—' : (a.hit_rate * 100).toFixed(0) + '%' }}</span>
+                <b :style="{color: a.avg_raw_30m >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtScorePct(a.avg_raw_30m) }}</b>
+              </div>
+            </div>
             <div class="side-more">30m 已扣 0.2% 成本 · 悬停看 MFE/MAE</div>
           </template>
           <div v-else style="font-size:var(--text-meta);color:var(--c-text-faint);line-height:1.6">
@@ -3594,6 +3603,10 @@ watch(()=>props.code, v=>{
 }
 .score-table td:first-child { white-space: normal; padding-right: 6px; }
 .score-table tr:last-child td { border-bottom: 0; }
+.ai-verify { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--c-border-light); }
+.ai-verify-title { font-size: var(--text-meta); color: var(--c-text-faint); margin-bottom: 3px; }
+.ai-verify-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-meta); color: var(--c-text-dim); }
+.ai-verify-row b { margin-left: auto; font-variant-numeric: tabular-nums; }
 .r-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .r-grid label { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-meta); color: var(--c-text-faint); }
 .r-grid input {

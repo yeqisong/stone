@@ -84,6 +84,27 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
         """), {'d': days}).fetchall()
         def f(v):
             return round(float(v), 6) if v is not None else None
+        # 事件 AI 观点验证：把 stance 与 30m「原始方向收益」对齐
+        ai_rows = db.execute(text("""
+            SELECT stance, COUNT(*) AS n, AVG(raw_ret) AS avg_raw,
+                   AVG(CASE
+                       WHEN stance = '偏强' AND raw_ret > 0.002 THEN 1.0
+                       WHEN stance = '偏弱' AND raw_ret < -0.002 THEN 1.0
+                       WHEN stance = '震荡' AND ABS(raw_ret) <= 0.005 THEN 1.0
+                       ELSE 0.0 END) AS hit_rate
+            FROM (
+                SELECT e.result->>'stance' AS stance,
+                       CASE WHEN o.direction = 0 THEN o.ret_30m
+                            ELSE o.ret_30m * o.direction END AS raw_ret
+                FROM intraday_ai_event e
+                JOIN intraday_signal_outcome o ON o.alert_id = e.alert_id
+                WHERE e.status='done' AND o.ret_30m IS NOT NULL
+                  AND o.trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
+                  AND e.result->>'stance' IS NOT NULL
+            ) t
+            GROUP BY stance
+            ORDER BY COUNT(*) DESC
+        """), {'d': days}).fetchall()
         return {
             'days': days,
             'items': [{
@@ -93,6 +114,10 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
                 'ret_30m': f(r[5]), 'ret_60m': f(r[6]),
                 'mfe': f(r[7]), 'mae': f(r[8]), 'direction': int(r[9] or 0),
             } for r in rows],
+            'ai_items': [{
+                'stance': r[0], 'n': int(r[1] or 0),
+                'avg_raw_30m': f(r[2]), 'hit_rate': f(r[3]),
+            } for r in ai_rows],
         }
     finally:
         db.close()
