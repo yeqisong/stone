@@ -31,6 +31,7 @@ import AppIcon from './AppIcon.vue'
 import ListPagination from './ListPagination.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import { useViewport } from '../utils/viewport'
+import { rememberDetailNavList } from '../utils/detailNav'
 const { isNarrow } = useViewport()
 import { ref, reactive, h, computed, onMounted, onUnmounted } from 'vue'
 import { useNavStore } from '../stores/nav'
@@ -76,8 +77,8 @@ const ell = (txt, extra = {}) => {
 }
 
 const columns = computed(() => [
-  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){ return h('span', { style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'}, onClick:()=>emit('show-detail', r.stock_code) }, r.stock_code) } },
-  { title:'名称', key:'stock_name', width: isNarrow.value ? 90 : 150, fixed:'left', render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'var(--c-text)', cursor:'pointer', onClick:()=>emit('show-detail', r.stock_code) }) } },
+  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){ return h('span', { style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'}, onClick:()=>openDetail(r.stock_code, rows.value) }, r.stock_code) } },
+  { title:'名称', key:'stock_name', width: isNarrow.value ? 90 : 150, fixed:'left', render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'var(--c-text)', cursor:'pointer', onClick:()=>openDetail(r.stock_code, rows.value) }) } },
   { title:'交易所', key:'exchange', width:70, render(r){return exName(r.exchange)} },
   { title:'最新价', key:'price', width:105, align:'right', sorter:true, sortOrder: sortField.value==='price'?sortDir.value:false, render(r){
     const color = r.chg_pct!=null ? (r.chg_pct>=0?'var(--c-up)':'var(--c-down)') : 'var(--c-text)'
@@ -93,8 +94,12 @@ const columns = computed(() => [
   { title:'数据日期', key:'trade_date', width:105, align:'center', render(r){return r.trade_date||'-'} },
 ])
 
+function openDetail(code, list){
+  rememberDetailNavList((list || []).map(r => r.stock_code || r.code))
+  emit('show-detail', code)
+}
 function rowProps(row){
-  return { style:'cursor:pointer', onClick:()=>emit('show-detail', row.stock_code) }
+  return { style:'cursor:pointer', onClick:()=>openDetail(row.stock_code, rows.value) }
 }
 function handleSorter(sorter){
   const map = {price:'price',chg_pct:'chg_pct',pe_ttm:'pe_ttm',market_cap:'market_cap'}
@@ -161,9 +166,9 @@ function toggleRadar(){
 
 const radarColumns = computed(() => [
   { title:'代码', key:'code', width:82, fixed:'left',
-    render:r => h('span', { style:{color:'var(--c-text-dim)', cursor:'pointer'}, onClick:()=>emit('show-detail', r.code) }, r.code) },
+    render:r => h('span', { style:{color:'var(--c-text-dim)', cursor:'pointer'}, onClick:()=>openDetail(r.code, radarRows.value) }, r.code) },
   { title:'名称', key:'name', width:140, fixed:'left',
-    render:r => ell(r.name, { maxWidth:'128px', color:'var(--c-text)', cursor:'pointer', onClick:()=>emit('show-detail', r.code) }) },
+    render:r => ell(r.name, { maxWidth:'128px', color:'var(--c-text)', cursor:'pointer', onClick:()=>openDetail(r.code, radarRows.value) }) },
   { title:'行业', key:'industry', width:120, render:r => ell(r.industry, { maxWidth:'110px' }) },
   { title:'最新价', key:'price', width:95, align:'right',
     render:r => h('span',{style:{fontWeight:600,fontVariantNumeric:'tabular-nums'}}, r.price != null ? '¥'+Number(r.price).toFixed(2) : '—') },

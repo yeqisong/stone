@@ -18,6 +18,7 @@ const { isNarrow } = useViewport()
 import { ref, h, computed, watch } from 'vue'
 import { NDataTable, NButton, NSpace, useMessage } from 'naive-ui'
 import axios from 'axios'
+import { rememberDetailNavList } from '../utils/detailNav'
 
 const props = defineProps({ groupId: { type: Number, required: true } })
 const emit = defineEmits(['show-detail'])
@@ -37,8 +38,8 @@ const ell = (txt, extra = {}) => {
 
 // 列定义与个股列表页（StocksView）一致：代码/名称/交易所/最新价/涨跌幅/PE/行业/数据日期
 const columns = computed(() => [
-  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){ return h('span', { style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'}, onClick:()=>emit('show-detail', r.stock_code) }, r.stock_code) } },
-  { title:'名称', key:'stock_name', width: isNarrow.value ? 90 : 150, fixed:'left', render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'var(--c-text)', cursor:'pointer', onClick:()=>emit('show-detail', r.stock_code) }) } },
+  { title:'代码', key:'stock_code', width:82, fixed:'left', render(r){ return h('span', { style:{color:'var(--c-text-dim)',cursor:'pointer',textDecoration:'underline',textDecorationColor:'var(--c-border)',textUnderlineOffset:'2px'}, onClick:()=>openDetail(r.stock_code) }, r.stock_code) } },
+  { title:'名称', key:'stock_name', width: isNarrow.value ? 90 : 150, fixed:'left', render(r){ return ell(r.stock_name, { maxWidth:'138px', color:'var(--c-text)', cursor:'pointer', onClick:()=>openDetail(r.stock_code) }) } },
   { title:'交易所', key:'exchange', width:70, render(r){return exName(r.exchange)} },
   { title:'最新价', key:'price', width:105, align:'right', sorter:true, sortOrder: sortField.value==='price'?sortDir.value:false, render(r){
     const color = r.chg_pct!=null ? (r.chg_pct>=0?'var(--c-up)':'var(--c-down)') : 'var(--c-text)'
@@ -61,7 +62,11 @@ const columns = computed(() => [
   }},
 ])
 
-function rowProps(row){ return { style:'cursor:pointer', onClick:()=>emit('show-detail', row.stock_code) } }
+function openDetail(code){
+  rememberDetailNavList(rows.value.map(r => r.stock_code))
+  emit('show-detail', code)
+}
+function rowProps(row){ return { style:'cursor:pointer', onClick:()=>openDetail(row.stock_code) } }
 function handleSorter(sorter){
   const map = {price:'price',chg_pct:'chg_pct',pe_ttm:'pe_ttm'}
   sortField.value = map[sorter?.columnKey] || 'trade_date'

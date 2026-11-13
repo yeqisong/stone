@@ -169,6 +169,7 @@ import { ref, reactive, h, computed, onMounted, onUnmounted } from 'vue'
 import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag, NButtonGroup } from 'naive-ui'
 import axios from 'axios'
 import { openFloatingWatch, canFloatWatch } from '../utils/floatingWatch'
+import { rememberDetailNavList } from '../utils/detailNav'
 import { useAuthStore } from '../stores/auth'
 import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
@@ -319,7 +320,11 @@ const columns = [
     h(NButton,{size:'tiny',type:'error',quaternary:true,style:{marginLeft:'4px'},onClick:()=>askDelete(row.stock_code)},{default:()=>'删除'})
   ])}}
 ]
-function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{if(!e.target.closest('button'))emit('show-detail',row.stock_code)}}}
+function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{
+  if(e.target.closest('button')) return
+  rememberDetailNavList((data.positions||[]).map(p=>p.stock_code))
+  emit('show-detail',row.stock_code)
+}}}
 async function load(){loading.value=true;try{const r=await axios.get(API+'/api/portfolio');Object.assign(data,r.data)}catch(e){message.error('持仓加载失败，请刷新重试')}finally{loading.value=false}}
 async function loadRiskHeat(){
   try{ const r=await axios.get(API+'/api/portfolio/risk-heat'); riskHeat.value=r.data?.ok ? r.data : null }

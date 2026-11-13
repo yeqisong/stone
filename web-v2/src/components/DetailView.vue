@@ -198,7 +198,12 @@
               </div>
             </template>
           </div>
-          <div :id="'c0'" style="width:100%;height:260px"></div>
+          <div class="mink-chart-wrap">
+            <div :id="'c0'" style="width:100%;height:260px"></div>
+            <label class="mink-grid-toggle" title="显示/隐藏分时图网格线">
+              <input type="checkbox" v-model="showMinkGrid"> 网格
+            </label>
+          </div>
           <div v-if="minkLevelChips.length" class="mink-levels">
             <span v-for="l in minkLevelChips" :key="l.name + l.value">
               <i :style="{background:l.color}"></i>{{ l.name }} <b>{{ l.value.toFixed(2) }}</b>
@@ -309,7 +314,7 @@
         <!-- 信号记分卡：提醒 → 5/15/30/60m 结果，方向调整后统计 -->
         <div class="side-panel">
           <h4 class="side-title"><AppIcon name="target" :size="13" />  信号记分卡
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 30 日 · 全池</span>
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 30 日 · 全池汇总（非单股）</span>
             <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('score')">?</button></h4>
           <template v-if="signalScoreItems.length">
             <table class="score-table">
@@ -337,7 +342,7 @@
                 <b :style="{color: a.avg_raw_30m >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtScorePct(a.avg_raw_30m) }}</b>
               </div>
             </div>
-            <div class="side-more">30m 已扣 0.2% 成本 · 悬停看 MFE/MAE</div>
+            <div class="side-more">30m 已扣 0.2% 成本 · 悬停看 MFE/MAE · 统计全池，不是单股</div>
           </template>
           <div v-else style="font-size:var(--text-meta);color:var(--c-text-faint);line-height:1.6">
             样本积累中：每条盘中提醒会自动记录 5/15/30/60 分钟结果。
@@ -725,7 +730,8 @@
 
   <!-- 本地价格提醒：上破/下破 -->
   <n-modal v-model:show="showAlarm" preset="card"
-    :title="'价格提醒 · ' + (detail?.stock_name || code)">
+    :title="'价格提醒 · ' + (detail?.stock_name || code)"
+    style="width:420px;max-width:94vw">
     <div class="alarm-form">
       <label>上破价
         <n-input-number v-model:value="alarmUpper" size="small" :min="0" :step="0.01" placeholder="高于现价" clearable />
@@ -1007,6 +1013,20 @@ function updateNav() {
   if (i >= 0 && i < navList.length - 1) nextCode.value = navList[i + 1]
 }
 function jump(c) { if (c) { _nav.dcode = c; _nav.syncHash(); code.value = c; inputCode.value = c; load() } }
+let navFallbackCode = ''
+async function ensureNavList(){
+  if (navList.includes(code.value) || navFallbackCode === code.value) return
+  navFallbackCode = code.value
+  try{
+    const r = await axios.get(API + '/api/portfolio')
+    const codes = (r.data?.positions || []).map(p => p.stock_code).filter(Boolean)
+    if (codes.length){
+      navList = codes
+      localStorage.setItem('detail_nav_list', JSON.stringify(codes))
+      updateNav()
+    }
+  }catch(e){ /* 直接打开详情页时持仓接口失败：保持按钮置灰 */ }
+}
 // 供列表页调用：记录当前列表代码序列
 window.__setDetailNavList = (codes) => { localStorage.setItem('detail_nav_list', JSON.stringify(codes || [])) }
 
@@ -1275,6 +1295,7 @@ async function load(){
   sigStats.value = null
   peData.value = []   // 同上：新票 PE 拉空/失败时旧票 PE 图会残留（c5 图层不随 v-if 消失）
   updateNav()
+  ensureNavList()
   loadLatestAiEvent(c, seq)   // 通知进入/换页时补展示最近一次事件解读（与主数据并行）
 
   // detail 与 kline 分开等：K线失败不应把整个详情页打成空白
@@ -2369,6 +2390,7 @@ const showLevels = ref(true)
 const showBands = ref(true)
 const showOr = ref(true)
 const showEvents = ref(true)
+const showMinkGrid = ref(false)   // 分时图网格线：默认隐藏
 const minkType = ref('candle')  // candle | line
 const minkMaMode = ref('ma')    // ma | ema
 const benchMink = ref([])       // 沪深300 同周期分钟线（盘中相对强弱）
@@ -2397,7 +2419,7 @@ const HELP_TOPICS = {
       { title: '字段怎么填', bullets: [
         '入场：计划成交价，默认取当前价；不要在追高后还用旧价。',
         '止损：优先用结构位（OR低、昨低、VWAP下方），不是成本价；必须低于入场价。',
-        '权益：账户总资金，用于计算风险预算，不是这只票的市值。',
+        '权益：账户总资金，用于计算风险预算，不是这只票的市值；当前只能手填（保存在本机），系统只同步持仓，不同步券商现金/总资产。',
         '风险%：单笔最多亏权益的百分比；专业交易通常 0.5%–1%，不建议超过 2%。',
       ] },
       { title: '计算口径', formula: '可买股数 = floor(权益 × 风险% ÷ (入场 - 止损) ÷ 100) × 100\n1R = 可买股数 × (入场 - 止损)' },
@@ -2445,7 +2467,7 @@ const HELP_TOPICS = {
         '胜率低或 30m 持续为负：降低对它的信任，甚至关闭该规则。',
         'MFE/MAE 用来校准止损和目标：MAE 很大说明止损太近，MFE 很大说明目标可能太保守。',
       ] },
-      { title: '注意', text: '记分卡是历史统计，不是预测；不同市场 regime 下同一规则表现会变。样本小的时候不要下重结论。' },
+      { title: '注意', text: '这张卡是“全池所有股票”的规则汇总，不是当前个股的单独统计，所以每只股票页面看到的是同一组数字；单股样本通常太少，不适合据此下结论。记分卡是历史统计，不是预测，不同市场 regime 下同一规则表现会变。' },
     ],
   },
   sector: {
@@ -3500,7 +3522,7 @@ function redrawFs(){
 watch(minkPeriod, () => {
   if (showFs.value) fsPanels.value.forEach(p => loadFsPanel(p, false))
 })
-watch([showLevels, showBands, showOr, showEvents], () => {
+watch([showLevels, showBands, showOr, showEvents, showMinkGrid], () => {
   if (minkBars.value.length) drawMink()
   redrawFs()
 })
@@ -3567,7 +3589,7 @@ function drawMink(){
       return +prev.toFixed(2)
     })
   }
-  const gl = {lineStyle:{color:T.line}}
+  const gl = showMinkGrid.value ? {lineStyle:{color:T.line}} : {show:false}
 
   // 昨收/均价/现价线只画最近一个交易日：m5/m60 覆盖多日，整段横线会误导
   const q = quote.value
@@ -4059,6 +4081,16 @@ watch(()=>props.code, v=>{
 .quote-depth-stat .qd-muted { color: var(--c-text-faint); margin-left: 3px; }
 
 /* 分时图下方的价位条：图上只画线，名称/数值在这里统一列 */
+.mink-chart-wrap { position: relative; }
+.mink-grid-toggle {
+  position: absolute; right: 14px; bottom: 22px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 4px; border-radius: 3px;
+  background: var(--c-card-bg); color: var(--c-text-faint);
+  font-size: 10px; cursor: pointer; opacity: .62; user-select: none;
+}
+.mink-grid-toggle:hover { opacity: 1; color: var(--c-text-dim); }
+.mink-grid-toggle input { width: 10px; height: 10px; margin: 0; accent-color: var(--c-accent); }
 .mink-levels {
   display: flex; flex-wrap: wrap; gap: 2px 12px;
   margin: -2px 0 2px; font-size: var(--text-meta); color: var(--c-text-dim);
