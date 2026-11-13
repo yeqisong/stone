@@ -260,6 +260,7 @@ def get_stock_kline(
                 "SELECT stock_type FROM stock_master WHERE stock_code=:c ORDER BY CASE stock_type WHEN 'stock' THEN 1 WHEN 'etf' THEN 2 WHEN 'index' THEN 3 END LIMIT 1"
             ), {"c": code}).scalar()
 
+        stock_name = ''
         if stype == 'index':
             # 指数：从 index_daily_quote 获取（无复权概念），days 限制最近 N 个交易日。
             # 表里没有 turnover 列（查询它曾整接口 500，详情页沪深300 基准被 allSettled
@@ -280,11 +281,12 @@ def get_stock_kline(
             adj_param = f"COALESCE(NULLIF({col}, 0), close)"  # col 仅来自白名单 dict，安全
             result = db.execute(text(f"""
                 SELECT trade_date, open, high, low, close,
-                       {adj_param} as adj_close, volume, amount, turnover
+                       {adj_param} as adj_close, volume, amount, turnover, stock_name
                 FROM daily_quote WHERE stock_code=:c AND close > 0
                 ORDER BY trade_date DESC LIMIT :days
             """), {"c": code, "days": days})
             rows = list(reversed(result.fetchall()))
+            stock_name = (getattr(rows[0], 'stock_name', '') if rows else '') or ''
             if adjust in ('qfq', 'hfq'):
                 fixed = []
                 for r in rows:
@@ -355,7 +357,7 @@ def get_stock_kline(
                 "dea": round(float(dea.iloc[i]), 3) if not pd.isna(dea.iloc[i]) else None,
                 "macd_bar": round(float(macd_bar.iloc[i]), 3) if not pd.isna(macd_bar.iloc[i]) else None,
             })
-        return {"stock_code": code, "stock_name": rows[0].stock_name if hasattr(rows[0], 'stock_name') else code, "kline": kline}
+        return {"stock_code": code, "stock_name": stock_name or code, "kline": kline}
     finally:
         db.close()
 
@@ -558,14 +560,15 @@ def get_stock_pe_history(code: str):
             report_date = str(r[0])[:10]  # 完整日期：日度行显示交易日，季度行显示报告期
             all_data.append({"date": report_date, "pe_ttm": pe, "pb_mrq": pb, "roe": roe})
 
-        # 计算分位数
+        # 计算分位数：先排序再 searchsorted，避免历史长序列的 O(n²)
         import numpy as np
         if pe_vals:
-            arr = np.array(pe_vals)
+            arr = np.sort(np.asarray(pe_vals, dtype=float))
+            n = len(arr)
             for d in all_data:
                 if d["pe_ttm"]:
-                    pct = np.sum(arr <= d["pe_ttm"]) / len(arr) * 100
-                    d["pe_percentile"] = round(pct, 1)
+                    pct = np.searchsorted(arr, d["pe_ttm"], side='right') / n * 100
+                    d["pe_percentile"] = round(float(pct), 1)
 
         return {"stock_code": code, "data": all_data}
     finally:

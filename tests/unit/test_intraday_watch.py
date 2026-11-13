@@ -315,6 +315,15 @@ class TestPrevLevelBreak:
         assert out == []
         assert state['600519']['prev_side'] == 1
 
+    def test_ex_rights_scales_prev_levels(self):
+        adj = iw._adjust_prev_levels(
+            {'high': 200.0, 'low': 180.0, 'close': 190.0, 'date': '2026-11-11'},
+            95.0)   # 2:1 除权
+        assert adj['high'] == 100.0
+        assert adj['low'] == 90.0
+        assert adj['high_raw'] == 200.0
+        assert round(adj['adjust_ratio'], 4) == 0.5
+
 
 class _Result:
     def __init__(self, rows=None, scalar_val=None):
@@ -385,16 +394,17 @@ class _PrevDB:
 class TestPrevLevelsLoad:
     def test_load_and_cache_same_day(self):
         iw._prev_cache.update(day=None, key=None, levels={})
-        db = _PrevDB([('600519', 101.0, 99.0, date(2026, 11, 11))])
+        db = _PrevDB([('600519', 101.0, 99.0, 100.0, date(2026, 11, 11))])
         out = iw._load_prev_levels(db, ['600519'], date(2026, 11, 12))
-        assert out['600519'] == {'high': 101.0, 'low': 99.0, 'date': '2026-11-11'}
+        assert out['600519'] == {'high': 101.0, 'low': 99.0, 'close': 100.0,
+                                 'date': '2026-11-11'}
         out2 = iw._load_prev_levels(db, ['600519'], date(2026, 11, 12))
         assert out2 == out
         assert db.calls == 1
 
     def test_code_pool_change_refreshes(self):
         iw._prev_cache.update(day=None, key=None, levels={})
-        db = _PrevDB([('600519', 101.0, 99.0, date(2026, 11, 11))])
+        db = _PrevDB([('600519', 101.0, 99.0, 100.0, date(2026, 11, 11))])
         iw._load_prev_levels(db, ['600519'], date(2026, 11, 12))
         iw._load_prev_levels(db, ['600519', '000001'], date(2026, 11, 12))
         assert db.calls == 2

@@ -280,8 +280,8 @@
             </span>
           </h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
-          <div v-if="chipData.profit_ratio!=null" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:2px">
-            现价 ¥{{chipData.current}} / 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'var(--c-up)':'var(--c-down)',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
+          <div v-if="chipProfit!=null" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:2px">
+            现价 ¥{{chipCurrent!=null?Number(chipCurrent).toFixed(2):'—'}} / 获利盘 <span :style="{color:chipProfit>=0.5?'var(--c-up)':'var(--c-down)',fontWeight:600}">{{(chipProfit*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
           </div>
         </div>
 
@@ -1465,7 +1465,8 @@ function drawChip(){
   if(!c){ c = echarts.init(el); el._echart = c }
   const prices = d.buckets.map(b=>b.price)
   const vols = d.buckets.map(b=>b.vol/1e8)   // 亿股
-  const nearest = prices.reduce((best,p,i)=>Math.abs(p-d.current)<Math.abs(prices[best]-d.current)?i:best,0)
+  const cur = chipCurrent.value ?? d.current
+  const nearest = prices.reduce((best,p,i)=>Math.abs(p-cur)<Math.abs(prices[best]-cur)?i:best,0)
   c.setOption({
     tooltip:{trigger:'axis',axisPointer:{type:'shadow'},textStyle:{fontSize: 11},
       formatter: ps=>{ const p=ps[0]; return `¥${p.name}<br/>成交 ${p.value} 亿股` }},
@@ -1474,7 +1475,7 @@ function drawChip(){
     yAxis:{type:'category',data:prices.map(p=>p.toFixed(2)),axisLabel:{fontSize: 11}},
     series:[{type:'bar',barWidth:'72%',
       // A 股约定红盈绿亏：现价下方=获利盘(红)，上方=套牢盘(绿)
-      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=d.current?T.up:T.down}})),
+      data:vols.map((v,i)=>({value:v,itemStyle:{color: prices[i]<=cur?T.up:T.down}})),
       markLine:{silent:true,symbol:'none',
         data:[{yAxis:nearest,label:{formatter:'现价',fontSize: 11,color:T.series[3]},lineStyle:{color:T.series[3],type:'dashed',width:1}}]}}
     ]
@@ -1592,6 +1593,19 @@ const quotePrice = computed(() => {
   const p = quote.value?.price
   return (p != null && p > 0) ? p : (detail.value?.close ?? null)
 })
+// 筹码分布现价/获利盘跟随 5s 快照；无快照时退回接口给的最近收盘
+const chipCurrent = computed(() => {
+  const p = quotePrice.value
+  return (p != null && p > 0) ? p : (chipData.value?.current ?? null)
+})
+const chipProfit = computed(() => {
+  const d = chipData.value
+  if(!d?.buckets?.length || chipCurrent.value == null) return d?.profit_ratio ?? null
+  const total = d.buckets.reduce((s, b) => s + (b.vol || 0), 0)
+  if(!total) return d.profit_ratio ?? null
+  const below = d.buckets.reduce((s, b) => s + (b.price <= chipCurrent.value ? (b.vol || 0) : 0), 0)
+  return below / total
+})
 const quoteChgPct = computed(() => quote.value?.change_pct ?? priceChg.value)
 const quoteColor = computed(() => quoteChgPct.value == null ? 'var(--c-text)'
   : (quoteChgPct.value >= 0 ? UP_COLOR : DOWN_COLOR))
@@ -1629,6 +1643,7 @@ async function loadQuote(c = code.value){
       last.low = Math.min(last.low, r.data.price)
     }
     if (minkBars.value.length && !minkPaused.value) drawMink()
+    if (chipData.value) drawChip()
   }catch(e){
     if (c !== code.value) return          // 失败保留旧快照，下轮重试
     quoteError.value = true
@@ -2201,6 +2216,7 @@ const compareLoading = ref(false)
 const compareEl = ref(null)
 const compareLines = ref([])
 let compareChart = null
+let compareSeq = 0
 
 function openCompare(){
   if (!minkDayBars.value.length) return
@@ -2211,31 +2227,34 @@ function openCompare(){
 
 async function loadCompare(){
   if (!minkDayBars.value.length) return
+  const c = code.value, period = minkPeriod.value
+  const req = ++compareSeq
   const current = {
-    code: code.value,
-    name: detail.value?.stock_name || code.value,
+    code: c,
+    name: detail.value?.stock_name || c,
     bars: minkBars.value,
   }
   const codes = String(compareInput.value || '')
     .split(/[\s,，]+/).map(s => s.trim())
-    .filter(c => /^\d{6}$/.test(c) && c !== code.value)
-    .filter((c, i, arr) => arr.indexOf(c) === i)
+    .filter(x => /^\d{6}$/.test(x) && x !== c)
+    .filter((x, i, arr) => arr.indexOf(x) === i)
     .slice(0, 2)
   compareLoading.value = true
   try{
-    const fetched = await Promise.all(codes.map(async c => {
+    const fetched = await Promise.all(codes.map(async x => {
       try{
-        const r = await axios.get(API+'/api/stock/'+c+'/minkline?period='+minkPeriod.value+'&count=320')
-        return {code:c, name:c, bars:r.data.bars || []}
-      }catch(e){ return {code:c, name:c, bars:[]} }
+        const r = await axios.get(API+'/api/stock/'+x+'/minkline?period='+period+'&count=320')
+        return {code:x, name:x, bars:r.data.bars || []}
+      }catch(e){ return {code:x, name:x, bars:[]} }
     }))
+    if(req !== compareSeq || c !== code.value || period !== minkPeriod.value) return
     compareLines.value = [current, ...fetched.filter(x => x.bars.length)]
     const missing = fetched.filter(x => !x.bars.length).map(x => x.code)
     if (missing.length) message.warning(`无分钟数据：${missing.join(' / ')}`)
     await nextTick()
-    drawCompare()
+    if(req === compareSeq) drawCompare()
   } finally {
-    compareLoading.value = false
+    if(req === compareSeq) compareLoading.value = false
   }
 }
 
@@ -2283,7 +2302,10 @@ function drawCompare(){
 
 watch(showCompare, async v => {
   if (v) { await nextTick(); drawCompare() }
-  else if (compareChart) { compareChart.dispose(); compareChart = null }
+  else {
+    compareSeq++   // 关闭/切股时作废在途请求
+    if (compareChart) { compareChart.dispose(); compareChart = null }
+  }
 })
 
 // ── 多栏分时全屏对比（1–3 栏；每栏完整分时功能）──
@@ -2301,7 +2323,7 @@ let fsTimer = null
 function newFsPanel(code, name, bars = [], quote = null){
   return {
     code, name, bars, quote, loading: false,
-    alerts: [], news: [], alertsOpen: false,
+    alerts: [], news: [], alertsOpen: false, alertsAt: 0, newsAt: 0,
     aiOpen: false, aiLoading: false, aiInsight: null, aiError: '',
   }
 }
@@ -2500,13 +2522,16 @@ async function loadFsPanel(p, withQuote = true){
   const bp = axios.get(API + '/api/stock/' + panel.code + '/minkline?period=' + period + '&count=320')
     .then(r => { if (alive() && period === minkPeriod.value) panel.bars = r.data.bars || [] })
     .catch(() => {})
-  const ap = withQuote
+  // 提醒 60s、资讯 5min 足够；30s 轮询只刷报价/分钟线，别让 3 栏反复拉资讯
+  const needAlerts = withQuote && (!panel.alertsAt || Date.now() - panel.alertsAt >= 60000)
+  const needNews = withQuote && (!panel.newsAt || Date.now() - panel.newsAt >= 300000)
+  const ap = needAlerts
     ? axios.get(API + '/api/risk/alerts?code=' + panel.code + '&intraday=true&limit=8')
-        .then(r => { if (alive()) panel.alerts = r.data || [] }).catch(() => {})
+        .then(r => { if (alive()) { panel.alerts = r.data || []; panel.alertsAt = Date.now() } }).catch(() => {})
     : Promise.resolve()
-  const np = withQuote
+  const np = needNews
     ? axios.get(API + '/api/stock/' + panel.code + '/news?days=1&limit=10')
-        .then(r => { if (alive()) panel.news = r.data?.data || [] }).catch(() => {})
+        .then(r => { if (alive()) { panel.news = r.data?.data || []; panel.newsAt = Date.now() } }).catch(() => {})
     : Promise.resolve()
   await Promise.allSettled([qp, bp, ap, np, rsp])
   if (!alive() || period !== minkPeriod.value) return

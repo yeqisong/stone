@@ -234,7 +234,7 @@ def _load_prev_levels(db, codes: list, day) -> dict:
     if codes:
         try:
             rows = db.execute(text("""
-                SELECT DISTINCT ON (stock_code) stock_code, high, low, trade_date
+                SELECT DISTINCT ON (stock_code) stock_code, high, low, close, trade_date
                 FROM daily_quote
                 WHERE stock_code = ANY(CAST(:codes AS varchar[]))
                   AND trade_date < :d
@@ -242,7 +242,8 @@ def _load_prev_levels(db, codes: list, day) -> dict:
                 ORDER BY stock_code, trade_date DESC
             """), {'codes': list(codes), 'd': day}).fetchall()
             levels = {
-                r[0]: {'high': float(r[1]), 'low': float(r[2]), 'date': str(r[3])[:10]}
+                r[0]: {'high': float(r[1]), 'low': float(r[2]),
+                       'close': float(r[3]), 'date': str(r[4])[:10]}
                 for r in rows
             }
         except Exception as e:
@@ -320,6 +321,30 @@ def _break_side(price: float, level: float, min_pct: float):
     if price <= level - buf:
         return -1
     return 0
+
+
+def _adjust_prev_levels(prev: dict | None, prev_close):
+    """按腾讯快照的「昨收」把昨日高低换算到今日价格口径。
+
+    除权除息日：昨收已是除权后价格，而 daily_quote 的昨高/昨低是除权前原值，
+    直接比较会把除权缺口误判为「跌破昨低」。ratio=今日昨收/昨日原始收盘。
+    """
+    if not prev:
+        return None
+    raw_close = prev.get('close')
+    try:
+        ratio = float(prev_close) / float(raw_close)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return prev
+    if not prev_close or not raw_close or ratio <= 0 or abs(ratio - 1) < 0.0005:
+        return prev
+    out = dict(prev)
+    out['high_raw'] = prev.get('high')
+    out['low_raw'] = prev.get('low')
+    out['high'] = float(prev['high']) * ratio
+    out['low'] = float(prev['low']) * ratio
+    out['adjust_ratio'] = ratio
+    return out
 
 
 def _prev_side(price: float, prev: dict | None, min_pct: float):
@@ -423,7 +448,7 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
 
         # 开盘区间必须在任何 continue 之前累计（否则前 15 分钟会被止损/急涨规则跳过）
         _update_or_state(st, q, price, rules, now)
-        prev = prev_levels.get(code)
+        prev = _adjust_prev_levels(prev_levels.get(code), q.get('prev_close'))
         if first:
             # 首轮只建基线，不报穿越（避免启动瞬间把「当前就在价位上方」当突破）
             st['vwap_side'] = _break_side(price, q.get('avg_price'), vwap_pct)
