@@ -1,7 +1,7 @@
 """FastAPI 应用入口。"""
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -27,7 +27,7 @@ from app.api.dag_types import router as dag_types_router
 from app.api.lineage import router as lineage_router
 from app.api.dag_flows import router as dag_flows_router
 from app.feishu.webhook import router as feishu_router
-from app.auth.auth import verify_password, create_token
+from app.auth.auth import verify_password, create_token, get_current_user
 
 
 @asynccontextmanager
@@ -173,9 +173,9 @@ app.include_router(watch_router, prefix="/api")
 app.include_router(agent_router)  # /api/agent 已含前缀
 app.include_router(treemap_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
-app.include_router(stock_router, prefix="/api")
+app.include_router(stock_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(status_router, prefix="/api")
-app.include_router(risk_router, prefix="/api")
+app.include_router(risk_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(stocks_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(models_router, prefix="/api")

@@ -5,8 +5,11 @@ from httpx import ASGITransport, AsyncClient
 import pytest_asyncio
 
 from app.main import app
+from app.auth.auth import create_token
 from app.db.connection import SyncSessionLocal
 from app.db.schema import init_db
+
+AUTH = {"Authorization": f"Bearer {create_token('test')}"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -58,8 +61,20 @@ async def test_buy_signals_empty(client):
 
 @pytest.mark.asyncio
 async def test_stock_not_found(client):
-    response = await client.get("/api/stock/999999/detail")
+    response = await client.get("/api/stock/999999/detail", headers=AUTH)
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stock_requires_auth(client):
+    response = await client.get("/api/stock/600519/detail")
+    assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_risk_requires_auth(client):
+    response = await client.get("/api/risk/alerts")
+    assert response.status_code in (401, 403)
 
 
 @pytest.mark.asyncio
