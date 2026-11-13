@@ -73,6 +73,21 @@ async def test_watch_window_with_auth(client):
 
 
 @pytest.mark.asyncio
+async def test_risk_heat_requires_auth(client):
+    response = await client.get("/api/portfolio/risk-heat")
+    assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_risk_heat_with_auth(client):
+    response = await client.get("/api/portfolio/risk-heat", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body.get("ok") is True
+    assert "score" in body
+
+
+@pytest.mark.asyncio
 async def test_stock_not_found(client):
     response = await client.get("/api/stock/999999/detail", headers=AUTH)
     assert response.status_code == 404

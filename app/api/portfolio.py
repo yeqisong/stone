@@ -27,6 +27,8 @@ class UpdatePosition(BaseModel):
 
 _watch_cache = {'ts': 0.0, 'payload': None}
 _WATCH_TTL_S = 5
+_risk_heat_cache = {'ts': 0.0, 'payload': None}
+_RISK_HEAT_TTL_S = 5
 
 
 @router.get("/portfolio/watch-window")
@@ -94,6 +96,120 @@ def get_watch_window(user: str = Depends(get_current_user)):
         'items': items,
     }
     _watch_cache.update(ts=now, payload=payload)
+    return payload
+
+
+@router.get("/portfolio/risk-heat")
+def get_portfolio_risk_heat(user: str = Depends(get_current_user)):
+    """组合风险热度：单票/行业集中度、浮盈、今日盘中 critical 提醒。"""
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+    now = _time.time()
+    if _risk_heat_cache['payload'] and now - _risk_heat_cache['ts'] < _RISK_HEAT_TTL_S:
+        return _risk_heat_cache['payload']
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT p.stock_code, p.stock_name, p.quantity, p.cost_price, sm.industry_l1
+            FROM portfolio p
+            LEFT JOIN LATERAL (
+                SELECT industry_l1 FROM stock_master
+                WHERE stock_code=p.stock_code AND stock_type='stock' LIMIT 1
+            ) sm ON true
+            WHERE p.is_active=true AND p.quantity > 0
+            ORDER BY p.stock_code
+        """)).fetchall()
+        codes = [r[0] for r in rows]
+        fallback = {}
+        if codes:
+            for r in db.execute(text("""
+                SELECT DISTINCT ON (stock_code) stock_code, close
+                FROM daily_quote
+                WHERE stock_code = ANY(CAST(:codes AS varchar[])) AND close > 0
+                ORDER BY stock_code, trade_date DESC
+            """), {'codes': codes}).fetchall():
+                fallback[r[0]] = float(r[1])
+        alert_row = db.execute(text("""
+            SELECT COUNT(*), COUNT(*) FILTER (WHERE level='critical')
+            FROM risk_alerts
+            WHERE trade_date=CURRENT_DATE AND stock_code = ANY(CAST(:codes AS varchar[]))
+              AND kind LIKE 'it%'
+        """), {'codes': codes or ['']}).fetchone() if codes else (0, 0)
+        from app.risk import get_risk_rules
+        rules = get_risk_rules(db)
+        industry_cap = float(rules.get('industry_cap_pct') or 0.45)
+    finally:
+        db.close()
+    if not codes:
+        payload = {'ok': True, 'positions': 0, 'asof': None}
+        _risk_heat_cache.update(ts=now, payload=payload)
+        return payload
+
+    qmap = {}
+    try:
+        from crawler.adapters.tencent_adapter import realtime_quotes
+        raw = realtime_quotes(codes, 'stock')
+        qmap = {q.get('code'): q for q in raw.values() if q.get('code')}
+    except Exception:
+        pass
+    positions = []
+    for r in rows:
+        code, name, qty, cost, industry = r[0], r[1], r[2], float(r[3] or 0), r[4] or '未分类'
+        q = qmap.get(code) or {}
+        price = q.get('price') or fallback.get(code) or cost
+        mv = price * qty
+        positions.append({'code': code, 'name': name, 'industry': industry,
+                          'quantity': qty, 'price': price, 'market_value': mv})
+    total_mv = sum(p['market_value'] for p in positions) or 1.0
+    total_cost = sum(float(r[3] or 0) * r[2] for r in rows)
+    pnl = total_mv - total_cost
+    pnl_pct = pnl / total_cost if total_cost else None
+    for p in positions:
+        p['weight'] = p['market_value'] / total_mv
+    top = sorted(positions, key=lambda p: -p['weight'])[0]
+    by_ind = {}
+    for p in positions:
+        by_ind[p['industry']] = by_ind.get(p['industry'], 0.0) + p['market_value']
+    top_ind, top_ind_mv = max(by_ind.items(), key=lambda kv: kv[1]) if by_ind else ('未分类', 0.0)
+    top_ind_w = top_ind_mv / total_mv
+    critical = int((alert_row or (0, 0))[1] or 0)
+    total_alerts = int((alert_row or (0, 0))[0] or 0)
+
+    flags = []
+    if top['weight'] > 0.20:
+        flags.append(f"单票集中：{top['name']} {top['weight']*100:.0f}%")
+    if top_ind_w > industry_cap:
+        flags.append(f"行业集中：{top_ind} {top_ind_w*100:.0f}%（上限 {industry_cap*100:.0f}%）")
+    if critical:
+        flags.append(f"今日 critical 提醒 {critical} 条")
+    if pnl_pct is not None and pnl_pct < -0.10:
+        flags.append(f"组合浮亏 {pnl_pct*100:.1f}%")
+
+    score = 0.0
+    score += min(30, max(0, (top['weight'] - 0.20) * 100))
+    score += min(30, max(0, (top_ind_w - industry_cap) * 100))
+    if pnl_pct is not None and pnl_pct < 0:
+        score += min(25, abs(pnl_pct) * 50)
+    score += min(15, critical * 5)
+    score = round(min(100, score), 1)
+    label = '高' if score >= 70 else ('中' if score >= 40 else '低')
+    payload = {
+        'ok': True, 'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
+        'positions': len(positions), 'total_market_value': round(total_mv, 2),
+        'total_cost': round(total_cost, 2), 'pnl': round(pnl, 2),
+        'pnl_pct': round(pnl_pct, 6) if pnl_pct is not None else None,
+        'top_position': {'code': top['code'], 'name': top['name'],
+                         'weight': round(top['weight'], 4)},
+        'top_industry': {'name': top_ind, 'weight': round(top_ind_w, 4)},
+        'industry_cap_pct': industry_cap,
+        'alerts_today': total_alerts, 'critical_today': critical,
+        'flags': flags, 'score': score, 'label': label,
+        'top_positions': [{'code': p['code'], 'name': p['name'],
+                           'weight': round(p['weight'], 4),
+                           'market_value': round(p['market_value'], 2)}
+                          for p in sorted(positions, key=lambda p: -p['weight'])[:5]],
+    }
+    _risk_heat_cache.update(ts=now, payload=payload)
     return payload
 
 

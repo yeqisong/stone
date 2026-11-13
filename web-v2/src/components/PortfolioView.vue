@@ -20,6 +20,24 @@
   <!-- 持仓 tab：统计区 + 持仓表（统计区仅持仓 tab 显示） -->
   <template v-if="activeTab==='pos'">
     <StatStrip v-if="data.count" :items="statItems" />
+    <div v-if="riskHeat?.positions" class="risk-heat"
+      :class="riskHeat.label === '高' ? 'rh-high' : riskHeat.label === '中' ? 'rh-mid' : 'rh-low'">
+      <div class="rh-head">
+        <b>组合风险 {{ riskHeat.score }}</b>
+        <span class="rh-label">{{ riskHeat.label }}</span>
+        <span class="rh-asof">{{ riskHeat.asof }} · 30s 刷新</span>
+      </div>
+      <div class="rh-metrics">
+        <span>最大单票 <b>{{ riskHeat.top_position.name }} {{ (riskHeat.top_position.weight*100).toFixed(0) }}%</b></span>
+        <span>最大行业 <b>{{ riskHeat.top_industry.name }} {{ (riskHeat.top_industry.weight*100).toFixed(0) }}%</b></span>
+        <span>浮盈 <b :style="{color: riskHeat.pnl >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ riskHeat.pnl >= 0 ? '+' : '' }}{{ fmt(riskHeat.pnl) }} / {{ riskHeat.pnl_pct != null ? (riskHeat.pnl_pct*100).toFixed(1)+'%' : '—' }}</b></span>
+        <span>今日提醒 <b>{{ riskHeat.alerts_today }}</b><template v-if="riskHeat.critical_today">（critical {{ riskHeat.critical_today }}）</template></span>
+      </div>
+      <div class="rh-flags">
+        <span v-for="f in riskHeat.flags" :key="f">{{ f }}</span>
+        <span v-if="!riskHeat.flags.length" class="rh-ok">结构正常</span>
+      </div>
+    </div>
 
     <n-spin v-if="loading" style="padding:40px" />
     <template v-else>
@@ -145,7 +163,7 @@
 import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import WatchTable from './WatchTable.vue'
-import { ref, reactive, h, computed, onMounted } from 'vue'
+import { ref, reactive, h, computed, onMounted, onUnmounted } from 'vue'
 import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag, NButtonGroup } from 'naive-ui'
 import axios from 'axios'
 import { openFloatingWatch, canFloatWatch } from '../utils/floatingWatch'
@@ -169,6 +187,8 @@ const message = useMessage()
 const auth2 = useAuthStore()
 const { isNarrow } = useViewport()
 const data = reactive({positions:[], count:0, total_value:0, total_pnl:0})
+const riskHeat = ref(null)
+let riskTimer = null
 const showEdit = ref(false), showDeleteConfirm = ref(false), loading = ref(true)
 
 // ── Tab：'pos'=持仓，number=分组 id（自选 + 动态组） ──
@@ -276,7 +296,15 @@ const columns = [
 ]
 function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{if(!e.target.closest('button'))emit('show-detail',row.stock_code)}}}
 async function load(){loading.value=true;try{const r=await axios.get(API+'/api/portfolio');Object.assign(data,r.data)}catch(e){message.error('持仓加载失败，请刷新重试')}finally{loading.value=false}}
-onMounted(() => { load(); loadGroups() })
+async function loadRiskHeat(){
+  try{ const r=await axios.get(API+'/api/portfolio/risk-heat'); riskHeat.value=r.data?.ok ? r.data : null }
+  catch(e){ riskHeat.value = null }
+}
+onMounted(() => {
+  load(); loadGroups(); loadRiskHeat()
+  riskTimer = setInterval(loadRiskHeat, 30000)
+})
+onUnmounted(() => { if(riskTimer) clearInterval(riskTimer) })
 async function doAdd(){
   if(!editForm.code)return
   const auth2 = useAuthStore()
@@ -297,7 +325,6 @@ async function confirmDelete(){
   const headers = auth2.token ? {Authorization: 'Bearer '+auth2.token} : {}
   try{await axios.delete(API+'/api/portfolio/'+deleteCode.value,{headers});showDeleteConfirm.value=false;await load();message.success('已删除')}catch(e){message.error('删除失败')}
 }
-onMounted(load)
 </script>
 
 <style scoped>
@@ -321,4 +348,28 @@ onMounted(load)
 .pos-signal { font-size: var(--text-meta); color: var(--c-text-dim); }
 .pos-signal.muted { color: var(--c-text-faint); }
 .pos-actions { margin-left: auto; display: flex; gap: 4px; }
+
+/* 组合风险热度 */
+.risk-heat {
+  margin-bottom: 10px; padding: 8px 12px; flex-shrink: 0;
+  border: 1px solid var(--c-border); border-left: 3px solid var(--c-success);
+  border-radius: var(--radius-sm); background: var(--c-card-bg);
+}
+.risk-heat.rh-high { border-left-color: var(--c-error); }
+.risk-heat.rh-mid { border-left-color: var(--c-warning); }
+.risk-heat.rh-low { border-left-color: var(--c-success); }
+.rh-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.rh-label { font-size: var(--text-meta); color: var(--c-text-dim); }
+.rh-asof { margin-left: auto; font-size: var(--text-meta); color: var(--c-text-faint); }
+.rh-metrics { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 5px; font-size: var(--text-meta); color: var(--c-text-dim); }
+.rh-metrics b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.rh-flags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; font-size: var(--text-meta); }
+.rh-flags span {
+  padding: 1px 6px; border-radius: 3px;
+  color: var(--c-error); border: 1px solid color-mix(in srgb, var(--c-error) 35%, transparent);
+}
+.rh-flags .rh-ok {
+  color: var(--c-success);
+  border-color: color-mix(in srgb, var(--c-success) 35%, transparent);
+}
 </style>
