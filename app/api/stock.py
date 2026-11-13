@@ -48,17 +48,22 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
             result = db.execute(text("""
                 SELECT index_code as stock_code, trade_date,
                        open, high, low, close, close as close_hfq, volume, 0 as turnover, amount
-                FROM index_daily_quote WHERE index_code=:c ORDER BY trade_date DESC LIMIT 1
+                FROM index_daily_quote WHERE index_code=:c AND close > 0
+                ORDER BY trade_date DESC LIMIT 1
             """), {"c": code})
         else:
+            # 取最近一个有效收盘日：零价停牌行不能作为详情页「最新价」
             result = db.execute(text("""
-                SELECT stock_code, trade_date, open, high, low, close, close_hfq, volume, turnover, amount
-                FROM daily_quote WHERE stock_code=:c ORDER BY trade_date DESC LIMIT 1
+                SELECT stock_code, trade_date, open, high, low, close, close_hfq,
+                       volume, turnover, amount, stock_name
+                FROM daily_quote WHERE stock_code=:c AND close > 0
+                ORDER BY trade_date DESC LIMIT 1
             """), {"c": code})
 
         quote = result.fetchone()
         if not quote:
             raise HTTPException(status_code=404, detail=f"未找到 {code}")
+        stock_name = stock_name or (getattr(quote, 'stock_name', None) or "")
 
         # 最新信号日期
         result = db.execute(text(
@@ -267,27 +272,47 @@ def get_stock_kline(
             rows = list(reversed(result.fetchall()))
         else:
             # 个股/ETF：从 daily_quote 获取（支持复权），days 限制最近 N 个交易日
-            # 列名来自白名单映射，安全；用两层 SQL 避免 f-string 注入风险
+            # 列名来自白名单映射，安全；用两层 SQL 避免 f-string 注入风险。
+            # 注意：daily_quote 的 open/high/low 只有不复权原值，close_hfq/close_qfq
+            # 也只存收盘价。若只替换 close，K 线会画出「开盘 1395 / 收盘 12193」这种
+            # 巨阳线。这里按 adj_close/raw_close 的比例同步缩放 OHLC。
             col = {"none": "close", "qfq": "close_qfq", "hfq": "close_hfq"}.get(adjust, "close")
-            col_param = f"COALESCE({col}, close)"  # col 仅来自白名单 dict，安全
+            adj_param = f"COALESCE(NULLIF({col}, 0), close)"  # col 仅来自白名单 dict，安全
             result = db.execute(text(f"""
-                SELECT trade_date, open, high, low, {col_param} as close, volume, amount, turnover
-                FROM daily_quote WHERE stock_code=:c
+                SELECT trade_date, open, high, low, close,
+                       {adj_param} as adj_close, volume, amount, turnover
+                FROM daily_quote WHERE stock_code=:c AND close > 0
                 ORDER BY trade_date DESC LIMIT :days
             """), {"c": code, "days": days})
             rows = list(reversed(result.fetchall()))
+            if adjust in ('qfq', 'hfq'):
+                fixed = []
+                for r in rows:
+                    raw = float(r.close) if r.close else 0.0
+                    adj = float(r.adj_close) if r.adj_close else raw
+                    ratio = (adj / raw) if raw > 0 and adj > 0 else 1.0
+                    fixed.append({
+                        'trade_date': r.trade_date,
+                        'open': float(r.open) * ratio, 'high': float(r.high) * ratio,
+                        'low': float(r.low) * ratio, 'close': adj,
+                        'volume': r.volume, 'amount': r.amount, 'turnover': r.turnover,
+                    })
+                rows = fixed
         if not rows:
             raise HTTPException(status_code=404, detail=f"未找到 {code}")
 
         # ── 周期聚合（week/month）：OHLC 合成（开=首/高=最高/低=最低/收=末），量额求和，
         # 换手均值；指标（BOLL/RSI/MACD）按聚合后序列计算，长周期口径更正确
         if period in ('week', 'month'):
+            def gv(r, k):
+                return r.get(k) if isinstance(r, dict) else getattr(r, k, None)
             df = pd.DataFrame([{
-                'date': str(r.trade_date), 'open': float(r.open), 'high': float(r.high),
-                'low': float(r.low), 'close': float(r.close),
-                'volume': int(r.volume or 0),
-                'amount': float(r.amount) if getattr(r, 'amount', None) else 0.0,
-                'turnover': float(r.turnover) if getattr(r, 'turnover', None) else None,
+                'date': str(gv(r, 'trade_date')), 'open': float(gv(r, 'open')),
+                'high': float(gv(r, 'high')), 'low': float(gv(r, 'low')),
+                'close': float(gv(r, 'close')),
+                'volume': int(gv(r, 'volume') or 0),
+                'amount': float(gv(r, 'amount')) if gv(r, 'amount') else 0.0,
+                'turnover': float(gv(r, 'turnover')) if gv(r, 'turnover') else None,
             } for r in rows])
             ts = pd.to_datetime(df['date'])
             if period == 'week':
@@ -305,7 +330,8 @@ def get_stock_kline(
             rows = agg.to_dict('records')
 
         closes = pd.Series([float(r['close'] if isinstance(r, dict) else r.close) for r in rows])
-        dates = [str(r['date'] if isinstance(r, dict) else r.trade_date) for r in rows]
+        dates = [str((r.get('trade_date') or r.get('date')) if isinstance(r, dict) else r.trade_date)
+                 for r in rows]
         mid, upper, lower, bw = bollinger_bands(closes)
         rsi_vals = rsi(closes)
         dif, dea, macd_bar = macd(closes)
@@ -762,6 +788,8 @@ _quote_cache: dict = {}          # (code, type) -> (ts, payload)
 _QUOTE_TTL_S = 3
 _quote_type_cache: dict = {}     # code -> (ts, stock_type)，避免 3s 缓存失效就打一次库
 _QUOTE_TYPE_TTL_S = 600
+_levels_cache: dict = {}         # (code, type, trade_date) -> (ts, levels)
+_LEVELS_TTL_S = 60
 
 
 def _quote_security_type(db, code: str, requested: str | None) -> str | None:
@@ -815,6 +843,49 @@ def _quote_session(ts_text: str | None, now: datetime | None = None):
     return status, live, max(0, int(age))
 
 
+def _quote_levels(db, code: str, stype: str, trade_date: str | None) -> dict:
+    """详情页价位：昨高/昨低 + 持仓成本/止损/止盈（60s 缓存，无需每次快照都查库）。
+
+    - 昨高/昨低取 quote.trade_date 之前最近一个交易日；盘前/盘后都对应图上最后一日的前一日。
+    - 止损用 risk_rules.stop_loss_pct（比例），止盈用 intraday_rules.take_profit_pct（百分数）。
+    - 指数不查持仓；ETF/个股才看 portfolio。
+    """
+    levels = {'prev_high': None, 'prev_low': None,
+              'cost_price': None, 'stop_price': None, 'take_profit_price': None}
+    if not trade_date:
+        return levels
+    if stype == 'index':
+        row = db.execute(text(
+            "SELECT high, low FROM index_daily_quote "
+            "WHERE index_code=:c AND trade_date < :d ORDER BY trade_date DESC LIMIT 1"
+        ), {'c': code, 'd': trade_date}).fetchone()
+    else:
+        row = db.execute(text(
+            "SELECT high, low FROM daily_quote "
+            "WHERE stock_code=:c AND trade_date < :d AND close > 0 "
+            "ORDER BY trade_date DESC LIMIT 1"
+        ), {'c': code, 'd': trade_date}).fetchone()
+    if row:
+        levels['prev_high'] = float(row[0]) if row[0] else None
+        levels['prev_low'] = float(row[1]) if row[1] else None
+
+    if stype in ('stock', 'etf'):
+        pos = db.execute(text(
+            "SELECT cost_price FROM portfolio "
+            "WHERE stock_code=:c AND is_active=true AND cost_price > 0 LIMIT 1"
+        ), {'c': code}).fetchone()
+        if pos and pos[0]:
+            from app.risk import get_risk_rules
+            from app.intraday_watch import get_intraday_rules
+            cost = float(pos[0])
+            stop_pct = float(get_risk_rules(db).get('stop_loss_pct') or 0.08)
+            take_pct = float(get_intraday_rules(db).get('take_profit_pct') or 20.0)
+            levels['cost_price'] = round(cost, 3)
+            levels['stop_price'] = round(cost * (1 - stop_pct), 3)
+            levels['take_profit_price'] = round(cost * (1 + take_pct / 100), 3)
+    return levels
+
+
 @router.get("/stock/{code}/quote")
 def get_stock_quote(code: str, response: Response, type: str = Query(None)):
     """实时快照（腾讯财经，不入库）。个股/指数/ETF 通用。
@@ -852,10 +923,57 @@ def get_stock_quote(code: str, response: Response, type: str = Query(None)):
     status, live, stale = _quote_session(quote.get('timestamp'))
     payload = {**quote, 'type': stype or 'stock', 'session_status': status,
                'is_realtime': live, 'stale_seconds': stale}
+
+    # 价位（昨高/昨低/持仓成本/止损/止盈）：60s 缓存，避免 5s 快照每次都查库
+    lv_key = (code, stype or 'stock', quote.get('trade_date'))
+    lv_hit = _levels_cache.get(lv_key)
+    if lv_hit and now - lv_hit[0] < _LEVELS_TTL_S:
+        levels = lv_hit[1]
+    else:
+        db = get_sync_db()
+        try:
+            levels = _quote_levels(db, code, stype or 'stock', quote.get('trade_date'))
+        finally:
+            db.close()
+        _levels_cache[lv_key] = (now, levels)
+        if len(_levels_cache) > 1000:
+            _levels_cache.clear()
+    payload.update(levels)
+
     _quote_cache[cache_key] = (now, payload)
     if len(_quote_cache) > 500:   # 活跃 code×type 组合远小于此，超限直接清空即可
         _quote_cache.clear()
     return payload
+
+
+@router.get("/stock/{code}/ai-intraday/latest-event")
+def get_stock_ai_intraday_latest_event(code: str, within_min: int = Query(120, ge=1, le=1440)):
+    """最近一次事件 AI 解读（详情页从通知/其他页面进入时补展示）。
+
+    只返回窗口内 status='done' 的结果；没有则 {ok:false, empty:true}。
+    """
+    cutoff = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None) - timedelta(minutes=within_min)
+    db = get_sync_db()
+    try:
+        row = db.execute(text("""
+            SELECT id, alert_id, kind, result, created_at
+            FROM intraday_ai_event
+            WHERE stock_code=:c AND status='done' AND created_at >= :cut
+            ORDER BY id DESC LIMIT 1
+        """), {'c': code, 'cut': cutoff}).fetchone()
+    finally:
+        db.close()
+    if not row or not row[3]:
+        return {'ok': False, 'empty': True}
+    out = dict(row[3])
+    out.update({
+        'ok': True,
+        'event_ai_id': row[0],
+        'event_alert_id': row[1],
+        'event_kind': row[2],
+        'event_created_at': str(row[4])[:19],
+    })
+    return out
 
 
 @router.get("/stock/{code}/ai-intraday")
@@ -879,31 +997,45 @@ def get_stock_ai_intraday(code: str, type: str = Query(None),
 
 # ── 腾讯分钟K线（design/06 外延：详情页盘中分钟图；不入库，30s 内存缓存防刷）──
 
-_mk_cache: dict = {}   # (code, period, count) -> (ts, payload)
+_mk_cache: dict = {}   # (code, period, count, type) -> (ts, payload)
 _MK_TTL_S = 30
 
 
 @router.get("/stock/{code}/minkline")
 def get_stock_minkline(code: str, period: str = Query("m5"),
-                       count: int = Query(120, ge=1, le=320)):
+                       count: int = Query(120, ge=1, le=320),
+                       type: str = Query(None)):
     """实时分钟K线（腾讯财经，不复权，最近 count 根）。period: m1/m5/m15/m30/m60。
 
     纯代理不入库；30s 内存缓存——详情页 30s 轮询刷新与限流（单入口 ~600 次）
     之间的缓冲。三入口轮换+冷却见 crawler/adapters/tencent_adapter.py。
+    指数（如 000300）传 type=index；不传则按 stock > etf > index 自动判定。
     """
-    key = (code, period.lower(), count)
-    hit = _mk_cache.get(key)
     now = time.time()
+    stype = type
+    if not stype:
+        hit_type = _quote_type_cache.get(code)
+        if hit_type and now - hit_type[0] < _QUOTE_TYPE_TTL_S:
+            stype = hit_type[1]
+        else:
+            db = get_sync_db()
+            try:
+                stype = _quote_security_type(db, code, None)
+            finally:
+                db.close()
+    key = (code, period.lower(), count, stype or '')
+    hit = _mk_cache.get(key)
     if hit and now - hit[0] < _MK_TTL_S:
         return hit[1]
     from crawler.adapters.tencent_adapter import minute_kline
     try:
-        bars = minute_kline(code, period, count)
+        bars = minute_kline(code, period, count, stype or 'stock')
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    payload = {"code": code, "period": period, "bars": bars, "fetched_at": now}
+    payload = {"code": code, "period": period, "type": stype or 'stock',
+               "bars": bars, "fetched_at": now}
     _mk_cache[key] = (now, payload)
     if len(_mk_cache) > 500:   # 防无限膨胀（活跃访问的 code×period 组合远小于此）
         _mk_cache.clear()
@@ -920,29 +1052,30 @@ def get_stock_news(code: str, days: int = Query(30, ge=1, le=365),
     summary/importance/sentiment 为 NULL 表示尚未 LLM 总结——前端需与「中性」区分显示。
     """
     db = get_sync_db()
-    rows = db.execute(text("""
-        SELECT n.id, n.source, n.category, n.published_at, n.title, n.summary,
-               n.importance, n.topics, n.sentiment, n.url, ns.rel
-        FROM news_stock ns
-        JOIN v_news_feed n ON n.id = ns.news_id
-        WHERE ns.stock_code = :c
-          AND n.published_at >= now() - make_interval(days => :d)
-          AND (:imp = 0 OR n.importance >= :imp)
-        ORDER BY n.published_at DESC
-        LIMIT :lim
-    """), {'c': code, 'd': days, 'imp': min_importance, 'lim': limit}).fetchall()
-    by_cat = {}
-    for r in rows:
-        by_cat[r[2]] = by_cat.get(r[2], 0) + 1
-    result = {
-        'code': code, 'days': days, 'count': len(rows), 'by_category': by_cat,
-        'data': [{
-            'id': r[0], 'source': r[1], 'category': r[2],
-            'published_at': r[3].strftime('%Y-%m-%d %H:%M') if r[3] else None,
-            'title': r[4], 'summary': r[5], 'importance': r[6],
-            'topics': [t for t in (r[7] or '').split(',') if t],
-            'sentiment': r[8], 'url': r[9], 'rel': r[10],
-        } for r in rows],
-    }
-    db.close()
-    return result
+    try:
+        rows = db.execute(text("""
+            SELECT n.id, n.source, n.category, n.published_at, n.title, n.summary,
+                   n.importance, n.topics, n.sentiment, n.url, ns.rel
+            FROM news_stock ns
+            JOIN v_news_feed n ON n.id = ns.news_id
+            WHERE ns.stock_code = :c
+              AND n.published_at >= now() - make_interval(days => :d)
+              AND (:imp = 0 OR n.importance >= :imp)
+            ORDER BY n.published_at DESC
+            LIMIT :lim
+        """), {'c': code, 'd': days, 'imp': min_importance, 'lim': limit}).fetchall()
+        by_cat = {}
+        for r in rows:
+            by_cat[r[2]] = by_cat.get(r[2], 0) + 1
+        return {
+            'code': code, 'days': days, 'count': len(rows), 'by_category': by_cat,
+            'data': [{
+                'id': r[0], 'source': r[1], 'category': r[2],
+                'published_at': r[3].strftime('%Y-%m-%d %H:%M') if r[3] else None,
+                'title': r[4], 'summary': r[5], 'importance': r[6],
+                'topics': [t for t in (r[7] or '').split(',') if t],
+                'sentiment': r[8], 'url': r[9], 'rel': r[10],
+            } for r in rows],
+        }
+    finally:
+        db.close()

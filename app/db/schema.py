@@ -1214,6 +1214,24 @@ CREATE INDEX IF NOT EXISTS idx_smb_time ON stock_minute_bar (bar_time);
 CREATE INDEX IF NOT EXISTS idx_smb_code_time ON stock_minute_bar (stock_code, bar_time DESC);
 """
 
+# ── 事件 AI 解读结果（P1 第一批）：高信号盘中提醒 → 后台 worker → 结构化解读。
+#    alert_id 唯一：同一条提醒只解读一次；result JSONB 与 /ai-intraday 同结构。
+CREATE_INTRADAY_AI_EVENT = """
+CREATE TABLE IF NOT EXISTS intraday_ai_event (
+    id          SERIAL PRIMARY KEY,
+    alert_id    INTEGER NOT NULL UNIQUE REFERENCES risk_alerts(id) ON DELETE CASCADE,
+    stock_code  VARCHAR(6) NOT NULL,
+    kind        VARCHAR(20) NOT NULL,
+    status      VARCHAR(10) NOT NULL DEFAULT 'done',   -- done / failed
+    result      JSONB,
+    error       TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,   -- 完成时间（冷却/单日上限口径）
+    finished_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_iae_created ON intraday_ai_event (created_at);
+CREATE INDEX IF NOT EXISTS idx_iae_code ON intraday_ai_event (stock_code, created_at DESC);
+"""
+
 # ── 拓展回补已核空日期登记（2026-09-04）：事件类拓展表历史上大量"真 0 行"日期
 #    （share_float/repurchase 等 ~2900 空日/表），exists_sql 判不出"已拉过且为空"，
 #    每轮 walk 从头重拉空日期烧配额且永不收敛。0 行也登记，永不再拉。──
@@ -1299,6 +1317,7 @@ ALL_TABLES = [
     ("paper_positions", CREATE_PAPER_POSITIONS),
     ("risk_alerts", CREATE_RISK_ALERTS),
     ("stock_minute_bar", CREATE_MINUTE_BAR),
+    ("intraday_ai_event", CREATE_INTRADAY_AI_EVENT),
     ("backfill_ext_checked", CREATE_BACKFILL_EXT_CHECKED),
     ("moneyflow_hsgt", CREATE_MONEYFLOW_HSGT),
     ("block_trade", CREATE_BLOCK_TRADE),

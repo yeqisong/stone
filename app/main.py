@@ -118,6 +118,9 @@ async def lifespan(app: FastAPI):
     set_main_loop(asyncio.get_running_loop())
     broadcast_task = asyncio.create_task(broadcast_dag_status())
     # 启动盘中实时提醒（关注池快照 → 规则 → risk_alerts → 既有 WS 推送）
+    # 事件 AI worker 先启动：提醒落库后入队，worker 异步解读，不阻塞行情轮询
+    from app.intraday_ai import start_ai_event_worker
+    start_ai_event_worker()
     from app.intraday_watch import intraday_watch_loop
     intraday_task = asyncio.create_task(intraday_watch_loop())
     # 启动 Cron 定时调度器（后台线程）
@@ -132,6 +135,8 @@ async def lifespan(app: FastAPI):
         await intraday_task          # 让 watcher 走完 finally（线程里的请求自行结束）
     except asyncio.CancelledError:
         pass
+    from app.intraday_ai import stop_ai_event_worker
+    stop_ai_event_worker()
     # 关闭前落盘配额计数（否则本次进程的最后一段用量丢失）
     try:
         from crawler.adapters.tushare_quota import TushareQuota

@@ -2,8 +2,8 @@
 <div>
   <n-space align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
     <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
-    <StockSuggestInput v-model:value="code" size="tiny" width="170px" @select="load" @enter="load" />
-    <n-button class="cta" type="primary" size="tiny" @click="load">查询</n-button>
+    <StockSuggestInput v-model:value="inputCode" size="tiny" width="170px" @select="onPickStock" @enter="onQuery" />
+    <n-button class="cta" type="primary" size="tiny" @click="onQuery">查询</n-button>
     <n-button size="tiny" title="带当前股票跳转问答页" @click="askAi"><AppIcon name="compass" :size="13" /> 问 AI</n-button>
     <n-select v-model:value="adj" @update:value="reloadChart" size="tiny" style="width:105px" :options="adjOptions" />
     <n-button-group size="tiny">
@@ -20,7 +20,13 @@
 
   <n-spin v-if="loading" />
   <n-empty v-else-if="notFound" description="未找到该证券，请检查代码" style="padding:40px" />
+  <div v-else-if="loadError" style="padding:40px;text-align:center">
+    <n-empty :description="loadError" />
+    <n-button size="small" style="margin-top:12px" @click="load">重试</n-button>
+  </div>
   <template v-else-if="detail">
+    <!-- 左边缘盘中执行卡：hover 小图标 → 左侧抽屉；操作动作由本页滚动/开图执行 -->
+    <IntradayPlaybook :code="detail.stock_code || code" :name="detail.stock_name" @action="onPlaybookAction" />
     <!-- 分组状态：持仓为 portfolio 固有状态（不可移除）；自选/动态组 hover 出 ✕ 点击确认移除；末尾 + 加组 -->
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       <span style="font-size: var(--text-meta);color:var(--c-text-dim)">分组</span>
@@ -39,13 +45,56 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:320px">
         <div style="margin-bottom:12px">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="clock" :size="13" />  分钟K线 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 分钟线 30s</span>
-            <n-button-group size="tiny" style="margin-left:8px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <AppIcon name="clock" :size="13" />  分钟K线
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 分钟线 30s</span>
+            <n-button-group size="tiny">
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+              <span class="mink-refresh" :class="{on: quote?.is_realtime}"
+                :title="quote?.is_realtime ? '实时报价：盘中每 5 秒自动刷新' : '实时报价：非交易时段每 30 秒自动刷新'">
+                {{ quote ? (quote.is_realtime ? '盘中 5s' : '非交易 30s') : '—' }}
+              </span>
+              <span class="mink-status" :class="minkStatusClass" :title="minkLastBarTitle">{{ minkStatus }}</span>
+              <n-button size="tiny" :type="minkPaused?'primary':'default'" @click="toggleMinkPause">{{ minkPaused ? '继续' : '暂停' }}</n-button>
+              <n-button size="tiny" @click="openFs" title="多栏分时全屏对比（Alt+F）">全屏</n-button>
+            </span>
           </h4>
+          <!-- 分时辅助层：价位/VWAP带/开盘区间/事件/量分布 -->
+          <div class="mink-toolbar">
+            <n-button-group size="tiny">
+              <n-button size="tiny" :type="minkType==='candle'?'primary':'default'"
+                title="蜡烛图" @click="minkType='candle'; drawMink()">K线</n-button>
+              <n-button size="tiny" :type="minkType==='line'?'primary':'default'"
+                title="分时线" @click="minkType='line'; drawMink()">分时</n-button>
+            </n-button-group>
+            <n-button-group size="tiny">
+              <n-button size="tiny" :type="minkMaMode==='ma'?'primary':'default'"
+                title="MA5 / MA10" @click="minkMaMode='ma'; drawMink()">MA</n-button>
+              <n-button size="tiny" :type="minkMaMode==='ema'?'primary':'default'"
+                title="EMA9 / EMA21" @click="minkMaMode='ema'; drawMink()">EMA</n-button>
+            </n-button-group>
+            <n-button size="tiny" @click="showLevels=!showLevels"
+              title="关键价位：昨高/昨低/今开/成本/止损/止盈/涨跌停（远离现价的不画，避免压缩日内波动）">价位</n-button>
+            <n-button size="tiny" :type="showBands?'primary':'default'" @click="showBands=!showBands"
+              title="VWAP ±1σ / ±2σ 标准差带">VWAP带</n-button>
+            <n-button size="tiny" :type="showOr?'primary':'default'" @click="showOr=!showOr"
+              title="开盘 15/30 分钟区间（m30/m60 不适用）">开盘区间</n-button>
+            <n-button size="tiny" :type="showEvents?'primary':'default'" @click="showEvents=!showEvents"
+              title="盘中提醒 / 重要资讯标记">事件</n-button>
+            <n-button size="tiny" :disabled="!minkDayBars.length" @click="openVp"
+              title="当日成交量分布 / POC / VAH / VAL">量分布</n-button>
+            <n-button size="tiny" :disabled="!minkDayBars.length" @click="openReplay()"
+              title="当日分时回放">回放</n-button>
+            <n-button size="tiny" :disabled="!minkDayBars.length" @click="openCompare"
+              title="多股对比（当日起点=0%）">对比</n-button>
+            <n-button size="tiny" @click="exportMink" title="导出分时图 PNG">导出</n-button>
+            <span style="font-size:var(--text-meta);color:var(--c-text-faint);margin-left:2px">hover 看 VWAP 偏离 / RVOL · Alt+1..5 切换周期</span>
+            <span class="mink-p3" title="分钟级模型需 P3 数据达标（20 个完整交易日 + 1 万根 bar）后训练；进度见状态页「分钟数据」">P3 模型 · 待数据</span>
+          </div>
           <!-- 实时报价条：盘中 5s / 非交易时段 30s；失败时回退到最近日线收盘并给出重试 -->
-          <div class="quote-bar" :class="{ 'quote-off': !quote }">
+          <div ref="quoteBarEl" class="quote-bar" :class="{ 'quote-off': !quote }">
             <div class="quote-quote">
               <div class="quote-kicker">
                 <span>现价</span>
@@ -73,11 +122,12 @@
               <div class="quote-stat"><span class="quote-stat-label">量比</span><b class="quote-stat-value">{{ qfmt(quote.volume_ratio) }}</b></div>
               <div class="quote-stat"><span class="quote-stat-label">成交额</span><b class="quote-stat-value">{{ fmtMoney(quote.amount) }}</b></div>
               <div class="quote-stat"><span class="quote-stat-label">换手</span><b class="quote-stat-value">{{ quote.turnover_pct != null ? quote.turnover_pct.toFixed(2) + '%' : '—' }}</b></div>
+              <div class="quote-stat" title="最后一根完整 bar 的成交量 / 当日已完成 bar 的均量；历史同时刻基线待 P3 数据积累">
+                <span class="quote-stat-label">RVOL</span>
+                <b class="quote-stat-value">{{ minkRvol != null ? minkRvol.toFixed(2) + 'x' : '—' }}</b>
+              </div>
             </div>
             <div class="quote-actions">
-              <span class="quote-refresh" :title="quote?.is_realtime ? '盘中每 5 秒自动刷新' : '非交易时段每 30 秒自动刷新'">
-                {{ quote?.is_realtime ? '盘中 5s' : '非交易 30s' }}
-              </span>
               <n-button size="tiny" text :loading="quoteLoading" title="立即刷新实时快照" @click="loadQuote">刷新</n-button>
               <n-button size="tiny" secondary :loading="aiLoading"
                 title="AI 解读：结合实时行情 / 分钟结构 / 资讯 / 模型信号，非预测" @click="loadAiInsight">
@@ -88,18 +138,33 @@
               <span class="quote-depth-label">五档</span>
               <span class="bid">买一 <b>{{ qfmt(quote.bids?.[0]?.price) }}</b> × {{ quote.bids?.[0]?.volume ?? '—' }}</span>
               <span class="ask">卖一 <b>{{ qfmt(quote.asks?.[0]?.price) }}</b> × {{ quote.asks?.[0]?.volume ?? '—' }}</span>
+              <span v-if="depthStats" class="quote-depth-stat"
+                title="五档快照：买盘总量 vs 卖盘总量，不代表成交方向">
+                盘口 <b :style="{color: depthStats.imb >= 0 ? UP_COLOR : DOWN_COLOR}">{{ depthStats.imb != null ? (depthStats.imb * 100).toFixed(0) + '%' : '—' }}</b>
+                <span class="qd-muted">{{ depthStats.imb >= 0 ? '买盘占优' : '卖盘占优' }}</span>
+                <span v-if="depthStats.spread != null"> · 价差 {{ depthStats.spread.toFixed(1) }}bp</span>
+              </span>
+              <span v-if="quote.cost_price" class="quote-depth-stat">
+                成本 <b>{{ qfmt(quote.cost_price) }}</b>
+                <span v-if="quote.stop_price"> · 止损 <b style="color:var(--c-up)">{{ qfmt(quote.stop_price) }}</b></span>
+                <span v-if="quote.take_profit_price"> · 止盈 <b style="color:var(--c-down)">{{ qfmt(quote.take_profit_price) }}</b></span>
+              </span>
             </div>
             <div v-else-if="!quote" class="quote-hint">
               实时报价接口不可用，当前显示最近日线收盘；若刚更新代码，请重启后端后点「刷新」。
             </div>
           </div>
           <!-- AI 盘面解读：只解读数据，不预测涨跌；结果 90s 服务端缓存 -->
-          <div v-if="aiLoading || aiInsight || aiError" class="ai-card">
+          <div v-if="aiLoading || aiInsight || aiError" ref="aiCardEl" class="ai-card">
             <div class="ai-head">
               <span class="ai-badge">AI 盘面解读</span>
               <span class="ai-note">非预测 · 非投资建议</span>
+              <span v-if="aiEvent" class="ai-event-badge">事件触发</span>
               <span v-if="aiInsight?.cached" class="ai-cached">缓存</span>
               <n-button size="tiny" text style="margin-left:auto" @click="closeAi">收起</n-button>
+            </div>
+            <div v-if="aiInsight?.event" class="ai-event-line" :title="aiInsight.event.body || ''">
+              事件：{{ aiInsight.event.title }}<span v-if="aiInsight.event.body"> · {{ aiInsight.event.body }}</span>
             </div>
             <div v-if="aiLoading" class="ai-loading">正在结合实时行情 / 分钟结构 / 资讯 / 模型信号生成解读…</div>
             <div v-else-if="aiError" class="ai-error">{{ aiError }}</div>
@@ -130,6 +195,16 @@
             </template>
           </div>
           <div :id="'c0'" style="width:100%;height:260px"></div>
+          <div v-if="minkLevelChips.length" class="mink-levels">
+            <span v-for="l in minkLevelChips" :key="l.name + l.value">
+              <i :style="{background:l.color}"></i>{{ l.name }} <b>{{ l.value.toFixed(2) }}</b>
+            </span>
+          </div>
+        </div>
+        <!-- 盘中相对强弱：与分时同周期、同窗口，起点=1 -->
+        <div v-if="benchMink.length && minkDayBars.length > 1" style="margin-bottom:12px">
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  盘中相对强弱 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">个股 vs 沪深300（当日起点=0%，超额=百分点）</span></h4>
+          <div :id="'c13'" style="width:100%;height:110px"></div>
         </div>
         <div style="margin-bottom:12px">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{dateRange}}</span></h4>
@@ -178,34 +253,10 @@
         </div>
       </div>
 
-      <!-- Right: Fundamentals & Overview -->
+      <!-- Right sidebar: 盘中提醒 → 筹码 → 信号回看 → 基本面 → 行情概览 → 讨论/资讯 tab -->
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
-        <div class="side-panel">
-          <h4 class="side-title"><AppIcon name="w" :size="13" />  基本面</h4>
-          <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
-          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" class="side-table">
-            <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
-              <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta);text-align:left">{{row.lbl}}</td>
-              <td style="padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text);text-align:left">{{row.val}}</td>
-            </tr>
-          </table>
-          <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
-        </div>
-        <div class="side-panel">
-          <h4 class="side-title"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
-          <table class="side-table">
-            <tr><td>日期</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'var(--c-up-faint)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">开盘</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">最高</td><td style="padding:4px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'var(--c-up)':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">最低</td><td style="padding:4px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'var(--c-down)':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">收盘</td><td style="padding:4px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'var(--c-up)':'var(--c-down)'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size: var(--text-meta);margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'var(--c-up)':'var(--c-down)'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size: var(--text-meta);margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交量</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交额</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
-            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">换手率</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
-          </table>
-        </div>
         <!-- 盘中提醒：后端 watcher 写 risk_alerts，30s 轮询；Chrome 通知走 WS 实时推送 -->
-        <div class="side-panel">
+        <div ref="alertsPanelEl" class="side-panel">
           <h4 class="side-title"><AppIcon name="bell" :size="13" />  盘中提醒 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 8 条 / 实时推送</span></h4>
           <div v-if="intradayAlerts.length" class="ia-list">
             <div v-for="a in intradayAlerts" :key="a.id" class="ia-item">
@@ -219,13 +270,22 @@
           </div>
           <n-empty v-else description="暂无盘中提醒" style="padding:6px" />
         </div>
+
+        <!-- 筹码分布 -->
         <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
-          <h4 class="side-title"><AppIcon name="pie-chart" :size="13" />  筹码分布 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> / {{chipData.date_from}}~{{chipData.date_to}}</template></span></h4>
+          <h4 class="side-title" style="flex-wrap:wrap">
+            <AppIcon name="pie-chart" :size="13" />  筹码分布
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim);flex-basis:100%;margin-left:19px;white-space:normal">
+              {{chipData.decay?'换手衰减':'全量'}},现价口径<template v-if="chipData.date_from"> / {{chipData.date_from}}~{{chipData.date_to}}</template>
+            </span>
+          </h4>
           <div :id="'c12'" style="width:100%;height:280px"></div>
           <div v-if="chipData.profit_ratio!=null" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:2px">
             现价 ¥{{chipData.current}} / 获利盘 <span :style="{color:chipData.profit_ratio>=0.5?'var(--c-up)':'var(--c-down)',fontWeight:600}">{{(chipData.profit_ratio*100).toFixed(1)}}%</span>（红=获利 绿=套牢）
           </div>
         </div>
+
+        <!-- 信号回看 -->
         <div v-if="sigStats" class="side-panel">
           <h4 class="side-title"><AppIcon name="list" :size="13" />  信号回看</h4>
           <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim)">
@@ -235,81 +295,264 @@
             20d <span :style="{color:sigStats.f20>=0?'var(--c-up)':'var(--c-down)'}">{{(sigStats.f20*100).toFixed(1)}}%</span>
           </div>
         </div>
-        <!-- 雪球讨论（design/06）：mark 语义未确认，徽标仅中性展示不染方向色；
-             情绪方向由 LLM 打分给出（红多绿空），与 mark 徽标相互独立 -->
-        <div v-if="xqData && (xqData.count_7d > 0 || xqData.today_count > 0)" class="side-panel">
-          <h4 class="side-title"><AppIcon name="message-circle" :size="13" />  雪球讨论 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">7日 {{xqData.count_7d}} 帖 / 热帖精选</span></h4>
-          <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
-            今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖
-            标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b>
-            7日互动 <b style="color:var(--c-text)">{{xqData.interactions_7d}}</b>
-          </div>
-          <!-- LLM 情绪构成（design/06 §9.10）：只统计已打分帖（夜间任务，按热度取） -->
-          <div v-if="xqData.sentiment && xqData.sentiment.scored"
-               class="side-well">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size: var(--text-meta);margin-bottom:4px">
-              <span style="color:var(--c-text-dim)">
-                LLM 情绪
-                <span style="color:var(--c-text-faint)">· {{xqData.sentiment.scored}} 帖已打分</span>
-              </span>
-              <span :style="{color: xqData.sentiment.net>=0 ? UP_COLOR : DOWN_COLOR, fontWeight:600}">
-                净看多 {{ xqData.sentiment.net>=0?'+':'' }}{{ (xqData.sentiment.net*100).toFixed(0) }}%
-              </span>
-            </div>
-            <!-- 占比条：红=看多 灰=中性 绿=看空（方向域，与全站一致） -->
-            <div style="display:flex;height:6px;border-radius:var(--radius-sm);overflow:hidden;background:var(--c-border)">
-              <div v-for="seg in sentiSegs" :key="seg.k" :title="seg.t+' '+seg.n+' 帖'"
-                   :style="{width:seg.w+'%', background:seg.c}"></div>
-            </div>
-            <div style="display:flex;gap:10px;font-size: var(--text-meta);margin-top:4px">
-              <span v-for="seg in sentiSegs" :key="seg.k" style="color:var(--c-text-dim)">
-                <span :style="{color:seg.c,fontWeight:600}">{{seg.t}}</span> {{seg.n}}
-              </span>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <div v-for="(p,i) in xqData.hot.slice(0, 6)" :key="i" class="side-item">
-              <div style="display:flex;align-items:center;gap:6px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:3px">
-                <span>{{p.created_at.slice(5)}}</span>
-                <span v-if="p.source">{{p.source}}</span>
-                <span v-if="sentiOf(p.sentiment)" :title="p.reason||''"
-                      :style="{color:sentiOf(p.sentiment).c, background:'var(--c-neutral-weak)', borderRadius:'8px', padding:'0 5px', fontWeight:600}">{{sentiOf(p.sentiment).t}}</span>
-                <span v-if="p.mark" style="background:var(--c-neutral-weak);border-radius:var(--radius);padding:0 4px">标</span>
-                <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} / 评 {{p.reply_count}}</span>
-              </div>
-              <div class="side-text" :title="p.text">{{p.text}}</div>
-            </div>
-          </div>
-          <div v-if="xqData.hot.length > 6" class="side-more">仅显示前 6 条热帖</div>
+
+        <!-- 基本面 -->
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="w" :size="13" />  基本面</h4>
+          <!-- v-if 判断对象存在即可：industry 可能为空，不能因此隐藏整块 -->
+          <table v-if="detail.fundamentals!=null&&Object.keys(detail.fundamentals).length" class="side-table">
+            <tr v-for="row in fundRows" :key="row.lbl" style="background:var(--c-card-bg)">
+              <td style="width:85px;white-space:nowrap;padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta);text-align:left">{{row.lbl}}</td>
+              <td style="padding:4px 6px;border:1px solid var(--c-border);color:var(--c-text);text-align:left">{{row.val}}</td>
+            </tr>
+          </table>
+          <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
-        <!-- 相关资讯（design/07）：与「雪球讨论」并列——第 3 层（资讯 × 雪球交叉分析）的落点。
-             未总结条目 summary/sentiment 为 NULL 而非 0，显示「待总结」不可当「中性」 -->
-        <div v-if="newsData && newsData.count > 0" class="side-panel">
-          <h4 class="side-title"><AppIcon name="file-text" :size="13" />  相关资讯 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{newsData.count}} 条 / 近 {{newsData.days}} 天</span></h4>
-          <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
-            <span v-for="(v,k) in newsData.by_category" :key="k" style="margin-right:8px">{{NEWS_CAT_NAME[k]||k}} <b style="color:var(--c-text)">{{v}}</b></span>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <div v-for="n in newsData.data.slice(0, 8)" :key="n.id" class="side-item">
-              <div style="display:flex;align-items:center;gap:6px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:3px">
-                <span>{{(n.published_at||'').slice(5)}}</span>
-                <span :style="{color:NEWS_CAT_COLOR[n.category]||'var(--c-text-dim)',fontWeight:600}">{{NEWS_CAT_NAME[n.category]||n.category}}</span>
-                <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:var(--c-up-weak);color:var(--c-up);border-radius:var(--radius);padding:0 4px;font-weight:600">重</span>
-                <span v-else-if="n.importance===2" style="background:var(--c-neutral-weak);border-radius:var(--radius);padding:0 4px">中</span>
-                <!-- 未总结才显示「待总结」：imp=1 是合法等级（不显示徽标），不能落到 else 里被当成未总结 -->
-                <span v-else-if="n.importance===null" style="background:var(--c-neutral-weaker);border-radius:var(--radius);padding:0 4px">待总结</span>
-                <span v-if="newsSentiOf(n.sentiment)" :style="{color:newsSentiOf(n.sentiment).c,background:'var(--c-neutral-weak)',borderRadius:'8px',padding:'0 5px',fontWeight:600}">{{newsSentiOf(n.sentiment).t}}</span>
-                <a v-if="n.url" :href="n.url" target="_blank" rel="noopener" style="margin-left:auto;flex-shrink:0;color:var(--c-info)">原文</a>
-              </div>
-              <div class="side-text" :title="n.title">{{n.title}}</div>
-              <div v-if="n.summary" class="side-text" style="color:var(--c-text-dim);margin-top:2px" :title="n.summary">{{n.summary}}</div>
-            </div>
-          </div>
-          <div v-if="newsData.data.length > 8" class="side-more">仅显示前 8 条，完整列表见资讯页</div>
+
+        <!-- 行情概览 -->
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
+          <table class="side-table">
+            <tr><td>日期</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)" :style="{background:hoverInfo?'var(--c-up-faint)':'transparent'}">{{hoverInfo?hoverInfo.date:detail.latest_trade_date}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">开盘</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">¥{{hoverInfo?hoverInfo.open.toFixed(2):(detail.open||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">最高</td><td style="padding:4px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'var(--c-up)':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.high.toFixed(2):(detail.high||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">最低</td><td style="padding:4px 8px;border:1px solid var(--c-border)" :style="{color:hoverInfo?'var(--c-down)':'var(--c-text)'}">¥{{hoverInfo?hoverInfo.low.toFixed(2):(detail.low||0).toFixed(2)}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">收盘</td><td style="padding:4px 8px;border:1px solid var(--c-border)"><span style="font-weight:600" :style="{color:hoverInfo?(hoverInfo.close>=hoverInfo.prevClose?'var(--c-up)':'var(--c-down)'):priceColor}">¥{{hoverInfo?hoverInfo.close.toFixed(2):(detail.close||0).toFixed(2)}}</span><span v-if="hoverInfo&&hoverInfo.prevClose" style="font-size: var(--text-meta);margin-left:4px" :style="{color:hoverInfo.close>=hoverInfo.prevClose?'var(--c-up)':'var(--c-down)'}">{{((hoverInfo.close-hoverInfo.prevClose)/hoverInfo.prevClose*100).toFixed(2)}}%</span><span v-else-if="priceChg!=null" style="font-size: var(--text-meta);margin-left:4px" :style="{color:priceColor}">{{priceChg>=0?'+':''}}{{priceChg.toFixed(2)}}%</span></td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交量</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo?fmt(hoverInfo.volume)+'股':fmt(detail.volume)+'股'}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">成交额</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{hoverInfo&&hoverInfo.amount?fmt(hoverInfo.amount)+'元':(detail.amount?fmt(detail.amount)+'元':'-')}}</td></tr>
+            <tr><td style="width:85px;white-space:nowrap;padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text-dim);font-size: var(--text-meta)">换手率</td><td style="padding:4px 8px;border:1px solid var(--c-border);color:var(--c-text)">{{(hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:(detail.turnover!=null?detail.turnover:null))!=null ? (hoverInfo&&hoverInfo.turnover!=null?hoverInfo.turnover:detail.turnover).toFixed(2)+'%':'—'}}</td></tr>
+          </table>
+        </div>
+
+        <!-- 雪球讨论 / 相关资讯：同一张卡两个 tab；只有一个有数据时自动切到有数据页 -->
+        <div v-if="xqHas || newsHas" class="side-panel">
+          <n-tabs :value="sentiTab" type="line" size="small" animated
+            @update:value="onSentiTabChange">
+            <n-tab-pane name="xq" :tab="'雪球讨论' + (xqData ? ' ' + (xqData.count_7d || 0) : '')">
+              <template v-if="xqHas">
+                <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
+                  今日 <b style="color:var(--c-text)">{{xqData.today_count}}</b> 帖
+                  标记帖 <b style="color:var(--c-text)">{{xqData.mark_ratio!=null?(xqData.mark_ratio*100).toFixed(1)+'%':'-'}}</b>
+                  7日互动 <b style="color:var(--c-text)">{{xqData.interactions_7d}}</b>
+                </div>
+                <!-- LLM 情绪构成（design/06 §9.10）：只统计已打分帖（夜间任务，按热度取） -->
+                <div v-if="xqData.sentiment && xqData.sentiment.scored" class="side-well">
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size: var(--text-meta);margin-bottom:4px">
+                    <span style="color:var(--c-text-dim)">
+                      LLM 情绪
+                      <span style="color:var(--c-text-faint)">· {{xqData.sentiment.scored}} 帖已打分</span>
+                    </span>
+                    <span :style="{color: xqData.sentiment.net>=0 ? UP_COLOR : DOWN_COLOR, fontWeight:600}">
+                      净看多 {{ xqData.sentiment.net>=0?'+':'' }}{{ (xqData.sentiment.net*100).toFixed(0) }}%
+                    </span>
+                  </div>
+                  <!-- 占比条：红=看多 灰=中性 绿=看空（方向域，与全站一致） -->
+                  <div style="display:flex;height:6px;border-radius:var(--radius-sm);overflow:hidden;background:var(--c-border)">
+                    <div v-for="seg in sentiSegs" :key="seg.k" :title="seg.t+' '+seg.n+' 帖'"
+                         :style="{width:seg.w+'%', background:seg.c}"></div>
+                  </div>
+                  <div style="display:flex;gap:10px;font-size: var(--text-meta);margin-top:4px">
+                    <span v-for="seg in sentiSegs" :key="seg.k" style="color:var(--c-text-dim)">
+                      <span :style="{color:seg.c,fontWeight:600}">{{seg.t}}</span> {{seg.n}}
+                    </span>
+                  </div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div v-for="(p,i) in xqData.hot.slice(0, 6)" :key="i" class="side-item">
+                    <div style="display:flex;align-items:center;gap:6px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:3px">
+                      <span>{{p.created_at.slice(5)}}</span>
+                      <span v-if="p.source">{{p.source}}</span>
+                      <span v-if="sentiOf(p.sentiment)" :title="p.reason||''"
+                            :style="{color:sentiOf(p.sentiment).c, background:'var(--c-neutral-weak)', borderRadius:'8px', padding:'0 5px', fontWeight:600}">{{sentiOf(p.sentiment).t}}</span>
+                      <span v-if="p.mark" style="background:var(--c-neutral-weak);border-radius:var(--radius);padding:0 4px">标</span>
+                      <span style="margin-left:auto;flex-shrink:0">赞 {{p.like_count}} / 评 {{p.reply_count}}</span>
+                    </div>
+                    <div class="side-text" :title="p.text">{{p.text}}</div>
+                  </div>
+                </div>
+                <div v-if="xqData.hot.length > 6" class="side-more">仅显示前 6 条热帖</div>
+              </template>
+              <n-empty v-else description="暂无雪球讨论" style="padding:8px" />
+            </n-tab-pane>
+            <n-tab-pane name="news" :tab="'相关资讯' + (newsData ? ' ' + (newsData.count || 0) : '')">
+              <template v-if="newsHas">
+                <div style="font-size: var(--text-meta);line-height:1.7;color:var(--c-text-dim);margin-bottom:6px">
+                  <span v-for="(v,k) in newsData.by_category" :key="k" style="margin-right:8px">{{NEWS_CAT_NAME[k]||k}} <b style="color:var(--c-text)">{{v}}</b></span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div v-for="n in newsData.data.slice(0, 8)" :key="n.id" class="side-item">
+                    <div style="display:flex;align-items:center;gap:6px;font-size: var(--text-meta);color:var(--c-text-faint);margin-bottom:3px">
+                      <span>{{(n.published_at||'').slice(5)}}</span>
+                      <span :style="{color:NEWS_CAT_COLOR[n.category]||'var(--c-text-dim)',fontWeight:600}">{{NEWS_CAT_NAME[n.category]||n.category}}</span>
+                      <span v-if="n.importance===3" title="重要度 3：个股重大事件" style="background:var(--c-up-weak);color:var(--c-up);border-radius:var(--radius);padding:0 4px;font-weight:600">重</span>
+                      <span v-else-if="n.importance===2" style="background:var(--c-neutral-weak);border-radius:var(--radius);padding:0 4px">中</span>
+                      <!-- 未总结才显示「待总结」：imp=1 是合法等级（不显示徽标），不能落到 else 里被当成未总结 -->
+                      <span v-else-if="n.importance===null" style="background:var(--c-neutral-weaker);border-radius:var(--radius);padding:0 4px">待总结</span>
+                      <span v-if="newsSentiOf(n.sentiment)" :style="{color:newsSentiOf(n.sentiment).c,background:'var(--c-neutral-weak)',borderRadius:'8px',padding:'0 5px',fontWeight:600}">{{newsSentiOf(n.sentiment).t}}</span>
+                      <a v-if="n.url" :href="n.url" target="_blank" rel="noopener" style="margin-left:auto;flex-shrink:0;color:var(--c-info)">原文</a>
+                    </div>
+                    <div class="side-text" :title="n.title">{{n.title}}</div>
+                    <div v-if="n.summary" class="side-text" style="color:var(--c-text-dim);margin-top:2px" :title="n.summary">{{n.summary}}</div>
+                  </div>
+                </div>
+                <div v-if="newsData.data.length > 8" class="side-more">仅显示前 8 条，完整列表见资讯页</div>
+              </template>
+              <n-empty v-else description="暂无相关资讯" style="padding:8px" />
+            </n-tab-pane>
+          </n-tabs>
         </div>
       </div>
     </div>
   </template>
+
+  <!-- 多栏分时全屏对比：1–3 栏；每栏完整分时功能；左右悬停 + 添加；Esc 退出 -->
+  <div v-if="showFs" class="fs-overlay">
+    <div class="fs-head">
+      <span class="fs-title">分时对比</span>
+      <span class="fs-count">{{ fsPanels.length }}/3</span>
+      <n-button-group size="tiny">
+        <n-button v-for="p in MINK_PERIODS" :key="'fs-'+p.v" size="tiny"
+          :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
+      </n-button-group>
+      <n-button-group size="tiny">
+        <n-button size="tiny" :type="minkType==='candle'?'primary':'default'"
+          @click="minkType='candle'">K线</n-button>
+        <n-button size="tiny" :type="minkType==='line'?'primary':'default'"
+          @click="minkType='line'">分时</n-button>
+      </n-button-group>
+      <n-button-group size="tiny">
+        <n-button size="tiny" :type="minkMaMode==='ma'?'primary':'default'"
+          @click="minkMaMode='ma'">MA</n-button>
+        <n-button size="tiny" :type="minkMaMode==='ema'?'primary':'default'"
+          @click="minkMaMode='ema'">EMA</n-button>
+      </n-button-group>
+      <n-button size="tiny" :type="showLevels?'primary':'default'" @click="showLevels=!showLevels">价位</n-button>
+      <n-button size="tiny" :type="showBands?'primary':'default'" @click="showBands=!showBands">VWAP带</n-button>
+      <n-button size="tiny" :type="showOr?'primary':'default'" @click="showOr=!showOr">开盘区间</n-button>
+      <n-button size="tiny" :type="showEvents?'primary':'default'" @click="showEvents=!showEvents">事件</n-button>
+      <span class="fs-hint">左右悬停 <b>+</b> 添加 · 最多 3 栏 · Esc 退出</span>
+      <span style="margin-left:auto;display:flex;gap:8px">
+        <n-button v-if="fsPanels.length < 3" size="small" @click="openFsSearch('right')">+ 添加</n-button>
+        <n-button size="small" @click="closeFs">退出全屏</n-button>
+      </span>
+    </div>
+    <div class="fs-panels" :style="{gridTemplateColumns: `repeat(${fsPanels.length}, minmax(0, 1fr))`}">
+      <div v-for="(p, i) in fsPanels" :key="p.code" class="fs-panel">
+        <div class="fs-panel-head">
+          <span class="fs-panel-name">{{ p.name }}</span>
+          <span class="fs-panel-code">{{ p.code }}</span>
+          <span v-if="p.quote" class="fs-panel-price"
+            :style="{color: (p.quote.change_pct >= 0 ? UP_COLOR : DOWN_COLOR)}">
+            {{ p.quote.price != null ? p.quote.price.toFixed(2) : '—' }}
+            <span class="fs-panel-chg" v-if="p.quote.change_pct != null">
+              {{ p.quote.change_pct >= 0 ? '+' : '' }}{{ p.quote.change_pct.toFixed(2) }}%
+            </span>
+          </span>
+          <span v-if="p.loading" class="fs-panel-loading">加载中…</span>
+          <span class="fs-panel-tools">
+            <n-button size="tiny" text @click="callFsAi(p)">AI</n-button>
+            <n-button v-if="p.alerts?.length" size="tiny" text @click="p.alertsOpen=!p.alertsOpen">提醒 {{ p.alerts.length }}</n-button>
+            <n-button size="tiny" text @click="openFsVp(p)">量分布</n-button>
+            <n-button size="tiny" text @click="openReplay(p)">回放</n-button>
+            <n-button size="tiny" text @click="exportFsPanel(p)">导出</n-button>
+            <n-button v-if="i > 0" size="tiny" text class="fs-remove" @click="removeFsPanel(i)">移除</n-button>
+          </span>
+        </div>
+        <!-- 完整报价条（与详情页同口径） -->
+        <div v-if="p.quote" class="fs-quote">
+          <div class="fs-q-row">
+            <span class="fs-q-status">{{ p.quote.session_status || '—' }}</span>
+            <span v-if="p.quote.is_realtime && p.quote.timestamp" class="fs-q-time">{{ p.quote.timestamp.slice(11) }}</span>
+            <span class="fs-q-stat">今开 <b>{{ qfmt(p.quote.open) }}</b></span>
+            <span class="fs-q-stat">最高 <b>{{ qfmt(p.quote.high) }}</b></span>
+            <span class="fs-q-stat">最低 <b>{{ qfmt(p.quote.low) }}</b></span>
+            <span class="fs-q-stat">均价 <b>{{ qfmt(p.quote.avg_price) }}</b></span>
+            <span class="fs-q-stat">量比 <b>{{ qfmt(p.quote.volume_ratio) }}</b></span>
+            <span class="fs-q-stat">成交额 <b>{{ fmtMoney(p.quote.amount) }}</b></span>
+            <span class="fs-q-stat">换手 <b>{{ p.quote.turnover_pct != null ? p.quote.turnover_pct.toFixed(2) + '%' : '—' }}</b></span>
+            <span class="fs-q-stat">RVOL <b>{{ fsRvol(p) != null ? fsRvol(p).toFixed(2) + 'x' : '—' }}</b></span>
+          </div>
+          <div class="fs-q-row" v-if="fsDepth(p) || p.quote.cost_price">
+            <span v-if="fsDepth(p)" class="fs-q-stat">盘口
+              <b :style="{color: fsDepth(p).imb >= 0 ? UP_COLOR : DOWN_COLOR}">{{ fsDepth(p).imb != null ? (fsDepth(p).imb * 100).toFixed(0) + '%' : '—' }}</b>
+              <span style="color:var(--c-text-faint)"> · 价差 {{ fsDepth(p).spread != null ? fsDepth(p).spread.toFixed(1) + 'bp' : '—' }}</span>
+            </span>
+            <span v-if="p.quote.bids?.[0]" class="fs-q-stat">买一 <b>{{ qfmt(p.quote.bids[0].price) }}</b> × {{ p.quote.bids[0].volume }}</span>
+            <span v-if="p.quote.asks?.[0]" class="fs-q-stat">卖一 <b>{{ qfmt(p.quote.asks[0].price) }}</b> × {{ p.quote.asks[0].volume }}</span>
+            <span v-if="p.quote.cost_price" class="fs-q-stat">成本 <b>{{ qfmt(p.quote.cost_price) }}</b>
+              <span v-if="p.quote.stop_price"> · 止损 <b style="color:var(--c-up)">{{ qfmt(p.quote.stop_price) }}</b></span>
+              <span v-if="p.quote.take_profit_price"> · 止盈 <b style="color:var(--c-down)">{{ qfmt(p.quote.take_profit_price) }}</b></span>
+            </span>
+          </div>
+        </div>
+        <!-- 栏内 AI 解读：与详情页一致，放在分时图上方 -->
+        <div v-if="p.aiOpen" class="fs-ai">
+          <div class="fs-ai-head">
+            <b>AI 盘面解读</b><span>非预测 · 非投资建议</span>
+            <n-button size="tiny" text style="margin-left:auto" @click="closeFsAi(p)">关闭</n-button>
+          </div>
+          <div v-if="p.aiLoading" class="fs-ai-loading">正在结合行情 / 分钟结构 / 资讯 / 模型信号生成…</div>
+          <div v-else-if="p.aiError" class="fs-ai-error">{{ p.aiError }}</div>
+          <template v-else-if="p.aiInsight">
+            <div class="fs-ai-summary"><b>{{ p.aiInsight.stance }}</b> {{ p.aiInsight.summary }}</div>
+            <ul class="fs-ai-list"><li v-for="(x, j) in p.aiInsight.observations" :key="'o'+j">{{ x }}</li></ul>
+            <template v-if="p.aiInsight.risks?.length">
+              <div class="fs-ai-sub">风险观察</div>
+              <ul class="fs-ai-list risk"><li v-for="(x, j) in p.aiInsight.risks" :key="'r'+j">{{ x }}</li></ul>
+            </template>
+            <template v-if="p.aiInsight.watch?.length">
+              <div class="fs-ai-sub">观察价位</div>
+              <ul class="fs-ai-list"><li v-for="(x, j) in p.aiInsight.watch" :key="'w'+j">{{ x }}</li></ul>
+            </template>
+            <div class="fs-ai-foot">{{ p.aiInsight.generated_at }} · {{ p.aiInsight.model }}</div>
+          </template>
+        </div>
+        <div v-if="!p.loading && !p.bars.length" class="fs-panel-empty">无分钟数据</div>
+        <div :id="'fsc-' + p.code" class="fs-panel-chart"></div>
+        <div v-if="fsLevelChips(p).length" class="fs-levels">
+          <span v-for="l in fsLevelChips(p)" :key="l.name + l.value">
+            <i :style="{background:l.color}"></i>{{ l.name }} <b>{{ l.value.toFixed(2) }}</b>
+          </span>
+        </div>
+        <!-- 盘中相对强弱：全屏也保留，与详情页同标题/同口径 -->
+        <div v-if="fsRsReady(p)" class="fs-rs">
+          <div class="fs-rs-head">
+            <span class="fs-rs-title">盘中相对强弱</span>
+            <span class="fs-rs-sub">个股 vs 沪深300（当日起点=0%，超额=百分点）</span>
+          </div>
+          <div :id="'fsrs-' + p.code" class="fs-rs-chart"></div>
+        </div>
+        <!-- 栏内提醒列表 -->
+        <div v-if="p.alertsOpen" class="fs-alerts">
+          <div class="fs-alerts-head"><b>盘中提醒</b>
+            <n-button size="tiny" text style="margin-left:auto" @click="p.alertsOpen=false">关闭</n-button>
+          </div>
+          <template v-if="p.alerts?.length">
+            <div v-for="a in p.alerts.slice(0,6)" :key="a.id" class="fs-alert-item">
+              <div class="fs-alert-title">{{ a.title }}</div>
+              <div class="fs-alert-body">{{ a.body }}</div>
+              <div class="fs-alert-time">{{ (a.created_at || '').slice(11, 16) }}</div>
+            </div>
+          </template>
+          <div v-else class="fs-alert-empty">暂无提醒</div>
+        </div>
+      </div>
+    </div>
+    <div v-if="fsPanels.length < 3" class="fs-side fs-side-left" @click="openFsSearch('left')">
+      <div class="fs-plus">+</div>
+    </div>
+    <div v-if="fsPanels.length < 3" class="fs-side fs-side-right" @click="openFsSearch('right')">
+      <div class="fs-plus">+</div>
+    </div>
+    <div v-if="fsSearchOpen" class="fs-search"
+      :class="fsSearchSide === 'left' ? 'fs-search-left' : 'fs-search-right'">
+      <div class="fs-search-title">添加对比个股（最多 3 栏）</div>
+      <StockSuggestInput v-model:value="fsSearchCode" size="small" width="240px" :z-index="4000"
+        @select="addFsStock" @enter="addFsStock" />
+      <div class="fs-search-hint">代码 / 名称 / 拼音首字母，选中即加入</div>
+      <n-button size="tiny" text @click="fsSearchOpen=false">取消</n-button>
+    </div>
+  </div>
 
   <!-- 加入分组弹窗：自选+动态组多选，支持就地新建分组并勾选 -->
   <n-modal v-model:show="showAddGroup">
@@ -334,20 +577,76 @@
       </template>
     </n-card>
   </n-modal>
+
+  <!-- 成交量分布（当日）：POC / VAH / VAL，基于当前周期已加载的 bar -->
+  <n-modal v-model:show="showVp" preset="card" :title="vpTitle"
+    style="width:560px;max-width:94vw">
+    <template v-if="vpData">
+      <div ref="vpEl" style="width:100%;height:360px"></div>
+      <div class="vp-summary">
+        POC <b>{{ vpData.pocPrice.toFixed(2) }}</b>
+        · VAH <b>{{ vpData.vah.toFixed(2) }}</b>
+        · VAL <b>{{ vpData.val.toFixed(2) }}</b>
+        · 总量 <b>{{ vpData.total.toLocaleString() }}</b> 手
+      </div>
+    </template>
+    <n-empty v-else description="当前周期没有可用的分钟量数据" />
+  </n-modal>
+
+  <!-- 当日分时回放 -->
+  <n-modal v-model:show="showReplay" preset="card" :title="replayTitle"
+    style="width:820px;max-width:96vw">
+    <template v-if="replayBars.length">
+      <div v-if="replayBar" class="replay-meta">
+        <b>{{ replayBar.datetime.slice(11) }}</b>
+        <span>开 {{ replayBar.open.toFixed(2) }}</span>
+        <span>高 {{ replayBar.high.toFixed(2) }}</span>
+        <span>低 {{ replayBar.low.toFixed(2) }}</span>
+        <span>收 {{ replayBar.close.toFixed(2) }}</span>
+        <span>量 {{ replayBar.volume }} 手</span>
+      </div>
+      <div ref="replayEl" style="width:100%;height:380px"></div>
+      <div class="replay-controls">
+        <n-button size="small" @click="playReplay">{{ replayPlaying ? '暂停' : '播放' }}</n-button>
+        <n-slider v-model:value="replayIdx" :min="1" :max="replayBars.length" :step="1"
+          style="flex:1" @update:value="drawReplay" />
+        <n-select v-model:value="replaySpeed" size="small" style="width:86px"
+          :options="[{label:'慢',value:800},{label:'中',value:300},{label:'快',value:100}]" />
+        <span class="replay-idx">{{ replayIdx }}/{{ replayBars.length }}</span>
+      </div>
+      <div class="replay-hint">只回放当日已加载的 {{ minkPeriod }} bar；拖动滑块或播放。回放不构成交易建议。</div>
+    </template>
+    <n-empty v-else description="当日没有可回放的分钟数据" />
+  </n-modal>
+
+  <!-- 盘中多股对比 -->
+  <n-modal v-model:show="showCompare" preset="card" title="盘中多股对比"
+    style="width:820px;max-width:96vw">
+    <div class="compare-bar">
+      <n-input v-model:value="compareInput" size="small"
+        placeholder="对比代码，逗号分隔，最多 2 只（如 600519,000001）"
+        style="flex:1" @keyup.enter="loadCompare" />
+      <n-button size="small" type="primary" :loading="compareLoading" @click="loadCompare">加载</n-button>
+    </div>
+    <div ref="compareEl" style="width:100%;height:380px"></div>
+    <div class="replay-hint">以当日起点=0% 归一化；最多 3 条线（含当前股）。</div>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
 import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import {NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NButtonGroup, NModal, NCheckboxGroup, NCheckbox, useDialog, useMessage} from 'naive-ui'
+import IntradayPlaybook from './IntradayPlaybook.vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
+import {NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NSlider, NButtonGroup, NModal, NCheckboxGroup, NCheckbox, NTabs, NTabPane, useDialog, useMessage} from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useViewport } from '../utils/viewport'
+import { addWsListener } from '../utils/ws'
 import { chartColors as T } from '../utils/chart'
 import StatStrip from './StatStrip.vue'
 
@@ -360,11 +659,37 @@ const dialog = useDialog()
 const message = useMessage()
 const authStore = useAuthStore()
 const _authH = () => authStore.token ? {Authorization: 'Bearer '+authStore.token} : {}
-const code = ref(props.code||'')
+const code = ref(props.code||'')       // 当前页面正在展示的代码
+const inputCode = ref(props.code||'')  // 搜索框文本；只有选中/回车才提交为 code
 const loading = ref(false)
+const loadError = ref('')
 const detail = ref(null)
 const notFound = ref(false)
 const hcnt = ref(0)
+let loadSeq = 0
+let chartSeq = 0
+let alive = true
+const _six = v => (String(v || '').match(/\d{6}/) || [''])[0]
+
+function onPickStock(item){
+  const c = _six(item?.code) || _six(inputCode.value)
+  if(!c) return
+  inputCode.value = item?.name ? `${c}  ${item.name}` : c
+  code.value = c
+  _nav.dcode = c
+  _nav.syncHash()
+  load()
+}
+
+function onQuery(){
+  const c = _six(inputCode.value) || _six(code.value)
+  if(!c){ message.warning('请输入 6 位代码'); return }
+  inputCode.value = c
+  code.value = c
+  _nav.dcode = c
+  _nav.syncHash()
+  load()
+}
 
 // ── 分组状态（持仓 / 自选 / 动态组）──
 function askAi() {
@@ -377,11 +702,13 @@ const allGroups = ref([])          // 加组弹窗里的全量分组
 const pickedGroups = ref([])       // 弹窗勾选
 const showAddGroup = ref(false), newGroupName = ref(''), addingGroup = ref(false), savingGroups = ref(false)
 
-async function loadStockGroups(){
+async function loadStockGroups(c = code.value, seq = loadSeq){
+  if(!c) return
   try{
-    const r = await axios.get(API + '/api/watch/stock-groups?code=' + code.value)
+    const r = await axios.get(API + '/api/watch/stock-groups?code=' + c)
+    if(seq !== loadSeq || c !== code.value) return
     stockGroups.value = r.data
-  }catch(e){ stockGroups.value = { groups: [], in_portfolio: false } }
+  }catch(e){ if(seq === loadSeq && c === code.value) stockGroups.value = { groups: [], in_portfolio: false } }
 }
 function confirmRemoveGroup(g){
   dialog.warning({
@@ -440,14 +767,8 @@ const RANGES = [{t:'1月',d:30},{t:'1年',d:250},{t:'2年',d:500},{t:'5年',d:12
 const period = ref('day')
 const range = ref(500)
 
-async function loadKline() {
-  const r = await axios.get(API + '/api/stock/' + code.value + '/kline?days=' + range.value + '&period=' + period.value + '&adjust=' + adj.value)
-  lastKline = r.data
-  await nextTick()
-  drawCharts(lastKline)
-}
-function switchPeriod(v) { period.value = v; loadKline() }
-function switchRange(d) { range.value = d; loadKline() }
+function switchPeriod(v) { period.value = v; reloadChart() }
+function switchRange(d) { range.value = d; reloadChart() }
 let lastKline = null
 const dateRange = ref('')
 const peData = ref([])
@@ -467,7 +788,7 @@ function updateNav() {
   if (i > 0) prevCode.value = navList[i - 1]
   if (i >= 0 && i < navList.length - 1) nextCode.value = navList[i + 1]
 }
-function jump(c) { if (c) { _nav.dcode = c; _nav.syncHash(); code.value = c; load() } }
+function jump(c) { if (c) { _nav.dcode = c; _nav.syncHash(); code.value = c; inputCode.value = c; load() } }
 // 供列表页调用：记录当前列表代码序列
 window.__setDetailNavList = (codes) => { localStorage.setItem('detail_nav_list', JSON.stringify(codes || [])) }
 
@@ -530,8 +851,8 @@ const summaryItems = computed(() => {
   if (!d) return []
   // 盘中优先用实时快照：原来这里固定显示上一交易日收盘，盘中会误导
   const q = quote.value
-  const price = q?.price ?? d.close
-  const chgPct = q?.change_pct ?? priceChg.value
+  const price = (q?.price != null && q.price > 0) ? q.price : d.close
+  const chgPct = (q?.price != null && q.price > 0 ? q.change_pct : null) ?? priceChg.value
   const color = chgPct == null ? undefined : (chgPct >= 0 ? UP_COLOR : DOWN_COLOR)
   return [
     { label: d.stock_code, value: d.stock_name },
@@ -566,6 +887,16 @@ const chipData = ref(null)   // 筹码分布（现价口径）
 const sigData = ref([])      // 模型信号史（含前瞻收益）
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
+// 右侧栏「雪球讨论 / 相关资讯」做成一个卡片两个 tab；只有一个有数据时自动切到有数据的那页
+const sentiTab = ref('xq')
+const sentiTabTouched = ref(false)   // 用户手动切过 tab 后，不再被数据到达自动改回
+const xqHas = computed(() => !!(xqData.value && (xqData.value.count_7d > 0 || xqData.value.today_count > 0)))
+const newsHas = computed(() => !!(newsData.value && newsData.value.count > 0))
+function onSentiTabChange(v){ sentiTab.value = v; sentiTabTouched.value = true }
+watch([xqHas, newsHas], ([x, n]) => {
+  if (sentiTabTouched.value) return
+  sentiTab.value = x ? 'xq' : (n ? 'news' : 'xq')
+})
 // 资讯分类标识色属「质量/状态域」，不表达涨跌方向，故不受红绿铁律约束
 const NEWS_CAT_NAME = { flash:'快讯', stock_news:'个股', report:'研报', notice:'公告' }
 const NEWS_CAT_COLOR = { flash:'var(--c-info)', stock_news:'var(--c-text-dim)', report:'var(--c-text-dim)', notice:'var(--c-warn)' }
@@ -647,19 +978,38 @@ function calcPriceChange(kd){
 }
 
 async function load(){
-  if(!code.value) return
+  const c = code.value
+  if(!c) return
+  const seq = ++loadSeq
   loading.value = true
   notFound.value = false
+  loadError.value = ''
   detail.value = null
+  lastKline = null
+  dateRange.value = ''
   quote.value = null        // 换票先清快照，避免旧票价格挂在新票抬头
   quoteError.value = false
+  clearTimeout(quoteTimer); quoteTimer = null
+  minkPaused.value = false
+  minkBars.value = []       // 必须清：否则 5s 快照可能把新票价写进上一只票的最后一根 bar
+  minkError.value = false
+  minkUpdatedAt.value = null
+  minkResetZoom = true      // 新票/查询后回到默认视窗
+  benchMink.value = []
+  showVp.value = false
+  vpData.value = null
+  showReplay.value = false
+  showCompare.value = false
+  if (showFs.value) closeFs()
   intradayAlerts.value = []
-  aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = ''
+  aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = ''; aiEvent.value = false
   hoverInfo.value = null
   // 清掉上一只票的全部扩展数据：这些都是 best-effort 补的（allSettled 吞错、空数据隐藏卡片），
   // 不清会在「新票无数据/请求失败」时把上只票的内容留在侧栏与图表——跨股票串数据比空白更难察觉
   xqData.value = null
   newsData.value = null
+  sentiTab.value = 'xq'
+  sentiTabTouched.value = false
   mfData.value = []; mfCum.value = []
   benchData.value = []
   marginData.value = []
@@ -669,28 +1019,47 @@ async function load(){
   sigStats.value = null
   peData.value = []   // 同上：新票 PE 拉空/失败时旧票 PE 图会残留（c5 图层不随 v-if 消失）
   updateNav()
-  try{
-    const [r1, r2] = await Promise.all([
-      axios.get(API+'/api/stock/'+code.value+'/detail'),
-      axios.get(API+'/api/stock/'+code.value+'/kline?days='+range.value+'&period='+period.value+'&adjust='+adj.value),
-    ])
-    detail.value = r1.data; hcnt.value = r1.data.history_count
-    if(r2.data.kline) lastKline = r2.data
-  }catch(e){
-    if(e.response?.status===404) notFound.value = true
-  } finally { loading.value = false }
-  // PE data (best-effort, 失败不影响 main charts)
+  loadLatestAiEvent(c, seq)   // 通知进入/换页时补展示最近一次事件解读（与主数据并行）
+
+  // detail 与 kline 分开等：K线失败不应把整个详情页打成空白
+  const [r1, r2] = await Promise.allSettled([
+    axios.get(API+'/api/stock/'+c+'/detail'),
+    axios.get(API+'/api/stock/'+c+'/kline?days='+range.value+'&period='+period.value+'&adjust='+adj.value),
+  ])
+  if(seq !== loadSeq) return
+  if(r1.status === 'fulfilled'){
+    detail.value = r1.value.data; hcnt.value = r1.value.data.history_count
+  } else if(r1.reason?.response?.status === 404){
+    notFound.value = true
+  } else {
+    const status = r1.reason?.response?.status
+    loadError.value = (status && status < 500 ? r1.reason?.response?.data?.detail : '')
+      || '加载失败，请检查后端服务后重试'
+  }
+  if(r2.status === 'fulfilled' && r2.value.data?.kline) lastKline = r2.value.data
+  loading.value = false
+  if(!detail.value) return
+
   await nextTick()
   drawCharts(lastKline)
+  // 主图先起：分时/报价/提醒不等待资金流、雪球、资讯等扩展请求
+  loadMink(c)
+  loadQuote(c)
+  loadIntradayAlerts(c)
   try{
-    const r=await axios.get(API+'/api/stock/'+code.value+'/pe_history')
-    if(r.data.data&&r.data.data.length){peData.value=r.data.data;nextTick(()=>drawPeChart())}
-    else clearPeChart()   // 新票无 PE 数据：清掉上一只票的图与标题区间
-  }catch(e){ clearPeChart() }
+    const r = await axios.get(API+'/api/stock/'+c+'/pe_history')
+    if(seq !== loadSeq) return
+    if(r.data.data&&r.data.data.length){
+      peData.value=r.data.data
+      nextTick(()=>{ if(seq === loadSeq) drawPeChart() })
+    } else clearPeChart()   // 新票无 PE 数据：清掉上一只票的图与标题区间
+  }catch(e){ if(seq === loadSeq) clearPeChart() }
+
   // ── 扩展图数据（全部 best-effort：空数据隐藏卡片，异常不影响主图）──
   await Promise.allSettled([
-    loadStockGroups(),
-    axios.get(API+'/api/stock/'+code.value+'/moneyflow?days=7000').then(r=>{
+    loadStockGroups(c, seq),
+    axios.get(API+'/api/stock/'+c+'/moneyflow?days=7000').then(r=>{
+      if(seq !== loadSeq) return
       mfData.value = r.data.data||[]
       const cum=[]; let s=0
       mfData.value.forEach(d=>{s+=d.net_main; cum.push(+s.toFixed(0))})
@@ -699,23 +1068,23 @@ async function load(){
     // 基准与 K 线同窗同周期：相对强弱两条线起点才可比
     // 注意：K线接口返回字段是 trade_date，c8 的 reindex 统一按 date 取，这里先归一化
     axios.get(API+'/api/stock/000300/kline?days='+range.value+'&period='+period.value+'&adjust=none&type=index').then(r=>{
+      if(seq !== loadSeq) return
       benchData.value = (r.data.kline||[]).map(x=>({date:x.trade_date, close:x.close}))
     }),
-    axios.get(API+'/api/stock/'+code.value+'/margin?days=7000').then(r=>{ marginData.value = r.data.data||[] }),
-    axios.get(API+'/api/stock/'+code.value+'/top_list?days=3650').then(r=>{ toplistData.value = r.data.data||[] }),
-    axios.get(API+'/api/stock/'+code.value+'/chip').then(r=>{ chipData.value = r.data }),
-    axios.get(API+'/api/stock/'+code.value+'/signals?days=1095').then(r=>{ sigData.value = r.data.data||[] }),
-    axios.get(API+'/api/stock/'+code.value+'/xueqiu').then(r=>{ xqData.value = r.data }),
+    axios.get(API+'/api/stock/'+c+'/margin?days=7000').then(r=>{ if(seq === loadSeq) marginData.value = r.data.data||[] }),
+    axios.get(API+'/api/stock/'+c+'/top_list?days=3650').then(r=>{ if(seq === loadSeq) toplistData.value = r.data.data||[] }),
+    axios.get(API+'/api/stock/'+c+'/chip').then(r=>{ if(seq === loadSeq) chipData.value = r.data }),
+    axios.get(API+'/api/stock/'+c+'/signals?days=1095').then(r=>{ if(seq === loadSeq) sigData.value = r.data.data||[] }),
+    axios.get(API+'/api/stock/'+c+'/xueqiu').then(r=>{ if(seq === loadSeq) xqData.value = r.data }),
     // 相关资讯：min_importance=0 全取（含待总结），重要度交给前端徽标表达
-    axios.get(API+'/api/stock/'+code.value+'/news?days=30&limit=20').then(r=>{ newsData.value = r.data }),
+    axios.get(API+'/api/stock/'+c+'/news?days=30&limit=20').then(r=>{ if(seq === loadSeq) newsData.value = r.data }),
   ])
+  if(seq !== loadSeq) return
   computeSigStats()
   await nextTick()
+  if(seq !== loadSeq) return
   drawAuxCharts(lastKline)
   drawChip()
-  loadMink()   // 容器就绪后立即画（timer 30s 兜底）
-  loadQuote()  // 实时报价条（盘中 5s / 非交易时段 30s）
-  loadIntradayAlerts()  // 该股盘中提醒（30s 轮询）
 }
 
 // dataZoom 滑块统一低调样式：ECharts 画在 canvas 上，颜色必须字面量（CSS 变量不生效，
@@ -738,6 +1107,7 @@ const dzSlider = () => ({
 const GRID_STD = { left:64, right:48, bottom:34 }
 
 function drawCharts(kd){
+  if(!kd?.kline?.length){ dateRange.value = ''; return }
   const dates = kd.kline.map(d=>d.trade_date)
   const closes = kd.kline.map(d=>d.close)
   const ohlc = kd.kline.map(d=>[d.open,d.close,d.low,d.high])
@@ -844,6 +1214,7 @@ function drawCharts(kd){
   // 缩放跟随：五图 connect 联动时任何一图缩放都会改 c2 的窗口，节流后按可见区间重算
   if (c2) {
     let _vqLast = 0
+    c2.off('datazoom')
     c2.on('datazoom', () => {
       const now = Date.now()
       if (now - _vqLast < 120) return
@@ -878,6 +1249,7 @@ function drawCharts(kd){
   calcPriceChange(kd)
   // crosshair 交互：hover K 线时更新动态行情数据（含成交额/换手）
   if(c1){
+    c1.off('mousemove'); c1.off('mouseout')
     c1.on('mousemove', p=>{
       if(p.dataIndex!=null){
         const o = ohlc[p.dataIndex]
@@ -1012,6 +1384,7 @@ function drawAuxCharts(kd){
     if(c9){
       newCharts.push(c9)
       let _tLast = 0
+      c9.off('datazoom')
       c9.off('datazoom')
       c9.on('datazoom', ()=>{
         const now=Date.now(); if(now-_tLast<120) return; _tLast=now
@@ -1165,28 +1538,45 @@ function drawPeChart(){
   })
   // 反向联动：拖 PE 滑块 → 日历窗翻译 → K 线组；绘制完成即按当前 K 线窗口对齐一次
   c5.off('datazoom')
+  c5.off('datazoom')
   c5.on('datazoom', () => { if (!syncingAx) syncKlineFromPe() })
   syncPeFromKline()
 }
 
 async function reloadChart(){
-  localStorage.setItem('detail_adj', adj.value)
+  const c = code.value
+  if(!c) return
+  const req = ++chartSeq
+  const p = period.value, rng = range.value, a = adj.value
+  localStorage.setItem('detail_adj', a)
   try{
-    const r = await axios.get(API+'/api/stock/'+code.value+'/kline?days='+range.value+'&period='+period.value+'&adjust='+adj.value)
-    if(r.data.kline) lastKline = r.data
-    // 相对强弱的基准与 K 线同窗同周期，换窗必须重取（其余扩展序列是长窗 reindex）
+    const r = await axios.get(API+'/api/stock/'+c+'/kline?days='+rng+'&period='+p+'&adjust='+a)
+    if(req !== chartSeq || c !== code.value) return
+    if(r.data?.kline) lastKline = r.data
+    // 相对强弱的基准与 K 线同窗同周期，换窗/换周期必须重取（其余扩展序列是长窗 reindex）
     try{
-      const rb = await axios.get(API+'/api/stock/000300/kline?days='+range.value+'&period='+period.value+'&adjust=none&type=index')
-      benchData.value = (rb.data.kline||[]).map(x=>({date:x.trade_date, close:x.close}))
+      const rb = await axios.get(API+'/api/stock/000300/kline?days='+rng+'&period='+p+'&adjust=none&type=index')
+      if(req === chartSeq && c === code.value)
+        benchData.value = (rb.data.kline||[]).map(x=>({date:x.trade_date, close:x.close}))
     }catch(e){}
-  }catch(e){} finally {
-    if(lastKline){ await nextTick(); drawCharts(lastKline); drawAuxCharts(lastKline); drawChip() }
-  }
+  }catch(e){ return }
+  if(req !== chartSeq || c !== code.value || !lastKline?.kline?.length) return
+  await nextTick()
+  if(req !== chartSeq) return
+  drawCharts(lastKline); drawAuxCharts(lastKline); drawChip()
 }
 
 // 窗口 resize 时自适应所有图表
-function resizeAll(){ ['c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12'].forEach(id => { const el = document.getElementById(id); if (el && el._echart) el._echart.resize() }) }
-let _resizeHandler = null
+function resizeAll(){
+  ['c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12','c13'].forEach(id => {
+    const el = document.getElementById(id); if (el && el._echart) el._echart.resize()
+  })
+  if (replayChart) replayChart.resize()
+  if (compareChart) compareChart.resize()
+  document.querySelectorAll('.fs-panel-chart, .fs-rs-chart').forEach(el => {
+    if (el._echart) el._echart.resize()
+  })
+}
 
 // ── 实时快照（腾讯，服务端 3s 缓存）：盘中 5s，非交易时段 30s ──
 // 分钟图只到「最近一根 bar」，报价条补上现价/涨跌幅/量比/五档，盘中不再看昨收。
@@ -1198,7 +1588,10 @@ let quoteBusy = false
 const intradayAlerts = ref([])   // 该股近 8 条盘中提醒（后端 watcher 写 risk_alerts）
 let alertTimer = null
 const qfmt = v => (v == null || v === 0) ? '—' : Number(v).toFixed(2)
-const quotePrice = computed(() => quote.value?.price ?? detail.value?.close ?? null)
+const quotePrice = computed(() => {
+  const p = quote.value?.price
+  return (p != null && p > 0) ? p : (detail.value?.close ?? null)
+})
 const quoteChgPct = computed(() => quote.value?.change_pct ?? priceChg.value)
 const quoteColor = computed(() => quoteChgPct.value == null ? 'var(--c-text)'
   : (quoteChgPct.value >= 0 ? UP_COLOR : DOWN_COLOR))
@@ -1218,24 +1611,36 @@ const quoteChgText = computed(() => {
   return quoteChgPct.value == null ? '' : (quoteChgPct.value >= 0 ? '+' : '') + quoteChgPct.value.toFixed(2) + '%'
 })
 
-async function loadQuote(){
-  if (quoteBusy || !code.value) return
+async function loadQuote(c = code.value){
+  if (quoteBusy || !c) return
   quoteBusy = true; quoteLoading.value = true
-  const c = code.value
   try{
     const r = await axios.get(API+'/api/stock/'+c+'/quote',
       { headers:{'Cache-Control':'no-store'} })
     if (c !== code.value) return          // 切换股票后旧请求返回，丢掉
-    const first = !quote.value
     quote.value = r.data
     quoteError.value = false
-    if (first && minkBars.value.length) drawMink()   // 首帧快照补画昨收/均价/现价线
+    // 5s 快照只更新最后一根 K 线的 close/high/low，历史 bar 不动；
+    // 这样分时图与报价条同步到 5s，而不是等 30s 的 minkline 刷新。
+    const last = minkBars.value[minkBars.value.length - 1]
+    if (last && r.data.trade_date === last.datetime.slice(0, 10) && r.data.price > 0) {
+      last.close = r.data.price
+      last.high = Math.max(last.high, r.data.price)
+      last.low = Math.min(last.low, r.data.price)
+    }
+    if (minkBars.value.length && !minkPaused.value) drawMink()
   }catch(e){
     if (c !== code.value) return          // 失败保留旧快照，下轮重试
     quoteError.value = true
   }finally{
     quoteBusy = false; quoteLoading.value = false
-    if (c === code.value) scheduleQuote()
+    if (alive && code.value) {
+      // 旧票请求结束时，新票可能正因 quoteBusy 没能发请求：给新票补一拍
+      if (c !== code.value) {
+        clearTimeout(quoteTimer)
+        quoteTimer = setTimeout(() => loadQuote(), 100)
+      } else scheduleQuote()
+    }
   }
 }
 function scheduleQuote(){
@@ -1247,15 +1652,98 @@ function scheduleQuote(){
 const aiLoading = ref(false)
 const aiInsight = ref(null)
 const aiError = ref('')
+// 盘中执行卡动作的滚动锚点
+const quoteBarEl = ref(null)
+const aiCardEl = ref(null)
+const alertsPanelEl = ref(null)
+const aiEvent = ref(false)      // true = 当前卡片由事件监听自动触发
 let aiReqSeq = 0
+let aiWsUnwatch = null
 const aiStanceClass = computed(() => aiInsight.value?.stance === '偏强' ? 'up'
   : (aiInsight.value?.stance === '偏弱' ? 'down' : 'flat'))
+
+// 事件 AI（后端 worker 完成 → WS intraday_ai）→ 当前股自动展开 AI 卡
+function onWsAiEvent(data){
+  // 盘中提醒：全局 WS 已推送，详情页直接并入侧栏，别等 30s 轮询
+  if (data?.type === 'risk_alert') {
+    const incoming = (data.alerts || []).filter(a =>
+      a.stock_code === code.value && String(a.kind || '').startsWith('it'))
+    if (incoming.length) {
+      const seen = new Set()
+      intradayAlerts.value = [...incoming, ...intradayAlerts.value]
+        .filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true })
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 8)
+    }
+    return
+  }
+  if (data?.type !== 'intraday_ai') return
+  const ev = (data.events || []).find(e => e.stock_code === code.value)
+  if (!ev) return
+  aiReqSeq++   // 事件结果优先：让在途的手动 AI 请求作废，避免回来后覆盖事件解读
+  if (ev.status === 'done' && ev.result?.ok) {
+    aiInsight.value = ev.result
+    aiError.value = ''
+    aiLoading.value = false
+    aiEvent.value = true
+  } else if (ev.status === 'failed') {
+    aiError.value = ev.error || '事件 AI 解读失败'
+    aiLoading.value = false
+    aiEvent.value = true
+  }
+  // 全屏分屏里同一只票也自动展开 AI 面板（否则全屏时事件解读只落在背后页面）
+  for (const p of fsPanels.value) {
+    if (p.code !== ev.stock_code) continue
+    p.aiOpen = true
+    p.aiLoading = false
+    if (ev.status === 'done' && ev.result?.ok) { p.aiInsight = ev.result; p.aiError = '' }
+    else if (ev.status === 'failed') { p.aiError = ev.error || '事件 AI 解读失败' }
+    resizeFsPanel(p)
+  }
+}
+
+// 盘中执行卡：抽屉已由子组件关闭，这里把页面带到对应区域
+function playbookScroll(el, delay = 280){
+  setTimeout(() => el?.scrollIntoView({ behavior: 'smooth', block: 'center' }), delay)
+}
+
+function onPlaybookAction(action){
+  if (action === 'alerts') { playbookScroll(alertsPanelEl.value, 260); return }
+  if (action === 'ai') {
+    if (!aiInsight.value && !aiLoading.value) loadAiInsight()
+    nextTick(() => playbookScroll(aiCardEl.value, 280))
+    return
+  }
+  if (action === 'levels') {
+    if (!['m1', 'm5', 'm15'].includes(minkPeriod.value)) minkPeriod.value = 'm5'
+    showLevels.value = true; showBands.value = true; showOr.value = true; showEvents.value = true
+    setTimeout(() => document.getElementById('c0')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 340)
+    return
+  }
+  if (action === 'risk') { playbookScroll(quoteBarEl.value, 260); return }
+  if (action === 'ask') askAi()
+}
+
+// 从通知/其他页面进入详情时 WS 消息已错过：补拉窗口内最近一次事件解读
+async function loadLatestAiEvent(c = code.value, loadToken = null){
+  if(!c) return
+  const aiSeq = aiReqSeq
+  try{
+    const r = await axios.get(API+'/api/stock/'+c+'/ai-intraday/latest-event')
+    if((loadToken != null && loadToken !== loadSeq) || aiSeq !== aiReqSeq || aiInsight.value) return
+    if(r.data?.ok){
+      aiInsight.value = r.data
+      aiError.value = ''
+      aiEvent.value = true
+    }
+  }catch(e){ /* 无事件/接口失败不打扰详情页 */ }
+}
 
 async function loadAiInsight(){
   if(aiLoading.value || !code.value) return
   const c = code.value
   const seq = ++aiReqSeq
-  aiLoading.value = true; aiError.value = ''; aiInsight.value = null
+  aiLoading.value = true; aiError.value = ''; aiInsight.value = null; aiEvent.value = false
   try{
     const r = await axios.get(API+'/api/stock/'+c+'/ai-intraday')
     if(seq !== aiReqSeq || c !== code.value) return
@@ -1268,15 +1756,23 @@ async function loadAiInsight(){
     if(seq === aiReqSeq) aiLoading.value = false
   }
 }
-function closeAi(){ aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = '' }
+function closeAi(){ aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = ''; aiEvent.value = false }
 
 // 盘中提醒列表（仅该股；Chrome 通知走全局 WS，不依赖这个轮询）
-async function loadIntradayAlerts(){
-  const c = code.value
+async function loadIntradayAlerts(c = code.value){
   if(!c) return
   try{
     const r = await axios.get(API+'/api/risk/alerts?code='+c+'&intraday=true&limit=8')
-    if(c === code.value) intradayAlerts.value = r.data || []   // 换票后旧请求返回，丢掉
+    if(c === code.value){
+      const rows = r.data || []
+      const maxId = rows.reduce((m, a) => Math.max(m, a.id || 0), 0)
+      // 轮询快照可能早于 WS 推送：保留比快照更新的 WS 行，避免新提醒被旧响应覆盖
+      const newer = intradayAlerts.value.filter(a => (a.id || 0) > maxId)
+      const seen = new Set()
+      intradayAlerts.value = [...rows, ...newer]
+        .filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true })
+        .sort((a, b) => b.id - a.id).slice(0, 8)
+    }
   }catch(e){ /* best-effort：提醒接口失败不影响行情 */ }
 }
 
@@ -1284,19 +1780,1076 @@ async function loadIntradayAlerts(){
 const MINK_PERIODS = [{v:'m1',t:'1分'},{v:'m5',t:'5分'},{v:'m15',t:'15分'},{v:'m30',t:'30分'},{v:'m60',t:'60分'}]
 const minkPeriod = ref('m5')
 const minkBars = ref([])
+const minkPaused = ref(false)
+const minkError = ref(false)
+const minkUpdatedAt = ref(null)
 let minkTimer = null
+let minkSeq = 0
+let minkResetZoom = false
 
-async function loadMink(){
+const minkLast = computed(() => minkBars.value[minkBars.value.length - 1] || null)
+const minkStatus = computed(() => {
+  if (minkPaused.value) return '已暂停'
+  if (minkError.value) return '分时数据延迟'
+  if (!minkBars.value.length) return minkUpdatedAt.value ? '无分钟数据' : '加载中'
+  const q = quote.value
+  if (q?.is_realtime && q.timestamp && minkLast.value) {
+    // 两边都是北京时间；统一按 UTC 解析，只比较差值
+    const ts = s => Date.parse(String(s).replace(' ', 'T') + 'Z')
+    if (ts(q.timestamp) - ts(minkLast.value.datetime) > 3 * 60 * 1000) return '分时数据延迟'
+  }
+  if (minkUpdatedAt.value) {
+    const d = minkUpdatedAt.value
+    const p = n => String(n).padStart(2, '0')
+    return `更新 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  }
+  return '已更新'
+})
+const minkStatusClass = computed(() => minkPaused.value ? 'paused'
+  : (minkError.value || minkStatus.value === '分时数据延迟' ? 'bad' : 'ok'))
+const minkLastBarTitle = computed(() => {
+  const parts = []
+  if (minkLast.value) parts.push(`最近 bar ${minkLast.value.datetime}`)
+  if (minkUpdatedAt.value) parts.push(`接口刷新 ${minkUpdatedAt.value.toLocaleTimeString('zh-CN', {hour12: false})}`)
+  if (minkError.value) parts.push('最近一次分时请求失败，图可能不是最新')
+  return parts.join(' / ') || '分钟数据状态'
+})
+function toggleMinkPause(){
+  minkPaused.value = !minkPaused.value
+  if (!minkPaused.value) loadMink()
+}
+
+function exportMink(){
+  const inst = document.getElementById('c0')?._echart
+  if (!inst) return
+  const url = inst.getDataURL({type:'png', pixelRatio:2, backgroundColor:T.bg})
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${code.value}_${minkPeriod.value}_${new Date().toISOString().slice(0,16).replace(/[-:T]/g,'')}.png`
+  a.click()
+}
+function onMinkKey(e){
+  if (e.key === 'Escape' && showFs.value) {
+    // 弹窗打开时把 Esc 让给弹窗（量分布/回放/对比），不要直接退出全屏
+    if (showVp.value || showReplay.value || showCompare.value) return
+    if (fsSearchOpen.value) fsSearchOpen.value = false
+    else closeFs()
+    return
+  }
+  if (!e.altKey || e.ctrlKey || e.metaKey) return
+  const tag = (e.target?.tagName || '').toUpperCase()
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return
+  const map = {1:'m1', 2:'m5', 3:'m15', 4:'m30', 5:'m60'}
+  const k = e.key
+  if (map[k]) {
+    e.preventDefault()
+    if (minkPeriod.value !== map[k]) minkPeriod.value = map[k]
+  } else if (k.toLowerCase() === 'p') {
+    e.preventDefault(); toggleMinkPause()
+  } else if (k.toLowerCase() === 'f') {
+    e.preventDefault(); openFs()
+  }
+}
+
+// ── 分时辅助层开关 ──
+const showLevels = ref(true)
+const showBands = ref(true)
+const showOr = ref(true)
+const showEvents = ref(true)
+const minkType = ref('candle')  // candle | line
+const minkMaMode = ref('ma')    // ma | ema
+const benchMink = ref([])       // 沪深300 同周期分钟线（盘中相对强弱）
+const showVp = ref(false)
+const vpData = ref(null)
+const vpTitle = ref('成交量分布（当日）')
+const vpEl = ref(null)
+let vpChart = null
+const MINK_MIN = { m1: 1, m5: 5, m15: 15, m30: 30, m60: 60 }
+
+const minkLastDay = computed(() => minkBars.value[minkBars.value.length - 1]?.datetime.slice(0, 10) || '')
+const minkDayBars = computed(() => {
+  const d = minkLastDay.value
+  return d ? minkBars.value.filter(b => b.datetime.slice(0, 10) === d) : []
+})
+const minkRvol = computed(() => {
+  const bars = minkDayBars.value
+  if (bars.length < 3) return null
+  const completed = bars.slice(0, -1)
+  const avg = completed.reduce((s, b) => s + (b.volume || 0), 0) / completed.length
+  const last = completed[completed.length - 1]
+  return avg > 0 ? +(last.volume / avg).toFixed(2) : null
+})
+const depthStats = computed(() => {
+  const q = quote.value
+  if (!q?.bids?.length || !q?.asks?.length) return null
+  const bidVol = q.bids.reduce((s, b) => s + (b.volume || 0), 0)
+  const askVol = q.asks.reduce((s, a) => s + (a.volume || 0), 0)
+  const tot = bidVol + askVol
+  const b1 = q.bids[0], a1 = q.asks[0]
+  return {
+    imb: tot ? (bidVol - askVol) / tot : null,
+    spread: b1?.price && a1?.price ? +((a1.price / b1.price - 1) * 1e4).toFixed(1) : null,
+  }
+})
+
+const toMin = hm => { const [h, m] = String(hm).split(':').map(Number); return h * 60 + m }
+// 盘中提醒/资讯 → 图上 markPoint（按最近 5 分钟映射到最后一日的 bar）
+const eventMarks = computed(() => {
+  if (!showEvents.value) return []
+  const day = minkLastDay.value
+  const dayBars = minkDayBars.value
+  if (!day || dayBars.length < 2) return []
+  const findBar = ts => {
+    const hm = String(ts || '').slice(11, 16)
+    if (!hm) return null
+    let best = null, bestDiff = Infinity
+    for (const b of dayBars) {
+      const diff = Math.abs(toMin(b.datetime.slice(11, 16)) - toMin(hm))
+      if (diff < bestDiff) { best = b; bestDiff = diff }
+    }
+    return bestDiff <= 5 ? best : null
+  }
+  const marks = []
+  for (const a of (intradayAlerts.value || [])) {
+    if (!String(a.created_at || '').startsWith(day)) continue
+    const b = findBar(a.created_at)
+    if (b) marks.push({
+      coord: [b.datetime.slice(5), b.close], name: a.title || '盘中提醒',
+      symbol: 'pin', symbolSize: 18, itemStyle: { color: T.up }, label: { show: false },
+    })
+  }
+  for (const n of (newsData.value?.data || [])) {
+    if (!String(n.published_at || '').startsWith(day)) continue
+    if (n.importance != null && n.importance < 2) continue
+    const b = findBar(n.published_at)
+    if (b) marks.push({
+      coord: [b.datetime.slice(5), b.close], name: n.title || '资讯',
+      symbol: 'circle', symbolSize: 7, itemStyle: { color: T.series[3] }, label: { show: false },
+    })
+  }
+  return marks.slice(0, 14)
+})
+
+// 图下价位条：把图上的关键线列成「名称 + 数值」，避免右侧 endLabel 叠字
+const minkOrLevels = computed(() => {
+  const q = quote.value
+  if (!q || !showOr.value || q.trade_date !== minkLastDay.value) return []
+  if ((MINK_MIN[minkPeriod.value] || 99) > 15) return []
+  const bars = minkDayBars.value
+  const step = MINK_MIN[minkPeriod.value] || 5
+  const or = mins => {
+    const ins = bars.slice(0, Math.max(1, Math.ceil(mins / step)))
+    if (!ins.length) return null
+    return {hi: Math.max(...ins.map(b => b.high)), lo: Math.min(...ins.map(b => b.low))}
+  }
+  const o15 = or(15), o30 = or(30), out = []
+  if (o15) out.push({name:'OR15高', value:o15.hi, color:T.series[4]},
+                     {name:'OR15低', value:o15.lo, color:T.series[4]})
+  if (o30) out.push({name:'OR30高', value:o30.hi, color:T.series[5]},
+                     {name:'OR30低', value:o30.lo, color:T.series[5]})
+  return out
+})
+const minkLevelChips = computed(() => {
+  const q = quote.value
+  if (!q || q.trade_date !== minkLastDay.value) return []
+  const out = []
+  if (showLevels.value) {
+    const near = (v, pct) => v != null && q.price && Math.abs(v / q.price - 1) <= pct
+    const add = (name, val, color, pct) => {
+      if (near(val, pct)) out.push({name, value:+val, color})
+    }
+    add('昨高', q.prev_high, T.faint, 0.15)
+    add('昨低', q.prev_low, T.faint, 0.15)
+    add('今开', q.open, T.series[3], 0.08)
+    add('成本', q.cost_price, T.warn, 0.12)
+    add('止损', q.stop_price, T.up, 0.12)
+    add('止盈', q.take_profit_price, T.down, 0.12)
+    add('涨停', q.limit_up, T.up, 0.025)
+    add('跌停', q.limit_down, T.down, 0.025)
+  }
+  return out.concat(minkOrLevels.value)
+})
+
+async function loadBenchMink(c = code.value, period = minkPeriod.value, minkReq = null){
+  if (minkPaused.value || !c) return
   try{
-    const r = await axios.get(API+'/api/stock/'+code.value+'/minkline?period='+minkPeriod.value+'&count=320')
+    const r = await axios.get(API+'/api/stock/000300/minkline?period='+period+'&count=320&type=index')
+    if((minkReq != null && minkReq !== minkSeq) || period !== minkPeriod.value || c !== code.value) return
+    benchMink.value = r.data.bars || []
+    await nextTick()
+    drawRsChart()
+  }catch(e){
+    if((minkReq == null || minkReq === minkSeq) && period === minkPeriod.value && c === code.value){
+      benchMink.value = []
+      await nextTick()
+      drawRsChart()
+    }
+  }
+}
+
+function drawRsChart(){
+  const el = document.getElementById('c13')
+  if (!el) return
+  const bars = minkBars.value
+  const bm = benchMink.value
+  if (!bars.length || !bm.length) {
+    if (el._echart) el._echart.clear()
+    return
+  }
+  const day = bars[bars.length - 1].datetime.slice(0, 10)
+  const sb = bars.filter(b => b.datetime.slice(0, 10) === day)
+  if (sb.length < 2) { if (el._echart) el._echart.clear(); return }
+  const bmap = new Map(bm.map(b => [b.datetime, b.close]))
+  let last = null
+  const bench = sb.map(b => {
+    const v = bmap.get(b.datetime)
+    if (v != null) last = v
+    return last
+  })
+  let i0 = 0
+  while (i0 < sb.length && (sb[i0].close == null || bench[i0] == null)) i0++
+  if (i0 >= sb.length - 1) { if (el._echart) el._echart.clear(); return }
+  const s0 = sb[i0].close, b0 = bench[i0]
+  // 用当日涨跌幅(%) 而非归一化 1：个股/指数日内波动常只有零点几个百分点，
+  // 归一化后 y 轴会被「超额=0」撑开，看起来像三条平线。超额单位=百分点。
+  const rel = sb.map((b, i) => i >= i0 ? +((b.close / s0 - 1) * 100).toFixed(3) : null)
+  const ben = bench.map((v, i) => i >= i0 && v != null ? +((v / b0 - 1) * 100).toFixed(3) : null)
+  const exc = rel.map((v, i) => v != null && ben[i] != null ? +(v - ben[i]).toFixed(3) : null)
+  makeChart('c13', {
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},
+      valueFormatter:v=>v==null?'—':(+v).toFixed(2)+'%'},
+    legend:{show:true,top:0,right:4,itemWidth:10,itemHeight:6,
+      textStyle:{fontSize:10,color:T.dim}},
+    grid:{left:46,right:16,top:18,bottom:18},
+    xAxis:{type:'category',data:sb.map(b=>b.datetime.slice(11)),
+      axisLabel:{fontSize:10,color:T.faint,hideOverlap:true},
+      axisLine:{lineStyle:{color:T.line}}},
+    yAxis:{scale:true,splitLine:{lineStyle:{color:T.line,type:'dashed'}},
+      axisLabel:{fontSize:10,color:T.faint,formatter:v=>v.toFixed(2)+'%'}},
+    series:[
+      {name:'个股',type:'line',data:rel,symbol:'none',lineStyle:{color:T.series[3],width:1.2}},
+      {name:'沪深300',type:'line',data:ben,symbol:'none',lineStyle:{color:T.faint,width:1}},
+      {name:'超额(pp)',type:'line',data:exc,symbol:'none',
+        lineStyle:{color:T.warn,width:1,type:'dashed'}},
+    ]
+  }, true)
+}
+
+// ── 成交量分布（Volume Profile / POC / VAH / VAL）──
+function computeVolumeProfile(bars){
+  if (!bars || bars.length < 2) return null
+  const lo = Math.min(...bars.map(b => b.low))
+  const hi = Math.max(...bars.map(b => b.high))
+  if (!(hi > lo)) return null
+  const bins = 30, step = (hi - lo) / bins
+  const vols = Array(bins).fill(0)
+  for (const b of bars) {
+    const tp = (b.high + b.low + b.close) / 3
+    const i = Math.min(bins - 1, Math.max(0, Math.floor((tp - lo) / step)))
+    vols[i] += b.volume || 0
+  }
+  const total = vols.reduce((a, b) => a + b, 0)
+  if (!total) return null
+  const poc = vols.indexOf(Math.max(...vols))
+  let i = poc, j = poc, va = vols[poc]
+  while (va < total * 0.7 && (i > 0 || j < bins - 1)) {
+    const left = i > 0 ? vols[i - 1] : -1
+    const right = j < bins - 1 ? vols[j + 1] : -1
+    if (right >= left) { j++; va += Math.max(0, right) }
+    else { i--; va += Math.max(0, left) }
+  }
+  return {
+    lo, hi, step, bins, vols, poc,
+    pocPrice: lo + (poc + 0.5) * step,
+    vah: lo + (j + 1) * step, val: lo + i * step,
+    vahIdx: j, valIdx: i, total,
+  }
+}
+
+function openVp(){
+  vpTitle.value = '成交量分布 · ' + (detail.value?.stock_name || code.value)
+  vpData.value = computeVolumeProfile(minkDayBars.value)
+  showVp.value = true
+}
+
+function drawVp(){
+  const d = vpData.value
+  if (!d || !vpEl.value) return
+  const labels = Array.from({length: d.bins}, (_, i) => (d.lo + (i + 0.5) * d.step).toFixed(2))
+  if (!vpChart) vpChart = echarts.init(vpEl.value)
+  vpChart.setOption({
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+      formatter(ps){
+        const p = ps[0]; if (!p) return ''
+        return `${labels[p.dataIndex]}<br/>量 ${Number(p.value).toLocaleString()} 手`
+      }},
+    grid:{left:70,right:18,top:12,bottom:24},
+    xAxis:{type:'value',axisLabel:{fontSize:10,color:T.faint,
+      formatter:v=>v>=1e4?(v/1e4).toFixed(1)+'万':v}},
+    yAxis:{type:'category',data:labels,axisLabel:{fontSize:10,color:T.faint}},
+    series:[{
+      type:'bar',data:d.vols,
+      itemStyle:{color:p=>p.dataIndex===d.poc?T.up:T.series[3]},
+      markLine:{silent:true,symbol:'none',data:[
+        {yAxis:labels[d.poc],label:{formatter:`POC ${d.pocPrice.toFixed(2)}`,position:'insideEndTop',fontSize:10,color:T.up},lineStyle:{color:T.up,type:'dashed'}},
+        {yAxis:labels[d.vahIdx],label:{formatter:`VAH ${d.vah.toFixed(2)}`,position:'insideEndTop',fontSize:10,color:T.warn},lineStyle:{color:T.warn,type:'dotted'}},
+        {yAxis:labels[d.valIdx],label:{formatter:`VAL ${d.val.toFixed(2)}`,position:'insideEndBottom',fontSize:10,color:T.warn},lineStyle:{color:T.warn,type:'dotted'}},
+      ]}
+    }]
+  }, true)
+  vpChart.resize()
+}
+
+watch(showVp, async v => {
+  if (v) { await nextTick(); drawVp() }
+  else if (vpChart) { vpChart.dispose(); vpChart = null }
+})
+
+// ── 当日分时回放 ──
+const showReplay = ref(false)
+const replayIdx = ref(1)
+const replayPlaying = ref(false)
+const replaySpeed = ref(300)
+const replayEl = ref(null)
+let replayChart = null
+let replayTimer = null
+const replaySource = ref([])
+const replayTitle = ref('分时回放（当日）')
+const replayBars = computed(() => replaySource.value)
+const replayBar = computed(() => replayBars.value[Math.max(0, replayIdx.value - 1)] || null)
+
+function openReplay(src){
+  const panel = src && src.bars ? src : null
+  const bars = panel ? fsDayBars(panel) : minkDayBars.value
+  if (!bars.length) return
+  replaySource.value = bars
+  replayTitle.value = '分时回放 · ' + (panel?.name || detail.value?.stock_name || code.value)
+  replayIdx.value = Math.min(20, bars.length)
+  replayPlaying.value = false
+  showReplay.value = true
+}
+
+function drawReplay(){
+  const el = replayEl.value
+  if (!el) return
+  const bars = replayBars.value.slice(0, replayIdx.value)
+  if (!bars.length) return
+  if (!replayChart) replayChart = echarts.init(el)
+  const dates = bars.map(b => b.datetime.slice(11))
+  const ohlc = bars.map(b => [b.open, b.close, b.low, b.high])
+  const vols = bars.map(b => b.volume)
+  const vc = ohlc.map(d => d[1] >= d[0] ? T.up : T.down)
+  replayChart.setOption({
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},
+      formatter(ps){
+        const b = bars[ps?.[0]?.dataIndex]
+        if (!b) return ''
+        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b><br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手`
+      }},
+    grid:[
+      {left:56,right:16,top:12,height:'62%'},
+      {left:56,right:16,top:'78%',height:'16%'},
+    ],
+    xAxis:[
+      {type:'category',data:dates,gridIndex:0,axisLabel:{show:false},axisLine:{lineStyle:{color:T.line}}},
+      {type:'category',data:dates,gridIndex:1,axisLabel:{fontSize:10,color:T.faint,hideOverlap:true},axisLine:{lineStyle:{color:T.line}}},
+    ],
+    yAxis:[
+      {scale:true,gridIndex:0,splitLine:{lineStyle:{color:T.line}},axisLabel:{fontSize:10,color:T.faint}},
+      {gridIndex:1,splitLine:{show:false},axisLabel:{fontSize:10,color:T.faint}},
+    ],
+    dataZoom:[{type:'inside',xAxisIndex:[0,1],start:0,end:100}],
+    series:[
+      {name:'分钟K',type:'candlestick',data:ohlc,
+        itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}},
+      {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,
+        itemStyle:{color:p=>vc[p.dataIndex]}},
+    ]
+  }, true)
+  replayChart.resize()
+}
+
+function pauseReplay(){
+  replayPlaying.value = false
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null }
+}
+function playReplay(){
+  if (replayPlaying.value) { pauseReplay(); return }
+  if (replayIdx.value >= replayBars.value.length) replayIdx.value = 1
+  replayPlaying.value = true
+  clearInterval(replayTimer)
+  replayTimer = setInterval(() => {
+    if (!showReplay.value || replayIdx.value >= replayBars.value.length) { pauseReplay(); return }
+    replayIdx.value++
+    drawReplay()
+  }, Math.max(50, +replaySpeed.value))
+}
+watch(showReplay, async v => {
+  if (v) { await nextTick(); drawReplay() }
+  else {
+    pauseReplay()
+    if (replayChart) { replayChart.dispose(); replayChart = null }
+  }
+})
+watch(replaySpeed, () => { if (replayPlaying.value) { pauseReplay(); playReplay() } })
+
+// ── 盘中多股对比 ──
+const showCompare = ref(false)
+const compareInput = ref('')
+const compareLoading = ref(false)
+const compareEl = ref(null)
+const compareLines = ref([])
+let compareChart = null
+
+function openCompare(){
+  if (!minkDayBars.value.length) return
+  if (!compareInput.value) compareInput.value = '000300'
+  showCompare.value = true
+  nextTick(() => loadCompare())
+}
+
+async function loadCompare(){
+  if (!minkDayBars.value.length) return
+  const current = {
+    code: code.value,
+    name: detail.value?.stock_name || code.value,
+    bars: minkBars.value,
+  }
+  const codes = String(compareInput.value || '')
+    .split(/[\s,，]+/).map(s => s.trim())
+    .filter(c => /^\d{6}$/.test(c) && c !== code.value)
+    .filter((c, i, arr) => arr.indexOf(c) === i)
+    .slice(0, 2)
+  compareLoading.value = true
+  try{
+    const fetched = await Promise.all(codes.map(async c => {
+      try{
+        const r = await axios.get(API+'/api/stock/'+c+'/minkline?period='+minkPeriod.value+'&count=320')
+        return {code:c, name:c, bars:r.data.bars || []}
+      }catch(e){ return {code:c, name:c, bars:[]} }
+    }))
+    compareLines.value = [current, ...fetched.filter(x => x.bars.length)]
+    const missing = fetched.filter(x => !x.bars.length).map(x => x.code)
+    if (missing.length) message.warning(`无分钟数据：${missing.join(' / ')}`)
+    await nextTick()
+    drawCompare()
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+function drawCompare(){
+  const el = compareEl.value
+  const lines = compareLines.value
+  if (!el || !lines.length) return
+  if (!compareChart) compareChart = echarts.init(el)
+  const main = lines[0]
+  const day = main.bars[main.bars.length - 1]?.datetime.slice(0, 10)
+  const times = main.bars.filter(b => b.datetime.slice(0, 10) === day).map(b => b.datetime.slice(11))
+  if (times.length < 2) { compareChart.clear(); return }
+  const rows = lines.map(l => {
+    const m = new Map(l.bars.filter(b => b.datetime.slice(0, 10) === day)
+      .map(b => [b.datetime.slice(11), b.close]))
+    return {name: l.name, raw: times.map(t => m.get(t) ?? null)}
+  })
+  let i0 = 0
+  while (i0 < times.length && rows.some(r => r.raw[i0] == null)) i0++
+  if (i0 >= times.length - 1) { compareChart.clear(); return }
+  const colors = [T.series[3], T.warn, T.series[4]]
+  const series = rows.map((r, idx) => {
+    const base = r.raw[i0]
+    return {
+      name: r.name, type: 'line', symbol: 'none',
+      data: r.raw.map((v, i) => i >= i0 && v != null ? +((v / base - 1) * 100).toFixed(3) : null),
+      lineStyle: {color: colors[idx] || T.series[5], width: idx === 0 ? 1.4 : 1.1},
+      connectNulls: false,
+    }
+  })
+  compareChart.setOption({
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},
+      valueFormatter:v=>v==null?'—':(+v).toFixed(2)+'%'},
+    legend:{show:true,top:0,right:4,itemWidth:10,itemHeight:6,
+      textStyle:{fontSize:10,color:T.dim}},
+    grid:{left:52,right:16,top:20,bottom:22},
+    xAxis:{type:'category',data:times,axisLabel:{fontSize:10,color:T.faint,hideOverlap:true},
+      axisLine:{lineStyle:{color:T.line}}},
+    yAxis:{scale:true,splitLine:{lineStyle:{color:T.line,type:'dashed'}},
+      axisLabel:{fontSize:10,color:T.faint,formatter:v=>v.toFixed(2)+'%'}},
+    series,
+  }, true)
+  compareChart.resize()
+}
+
+watch(showCompare, async v => {
+  if (v) { await nextTick(); drawCompare() }
+  else if (compareChart) { compareChart.dispose(); compareChart = null }
+})
+
+// ── 多栏分时全屏对比（1–3 栏；每栏完整分时功能）──
+const showFs = ref(false)
+const fsPanels = ref([])
+// 全屏共用一份沪深300分钟线：同周期、同一次拉取，避免 3 栏重复请求指数
+const fsBenchBars = ref([])
+const fsBenchPeriod = ref('')
+let fsBenchAt = 0
+const fsSearchOpen = ref(false)
+const fsSearchSide = ref('left')
+const fsSearchCode = ref('')
+let fsTimer = null
+
+function newFsPanel(code, name, bars = [], quote = null){
+  return {
+    code, name, bars, quote, loading: false,
+    alerts: [], news: [], alertsOpen: false,
+    aiOpen: false, aiLoading: false, aiInsight: null, aiError: '',
+  }
+}
+
+function fsDayBars(p){
+  const bars = p?.bars || []
+  const day = bars[bars.length - 1]?.datetime.slice(0, 10)
+  return day ? bars.filter(b => b.datetime.slice(0, 10) === day) : []
+}
+
+function fsVwap(dayBars){
+  const vw = [], u1 = [], l1 = [], u2 = [], l2 = []
+  let pv = 0, vv = 0, pv2 = 0
+  for (const b of dayBars) {
+    const tp = (b.high + b.low + b.close) / 3
+    const v = b.volume > 0 ? b.volume : 1
+    pv += tp * v; vv += v; pv2 += tp * tp * v
+    const mu = pv / vv
+    const sd = Math.sqrt(Math.max(0, pv2 / vv - mu * mu))
+    vw.push(+mu.toFixed(4))
+    u1.push(+(mu + sd).toFixed(4)); l1.push(+(mu - sd).toFixed(4))
+    u2.push(+(mu + 2 * sd).toFixed(4)); l2.push(+(mu - 2 * sd).toFixed(4))
+  }
+  return {vw, u1, l1, u2, l2}
+}
+
+function fsOr(dayBars, period = minkPeriod.value){
+  const step = MINK_MIN[period] || 5
+  const or = mins => {
+    const ins = dayBars.slice(0, Math.max(1, Math.ceil(mins / step)))
+    if (!ins.length) return null
+    return {hi: Math.max(...ins.map(b => b.high)), lo: Math.min(...ins.map(b => b.low))}
+  }
+  return {o15: or(15), o30: or(30)}
+}
+
+function fsRvol(p){
+  const bars = fsDayBars(p)
+  if (bars.length < 3) return null
+  const completed = bars.slice(0, -1)
+  const avg = completed.reduce((s, b) => s + (b.volume || 0), 0) / completed.length
+  const last = completed[completed.length - 1]
+  return avg > 0 ? +(last.volume / avg).toFixed(2) : null
+}
+
+function fsDepth(p){
+  const q = p?.quote
+  if (!q?.bids?.length || !q?.asks?.length) return null
+  const bv = q.bids.reduce((s, b) => s + (b.volume || 0), 0)
+  const av = q.asks.reduce((s, a) => s + (a.volume || 0), 0)
+  const tot = bv + av
+  const b1 = q.bids[0], a1 = q.asks[0]
+  return {
+    imb: tot ? (bv - av) / tot : null,
+    spread: b1?.price && a1?.price ? +((a1.price / b1.price - 1) * 1e4).toFixed(1) : null,
+  }
+}
+
+function fsLevelChips(p){
+  const q = p?.quote
+  const bars = fsDayBars(p)
+  if (!q || !bars.length) return []
+  const out = []
+  const near = (v, pct) => v != null && q.price && Math.abs(v / q.price - 1) <= pct
+  const add = (name, val, color, pct) => { if (near(val, pct)) out.push({name, value: +val, color}) }
+  if (showLevels.value) {
+    add('昨高', q.prev_high, T.faint, .15)
+    add('昨低', q.prev_low, T.faint, .15)
+    add('今开', q.open, T.series[3], .08)
+    add('成本', q.cost_price, T.warn, .12)
+    add('止损', q.stop_price, T.up, .12)
+    add('止盈', q.take_profit_price, T.down, .12)
+    add('涨停', q.limit_up, T.up, .025)
+    add('跌停', q.limit_down, T.down, .025)
+  }
+  if (showOr.value && (MINK_MIN[minkPeriod.value] || 99) <= 15) {
+    const {o15, o30} = fsOr(bars, minkPeriod.value)
+    if (o15) out.push({name:'OR15高', value:o15.hi, color:T.series[4]},
+                       {name:'OR15低', value:o15.lo, color:T.series[4]})
+    if (o30) out.push({name:'OR30高', value:o30.hi, color:T.series[5]},
+                       {name:'OR30低', value:o30.lo, color:T.series[5]})
+  }
+  return out
+}
+
+function fsEventMarks(p){
+  if (!showEvents.value) return []
+  const bars = fsDayBars(p)
+  if (bars.length < 2) return []
+  const find = ts => {
+    const hm = String(ts || '').slice(11, 16)
+    if (!hm) return null
+    let best = null, bd = Infinity
+    for (const b of bars) {
+      const d = Math.abs(toMin(b.datetime.slice(11, 16)) - toMin(hm))
+      if (d < bd) { best = b; bd = d }
+    }
+    return bd <= 5 ? best : null
+  }
+  const marks = []
+  for (const a of (p.alerts || [])) {
+    const b = find(a.created_at)
+    if (b) marks.push({coord:[b.datetime.slice(11), b.close], symbol:'pin', symbolSize:16,
+      itemStyle:{color:T.up}, label:{show:false}})
+  }
+  for (const n of (p.news || [])) {
+    if (n.importance != null && n.importance < 2) continue
+    const b = find(n.published_at)
+    if (b) marks.push({coord:[b.datetime.slice(11), b.close], symbol:'circle', symbolSize:6,
+      itemStyle:{color:T.series[3]}, label:{show:false}})
+  }
+  return marks.slice(0, 14)
+}
+
+function fsSessionMarks(bars, q){
+  const marks = []
+  if (!bars.length || !q) return marks
+  const nowHM = q.timestamp ? q.timestamp.slice(11, 16) : ''
+  const add = (b, label, pos) => {
+    if (!b) return
+    const x = b.datetime.slice(11)
+    if (marks.some(m => m.xAxis === x)) return
+    marks.push({xAxis:x, label:{formatter:label, position:pos, fontSize:8, color:T.faint},
+      lineStyle:{color:T.line, type:'dotted', width:1}})
+  }
+  add(bars[0], '09:30', 'insideStartTop')
+  const am = bars.filter(b => b.datetime.slice(11) <= '11:30')
+  if (nowHM >= '11:30') add(am[am.length - 1], '11:30', 'insideEndTop')
+  const pm = bars.find(b => b.datetime.slice(11) >= '13:00')
+  if (nowHM >= '13:00') add(pm, '13:00', 'insideEndBottom')
+  if (nowHM >= '15:00') add(bars[bars.length - 1], '15:00', 'insideStartTop')
+  return marks
+}
+
+function openFs(){
+  if (!code.value) return
+  fsPanels.value = [newFsPanel(
+    code.value,
+    detail.value?.stock_name || code.value,
+    minkBars.value.slice(),
+    quote.value,
+  )]
+  fsSearchOpen.value = false
+  fsSearchCode.value = ''
+  showFs.value = true
+  nextTick(() => {
+    drawFsPanel(fsPanels.value[0])
+    loadFsPanel(fsPanels.value[0], true)
+  })
+  clearInterval(fsTimer)
+  fsTimer = setInterval(() => {
+    if (!showFs.value) return
+    fsPanels.value.forEach(p => loadFsPanel(p, true))
+  }, 30000)
+}
+
+function closeFs(){
+  showFs.value = false
+  fsSearchOpen.value = false
+  if (fsTimer) { clearInterval(fsTimer); fsTimer = null }
+  fsPanels.value.forEach(p => {
+    for (const id of ['fsc-', 'fsrs-']) {
+      const el = document.getElementById(id + p.code)
+      if (el && el._echart) { el._echart.dispose(); el._echart = null }
+    }
+  })
+  fsPanels.value = []
+}
+
+async function loadFsBench(){
+  const period = minkPeriod.value
+  if (fsBenchPeriod.value === period && Date.now() - fsBenchAt < 20000) return
+  try {
+    const r = await axios.get(API + '/api/stock/000300/minkline?period=' + period + '&count=320&type=index')
+    if (period !== minkPeriod.value) return   // 周期已切换，旧响应作废
+    fsBenchBars.value = r.data.bars || []
+    fsBenchPeriod.value = period
+    fsBenchAt = Date.now()
+  } catch (e) {
+    if (period === minkPeriod.value) fsBenchBars.value = []
+  }
+}
+
+async function loadFsPanel(p, withQuote = true){
+  // 改 ref 数组里的响应式代理，否则名称/价格/加载状态不刷新
+  const panel = fsPanels.value.find(x => x.code === p.code) || p
+  panel.loading = true
+  const period = minkPeriod.value
+  const alive = () => fsPanels.value.some(x => x.code === panel.code)
+  const rsp = loadFsBench()
+  const qp = withQuote
+    ? axios.get(API + '/api/stock/' + panel.code + '/quote').then(r => {
+        if (alive() && r.data) { panel.quote = r.data; panel.name = r.data.name || panel.name }
+      }).catch(() => {})
+    : Promise.resolve()
+  const bp = axios.get(API + '/api/stock/' + panel.code + '/minkline?period=' + period + '&count=320')
+    .then(r => { if (alive() && period === minkPeriod.value) panel.bars = r.data.bars || [] })
+    .catch(() => {})
+  const ap = withQuote
+    ? axios.get(API + '/api/risk/alerts?code=' + panel.code + '&intraday=true&limit=8')
+        .then(r => { if (alive()) panel.alerts = r.data || [] }).catch(() => {})
+    : Promise.resolve()
+  const np = withQuote
+    ? axios.get(API + '/api/stock/' + panel.code + '/news?days=1&limit=10')
+        .then(r => { if (alive()) panel.news = r.data?.data || [] }).catch(() => {})
+    : Promise.resolve()
+  await Promise.allSettled([qp, bp, ap, np, rsp])
+  if (!alive() || period !== minkPeriod.value) return
+  panel.loading = false
+  if (!showFs.value) return
+  await nextTick()
+  drawFsPanel(panel)
+}
+
+function drawFsPanel(p){
+  const el = document.getElementById('fsc-' + p.code)
+  if (!el) return
+  let c = el._echart
+  if (!c) { c = echarts.init(el); el._echart = c }
+  const bars = fsDayBars(p)
+  if (!bars.length) { c.clear(); drawFsRs(p); return }
+
+  // 保留用户缩放/图例选择（30s 刷新不重置）
+  const prevOpt = c.getOption ? c.getOption() : {}
+  const dz = prevOpt?.dataZoom?.[0]
+  const zs = dz && dz.start != null ? dz.start : 0
+  const ze = dz && dz.end != null ? dz.end : 100
+  const lgPrev = prevOpt?.legend?.[0]
+  const legendSel = lgPrev?.selected || null
+
+  const dates = bars.map(b => b.datetime.slice(11))
+  const ohlc = bars.map(b => [b.open, b.close, b.low, b.high])
+  const vols = bars.map(b => b.volume)
+  const vc = ohlc.map(d => d[1] >= d[0] ? T.up : T.down)
+  const closes = bars.map(b => b.close)
+  const ma = n => closes.map((_, i) => i < n ? null : +(closes.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n).toFixed(2))
+  const ema = n => {
+    const k = 2 / (n + 1)
+    let prev = null
+    return closes.map((x, i) => {
+      if (i < n - 1) return null
+      if (prev == null) prev = closes.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1)
+      else prev = x * k + prev * (1 - k)
+      return +prev.toFixed(2)
+    })
+  }
+  const q = p.quote
+  const vw = fsVwap(bars)
+  const line = val => val != null ? bars.map(() => val) : null
+  const core = []
+  const pushCore = (name, data, color, width = 1, type = 'dashed') => {
+    if (!data || !data.some(v => v != null)) return
+    core.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
+      symbol:'none', connectNulls:false,
+      lineStyle:{color, width, type}, tooltip:{show:false}})
+  }
+  pushCore('昨收', line(q?.prev_close), T.faint)
+  pushCore('均价', vw.vw, T.warn, 1.2, 'solid')
+  pushCore('现价', line(q?.price), T.series[5], 1.2, 'solid')
+
+  const extra = []
+  const pushExtra = (name, data, color, type = 'dashed', width = 1) => {
+    if (!data || !data.some(v => v != null)) return
+    extra.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
+      symbol:'none', connectNulls:false, tooltip:{show:false},
+      lineStyle:{color, width, type}})
+  }
+  if (showBands.value) {
+    pushExtra('+1σ', vw.u1, T.warn, 'dashed')
+    pushExtra('-1σ', vw.l1, T.warn, 'dashed')
+    pushExtra('+2σ', vw.u2, T.warn, 'dotted')
+    pushExtra('-2σ', vw.l2, T.warn, 'dotted')
+  }
+  if (showLevels.value && q) {
+    const near = (v, pct = 0.12) => v != null && q.price && Math.abs(v / q.price - 1) <= pct
+    const level = (name, val, color, type = 'dashed', width = 1, pct = 0.12) => {
+      if (near(val, pct)) pushExtra(name, line(val), color, type, width)
+    }
+    level('昨高', q.prev_high, T.faint, 'dotted', 1, 0.15)
+    level('昨低', q.prev_low, T.faint, 'dotted', 1, 0.15)
+    level('今开', q.open, T.series[3], 'dashed', 1, 0.08)
+    level('成本', q.cost_price, T.warn, 'solid', 1.2, 0.12)
+    level('止损', q.stop_price, T.up, 'solid', 1.2, 0.12)
+    level('止盈', q.take_profit_price, T.down, 'dashed', 1, 0.12)
+    level('涨停', q.limit_up, T.up, 'dashed', 1, 0.025)
+    level('跌停', q.limit_down, T.down, 'dashed', 1, 0.025)
+  }
+  if (showOr.value && q && (MINK_MIN[minkPeriod.value] || 99) <= 15) {
+    const {o15, o30} = fsOr(bars, minkPeriod.value)
+    if (o15) {
+      pushExtra('OR15高', line(o15.hi), T.series[4], 'dotted')
+      pushExtra('OR15低', line(o15.lo), T.series[4], 'dotted')
+    }
+    if (o30) {
+      pushExtra('OR30高', line(o30.hi), T.series[5], 'dotted')
+      pushExtra('OR30低', line(o30.lo), T.series[5], 'dotted')
+    }
+  }
+  const marks = fsEventMarks(p)
+  const sessionMarks = fsSessionMarks(bars, q)
+  const priceExtras = {
+    ...(sessionMarks.length ? {markLine:{symbol:'none', silent:true, animation:false, data:sessionMarks}} : {}),
+    ...(marks.length ? {markPoint:{data:marks, label:{show:false}}} : {}),
+  }
+  const priceSeries = minkType.value === 'line'
+    ? {name:'分时', type:'line', data:closes, symbol:'none',
+       lineStyle:{color:T.series[5], width:1.3},
+       areaStyle:{color:T.series[5], opacity:0.05}, ...priceExtras}
+    : {name:'分钟K', type:'candlestick', data:ohlc,
+       itemStyle:{color:T.up, color0:T.down, borderColor:T.up, borderColor0:T.down}, ...priceExtras}
+  const maSeries = minkMaMode.value === 'ema'
+    ? [{name:'EMA9', type:'line', data:ema(9), symbol:'none', lineStyle:{color:T.warn, width:1}},
+       {name:'EMA21', type:'line', data:ema(21), symbol:'none', lineStyle:{color:T.series[3], width:1}}]
+    : [{name:'MA5', type:'line', data:ma(5), symbol:'none', lineStyle:{color:T.warn, width:1}},
+       {name:'MA10', type:'line', data:ma(10), symbol:'none', lineStyle:{color:T.series[3], width:1}}]
+  const coreNames = core.map(o => o.name)
+
+  c.setOption({
+    tooltip:{trigger:'axis', axisPointer:{type:'cross'},
+      formatter(ps){
+        const i = ps?.[0]?.dataIndex
+        const b = bars[i]
+        if (!b) return ''
+        const vwv = vw.vw[i]
+        const dev = vwv ? (b.close / vwv - 1) * 100 : null
+        const dayVols = bars.map(x => x.volume || 0)
+        const avg = dayVols.length ? dayVols.reduce((a, x) => a + x, 0) / dayVols.length : 0
+        const volX = avg ? b.volume / avg : null
+        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b><br/>高 ${b.high} 低 ${b.low}`
+          + `<br/>均价 ${vwv != null ? vwv.toFixed(2) : '—'}`
+          + `${dev != null ? '（偏离 ' + (dev >= 0 ? '+' : '') + dev.toFixed(2) + '%）' : ''}`
+          + `<br/>量 ${b.volume}手${volX != null ? '（当日均量 ' + volX.toFixed(2) + 'x）' : ''}`
+      }},
+    ...(coreNames.length ? {legend:{top:0, left:48, itemWidth:8, itemHeight:5,
+      textStyle:{fontSize:8, color:T.dim}, data:coreNames,
+      ...(legendSel ? {selected: legendSel} : {})}} : {}),
+    grid:[
+      {left:44, right:12, top:coreNames.length ? 16 : 8, height:coreNames.length ? '52%' : '56%'},
+      {left:44, right:12, top:'72%', height:'18%'},
+    ],
+    xAxis:[
+      {type:'category', data:dates, gridIndex:0, axisLabel:{show:false}, axisLine:{lineStyle:{color:T.line}}},
+      {type:'category', data:dates, gridIndex:1, axisLabel:{fontSize:8, color:T.faint, hideOverlap:true}, axisLine:{lineStyle:{color:T.line}}},
+    ],
+    yAxis:[
+      {scale:true, gridIndex:0, splitLine:{lineStyle:{color:T.line}}, axisLabel:{fontSize:8, color:T.faint}},
+      {gridIndex:1, splitLine:{show:false}, axisLabel:{fontSize:8, color:T.faint}},
+    ],
+    dataZoom:[{type:'inside', xAxisIndex:[0,1], start:zs, end:ze}],
+    series:[priceSeries, ...maSeries, ...core, ...extra,
+      {name:'成交量', type:'bar', xAxisIndex:1, yAxisIndex:1, data:vols,
+       itemStyle:{color:p => vc[p.dataIndex]}}],
+  }, true)
+  c.resize()
+  setTimeout(() => c.resize(), 60)
+  drawFsRs(p)
+}
+
+function fsRsReady(p){
+  const sb = fsDayBars(p)
+  const bm = fsBenchBars.value
+  if (sb.length < 2 || !bm.length) return false
+  const times = new Set(bm.map(b => b.datetime))
+  return sb.filter(b => times.has(b.datetime)).length > 1
+}
+
+// 全屏栏内「盘中相对强弱」：与详情页同口径，个股/沪深300 当日起点=0%，超额=百分点
+function drawFsRs(p){
+  const el = document.getElementById('fsrs-' + p.code)
+  if (!el) return
+  let c = el._echart
+  if (!c) { c = echarts.init(el); el._echart = c }
+  const sb = fsDayBars(p)
+  const bm = fsBenchBars.value
+  if (sb.length < 2 || !bm.length) { c.clear(); return }
+  const bmap = new Map(bm.map(b => [b.datetime, b.close]))
+  let last = null
+  const bench = sb.map(b => {
+    const v = bmap.get(b.datetime)
+    if (v != null) last = v
+    return last
+  })
+  let i0 = 0
+  while (i0 < sb.length && (sb[i0].close == null || bench[i0] == null)) i0++
+  if (i0 >= sb.length - 1) { c.clear(); return }
+  const s0 = sb[i0].close, b0 = bench[i0]
+  if (!s0 || !b0) { c.clear(); return }
+  const rel = sb.map((b, i) => i >= i0 ? +((b.close / s0 - 1) * 100).toFixed(3) : null)
+  const ben = bench.map((v, i) => i >= i0 && v != null ? +((v / b0 - 1) * 100).toFixed(3) : null)
+  const exc = rel.map((v, i) => v != null && ben[i] != null ? +(v - ben[i]).toFixed(3) : null)
+  c.setOption({
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},
+      valueFormatter:v=>v==null?'—':(+v).toFixed(2)+'%'},
+    legend:{show:true,top:0,right:2,itemWidth:9,itemHeight:5,
+      textStyle:{fontSize:9,color:T.dim}},
+    grid:{left:44,right:12,top:16,bottom:16},
+    xAxis:{type:'category',data:sb.map(b=>b.datetime.slice(11)),
+      axisLabel:{fontSize:9,color:T.faint,hideOverlap:true},
+      axisLine:{lineStyle:{color:T.line}}},
+    yAxis:{scale:true,splitLine:{lineStyle:{color:T.line,type:'dashed'}},
+      axisLabel:{fontSize:9,color:T.faint,formatter:v=>v.toFixed(1)+'%'}},
+    series:[
+      {name:'个股',type:'line',data:rel,symbol:'none',lineStyle:{color:T.series[3],width:1.2}},
+      {name:'沪深300',type:'line',data:ben,symbol:'none',lineStyle:{color:T.faint,width:1}},
+      {name:'超额(pp)',type:'line',data:exc,symbol:'none',
+        lineStyle:{color:T.warn,width:1,type:'dashed'}},
+    ]
+  }, true)
+  c.resize()
+}
+
+function openFsSearch(side){
+  if (fsPanels.value.length >= 3) return
+  fsSearchSide.value = side
+  fsSearchCode.value = ''
+  fsSearchOpen.value = true
+}
+
+function addFsStock(item){
+  const c = String(item?.code || fsSearchCode.value || '').trim()
+  if (!/^\d{6}$/.test(c)) { message.warning('请输入 6 位代码'); return }
+  if (fsPanels.value.some(p => p.code === c)) { message.warning('该股已在对比中'); return }
+  if (fsPanels.value.length >= 3) { message.warning('最多 3 栏'); return }
+  const p = newFsPanel(c, item?.name || c)
+  fsPanels.value.push(p)
+  fsSearchOpen.value = false
+  fsSearchCode.value = ''
+  nextTick(async () => { await loadFsPanel(p, true) })
+}
+
+function removeFsPanel(index){
+  const p = fsPanels.value[index]
+  if (!p) return
+  for (const id of ['fsc-', 'fsrs-']) {
+    const el = document.getElementById(id + p.code)
+    if (el && el._echart) { el._echart.dispose(); el._echart = null }
+  }
+  fsPanels.value.splice(index, 1)
+  if (!fsPanels.value.length) { closeFs(); return }
+  nextTick(() => fsPanels.value.forEach(drawFsPanel))
+}
+
+function resizeFsPanel(p){
+  nextTick(() => {
+    for (const id of ['fsc-', 'fsrs-']) {
+      const el = document.getElementById(id + p.code)
+      el?._echart?.resize()
+    }
+  })
+}
+
+function closeFsAi(p){
+  p.aiOpen = false
+  resizeFsPanel(p)
+}
+
+async function callFsAi(p){
+  const panel = fsPanels.value.find(x => x.code === p.code) || p
+  panel.aiOpen = true
+  panel.aiLoading = true
+  panel.aiError = ''
+  panel.aiInsight = null
+  resizeFsPanel(panel)
+  try {
+    const r = await axios.get(API + '/api/stock/' + panel.code + '/ai-intraday')
+    if (r.data?.ok) panel.aiInsight = r.data
+    else panel.aiError = r.data?.error || 'AI 解读失败'
+  } catch (e) {
+    panel.aiError = e.response?.data?.detail || 'AI 解读失败，请稍后重试'
+  } finally {
+    panel.aiLoading = false
+    resizeFsPanel(panel)
+  }
+}
+
+function openFsVp(p){
+  vpTitle.value = '成交量分布 · ' + (p.name || p.code)
+  vpData.value = computeVolumeProfile(fsDayBars(p))
+  showVp.value = true
+}
+
+function exportFsPanel(p){
+  const inst = document.getElementById('fsc-' + p.code)?._echart
+  if (!inst) return
+  const url = inst.getDataURL({type:'png', pixelRatio:2, backgroundColor:T.bg})
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${p.code}_${minkPeriod.value}_${new Date().toISOString().slice(0,16).replace(/[-:T]/g,'')}.png`
+  a.click()
+}
+
+function redrawFs(){
+  if (showFs.value) fsPanels.value.forEach(drawFsPanel)
+}
+
+watch(minkPeriod, () => {
+  if (showFs.value) fsPanels.value.forEach(p => loadFsPanel(p, false))
+})
+watch([showLevels, showBands, showOr, showEvents], () => {
+  if (minkBars.value.length) drawMink()
+  redrawFs()
+})
+watch([minkType, minkMaMode], () => {
+  if (minkBars.value.length) drawMink()
+  redrawFs()
+})
+watch(eventMarks, () => {
+  if (minkBars.value.length) drawMink()
+})
+
+async function loadMink(c = code.value){
+  if (minkPaused.value || !c) return
+  const period = minkPeriod.value
+  const req = ++minkSeq
+  try{
+    const r = await axios.get(API+'/api/stock/'+c+'/minkline?period='+period+'&count=320')
+    if(req !== minkSeq || c !== code.value || period !== minkPeriod.value) return
     minkBars.value = r.data.bars||[]
+    minkError.value = false
+    minkUpdatedAt.value = new Date()
     drawMink()
-  }catch(e){ /* 限流/非交易时段失败静默保留旧图 */ }
+    loadBenchMink(c, period, req)
+  }catch(e){
+    if(req === minkSeq && c === code.value && period === minkPeriod.value) minkError.value = true
+  }
 }
 
 function drawMink(){
   const bars = minkBars.value
-  if(!bars.length) return
+  if(!bars.length){
+    const el = document.getElementById('c0')
+    if(el && el._echart) el._echart.clear()
+    drawRsChart()
+    return
+  }
+
+  // 30s/5s 重绘不能把用户刚拖的视窗打回默认：先读当前 dataZoom/legend
+  const inst = document.getElementById('c0')?._echart
+  let zoomStart = 60, zoomEnd = 100, legendSel = null
+  if (inst) {
+    const opt = inst.getOption()
+    const dz = (opt.dataZoom || [])[0]
+    if (dz && dz.start != null) { zoomStart = dz.start; zoomEnd = dz.end }
+    const lg = (opt.legend || [])[0]
+    if (lg && lg.selected) legendSel = lg.selected
+  }
+  if (minkResetZoom) { zoomStart = 60; zoomEnd = 100; minkResetZoom = false }
+
   const dates = bars.map(b=>b.datetime.slice(5))            // MM-DD HH:MM
   const ohlc = bars.map(b=>[b.open, b.close, b.low, b.high])
   const vols = bars.map(b=>b.volume)
@@ -1304,7 +2857,18 @@ function drawMink(){
   const vc = ohlc.map(d=>d[1]>=d[0]?T.up:T.down)
   const closes = bars.map(b=>b.close)
   const ma = (n) => closes.map((_,i)=> i<n ? null : +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2))
+  const ema = (n) => {
+    const k = 2 / (n + 1)
+    let prev = null
+    return closes.map((c, i) => {
+      if (i < n - 1) return null
+      if (prev == null) prev = closes.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1)
+      else prev = c * k + prev * (1 - k)
+      return +prev.toFixed(2)
+    })
+  }
   const gl = {lineStyle:{color:T.line}}
+
   // 昨收/均价/现价线只画最近一个交易日：m5/m60 覆盖多日，整段横线会误导
   const q = quote.value
   const lastDay = bars[bars.length-1].datetime.slice(0,10)
@@ -1312,30 +2876,159 @@ function drawMink(){
   const qSameDay = q && q.trade_date === lastDay ? q : null
   const dayLine = val => (qSameDay && val != null)
     ? bars.map((_,i)=> i>=dayStart ? val : null) : null
-  const overlays = []
-  const pushLine = (name, val, color, width=1) => {
-    const data = dayLine(val)
-    if (data) overlays.push({name,type:'line',xAxisIndex:0,yAxisIndex:0,data,
-      symbol:'none',connectNulls:false,
-      lineStyle:{color,width,type:name==='现价'?'solid':'dashed'},tooltip:{show:false}})
+  const dayBars = bars.slice(dayStart)
+  const padDay = arr => bars.map((_, i) => i >= dayStart ? (arr[i - dayStart] ?? null) : null)
+  const core = []
+  const pushCore = (name, data, color, width = 1, type = 'dashed') => {
+    if (!data || !data.some(v => v != null)) return
+    core.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
+      symbol:'none', connectNulls:false,
+      lineStyle:{color, width, type}, tooltip:{show:false}})
   }
-  pushLine('昨收', qSameDay?.prev_close, T.faint)
-  pushLine('均价', qSameDay?.avg_price, T.warn)
-  pushLine('现价', qSameDay?.price, T.series[5], 1.2)
-  const overlayNames = overlays.map(o=>o.name)
+  // VWAP + 标准差带：按当日已加载 bar 逐根计算；末值应接近腾讯 avg_price
+  let vwapData = null
+  if (dayBars.length >= 2) {
+    const vw = [], u1 = [], l1 = [], u2 = [], l2 = []
+    let pv = 0, vv = 0, pv2 = 0
+    for (const b of dayBars) {
+      const tp = (b.high + b.low + b.close) / 3
+      const v = b.volume > 0 ? b.volume : 1
+      pv += tp * v; vv += v; pv2 += tp * tp * v
+      const mu = pv / vv
+      const sd = Math.sqrt(Math.max(0, pv2 / vv - mu * mu))
+      vw.push(+mu.toFixed(4))
+      u1.push(+(mu + sd).toFixed(4)); l1.push(+(mu - sd).toFixed(4))
+      u2.push(+(mu + 2 * sd).toFixed(4)); l2.push(+(mu - 2 * sd).toFixed(4))
+    }
+    vwapData = { vw, u1, l1, u2, l2 }
+  }
+  pushCore('昨收', dayLine(qSameDay?.prev_close), T.faint)
+  if (vwapData) pushCore('均价', padDay(vwapData.vw), T.warn, 1.2, 'solid')
+  else pushCore('均价', dayLine(qSameDay?.avg_price), T.warn)
+  pushCore('现价', dayLine(qSameDay?.price), T.series[5], 1.2, 'solid')
+
+  // 额外价位/带/开盘区间：不进 legend，用末端 label 标识
+  const extra = []
+  const pushExtra = (name, data, color, type = 'dashed', width = 1) => {
+    if (!data || !data.some(v => v != null)) return
+    // 不在右轴叠 endLabel：价位条在图表下方统一列名称+数值，图内只画线
+    extra.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
+      symbol:'none', connectNulls:false, tooltip:{show:false},
+      lineStyle:{color, width, type}})
+  }
+  if (showBands.value && vwapData) {
+    pushExtra('+1σ', padDay(vwapData.u1), T.warn, 'dashed', 1, false)
+    pushExtra('-1σ', padDay(vwapData.l1), T.warn, 'dashed', 1, false)
+    pushExtra('+2σ', padDay(vwapData.u2), T.warn, 'dotted', 1, false)
+    pushExtra('-2σ', padDay(vwapData.l2), T.warn, 'dotted', 1, false)
+  }
+  if (showLevels.value && qSameDay) {
+    // 只画当前价附近的线：成本 144/现价 78 这种 far-away 线会把日内波动压扁
+    const near = (v, pct = 0.12) => v != null && qSameDay.price && Math.abs(v / qSameDay.price - 1) <= pct
+    const level = (name, val, color, type = 'dashed', width = 1, pct = 0.12) => {
+      if (near(val, pct)) pushExtra(name, dayLine(val), color, type, width, true)
+    }
+    level('昨高', qSameDay.prev_high, T.faint, 'dotted', 1, 0.15)
+    level('昨低', qSameDay.prev_low, T.faint, 'dotted', 1, 0.15)
+    level('今开', qSameDay.open, T.series[3], 'dashed', 1, 0.08)
+    level('成本', qSameDay.cost_price, T.warn, 'solid', 1.2, 0.12)
+    level('止损', qSameDay.stop_price, T.up, 'solid', 1.2, 0.12)
+    level('止盈', qSameDay.take_profit_price, T.down, 'dashed', 1, 0.12)
+    level('涨停', qSameDay.limit_up, T.up, 'dashed', 1, 0.025)
+    level('跌停', qSameDay.limit_down, T.down, 'dashed', 1, 0.025)
+  }
+  if (showOr.value && qSameDay && (MINK_MIN[minkPeriod.value] || 99) <= 15) {
+    // 腾讯按 bar 结束时间标记：m15 首根是 09:45，按「根数」切才不漏 OR15
+    const step = MINK_MIN[minkPeriod.value] || 5
+    const or = mins => {
+      const ins = dayBars.slice(0, Math.max(1, Math.ceil(mins / step)))
+      if (!ins.length) return null
+      return {hi: Math.max(...ins.map(b => b.high)), lo: Math.min(...ins.map(b => b.low))}
+    }
+    const o15 = or(15), o30 = or(30)
+    if (o15) {
+      pushExtra('OR15高', dayLine(o15.hi), T.series[4], 'dotted', 1, true)
+      pushExtra('OR15低', dayLine(o15.lo), T.series[4], 'dotted', 1, false)
+    }
+    if (o30) {
+      pushExtra('OR30高', dayLine(o30.hi), T.series[5], 'dotted', 1, true)
+      pushExtra('OR30低', dayLine(o30.lo), T.series[5], 'dotted', 1, false)
+    }
+  }
+  const marks = showEvents.value ? eventMarks.value : []
+
+  // 开收盘/午休分隔线：只标最后一个交易日，避免多日图重复。
+  // 腾讯 m5/m15 首根常是 09:35/13:05，不能等精确时间戳——用首根/末根 + 当前时间门控。
+  const sessionMarks = []
+  if (qSameDay) {
+    const dayBars = bars.slice(dayStart)
+    const addMark = (bar, label, pos = 'insideEndTop') => {
+      if (!bar) return
+      const x = bar.datetime.slice(5)
+      if (sessionMarks.some(m => m.xAxis === x)) return
+      sessionMarks.push({
+        xAxis: x,
+        label: {formatter: label, position: pos, fontSize: 9, color: T.faint},
+        lineStyle: {color: T.line, type: 'dotted', width: 1},
+      })
+    }
+    const nowHM = q?.timestamp ? q.timestamp.slice(11, 16)
+      : (dayBars[dayBars.length - 1]?.datetime.slice(11) || '')
+    const amBars = dayBars.filter(b => b.datetime.slice(11) <= '11:30')
+    const pmFirst = dayBars.find(b => b.datetime.slice(11) >= '13:00')
+    addMark(dayBars[0], '09:30', 'insideStartTop')
+    // 11:30 与 13:00 在 category 轴上相邻；一个标签放顶部、一个放底部，避免竖排叠字
+    if (nowHM >= '11:30') addMark(amBars[amBars.length - 1], '11:30', 'insideEndTop')
+    if (nowHM >= '13:00') addMark(pmFirst, '13:00', 'insideEndBottom')
+    if (nowHM >= '15:00') addMark(dayBars[dayBars.length - 1], '15:00', 'insideStartTop')
+  }
+
+  const coreNames = core.map(o => o.name)
+  const rightPad = 16
+  const priceExtras = {
+    ...(sessionMarks.length ? {markLine:{symbol:'none',silent:true,animation:false,data:sessionMarks}} : {}),
+    ...(marks.length ? {markPoint:{data:marks,label:{show:false}}} : {}),
+  }
+  const priceSeries = minkType.value === 'line'
+    ? {name:'分时', type:'line', xAxisIndex:0, yAxisIndex:0, data:closes,
+       symbol:'none', lineStyle:{color:T.series[5],width:1.4},
+       areaStyle:{color:T.series[5],opacity:0.06}, ...priceExtras}
+    : {name:'分钟K', type:'candlestick', xAxisIndex:0, yAxisIndex:0, data:ohlc,
+       itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}, ...priceExtras}
+  const maSeries = minkMaMode.value === 'ema'
+    ? [{name:'EMA9',type:'line',xAxisIndex:0,yAxisIndex:0,data:ema(9),
+        lineStyle:{color:T.warn,width:1},symbol:'none'},
+       {name:'EMA21',type:'line',xAxisIndex:0,yAxisIndex:0,data:ema(21),
+        lineStyle:{color:T.series[3],width:1},symbol:'none'}]
+    : [{name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),
+        lineStyle:{color:T.warn,width:1},symbol:'none'},
+       {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),
+        lineStyle:{color:T.series[3],width:1},symbol:'none'}]
   makeChart('c0', {
     axisPointer:{link:[{xAxisIndex:'all'}]},
-    ...(overlayNames.length ? {legend:{top:0,right:8,itemWidth:10,itemHeight:6,
-      textStyle:{fontSize:10,color:T.dim},data:overlayNames}} : {}),
+    ...(coreNames.length ? {legend:{top:0,left:72,itemWidth:10,itemHeight:6,
+      textStyle:{fontSize:10,color:T.dim},data:coreNames,
+      ...(legendSel ? {selected: legendSel} : {})}} : {}),
     grid:[
-      {left:66,right:16,top:overlayNames.length?20:8,height:overlayNames.length?'53%':'56%'},
-      {left:66,right:16,top:'72%',height:'22%'},
+      {left:66,right:rightPad,top:coreNames.length?20:8,height:coreNames.length?'53%':'56%'},
+      {left:66,right:rightPad,top:'72%',height:'22%'},
     ],
     tooltip:{trigger:'axis',axisPointer:{type:'cross'},
       formatter(ps){
-        const b = bars[ps[0].dataIndex]; if(!b) return ''
+        const i = ps?.[0]?.dataIndex
+        const b = bars[i]; if(!b) return ''
         const chg = ((b.close-b.open)/b.open*100)
-        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}<br/>量 ${b.volume}手 / 换手 ${b.turnover_rate_pct!=null?b.turnover_rate_pct+'%':'-'}`
+        const di = i - dayStart
+        const vw = vwapData && di >= 0 ? vwapData.vw[di] : null
+        const vwDev = vw ? (b.close / vw - 1) * 100 : null
+        const dayVols = dayBars.map(x => x.volume || 0)
+        const avgVol = dayVols.length ? dayVols.reduce((a, x) => a + x, 0) / dayVols.length : 0
+        const volX = avgVol ? b.volume / avgVol : null
+        return `${b.datetime}<br/>开 ${b.open} 收 <b>${b.close}</b>（${chg>=0?'+':''}${chg.toFixed(2)}%）<br/>高 ${b.high} 低 ${b.low}`
+          + `<br/>均价 ${vw != null ? vw.toFixed(2) : '—'}`
+          + `${vwDev != null ? '（偏离 ' + (vwDev >= 0 ? '+' : '') + vwDev.toFixed(2) + '%）' : ''}`
+          + `<br/>量 ${b.volume}手${volX != null ? '（当日均量 ' + volX.toFixed(2) + 'x）' : ''}`
+          + ` / 换手 ${b.turnover_rate_pct!=null?b.turnover_rate_pct+'%':'-'}`
       }},
     xAxis:[
       {type:'category',data:dates,gridIndex:0,axisLabel:{show:false},axisLine:{lineStyle:{color:T.line}}},
@@ -1346,44 +3039,62 @@ function drawMink(){
       {gridIndex:1,splitLine:{show:false},axisLabel:{fontSize: 11,color:T.faint,formatter:v=>(v/1e3).toFixed(0)+'千手'}},
     ],
     dataZoom:[
-      {type:'inside',xAxisIndex:[0,1],start:60,end:100},
-      {type:'slider',xAxisIndex:[0,1],height:13,bottom:2,borderColor:'transparent',backgroundColor:T.line,fillerColor:T.line,handleSize:'60%'},
+      {type:'inside',xAxisIndex:[0,1],start:zoomStart,end:zoomEnd},
+      {type:'slider',xAxisIndex:[0,1],start:zoomStart,end:zoomEnd,height:13,bottom:2,borderColor:'transparent',backgroundColor:T.line,fillerColor:T.line,handleSize:'60%'},
     ],
     series:[
-      {name:'分钟K',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}},
-      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),lineStyle:{color:T.warn,width:1},symbol:'none'},
-      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),lineStyle:{color:T.series[3],width:1},symbol:'none'},
-      ...overlays,
+      priceSeries,
+      ...maSeries,
+      ...core,
+      ...extra,
       {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,itemStyle:{color:p=>vc[p.dataIndex]}},
     ]
   }, true)   // notMerge：周期切换后昨收/均价/现价线不能残留上一轮的 series
 }
 
-watch(minkPeriod, ()=>loadMink())
+watch(minkPeriod, ()=>{ minkResetZoom = true; loadMink() })
 
 const _theme = useThemeStore()
 watch(() => _theme.isDark, () => nextTick(() => {
+  drawMink(); drawRsChart(); if (showVp.value) drawVp(); if (showReplay.value) drawReplay(); if (showCompare.value) drawCompare()
   if (!lastKline) return
-  drawCharts(lastKline); drawAuxCharts(lastKline); drawChip(); drawPeChart(); drawMink()
+  drawCharts(lastKline); drawAuxCharts(lastKline); drawChip(); drawPeChart()
 }))
 
 onMounted(() => {
-  _resizeHandler = window.addEventListener ? window.addEventListener('resize', resizeAll) : null
-  if(code.value){ load(); loadMink() }
+  window.addEventListener('resize', resizeAll)
+  window.addEventListener('keydown', onMinkKey)
+  aiWsUnwatch = addWsListener(onWsAiEvent)
+  if(code.value) load()
   minkTimer = setInterval(loadMink, 30000)
   alertTimer = setInterval(loadIntradayAlerts, 30000)
 })
+onBeforeUnmount(() => {
+  // ECharts 实例挂在 DOM 上，必须在 DOM 移除前 dispose（onUnmounted 时已经查不到节点）
+  if (showFs.value) closeFs()
+  ;['c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12','c13'].forEach(id => {
+    const el = document.getElementById(id)
+    if (el && el._echart) { el._echart.dispose(); el._echart = null }
+  })
+})
 onUnmounted(() => {
-  if (_resizeHandler && window.removeEventListener) window.removeEventListener('resize', resizeAll)
+  alive = false
+  window.removeEventListener('resize', resizeAll)
+  window.removeEventListener('keydown', onMinkKey)
+  if (aiWsUnwatch) { aiWsUnwatch(); aiWsUnwatch = null }
   if (minkTimer) clearInterval(minkTimer)
   if (quoteTimer) clearTimeout(quoteTimer)
   if (alertTimer) clearInterval(alertTimer)
+  if (vpChart) { vpChart.dispose(); vpChart = null }
+  pauseReplay()
+  if (replayChart) { replayChart.dispose(); replayChart = null }
+  if (compareChart) { compareChart.dispose(); compareChart = null }
 })
 
 watch(()=>props.code, v=>{
   if(v && v!==code.value){
     clearTimeout(quoteTimer); quote.value=null; quoteError.value=false
-    code.value=v; load(); loadMink()
+    code.value=v; inputCode.value=v; load()
   }
 })
 </script>
@@ -1519,8 +3230,8 @@ watch(()=>props.code, v=>{
 .quote-stats {
   grid-column: 2;
   display: grid;
-  grid-template-columns: repeat(7, minmax(52px, auto));
-  gap: 4px 18px;
+  grid-template-columns: repeat(8, minmax(48px, auto));
+  gap: 4px 14px;
   align-items: center;
 }
 .quote-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
@@ -1536,15 +3247,58 @@ watch(()=>props.code, v=>{
   grid-column: 3; display: flex; align-items: center; gap: 8px;
   justify-self: end; white-space: nowrap;
 }
-.quote-refresh { font-size: var(--text-meta); color: var(--c-text-faint); }
 .quote-depth {
-  grid-column: 1 / -1; display: flex; align-items: baseline; gap: 16px;
+  grid-column: 1 / -1; display: flex; align-items: baseline;
+  flex-wrap: wrap; gap: 4px 16px;
   padding-top: 5px; border-top: 1px solid var(--c-border-light);
   font-size: var(--text-meta); font-variant-numeric: tabular-nums;
 }
 .quote-depth-label { color: var(--c-text-faint); }
 .quote-depth .bid b { color: var(--c-up); font-weight: 600; }
 .quote-depth .ask b { color: var(--c-down); font-weight: 600; }
+.quote-depth-stat { color: var(--c-text-dim); }
+.quote-depth-stat b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.quote-depth-stat .qd-muted { color: var(--c-text-faint); margin-left: 3px; }
+
+/* 分时图下方的价位条：图上只画线，名称/数值在这里统一列 */
+.mink-levels {
+  display: flex; flex-wrap: wrap; gap: 2px 12px;
+  margin: -2px 0 2px; font-size: var(--text-meta); color: var(--c-text-dim);
+}
+.mink-levels i {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-right: 4px; vertical-align: 1px;
+}
+.mink-levels b { color: var(--c-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* 分时工具栏 */
+.mink-toolbar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0 0 6px;
+}
+.mink-p3 {
+  font-size: var(--text-meta); color: var(--c-text-faint);
+  border: 1px dashed var(--c-border); border-radius: 3px;
+  padding: 0 5px; white-space: nowrap; cursor: help;
+}
+
+/* 成交量分布弹窗 */
+.vp-summary {
+  margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-dim);
+  display: flex; gap: 10px; flex-wrap: wrap;
+}
+.vp-summary b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+
+/* 分时回放 */
+.replay-meta {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  font-size: var(--text-meta); color: var(--c-text-dim); margin-bottom: 4px;
+}
+.replay-meta b { color: var(--c-text); }
+.replay-controls { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.replay-idx { font-size: var(--text-meta); color: var(--c-text-faint); font-variant-numeric: tabular-nums; }
+.replay-hint { margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-faint); }
+.compare-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .quote-hint {
   grid-column: 1 / -1; font-size: var(--text-meta);
   line-height: 1.5; color: var(--c-text-faint);
@@ -1579,6 +3333,24 @@ watch(()=>props.code, v=>{
 .ia-time { color: var(--c-text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .ia-body { margin-top: 2px; font-size: var(--text-meta); line-height: 1.5; color: var(--c-text-dim); }
 
+/* 分钟图状态（暂停/延迟/更新时间） */
+.mink-refresh {
+  font-size: var(--text-meta); color: var(--c-text-faint);
+  min-width: 76px; text-align: right; white-space: nowrap;
+}
+.mink-refresh::before {
+  content: '●'; font-size: 8px; margin-right: 3px; color: var(--c-text-faint);
+}
+.mink-refresh.on { color: var(--c-up); }
+.mink-refresh.on::before {
+  color: var(--c-up);
+  animation: quotePulse 2s ease-in-out infinite;
+}
+.mink-status { font-size: var(--text-meta); white-space: nowrap; }
+.mink-status.ok { color: var(--c-text-faint); }
+.mink-status.bad { color: var(--c-warning); font-weight: 600; }
+.mink-status.paused { color: var(--c-text-dim); }
+
 /* AI 盘面解读卡片 */
 .ai-card {
   margin-bottom: 6px; padding: 9px 11px;
@@ -1591,6 +3363,15 @@ watch(()=>props.code, v=>{
 .ai-cached {
   font-size: var(--text-meta); color: var(--c-text-faint);
   border: 1px solid var(--c-border); border-radius: 3px; padding: 0 4px;
+}
+.ai-event-badge {
+  font-size: var(--text-meta); font-weight: 600; color: var(--c-warning);
+  border: 1px solid var(--c-warning); border-radius: 3px; padding: 0 4px;
+}
+.ai-event-line {
+  margin: -1px 0 6px; font-size: var(--text-meta); line-height: 1.5;
+  color: var(--c-text-dim); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 .ai-loading { font-size: var(--text-meta); color: var(--c-text-dim); padding: 3px 0; }
 .ai-error { font-size: var(--text-meta); color: var(--c-error); padding: 3px 0; }
@@ -1610,4 +3391,133 @@ watch(()=>props.code, v=>{
 .ai-points.risk li { color: var(--c-warning); }
 .ai-sub { margin-top: 6px; font-size: var(--text-meta); font-weight: 600; color: var(--c-text-dim); }
 .ai-foot { margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-faint); }
+
+/* 多栏分时全屏对比 */
+.fs-overlay {
+  position: fixed; inset: 0; z-index: 1500;   /* 低于 n-modal(2000)，高于页面；量分布/回放弹窗才能盖在全屏上 */
+  display: flex; flex-direction: column;
+  background: var(--c-bg); color: var(--c-text);
+  padding: 10px 14px;
+}
+.fs-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.fs-title { font-size: 16px; font-weight: 600; }
+.fs-count { font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-hint { font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-hint b { color: var(--c-text); }
+.fs-panels { flex: 1; display: grid; gap: 8px; min-height: 0; }
+.fs-panel {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  position: relative; overflow: hidden;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-card-bg);
+}
+.fs-panel-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; border-bottom: 1px solid var(--c-border-light);
+}
+.fs-panel-name { font-size: 14px; font-weight: 600; }
+.fs-panel-code { font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-panel-price {
+  margin-left: auto; font-size: 16px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.fs-panel-chg { font-size: var(--text-meta); font-weight: 500; margin-left: 3px; }
+.fs-panel-loading { font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-remove { margin-left: 4px; }
+.fs-panel-tools {
+  display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
+  margin-left: auto;
+}
+.fs-panel-tools .n-button { font-size: var(--text-meta) !important; }
+.fs-quote {
+  padding: 4px 10px 5px; border-bottom: 1px solid var(--c-border-light);
+  font-size: var(--text-meta); color: var(--c-text-dim);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.fs-q-row { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
+.fs-q-status { color: var(--c-text); font-weight: 500; }
+.fs-q-time { color: var(--c-text-faint); font-variant-numeric: tabular-nums; }
+.fs-q-stat b { color: var(--c-text); font-weight: 600; font-variant-numeric: tabular-nums; margin-left: 2px; }
+.fs-levels { margin: 2px 8px 4px; }
+.fs-panel-chart { flex: 1; min-height: 120px; }
+/* 盘中相对强弱：全屏与详情页同图同口径 */
+.fs-rs { margin: 0 8px 4px; padding-top: 4px; border-top: 1px dashed var(--c-border-light); }
+.fs-rs-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 2px; }
+.fs-rs-title { font-size: var(--text-meta); font-weight: 600; color: var(--c-text); }
+.fs-rs-sub { font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-rs-chart { width: 100%; height: 112px; }
+/* AI 卡与详情页一致：在分时图上方、参与流式布局；提醒列表仍用覆盖层避免挤压图表 */
+.fs-ai {
+  flex: none; margin: 2px 8px 6px; padding: 10px; max-height: 34%; overflow: auto;
+  background: var(--c-card-bg); border: 1px solid var(--c-border);
+  border-radius: var(--radius); box-shadow: 0 4px 14px var(--c-shadow-color);
+}
+.fs-alerts {
+  position: absolute; left: 8px; right: 8px; top: 96px; bottom: 8px; z-index: 12;
+  background: var(--c-card-bg); border: 1px solid var(--c-border);
+  border-radius: var(--radius); box-shadow: 0 8px 24px var(--c-shadow-color);
+  padding: 10px; overflow: auto;
+}
+.fs-ai-head, .fs-alerts-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+  font-size: var(--text-meta);
+}
+.fs-ai-head span { color: var(--c-text-faint); }
+.fs-ai-loading { font-size: var(--text-meta); color: var(--c-text-dim); }
+.fs-ai-error { font-size: var(--text-meta); color: var(--c-error); }
+.fs-ai-summary { font-size: 12px; line-height: 1.5; color: var(--c-text); }
+.fs-ai-summary b { color: var(--c-accent); margin-right: 4px; }
+.fs-ai-list { margin: 4px 0 0; padding-left: 16px; font-size: var(--text-meta); line-height: 1.55; color: var(--c-text-dim); }
+.fs-ai-list.risk li { color: var(--c-warning); }
+.fs-ai-sub { margin-top: 6px; font-size: var(--text-meta); font-weight: 600; color: var(--c-text-dim); }
+.fs-ai-foot { margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-alert-item { padding: 5px 0; border-top: 1px solid var(--c-border-light); }
+.fs-alert-item:first-of-type { border-top: 0; }
+.fs-alert-title { font-size: var(--text-meta); color: var(--c-text); font-weight: 500; }
+.fs-alert-body { margin-top: 1px; font-size: var(--text-meta); line-height: 1.45; color: var(--c-text-dim); }
+.fs-alert-time { margin-top: 1px; font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-alert-empty { font-size: var(--text-meta); color: var(--c-text-faint); }
+.fs-panel-empty {
+  position: absolute; left: 0; right: 0; top: 52%;
+  text-align: center; font-size: var(--text-meta); color: var(--c-text-faint);
+}
+.fs-side {
+  /* 从图表区开始，避免挡住面板头部的 AI/量分布/移除等按钮 */
+  position: absolute; top: 96px; bottom: 0; width: 54px; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.fs-side-left { left: 0; }
+.fs-side-right { right: 0; }
+.fs-plus {
+  width: 38px; height: 38px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; line-height: 1; color: var(--c-text);
+  background: var(--c-card-bg); border: 1px solid var(--c-border);
+  box-shadow: 0 2px 10px var(--c-shadow-color);
+  opacity: 0; transform: scale(.9);
+  transition: opacity .15s, transform .15s;
+}
+.fs-side:hover .fs-plus { opacity: 1; transform: scale(1); }
+.fs-search {
+  position: absolute; top: 66px; z-index: 20; width: 272px;
+  padding: 10px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--c-card-bg); border: 1px solid var(--c-border);
+  border-radius: var(--radius); box-shadow: 0 8px 24px var(--c-shadow-color);
+}
+.fs-search-left { left: 56px; }
+.fs-search-right { right: 56px; }
+.fs-search-title { font-size: var(--text-meta); font-weight: 600; }
+.fs-search-hint { font-size: var(--text-meta); color: var(--c-text-faint); }
+@media (max-width: 900px) {
+  .fs-panels {
+    grid-template-columns: 1fr !important;
+    grid-auto-rows: minmax(420px, auto);
+    overflow-y: auto;
+  }
+  .fs-side { display: none; }
+}
 </style>

@@ -507,6 +507,14 @@ async def broadcast_dag_status():
         _adb0.close()
     except Exception:
         _last_alert_id = 0
+    _last_ai_id = 0  # 事件 AI 结果增量推送游标
+    try:
+        _adb0 = get_sync_db()
+        _last_ai_id = _adb0.execute(text(
+            "SELECT COALESCE(MAX(id), 0) FROM intraday_ai_event")).scalar() or 0
+        _adb0.close()
+    except Exception:
+        _last_ai_id = 0
 
     while True:
         # 初始化在 try 外：首轮 DB 异常时 has_running 已定义，避免 NameError 杀死广播协程
@@ -515,7 +523,7 @@ async def broadcast_dag_status():
         try:
             _adb = get_sync_db()
             _arows = _adb.execute(text(
-                "SELECT id, trade_date, kind, stock_code, level, title, body "
+                "SELECT id, trade_date, kind, stock_code, level, title, body, created_at "
                 "FROM risk_alerts WHERE id > :last ORDER BY id LIMIT 20"
             ), {"last": _last_alert_id}).fetchall()
             _adb.close()
@@ -523,7 +531,8 @@ async def broadcast_dag_status():
                 _last_alert_id = _arows[-1][0]
                 _amsg = _json.dumps({"type": "risk_alert", "alerts": [
                     {"id": r[0], "trade_date": str(r[1]), "kind": r[2],
-                     "stock_code": r[3], "level": r[4], "title": r[5], "body": r[6]}
+                     "stock_code": r[3], "level": r[4], "title": r[5], "body": r[6],
+                     "created_at": str(r[7])[:19] if r[7] else None}
                     for r in _arows
                 ]})
                 dead_a = set()
@@ -533,6 +542,31 @@ async def broadcast_dag_status():
                     except Exception:
                         dead_a.add(ws)
                 _ws_clients -= dead_a
+        except Exception:
+            pass
+        # 事件 AI 结果增量推送：worker 落库后 2s 内推给前端
+        try:
+            _aadb = get_sync_db()
+            _airows = _aadb.execute(text(
+                "SELECT id, alert_id, stock_code, kind, status, result, error, created_at "
+                "FROM intraday_ai_event WHERE id > :last ORDER BY id LIMIT 10"
+            ), {"last": _last_ai_id}).fetchall()
+            _aadb.close()
+            if _airows:
+                _last_ai_id = _airows[-1][0]
+                _aimsg = _json.dumps({"type": "intraday_ai", "events": [
+                    {"id": r[0], "alert_id": r[1], "stock_code": r[2], "kind": r[3],
+                     "status": r[4], "result": r[5], "error": r[6],
+                     "created_at": str(r[7])[:19] if r[7] else None}
+                    for r in _airows
+                ]}, ensure_ascii=False)
+                dead_ai = set()
+                for ws in list(_ws_clients):
+                    try:
+                        await ws.send_text(_aimsg)
+                    except Exception:
+                        dead_ai.add(ws)
+                _ws_clients -= dead_ai
         except Exception:
             pass
         node_list = []

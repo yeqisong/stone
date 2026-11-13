@@ -1,6 +1,7 @@
 <template>
   <n-auto-complete v-model:value="text" :options="options" :size="size" :placeholder="placeholder"
     :clearable="true" :style="{ width }" :loading="fetching || undefined"
+    :z-index="zIndex"
     @update:value="onInput" @select="onSelect" @keyup.enter="$emit('enter')" />
 </template>
 
@@ -18,6 +19,7 @@ const props = defineProps({
   size: { type: String, default: undefined },
   placeholder: { type: String, default: '代码/名称/拼音首字母' },
   width: { type: [String, Number], default: '100%' },
+  zIndex: { type: Number, default: undefined },
 })
 const emit = defineEmits(['update:value', 'select', 'enter'])
 
@@ -53,7 +55,11 @@ function onInput(v) {
 }
 
 function onSelect(v, option) {
+  // 不同 Naive UI 版本/事件路径下 option 可能是对象或 label 字符串；
+  // 统一从 "000001  平安银行" 里剥出名称，避免面板头先显示代码本身。
+  const label = typeof option === 'string' ? option : (option?.label || '')
+  const name = (option?.name || label.replace(/^\s*\d{6}\s*/, '')).trim()
   emit('update:value', v)
-  emit('select', { code: v, name: option?.name || (option?.label || '').slice(7) })
+  emit('select', { code: v, name })
 }
 </script>

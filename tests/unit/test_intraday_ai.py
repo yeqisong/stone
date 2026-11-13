@@ -58,6 +58,18 @@ class TestNormalize:
     def test_invalid_stance(self):
         assert ia.normalize_result({'stance': '看多'})['stance'] == '震荡'
 
+    def test_missing_summary_uses_first_observation(self):
+        r = ia.normalize_result({
+            'stance': '偏强', 'observations': ['现价站上均价', '量比 1.2'],
+            'risks': [], 'watch': [],
+        })
+        assert r['summary'] == '现价站上均价'
+        assert r['fallback'] is False
+
+    def test_no_summary_and_no_observations(self):
+        r = ia.normalize_result({'stance': '震荡', 'observations': []})
+        assert r['summary'] == '（模型未给出结论）'
+
     def test_fallback_raw_content(self):
         r = ia.normalize_result(None, '模型只回了一段话')
         assert r['fallback'] is True
@@ -176,3 +188,28 @@ class TestAnalyze:
         assert out['ok'] is True
         assert out['fallback'] is True
         assert '一段话' in out['summary']
+
+    def test_empty_content_is_error(self, monkeypatch):
+        # 推理模型 max_tokens 被 reasoning 吃满时 content 为空：必须显式失败
+        client = _FakeClient('')
+        _install_fakes(monkeypatch, client)
+        out = ia.analyze_intraday('600519', 'stock')
+        assert out['ok'] is False
+        assert '为空' in out['error']
+
+    def test_event_prompt_and_payload(self, monkeypatch):
+        content = ('{"stance":"偏强","summary":"5分钟急涨，量价确认",'
+                   '"observations":["现价上穿VWAP"],"risks":[],"watch":["VWAP"]}')
+        client = _FakeClient(content)
+        _install_fakes(monkeypatch, client)
+        event = {'alert_id': 9, 'kind': 'it_surge', 'title': '5分钟急涨 +2.1%',
+                 'body': '现价 79.80', 'trade_date': '2026-11-13'}
+        out = ia.analyze_intraday('600519', 'stock', event=event)
+        assert out['ok'] is True
+        assert out['event']['kind'] == 'it_surge'
+        assert out['prompt_ver'] == 'ia1e'
+        sys_msg = client.calls[0]['messages'][0]['content']
+        user_msg = client.calls[0]['messages'][1]['content']
+        assert '盘中价格事件' in sys_msg
+        assert '5分钟急涨' in user_msg
+        assert '"event"' in user_msg

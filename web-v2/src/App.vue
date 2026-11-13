@@ -131,8 +131,8 @@ const theme = useThemeStore()
 const wsConnected = ref(false)
 // ── 风控告警 → Chrome 通知（step3）──
 const notifEnabled = ref(localStorage.getItem('notif_enabled') === '1')
-const notifHint = computed(() => notifEnabled.value ? '风控/盘中提醒 Chrome 通知已开启，点击关闭'
-                                      : ('开启风控/盘中提醒 Chrome 通知' + (typeof Notification !== 'undefined' && Notification.permission === 'denied' ? '（浏览器已禁止，请在地址栏设置中放行）' : '')))
+const notifHint = computed(() => notifEnabled.value ? '风控/盘中提醒/AI事件 Chrome 通知已开启，点击关闭'
+                                      : ('开启风控/盘中提醒/AI事件 Chrome 通知' + (typeof Notification !== 'undefined' && Notification.permission === 'denied' ? '（浏览器已禁止，请在地址栏设置中放行）' : '')))
 function toggleNotif() {
   if (notifEnabled.value) {
     notifEnabled.value = false
@@ -143,13 +143,13 @@ function toggleNotif() {
   if (Notification.permission === 'granted') {
     notifEnabled.value = true
     localStorage.setItem('notif_enabled', '1')
-    new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动将实时推送' })
+    new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动/AI事件解读将实时推送' })
   } else {
     Notification.requestPermission().then(p => {
       if (p === 'granted') {
         notifEnabled.value = true
         localStorage.setItem('notif_enabled', '1')
-        new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动将实时推送' })
+        new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动/AI事件解读将实时推送' })
       }
     })
   }
@@ -165,6 +165,22 @@ addWsListener(data => {
         window.focus()
         if (isIntraday && a.stock_code) nav.showDetail(a.stock_code)
         else nav.switchTab('x')
+        n.close()
+      }
+    }
+  }
+  // 事件 AI 解读完成 → Chrome 通知；点击直达个股详情（详情页同时会自动展开 AI 卡）
+  if (data && data.type === 'intraday_ai' && notifEnabled.value
+      && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    for (const ev of (data.events || [])) {
+      const ok = ev.status === 'done' && ev.result?.ok
+      const name = ok ? (ev.result.name || ev.stock_code) : ev.stock_code
+      const body = ok ? (ev.result.summary || '') : (ev.error || 'AI 解读失败')
+      const n = new Notification(ok ? `盘中AI · ${name}` : `盘中AI · ${name}（失败）`,
+        { body: String(body).slice(0, 120), tag: 'ai-' + ev.id })
+      n.onclick = () => {
+        window.focus()
+        if (ev.stock_code) nav.showDetail(ev.stock_code)
         n.close()
       }
     }

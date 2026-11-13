@@ -15,6 +15,9 @@
 - it_surge / it_drop  N 分钟急涨/急跌（默认 5 分钟 2%）
 - it_high / it_low    日内新高/新低（首轮只建基线不报）
 - it_vol              量比异动（默认 2.0，开盘 15 分钟后启用）
+- it_vwap_up/down     上穿/下破当日 VWAP（均价线，默认 0.1% 缓冲）
+- it_or_up/down       突破/跌破开盘 N 分钟区间（默认 15 分钟；盘中晚于窗口启动则当天不产生 OR 信号）
+- it_prev_high/low    突破/跌破昨日最高/最低（取今天之前最近一个有有效价的交易日）
 
 设计取舍：
 - 复用 risk_alerts 而不是新表：status.py 的 WS 循环已经在增量推送新告警，
@@ -52,30 +55,56 @@ DEFAULT_CONFIG = {
     'cooldown_min': 30,            # 同类提醒默认冷却
     'max_alerts_per_day': 30,      # 单日盘中提醒上限
     'max_per_tick': 3,             # 单轮最多推几条（急跌时防刷屏，其余下轮再评估）
+    # 关键价位突破（VWAP / 开盘区间 / 昨高昨低）
+    'vwap_break_enabled': True,
+    'vwap_break_min_pct': 0.1,     # 相对 VWAP 的最小穿越幅度；另保底 1 个价位 0.01 元
+    'or_break_enabled': True,
+    'or_minutes': 15,              # 开盘区间长度（09:30 起算）
+    'or_break_min_pct': 0.1,       # 相对 OR 上/下沿的最小突破幅度
+    'prev_level_enabled': True,
+    'prev_level_min_pct': 0.1,     # 相对昨高/昨低的最小突破幅度
+    # P1 事件 AI：默认这些高信号提醒自动触发解读（新高/新低/量比不触发）
+    'ai_event_enabled': True,
+    'ai_event_kinds': ['it_stop', 'it_take', 'it_limit_up', 'it_limit_down',
+                       'it_surge', 'it_drop',
+                       'it_vwap_up', 'it_vwap_down', 'it_or_up', 'it_or_down',
+                       'it_prev_high', 'it_prev_low'],
+    'ai_event_cooldown_min': 15,   # 同股冷却：15 分钟内只解读一次
+    'ai_event_max_per_day': 10,    # 全局单日 AI 解读上限
 }
 
-# 止损/止盈一天只提醒一次（4 小时覆盖整个连续竞价时段）；新高/新低/量比 1 小时
+# 止损/止盈一天只提醒一次（4 小时覆盖整个连续竞价时段）；新高/新低/量比/关键价位 1 小时
 COOLDOWN_MIN = {
     'it_stop': 240, 'it_take': 240,
     'it_high': 60, 'it_low': 60, 'it_vol': 60,
+    'it_vwap_up': 30, 'it_vwap_down': 30,
+    'it_or_up': 60, 'it_or_down': 60,
+    'it_prev_high': 60, 'it_prev_low': 60,
 }
 PRIORITY = {
     'it_stop': 0, 'it_take': 0, 'it_limit_down': 1, 'it_limit_up': 2,
-    'it_drop': 3, 'it_surge': 4, 'it_high': 5, 'it_low': 6, 'it_vol': 7,
+    'it_drop': 3, 'it_surge': 4,
+    'it_prev_low': 5, 'it_or_down': 6, 'it_vwap_down': 7,
+    'it_prev_high': 8, 'it_or_up': 9, 'it_vwap_up': 10,
+    'it_high': 11, 'it_low': 12, 'it_vol': 13,
 }
 KIND_LABEL = {
     'it_stop': '触及止损', 'it_take': '触及止盈',
     'it_limit_up': '逼近涨停', 'it_limit_down': '逼近跌停',
     'it_surge': '盘中急涨', 'it_drop': '盘中急跌',
     'it_high': '日内新高', 'it_low': '日内新低', 'it_vol': '量比异动',
+    'it_vwap_up': '上穿 VWAP', 'it_vwap_down': '下破 VWAP',
+    'it_or_up': '突破开盘区间', 'it_or_down': '跌破开盘区间',
+    'it_prev_high': '突破昨高', 'it_prev_low': '跌破昨低',
 }
 CRITICAL = {'it_stop', 'it_limit_down', 'it_drop'}
 
 _CTX_TTL_S = 60
 _ctx = {'ts': 0.0, 'rules': dict(DEFAULT_CONFIG), 'pool': [], 'costs': {},
-        'trade_day': True}
+        'prev_levels': {}, 'trade_day': True}
 _trade_day_cache = {'day': None, 'ok': True}
-_state: dict = {}          # code -> {day, high, low, vol_hot, limit_near, samples}
+_prev_cache = {'day': None, 'key': None, 'levels': {}}
+_state: dict = {}          # code -> 日内状态（高低/量比/限价/采样 + VWAP/OR/昨高昨低侧别）
 _started = False
 
 
@@ -176,17 +205,51 @@ def _load_costs(db) -> dict:
     return {r[0]: {'name': r[1], 'cost': float(r[2])} for r in rows}
 
 
+def _load_prev_levels(db, codes: list, day) -> dict:
+    """昨高/昨低：每个 code 取 day 之前最近一个有有效价的交易日。
+
+    按「日期 + 代码集合」缓存，池子不变时一天只查一次；查询失败不写缓存，
+    下一轮（60s 后）自动重试。
+    """
+    key = ','.join(sorted(codes))
+    day_key = day.isoformat()
+    if _prev_cache['day'] == day_key and _prev_cache['key'] == key:
+        return _prev_cache['levels']
+    levels = {}
+    if codes:
+        try:
+            rows = db.execute(text("""
+                SELECT DISTINCT ON (stock_code) stock_code, high, low, trade_date
+                FROM daily_quote
+                WHERE stock_code = ANY(CAST(:codes AS varchar[]))
+                  AND trade_date < :d
+                  AND close > 0 AND high > 0 AND low > 0
+                ORDER BY stock_code, trade_date DESC
+            """), {'codes': list(codes), 'd': day}).fetchall()
+            levels = {
+                r[0]: {'high': float(r[1]), 'low': float(r[2]), 'date': str(r[3])[:10]}
+                for r in rows
+            }
+        except Exception as e:
+            logger.warning(f"[intraday] 昨高昨低加载失败: {str(e)[:120]}")
+            return {}
+    _prev_cache.update(day=day_key, key=key, levels=levels)
+    return levels
+
+
 def _load_context() -> dict:
     now = time.monotonic()
     if now - _ctx['ts'] < _CTX_TTL_S:
         return _ctx
     db = get_sync_db()
     try:
+        pool = _load_pool(db)
         _ctx.update(
             ts=now,
             rules=get_intraday_rules(db),
-            pool=_load_pool(db),
+            pool=pool,
             costs=_load_costs(db),
+            prev_levels=_load_prev_levels(db, [p['code'] for p in pool], _bj_now().date()),
             trade_day=_is_trade_day(db, _bj_now().date()),
         )
     except Exception as e:
@@ -229,10 +292,79 @@ def _cand(code, name, kind, body) -> dict:
     }
 
 
-def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict, now: datetime) -> list:
+def _break_side(price: float, level: float, min_pct: float):
+    """price 相对单一价位（VWAP/昨高/昨低）的侧别；0=缓冲区内。
+
+    缓冲取 max(level*min_pct%, 0.01 元)：低价股不会因为不足一个价位反复穿越。
+    """
+    if not level or level <= 0:
+        return None
+    buf = max(level * max(0.0, min_pct) / 100, 0.01)
+    if price >= level + buf:
+        return 1
+    if price <= level - buf:
+        return -1
+    return 0
+
+
+def _prev_side(price: float, prev: dict | None, min_pct: float):
+    """price 相对昨高/昨低的侧别；昨高之上=1，昨低之下=-1，区间内=0。"""
+    if not prev:
+        return None
+    hi, lo = prev.get('high'), prev.get('low')
+    if hi and price >= hi + max(hi * max(0.0, min_pct) / 100, 0.01):
+        return 1
+    if lo and price <= lo - max(lo * max(0.0, min_pct) / 100, 0.01):
+        return -1
+    return 0
+
+
+def _or_side(price: float, hi, lo, min_pct: float):
+    if not hi or not lo or hi <= lo:
+        return None
+    if price >= hi + max(hi * max(0.0, min_pct) / 100, 0.01):
+        return 1
+    if price <= lo - max(lo * max(0.0, min_pct) / 100, 0.01):
+        return -1
+    return 0
+
+
+def _or_window_min(rules: dict) -> int:
+    """开盘区间长度：最多到上午收盘（120 分钟），避免把午后行情算进 OR。"""
+    return min(120, max(1, _num(rules.get('or_minutes'), 15, int)))
+
+
+def _update_or_state(st: dict, q: dict, price: float, rules: dict, now: datetime):
+    """累计开盘 N 分钟区间。必须在任何 `continue` 之前调用，否则前 15 分钟会被止损/急涨跳过。"""
+    if not rules.get('or_break_enabled', True) or st.get('or_unavailable'):
+        return
+    or_min = _or_window_min(rules)
+    mins = _session_minutes(now)
+    if st.get('or_high') is None or st.get('or_low') is None:
+        if mins < or_min:
+            st['or_high'] = q.get('high') or price
+            st['or_low'] = q.get('low') or price
+        else:
+            # 盘中晚于 OR 窗口启动：当天无法还原区间，直接标记不可用
+            st['or_unavailable'] = True
+        return
+    if st.get('or_ready'):
+        return
+    if mins < or_min:
+        st['or_high'] = max(st['or_high'], q.get('high') or price)
+        st['or_low'] = min(st['or_low'], q.get('low') or price)
+    elif st['or_high'] > st['or_low']:
+        st['or_ready'] = True
+    else:
+        st['or_unavailable'] = True
+
+
+def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
+                  now: datetime, prev_levels: dict | None = None) -> list:
     """纯规则评估：返回候选告警（未落库、未查冷却）。同一只票一次最多一条。
 
-    state 会被就地更新（日内高低基线、量比状态、急涨急跌采样）。
+    state 会被就地更新（日内高低基线、量比状态、急涨急跌采样、
+    VWAP/OR/昨高昨低侧别）。prev_levels: code -> {high, low, date}。
     """
     today = now.strftime('%Y-%m-%d')
     now_ts = now.timestamp()
@@ -244,6 +376,10 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict, now: date
     hl_min = max(0.0, _num(rules.get('high_low_min_pct'), 0.2))
     stop_pct = _num(rules.get('stop_loss_pct'), 8.0)
     take_pct = _num(rules.get('take_profit_pct'), 20.0)
+    vwap_pct = max(0.0, _num(rules.get('vwap_break_min_pct'), 0.1))
+    or_pct = max(0.0, _num(rules.get('or_break_min_pct'), 0.1))
+    prev_pct = max(0.0, _num(rules.get('prev_level_min_pct'), 0.1))
+    prev_levels = prev_levels or {}
     out = []
 
     for code, q in quotes.items():
@@ -260,12 +396,23 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict, now: date
             hi = q.get('high') or price
             lo = q.get('low') or price
             st = {'day': today, 'high': hi, 'low': lo, 'vol_hot': False,
-                  'limit_near': None, 'samples': deque()}
+                  'limit_near': None, 'samples': deque(),
+                  'vwap_side': None, 'prev_side': None,
+                  'or_high': None, 'or_low': None, 'or_ready': False,
+                  'or_unavailable': False, 'or_side': 0}
             state[code] = st
         name = (costs.get(code) or {}).get('name') or q.get('name') or code
         st['samples'].append((now_ts, price))
         while st['samples'] and st['samples'][0][0] < now_ts - 15 * 60:
             st['samples'].popleft()
+
+        # 开盘区间必须在任何 continue 之前累计（否则前 15 分钟会被止损/急涨规则跳过）
+        _update_or_state(st, q, price, rules, now)
+        prev = prev_levels.get(code)
+        if first:
+            # 首轮只建基线，不报穿越（避免启动瞬间把「当前就在价位上方」当突破）
+            st['vwap_side'] = _break_side(price, q.get('avg_price'), vwap_pct)
+            st['prev_side'] = _prev_side(price, prev, prev_pct)
 
         # 1) 持仓止损/止盈（真实价 vs 持仓成本价，均不复权）
         pos = costs.get(code) or {}
@@ -318,7 +465,65 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict, now: date
                                  f'跌幅 {chg * 100:.2f}%（阈值 {rapid_pct:.1f}%）'))
                 continue
 
-        # 4) 日内新高/新低：首轮只建基线；状态始终更新，冷却只影响是否推送
+        # 4) 昨高/昨低突破（结构性价位，优先于 OR/VWAP）
+        if rules.get('prev_level_enabled', True) and prev:
+            side = _prev_side(price, prev, prev_pct)
+            if side is not None:
+                if st.get('prev_side') is None:
+                    st['prev_side'] = side      # 兼容旧状态：首轮只建基线
+                elif side != 0 and side != st['prev_side']:
+                    st['prev_side'] = side
+                    if side > 0:
+                        diff = (price / prev['high'] - 1) * 100
+                        out.append(_cand(code, name, 'it_prev_high',
+                                         f"现价 {_fmt(price)}，昨高 {_fmt(prev['high'])}"
+                                         f"（{prev.get('date') or '—'}），突破 +{diff:.2f}%"))
+                    else:
+                        diff = (prev['low'] / price - 1) * 100
+                        out.append(_cand(code, name, 'it_prev_low',
+                                         f"现价 {_fmt(price)}，昨低 {_fmt(prev['low'])}"
+                                         f"（{prev.get('date') or '—'}），跌破 -{diff:.2f}%"))
+                    continue
+
+        # 5) 开盘区间（OR）突破
+        if rules.get('or_break_enabled', True) and st.get('or_ready'):
+            side = _or_side(price, st.get('or_high'), st.get('or_low'), or_pct)
+            if side is not None:
+                if st.get('or_side') is None:
+                    st['or_side'] = 0
+                if side != 0 and side != st.get('or_side'):
+                    st['or_side'] = side
+                    or_hi, or_lo = st['or_high'], st['or_low']
+                    or_min = _or_window_min(rules)
+                    if side > 0:
+                        diff = (price / or_hi - 1) * 100
+                        out.append(_cand(code, name, 'it_or_up',
+                                         f'现价 {_fmt(price)}，开盘 {or_min} 分钟区间 '
+                                         f'{_fmt(or_lo)}-{_fmt(or_hi)}，突破 +{diff:.2f}%'))
+                    else:
+                        diff = (or_lo / price - 1) * 100
+                        out.append(_cand(code, name, 'it_or_down',
+                                         f'现价 {_fmt(price)}，开盘 {or_min} 分钟区间 '
+                                         f'{_fmt(or_lo)}-{_fmt(or_hi)}，跌破 -{diff:.2f}%'))
+                    continue
+
+        # 6) VWAP（均价线）上穿/下破
+        if rules.get('vwap_break_enabled', True):
+            vwap = q.get('avg_price')
+            side = _break_side(price, vwap, vwap_pct)
+            if side is not None:
+                if st.get('vwap_side') is None:
+                    st['vwap_side'] = side      # 兼容旧状态：首轮只建基线
+                elif side != 0 and side != st['vwap_side']:
+                    st['vwap_side'] = side
+                    diff = abs(price / vwap - 1) * 100
+                    out.append(_cand(code, name,
+                                     'it_vwap_up' if side > 0 else 'it_vwap_down',
+                                     f"现价 {_fmt(price)}，{'上穿' if side > 0 else '下破'} "
+                                     f'VWAP {_fmt(vwap)}（{diff:.2f}%）'))
+                    continue
+
+        # 7) 日内新高/新低：首轮只建基线；状态始终更新，冷却只影响是否推送
         hi, lo = q.get('high'), q.get('low')
         if not first:
             # 只在相对上次提醒位走出 min_pct 时才报：开盘 0.01 元级的新高/新低是噪声，
@@ -337,7 +542,7 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict, now: date
             st['high'] = max(st['high'], hi or price)
             st['low'] = min(st['low'], lo or price)
 
-        # 5) 量比异动：只在从低位上穿阈值时报一次
+        # 8) 量比异动：只在从低位上穿阈值时报一次
         vr = q.get('volume_ratio')
         if vr is not None and _session_minutes(now) >= vol_min_min:
             if vr >= vol_th and not st['vol_hot']:
@@ -358,6 +563,9 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
     max_tick = max(1, _num(rules.get('max_per_tick'), 3, int))
     cooldown_default = max(1, _num(rules.get('cooldown_min'), 30, int))
     candidates = sorted(candidates, key=lambda c: PRIORITY.get(c['kind'], 9))[:max_tick]
+    ai_enabled = bool(rules.get('ai_event_enabled', True))
+    ai_kinds = set(rules.get('ai_event_kinds') or [])
+    to_enqueue = []
 
     db = get_sync_db()
     inserted = 0
@@ -366,8 +574,9 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             "SELECT count(*) FROM risk_alerts WHERE trade_date=:d AND kind LIKE 'it%'"
         ), {"d": now.date()}).scalar() or 0
         for c in candidates:
-            if count >= max_day:
-                break
+            # 单日上限用于压噪声，不压止损/跌停/急跌等 critical 告警
+            if count >= max_day and not (max_day > 0 and c['level'] == 'critical'):
+                continue
             cd = COOLDOWN_MIN.get(c['kind'], cooldown_default)
             cutoff = now - timedelta(minutes=cd)
             seen = db.execute(text(
@@ -376,15 +585,23 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             ), {"c": c['stock_code'], "k": c['kind'], "cut": cutoff}).fetchone()
             if seen:
                 continue
-            db.execute(text(
+            row = db.execute(text(
                 "INSERT INTO risk_alerts "
                 "(trade_date, kind, stock_code, level, title, body, created_at) "
-                "VALUES (:d, :k, :c, :lv, :t, :b, :ts)"
+                "VALUES (:d, :k, :c, :lv, :t, :b, :ts) RETURNING id"
             ), {"d": now.date(), "k": c['kind'], "c": c['stock_code'],
-                "lv": c['level'], "t": c['title'], "b": c['body'], "ts": now})
+                "lv": c['level'], "t": c['title'], "b": c['body'], "ts": now}).fetchone()
             count += 1
             inserted += 1
             logger.info(f"[intraday] {c['title']} | {c['body']}")
+            if row and ai_enabled and c['kind'] in ai_kinds:
+                to_enqueue.append({
+                    'alert_id': row[0],
+                    'stock_code': c['stock_code'],
+                    'kind': c['kind'],
+                    'title': c['title'],
+                    'body': c['body'],
+                })
         db.commit()
     except Exception as e:
         db.rollback()
@@ -392,6 +609,15 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
         return 0
     finally:
         db.close()
+
+    # commit 之后再入队：worker 需要能读到已提交的 alert 行
+    if to_enqueue:
+        try:
+            from app.intraday_ai import enqueue_ai_event
+            for item in to_enqueue:
+                enqueue_ai_event(item)
+        except Exception as e:
+            logger.warning(f"[intraday] 事件 AI 入队失败: {str(e)[:120]}")
     return inserted
 
 
@@ -518,7 +744,8 @@ def _tick(now: datetime, rules: dict | None = None) -> int:
         _save_bars(_collect_bars(quotes, now))
     if not rules.get('enabled'):
         return 0
-    candidates = evaluate_tick(quotes, _state, ctx['costs'], rules, now)
+    candidates = evaluate_tick(quotes, _state, ctx['costs'], rules, now,
+                               ctx.get('prev_levels'))
     return _persist(candidates, rules, now)
 
 

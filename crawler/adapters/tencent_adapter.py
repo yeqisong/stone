@@ -35,19 +35,14 @@ _UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
 
-def _prefix(code: str) -> str:
-    """6 位码 → sh/sz 前缀。北交所不支持（腾讯分钟线为空）。"""
-    if code.startswith(('60', '68', '90', '5')):
-        return 'sh'
-    if code.startswith(('00', '30', '20', '1')):
-        return 'sz'
-    raise ValueError(f'腾讯分钟线不支持该代码: {code}（北交所分钟线为空）')
-
-
-def minute_kline(code: str, period: str = 'm5', count: int = 120) -> list[dict]:
+def minute_kline(code: str, period: str = 'm5', count: int = 120,
+                 security_type: str = 'stock') -> list[dict]:
     """分钟K线（不复权，最近 count 根 ≤320）。返回 dict 列表：
 
     {datetime: 'YYYY-MM-DD HH:MM', open, close, high, low, volume(手), turnover_rate_pct}
+
+    security_type='index' 时支持 sh000300/sz399006 等指数（实测可用）；
+    北交所个股分钟线为空，会走 RuntimeError。
     """
     period = period.lower()
     if period not in _PERIODS:
@@ -55,7 +50,7 @@ def minute_kline(code: str, period: str = 'm5', count: int = 120) -> list[dict]:
     count = int(count)
     if not 1 <= count <= 320:
         raise ValueError('count 范围 1-320')
-    symbol = _prefix(code) + code
+    symbol = _quote_symbol(code, security_type)
     param = f'{symbol},{period},,{count}'
 
     errors = []
@@ -134,7 +129,7 @@ def _quote_symbol(code: str, security_type: str = 'stock') -> str:
         return 'sz' + code
     if code.startswith(('4', '8', '92')):
         return 'bj' + code          # 快照支持北交所（分钟线不支持，别混用）
-    raise ValueError(f'腾讯实时快照不支持该代码: {code}')
+    raise ValueError(f'腾讯行情不支持该代码: {code}')
 
 
 def _qnum(v):
