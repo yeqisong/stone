@@ -325,7 +325,7 @@
         </div>
 
         <!-- 雪球讨论 / 相关资讯：同一张卡两个 tab；只有一个有数据时自动切到有数据页 -->
-        <div v-if="xqHas || newsHas" class="side-panel">
+        <div v-if="xqData || newsData" class="side-panel">
           <n-tabs :value="sentiTab" type="line" size="small" animated
             @update:value="onSentiTabChange">
             <n-tab-pane name="xq" :tab="'雪球讨论' + (xqData ? ' ' + (xqData.count_7d || 0) : '')">
@@ -892,7 +892,31 @@ const sentiTab = ref('xq')
 const sentiTabTouched = ref(false)   // 用户手动切过 tab 后，不再被数据到达自动改回
 const xqHas = computed(() => !!(xqData.value && (xqData.value.count_7d > 0 || xqData.value.today_count > 0)))
 const newsHas = computed(() => !!(newsData.value && newsData.value.count > 0))
-function onSentiTabChange(v){ sentiTab.value = v; sentiTabTouched.value = true }
+const sentiLoaded = ref({ xq: false, news: false })
+function loadSentiData(tab = 'xq', c = code.value, seq = loadSeq){
+  if(!c || sentiLoaded.value[tab]) return
+  sentiLoaded.value[tab] = true
+  const url = tab === 'xq'
+    ? API+'/api/stock/'+c+'/xueqiu'
+    : API+'/api/stock/'+c+'/news?days=30&limit=20'
+  axios.get(url).then(r => {
+    if(seq !== loadSeq) return
+    if(tab === 'xq') xqData.value = r.data
+    else newsData.value = r.data
+  }).catch(() => {
+    if(seq === loadSeq){
+      sentiLoaded.value[tab] = false
+      // 保留卡片壳，用户仍能切到另一个 tab 触发懒加载
+      if(tab === 'xq' && !xqData.value) xqData.value = {}
+      if(tab === 'news' && !newsData.value) newsData.value = {}
+    }
+  })
+}
+function onSentiTabChange(v){
+  sentiTab.value = v
+  sentiTabTouched.value = true
+  loadSentiData(v)
+}
 watch([xqHas, newsHas], ([x, n]) => {
   if (sentiTabTouched.value) return
   sentiTab.value = x ? 'xq' : (n ? 'news' : 'xq')
@@ -1008,6 +1032,7 @@ async function load(){
   // 不清会在「新票无数据/请求失败」时把上只票的内容留在侧栏与图表——跨股票串数据比空白更难察觉
   xqData.value = null
   newsData.value = null
+  sentiLoaded.value = { xq: false, news: false }
   sentiTab.value = 'xq'
   sentiTabTouched.value = false
   mfData.value = []; mfCum.value = []
@@ -1046,6 +1071,7 @@ async function load(){
   loadMink(c)
   loadQuote(c)
   loadIntradayAlerts(c)
+  loadSentiData('xq', c, seq)   // 资讯 tab 懒加载：首屏只取当前激活的雪球页
   try{
     const r = await axios.get(API+'/api/stock/'+c+'/pe_history')
     if(seq !== loadSeq) return
@@ -1075,9 +1101,6 @@ async function load(){
     axios.get(API+'/api/stock/'+c+'/top_list?days=3650').then(r=>{ if(seq === loadSeq) toplistData.value = r.data.data||[] }),
     axios.get(API+'/api/stock/'+c+'/chip').then(r=>{ if(seq === loadSeq) chipData.value = r.data }),
     axios.get(API+'/api/stock/'+c+'/signals?days=1095').then(r=>{ if(seq === loadSeq) sigData.value = r.data.data||[] }),
-    axios.get(API+'/api/stock/'+c+'/xueqiu').then(r=>{ if(seq === loadSeq) xqData.value = r.data }),
-    // 相关资讯：min_importance=0 全取（含待总结），重要度交给前端徽标表达
-    axios.get(API+'/api/stock/'+c+'/news?days=30&limit=20').then(r=>{ if(seq === loadSeq) newsData.value = r.data }),
   ])
   if(seq !== loadSeq) return
   computeSigStats()
