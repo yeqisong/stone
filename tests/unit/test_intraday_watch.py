@@ -332,17 +332,27 @@ class _Result:
 
 
 class _FakeDB:
-    def __init__(self, count=0, existing=None):
+    def __init__(self, count=0, existing=None, stock_seen=False, family_seen=False):
         self.count = count
         self.existing = set(existing or [])
+        self.stock_seen = stock_seen
+        self.family_seen = family_seen
         self.inserts = []
         self.checks = []
+        self.stock_checks = []
+        self.family_checks = []
         self.committed = False
 
     def execute(self, stmt, params=None):
         sql = str(stmt)
         if 'count(*)' in sql:
             return _Result(scalar_val=self.count)
+        if 'kind = ANY' in sql:
+            self.family_checks.append(dict(params))
+            return _Result(rows=[(1,)] if self.family_seen else [])
+        if 'kind LIKE' in sql and 'stock_code=:c' in sql:
+            self.stock_checks.append(dict(params))
+            return _Result(rows=[(1,)] if self.stock_seen else [])
         if sql.strip().startswith('SELECT 1'):
             self.checks.append(dict(params))
             key = (params['c'], params['k'])
@@ -424,6 +434,34 @@ class TestPersist:
         assert iw._persist([self._cand('600519', 'it_stop', level='critical')],
                            _rules(max_alerts_per_day=30), NOW) == 1
         assert fake.inserts[0]['k'] == 'it_stop'
+
+    def test_stock_cooldown_skips_noise_kind(self, monkeypatch):
+        fake = _FakeDB(count=0, stock_seen=True)
+        monkeypatch.setattr(iw, 'get_sync_db', lambda: fake)
+        assert iw._persist([self._cand('600519', 'it_vwap_up')],
+                           _rules(), NOW) == 0
+        assert fake.inserts == []
+
+    def test_stock_cooldown_allows_high_signal(self, monkeypatch):
+        fake = _FakeDB(count=0, stock_seen=True)
+        monkeypatch.setattr(iw, 'get_sync_db', lambda: fake)
+        assert iw._persist([self._cand('600519', 'it_stop')],
+                           _rules(), NOW) == 1
+        assert fake.inserts[0]['k'] == 'it_stop'
+
+    def test_family_cooldown_skips_vwap_reverse(self, monkeypatch):
+        fake = _FakeDB(count=0, family_seen=True)
+        monkeypatch.setattr(iw, 'get_sync_db', lambda: fake)
+        assert iw._persist([self._cand('600519', 'it_vwap_down')],
+                           _rules(), NOW) == 0
+        assert fake.inserts == []
+        assert fake.family_checks[0]['ks'] == ['it_vwap_up', 'it_vwap_down']
+
+    def test_stock_cooldown_can_be_disabled(self, monkeypatch):
+        fake = _FakeDB(count=0, stock_seen=True)
+        monkeypatch.setattr(iw, 'get_sync_db', lambda: fake)
+        assert iw._persist([self._cand('600519', 'it_vwap_up')],
+                           _rules(stock_cooldown_min=0), NOW) == 1
 
     def test_tick_cap_sorted_by_priority(self, monkeypatch):
         fake = _FakeDB(count=0)

@@ -53,6 +53,8 @@ DEFAULT_CONFIG = {
     'stop_loss_pct': 8.0,          # 持仓成本回撤阈值
     'take_profit_pct': 20.0,       # 持仓成本盈利阈值
     'cooldown_min': 30,            # 同类提醒默认冷却
+    'stock_cooldown_min': 5,       # 同股非 critical 提醒冷却（压单股刷屏；止损/跌停/急跌不受限）
+    'family_cooldown_min': 15,     # 同族提醒冷却（VWAP 上/下、OR 上/下、昨高/昨低共用一个窗口）
     'max_alerts_per_day': 30,      # 单日盘中提醒上限
     'max_per_tick': 3,             # 单轮最多推几条（急跌时防刷屏，其余下轮再评估）
     # 关键价位突破（VWAP / 开盘区间 / 昨高昨低）
@@ -81,6 +83,19 @@ COOLDOWN_MIN = {
     'it_or_up': 60, 'it_or_down': 60,
     'it_prev_high': 60, 'it_prev_low': 60,
 }
+# 同族共冷却：避免价格在 VWAP/OR/昨高昨低附近来回穿越时 up/down 交替刷屏
+COOLDOWN_FAMILY = {
+    'it_vwap_up': 'vwap', 'it_vwap_down': 'vwap',
+    'it_or_up': 'or', 'it_or_down': 'or',
+    'it_prev_high': 'prev', 'it_prev_low': 'prev',
+    'it_high': 'hl', 'it_low': 'hl',
+}
+FAMILY_KINDS = {}
+for _k, _fam in COOLDOWN_FAMILY.items():
+    FAMILY_KINDS.setdefault(_fam, []).append(_k)
+# 这些高信号不受「同股 5 分钟冷却」限制；否则急涨/止盈可能被前面的 VWAP 提醒压掉
+STOCK_COOLDOWN_BYPASS = {'it_stop', 'it_take', 'it_limit_up', 'it_limit_down',
+                         'it_drop', 'it_surge'}
 PRIORITY = {
     'it_stop': 0, 'it_take': 0, 'it_limit_down': 1, 'it_limit_up': 2,
     'it_drop': 3, 'it_surge': 4,
@@ -562,6 +577,8 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
     max_day = max(0, _num(rules.get('max_alerts_per_day'), 30, int))
     max_tick = max(1, _num(rules.get('max_per_tick'), 3, int))
     cooldown_default = max(1, _num(rules.get('cooldown_min'), 30, int))
+    stock_cd = max(0, _num(rules.get('stock_cooldown_min'), 5, int))
+    family_cd = max(0, _num(rules.get('family_cooldown_min'), 15, int))
     candidates = sorted(candidates, key=lambda c: PRIORITY.get(c['kind'], 9))[:max_tick]
     ai_enabled = bool(rules.get('ai_event_enabled', True))
     ai_kinds = set(rules.get('ai_event_kinds') or [])
@@ -585,6 +602,26 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             ), {"c": c['stock_code'], "k": c['kind'], "cut": cutoff}).fetchone()
             if seen:
                 continue
+            # 同族冷却：VWAP 上/下、OR 上/下、昨高/昨低共享窗口，压住 30 秒内反向穿越
+            fam = COOLDOWN_FAMILY.get(c['kind'])
+            if fam and family_cd:
+                fam_cut = now - timedelta(minutes=family_cd)
+                seen_fam = db.execute(text(
+                    "SELECT 1 FROM risk_alerts WHERE stock_code=:c "
+                    "AND kind = ANY(CAST(:ks AS varchar[])) AND created_at >= :cut LIMIT 1"
+                ), {"c": c['stock_code'], "ks": FAMILY_KINDS.get(fam, []),
+                    "cut": fam_cut}).fetchone()
+                if seen_fam:
+                    continue
+            # 同股冷却：只压结构化/噪声类提醒；止损/止盈/涨跌停/急涨急跌不受限
+            if stock_cd and c['kind'] not in STOCK_COOLDOWN_BYPASS:
+                stock_cut = now - timedelta(minutes=stock_cd)
+                seen_stock = db.execute(text(
+                    "SELECT 1 FROM risk_alerts WHERE stock_code=:c AND trade_date=:d "
+                    "AND kind LIKE 'it%' AND created_at >= :cut LIMIT 1"
+                ), {"c": c['stock_code'], "d": now.date(), "cut": stock_cut}).fetchone()
+                if seen_stock:
+                    continue
             row = db.execute(text(
                 "INSERT INTO risk_alerts "
                 "(trade_date, kind, stock_code, level, title, body, created_at) "
