@@ -52,6 +52,7 @@
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
             <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+              <n-button size="tiny" text :loading="quoteLoading" title="立即刷新实时快照" @click="loadQuote">刷新</n-button>
               <span class="mink-refresh" :class="{on: quote?.is_realtime}"
                 :title="quote?.is_realtime ? '实时报价：盘中每 5 秒自动刷新' : '实时报价：非交易时段每 30 秒自动刷新'">
                 {{ quote ? (quote.is_realtime ? '盘中 5s' : '非交易 30s') : '—' }}
@@ -128,7 +129,6 @@
               </div>
             </div>
             <div class="quote-actions">
-              <n-button size="tiny" text :loading="quoteLoading" title="立即刷新实时快照" @click="loadQuote">刷新</n-button>
               <n-button size="tiny" secondary :loading="aiLoading"
                 title="AI 解读：结合实时行情 / 分钟结构 / 资讯 / 模型信号，非预测" @click="loadAiInsight">
                 <AppIcon name="compass" :size="12" /> AI 解读
