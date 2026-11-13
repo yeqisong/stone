@@ -1,12 +1,6 @@
 <template>
   <div ref="rootEl" class="fw-root">
-    <div class="fw-top">
-      <b>浮窗盯盘</b>
-      <span class="fw-asof">{{ data.asof || '—' }} · {{ items.length }} 只</span>
-      <button type="button" class="fw-btn" @click="arrange">整理</button>
-      <button type="button" class="fw-btn" :disabled="loading" @click="load">刷新</button>
-    </div>
-    <div ref="canvasEl" class="fw-canvas">
+    <div ref="canvasEl" class="fw-canvas" @dblclick.self="arrange">
       <div v-for="it in items" :key="it.code" class="fw-card"
         :class="{ dragging: dragging === it.code }"
         :style="{ left: it._x + 'px', top: it._y + 'px' }"
@@ -46,6 +40,7 @@ const data = reactive({ asof: '' })
 const loading = ref(false)
 const error = ref('')
 const dragging = ref('')
+let lastFitCount = -1
 const POS_KEY = 'floating_watch_positions_v1'
 const CARD_W = 190
 const CARD_H = 116
@@ -71,17 +66,32 @@ function savePositions(){
     localStorage.setItem(POS_KEY, JSON.stringify(out))
   } catch (e) {}
 }
-function layout(list, keepExisting = false){
+function layout(list, keepExisting = false, colsHint = null){
   const saved = loadPositions()
   const prev = new Map(items.value.map(x => [x.code, { x: x._x, y: x._y }]))
   const el = canvasEl.value
   const width = el ? el.clientWidth : 600
-  const cols = Math.max(1, Math.floor((width - GAP) / (CARD_W + GAP)))
+  const cols = colsHint || Math.max(1, Math.floor((width - GAP) / (CARD_W + GAP)))
   list.forEach((it, i) => {
     const p = (keepExisting ? prev.get(it.code) : null) || saved[it.code]
     it._x = p ? p.x : GAP + (i % cols) * (CARD_W + GAP)
     it._y = p ? p.y : GAP + Math.floor(i / cols) * (CARD_H + GAP)
   })
+}
+
+// 按卡片实际占用计算 PiP 最小窗口：无标题栏、无额外留白
+function fitWindow(){
+  const n = items.value.length
+  if(!n) return
+  const saved = loadPositions()
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n)))
+  const rows = Math.ceil(n / cols)
+  const maxX = Math.max(...items.value.map(it => it._x + CARD_W))
+  const maxY = Math.max(...items.value.map(it => it._y + CARD_H))
+  const hasSaved = items.value.some(it => saved[it.code])
+  const width = Math.ceil((hasSaved ? maxX : cols * CARD_W + (cols - 1) * GAP) + GAP)
+  const height = Math.ceil((hasSaved ? maxY : rows * CARD_H + (rows - 1) * GAP) + GAP)
+  try { hostWindow().resizeTo(Math.max(210, width), Math.max(126, height)) } catch (e) {}
 }
 function clamp(item){
   const el = canvasEl.value
@@ -92,8 +102,9 @@ function clamp(item){
 }
 function arrange(){
   try { localStorage.removeItem(POS_KEY) } catch (e) {}
-  layout(items.value)
+  layout(items.value, false, Math.max(1, Math.ceil(Math.sqrt(items.value.length || 1))))
   savePositions()
+  fitWindow()
 }
 
 async function load(){
@@ -104,9 +115,14 @@ async function load(){
     const list = (r.data?.items || []).map(x => ({ ...x, _x: 0, _y: 0 }))
     data.asof = r.data?.asof || ''
     error.value = r.data?.error || ''
-    layout(list, items.value.length > 0)
+    const first = items.value.length === 0
+    layout(list, !first, first ? Math.max(1, Math.ceil(Math.sqrt(list.length))) : null)
     for(const it of list) clamp(it)
     items.value = list
+    if(list.length !== lastFitCount){
+      lastFitCount = list.length
+      fitWindow()
+    }
   }catch(e){
     error.value = e.response?.data?.detail || '盯盘数据加载失败'
   }finally{
@@ -198,22 +214,9 @@ onUnmounted(() => {
 <style scoped>
 .fw-root {
   position: fixed; inset: 0; display: flex; flex-direction: column;
-  background: var(--c-bg); color: var(--c-text); font: 12px/1.4 system-ui, sans-serif;
+  background: transparent; color: var(--c-text); font: 12px/1.4 system-ui, sans-serif;
 }
-.fw-top {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; border-bottom: 1px solid var(--c-border); background: var(--c-card-bg);
-}
-.fw-top b { font-size: 13px; }
-.fw-asof { color: var(--c-text-faint); font-size: 11px; }
-.fw-btn {
-  margin-left: auto; padding: 2px 8px; border: 1px solid var(--c-border);
-  border-radius: 4px; background: transparent; color: var(--c-text-dim);
-  font-size: 11px; cursor: pointer;
-}
-.fw-btn + .fw-btn { margin-left: 0; }
-.fw-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
-.fw-canvas { position: relative; flex: 1; overflow: hidden; }
+.fw-canvas { position: relative; flex: 1; overflow: hidden; background: transparent; }
 .fw-card {
   position: absolute; width: 190px; height: 116px; box-sizing: border-box;
   padding: 7px 9px; border: 1px solid var(--c-border); border-radius: 7px;
