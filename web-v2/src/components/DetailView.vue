@@ -84,6 +84,8 @@
               title="开盘 15/30 分钟区间（m30/m60 不适用）">开盘区间</n-button>
             <n-button size="tiny" :type="showEvents?'primary':'default'" @click="showEvents=!showEvents"
               title="盘中提醒 / 重要资讯标记">事件</n-button>
+            <n-button size="tiny" :type="activePriceAlarm ? 'primary' : 'default'" @click="openAlarm"
+              title="本地价格提醒：上破/下破时浏览器通知">提醒<template v-if="activePriceAlarm"> ·</template></n-button>
             <n-button size="tiny" @click="openTape()"
               title="逐笔成交 / 大单（最近约 4 分钟，非全天）">逐笔</n-button>
             <n-button size="tiny" :disabled="!minkDayBars.length" @click="openVp"
@@ -691,6 +693,31 @@
     </n-card>
   </n-modal>
 
+  <!-- 本地价格提醒：上破/下破 -->
+  <n-modal v-model:show="showAlarm" preset="card"
+    :title="'价格提醒 · ' + (detail?.stock_name || code)">
+    <div class="alarm-form">
+      <label>上破价
+        <n-input-number v-model:value="alarmUpper" size="small" :min="0" :step="0.01" placeholder="高于现价" clearable />
+      </label>
+      <label>下破价
+        <n-input-number v-model:value="alarmLower" size="small" :min="0" :step="0.01" placeholder="低于现价" clearable />
+      </label>
+      <div class="alarm-hint">
+        盘中 5s 快照触发；触发后需重新保存才会再次提醒。当前价格 {{ quotePrice != null ? Number(quotePrice).toFixed(2) : '—' }}。
+      </div>
+      <div v-if="activePriceAlarm" class="alarm-status">
+        状态：上破 {{ activePriceAlarm.trigUpper ? '已触发' : '待触发' }} · 下破 {{ activePriceAlarm.trigLower ? '已触发' : '待触发' }}
+      </div>
+    </div>
+    <template #footer>
+      <n-space justify="flex-end">
+        <n-button size="small" @click="clearAlarm">清除</n-button>
+        <n-button size="small" type="primary" @click="saveAlarm">保存</n-button>
+      </n-space>
+    </template>
+  </n-modal>
+
   <!-- 逐笔成交 / 大单：腾讯 detail 最近约 4 分钟窗口 -->
   <n-modal v-model:show="showTape" preset="card" :title="tapeTitle"
     style="width:760px;max-width:94vw">
@@ -794,7 +821,7 @@ import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import IntradayPlaybook from './IntradayPlaybook.vue'
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
-import {NCard, NButton, NInput, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NSlider, NButtonGroup, NModal, NCheckboxGroup, NCheckbox, NTabs, NTabPane, useDialog, useMessage} from 'naive-ui'
+import {NCard, NButton, NInput, NInputNumber, NSpace, NSpin, NTag, NEmpty, NDescriptions, NDescriptionsItem, NSelect, NSlider, NButtonGroup, NModal, NCheckboxGroup, NCheckbox, NTabs, NTabPane, useDialog, useMessage} from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useNavStore } from '../stores/nav'
@@ -1188,6 +1215,8 @@ async function load(){
   vpData.value = null
   showTape.value = false
   tapeData.value = null
+  showAlarm.value = false
+  alarmUpper.value = null; alarmLower.value = null
   showReplay.value = false
   showCompare.value = false
   if (showFs.value) closeFs()
@@ -1864,6 +1893,70 @@ const quotePrice = computed(() => {
   const p = quote.value?.price
   return (p != null && p > 0) ? p : (detail.value?.close ?? null)
 })
+
+// ── 本地价格提醒（上破/下破，5s 快照触发）──
+const PRICE_ALARM_KEY = 'price_alarms_v1'
+function loadPriceAlarms(){
+  try { return JSON.parse(localStorage.getItem(PRICE_ALARM_KEY) || '{}') || {} } catch (e) { return {} }
+}
+const priceAlarms = ref(loadPriceAlarms())
+const showAlarm = ref(false)
+const alarmUpper = ref(null)
+const alarmLower = ref(null)
+const activePriceAlarm = computed(() => priceAlarms.value[code.value] || null)
+function savePriceAlarms(){
+  try { localStorage.setItem(PRICE_ALARM_KEY, JSON.stringify(priceAlarms.value)) } catch (e) {}
+}
+function openAlarm(){
+  const a = priceAlarms.value[code.value] || {}
+  alarmUpper.value = a.upper ?? null
+  alarmLower.value = a.lower ?? null
+  showAlarm.value = true
+}
+function saveAlarm(){
+  const c = code.value
+  if(!c) return
+  const u = Number(alarmUpper.value) || null
+  const l = Number(alarmLower.value) || null
+  if(!u && !l){
+    clearAlarm()
+    return
+  }
+  if(u && l && u <= l){ message.warning('上破价需高于下破价'); return }
+  priceAlarms.value = { ...priceAlarms.value, [c]: { upper: u, lower: l, trigUpper: false, trigLower: false } }
+  savePriceAlarms()
+  showAlarm.value = false
+  message.success('价格提醒已设置')
+}
+function clearAlarm(){
+  const c = code.value
+  if(c && priceAlarms.value[c]){
+    const next = { ...priceAlarms.value }
+    delete next[c]
+    priceAlarms.value = next
+    savePriceAlarms()
+  }
+  alarmUpper.value = null; alarmLower.value = null
+  showAlarm.value = false
+}
+function checkPriceAlarms(q, c){
+  if(!q?.is_realtime || !(q.price > 0)) return
+  const a = priceAlarms.value[c]
+  if(!a) return
+  let side = '', level = null
+  if(a.upper && !a.trigUpper && q.price >= a.upper){ side = '上破'; level = a.upper; a.trigUpper = true }
+  else if(a.lower && !a.trigLower && q.price <= a.lower){ side = '下破'; level = a.lower; a.trigLower = true }
+  if(!side) return
+  priceAlarms.value = { ...priceAlarms.value, [c]: { ...a } }
+  savePriceAlarms()
+  const name = detail.value?.stock_name || q.name || c
+  const body = `${side} ${Number(level).toFixed(2)}，现价 ${Number(q.price).toFixed(2)}`
+  message.warning(`价格提醒 · ${name} ${body}`)
+  if(typeof Notification !== 'undefined' && Notification.permission === 'granted'){
+    const n = new Notification(`价格提醒 · ${name}`, { body, tag: `price-alarm-${c}-${side}` })
+    n.onclick = () => { window.focus(); n.close() }
+  }
+}
 // 筹码分布现价/获利盘跟随 5s 快照；无快照时退回接口给的最近收盘
 const chipCurrent = computed(() => {
   const p = quotePrice.value
@@ -1977,6 +2070,7 @@ async function loadQuote(c = code.value){
     if (c !== code.value) return          // 切换股票后旧请求返回，丢掉
     quote.value = r.data
     quoteError.value = false
+    checkPriceAlarms(r.data, c)
     // 5s 快照只更新最后一根 K 线的 close/high/low，历史 bar 不动；
     // 这样分时图与报价条同步到 5s，而不是等 30s 的 minkline 刷新。
     const last = minkBars.value[minkBars.value.length - 1]
@@ -2363,6 +2457,11 @@ const minkLevelChips = computed(() => {
     add('止盈', q.take_profit_price, T.down, 0.12)
     add('涨停', q.limit_up, T.up, 0.025)
     add('跌停', q.limit_down, T.down, 0.025)
+  }
+  const al = priceAlarms.value[code.value]
+  if(al){
+    if(al.upper) out.push({name:'提醒上', value:+al.upper, color:T.up})
+    if(al.lower) out.push({name:'提醒下', value:+al.lower, color:T.down})
   }
   return out.concat(minkOrLevels.value)
 })
@@ -3374,6 +3473,11 @@ function drawMink(){
     level('止盈', qSameDay.take_profit_price, T.down, 'dashed', 1, 0.12)
     level('涨停', qSameDay.limit_up, T.up, 'dashed', 1, 0.025)
     level('跌停', qSameDay.limit_down, T.down, 'dashed', 1, 0.025)
+    const al = activePriceAlarm.value
+    if(al){
+      level('提醒上', al.upper, T.up, 'dashed', 1.2, 0.08)
+      level('提醒下', al.lower, T.down, 'dashed', 1.2, 0.08)
+    }
   }
   if (showOr.value && qSameDay && (MINK_MIN[minkPeriod.value] || 99) <= 15) {
     // 腾讯按 bar 结束时间标记：m15 首根是 09:45，按「根数」切才不漏 OR15
@@ -3779,6 +3883,13 @@ watch(()=>props.code, v=>{
   display: flex; gap: 10px; flex-wrap: wrap;
 }
 .vp-summary b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+
+/* 价格提醒弹窗 */
+.alarm-form { display: flex; flex-direction: column; gap: 10px; }
+.alarm-form label { display: flex; align-items: center; gap: 10px; font-size: var(--text-meta); color: var(--c-text-dim); }
+.alarm-form label .n-input-number { flex: 1; }
+.alarm-hint { font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; }
+.alarm-status { font-size: var(--text-meta); color: var(--c-text-dim); }
 
 /* 逐笔 / 大单弹窗 */
 .tape-loading { padding: 24px; text-align: center; color: var(--c-text-dim); font-size: var(--text-meta); }
