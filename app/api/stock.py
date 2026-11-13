@@ -1,9 +1,11 @@
 """个股详情 API — 最新策略信号 + 历史信号分页 + K线(含全部指标)。"""
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import requests
 from fastapi import APIRouter, HTTPException, Query, Response
 from loguru import logger
 from sqlalchemy import text
@@ -996,6 +998,103 @@ def get_stock_ai_intraday(code: str, type: str = Query(None),
     except Exception as e:
         logger.warning(f"[ai-intraday] {code} 失败: {str(e)[:160]}")
         raise HTTPException(status_code=500, detail="AI 解读失败，请稍后重试")
+
+
+# ── 逐笔成交 / 大单（腾讯 detail 接口，仅弹窗打开时按需拉取，5s 缓存）──
+_tape_cache: dict = {}
+_TAPE_TTL_S = 5
+_TAPE_HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://gu.qq.com/'}
+
+
+def _fetch_tape_pages(symbol: str, pages: int = 2) -> tuple[str | None, list[dict]]:
+    """拉取最近 N 页逐笔；返回 (trade_date, ticks)。单页约 100+ 笔，2 页约 4 分钟。"""
+    base = 'https://stock.gtimg.cn/data/index.php'
+    r = requests.get(base, params={'appn': 'detail', 'action': 'timeline', 'c': symbol},
+                     headers=_TAPE_HEADERS, timeout=(4, 8))
+    m = re.search(r'\[(\d+),"([^"]*)"\]', r.text or '')
+    if not m:
+        return None, []
+    day = m.group(1)
+    trade_date = f'{day[:4]}-{day[4:6]}-{day[6:]}'
+    page_groups = [x for x in m.group(2).split('|') if x]
+    if not page_groups:
+        return trade_date, []
+    ticks = []
+    for p in range(max(0, len(page_groups) - pages), len(page_groups)):
+        rr = requests.get(base, params={'appn': 'detail', 'action': 'data', 'c': symbol, 'p': p},
+                          headers=_TAPE_HEADERS, timeout=(4, 8))
+        mm = re.search(r'\[(\d+),"([^"]*)"\]', rr.text or '')
+        if not mm:
+            continue
+        for seg in mm.group(2).split('|'):
+            parts = seg.split('/')
+            if len(parts) < 7:
+                continue
+            try:
+                ticks.append({
+                    'idx': int(parts[0]), 'time': parts[1],
+                    'price': float(parts[2]), 'change': float(parts[3]),
+                    'volume': int(float(parts[4])),          # 手
+                    'amount': float(parts[5]),               # 元
+                    'side': parts[6],
+                })
+            except (TypeError, ValueError):
+                continue
+    # 去重（翻页边界/接口偶发重复索引）
+    uniq = {t['idx']: t for t in ticks}
+    return trade_date, [uniq[k] for k in sorted(uniq)]
+
+
+@router.get("/stock/{code}/tape")
+def get_stock_tape(code: str, pages: int = Query(2, ge=1, le=3),
+                   limit: int = Query(120, ge=20, le=400),
+                   large_amount: float = Query(1000000, ge=0),
+                   type: str = Query(None)):
+    """逐笔成交 + 大单摘要（腾讯非官方接口）。
+
+    volume 单位手、amount 单位元；summary 只覆盖本次拉取的最近 N 页（约 2–6 分钟），
+    不是全天主动买卖，前端必须标注窗口。
+    """
+    key = (code, pages, limit, large_amount)
+    now = time.time()
+    hit = _tape_cache.get(key)
+    if hit and now - hit[0] < _TAPE_TTL_S:
+        return hit[1]
+    db = get_sync_db()
+    try:
+        stype = _quote_security_type(db, code, type)
+    finally:
+        db.close()
+    if stype == 'index':
+        return {'ok': False, 'error': '指数不支持逐笔'}
+    try:
+        from crawler.adapters.tencent_adapter import _quote_symbol
+        symbol = _quote_symbol(code, stype or 'stock')
+        trade_date, ticks = _fetch_tape_pages(symbol, pages)
+    except Exception as e:
+        logger.warning(f"[tape] {code} 拉取失败: {str(e)[:120]}")
+        return {'ok': False, 'error': '逐笔接口不可用'}
+    if not ticks:
+        return {'ok': False, 'error': '无逐笔数据'}
+    buy_amt = sum(t['amount'] for t in ticks if t['side'] == 'B')
+    sell_amt = sum(t['amount'] for t in ticks if t['side'] == 'S')
+    large = [t for t in ticks if t['amount'] >= large_amount]
+    payload = {
+        'ok': True, 'code': code, 'trade_date': trade_date,
+        'window': {'ticks': len(ticks),
+                   'from': ticks[0]['time'], 'to': ticks[-1]['time']},
+        'summary': {
+            'buy_amount': round(buy_amt, 2), 'sell_amount': round(sell_amt, 2),
+            'net_amount': round(buy_amt - sell_amt, 2),
+            'buy_ratio': round(buy_amt / (buy_amt + sell_amt), 4) if (buy_amt + sell_amt) else None,
+        },
+        'large': [dict(t, amount_wan=round(t['amount'] / 1e4, 1)) for t in large[-30:]][::-1],
+        'ticks': [dict(t, amount_wan=round(t['amount'] / 1e4, 1)) for t in ticks[-limit:]][::-1],
+    }
+    _tape_cache[key] = (now, payload)
+    if len(_tape_cache) > 200:
+        _tape_cache.clear()
+    return payload
 
 
 # ── 盘中雷达：关注池实时排序（涨速/量比/VWAP 偏离/日内位置），10s 缓存 ──

@@ -84,6 +84,8 @@
               title="开盘 15/30 分钟区间（m30/m60 不适用）">开盘区间</n-button>
             <n-button size="tiny" :type="showEvents?'primary':'default'" @click="showEvents=!showEvents"
               title="盘中提醒 / 重要资讯标记">事件</n-button>
+            <n-button size="tiny" @click="openTape()"
+              title="逐笔成交 / 大单（最近约 4 分钟，非全天）">逐笔</n-button>
             <n-button size="tiny" :disabled="!minkDayBars.length" @click="openVp"
               title="当日成交量分布 / POC / VAH / VAL">量分布</n-button>
             <n-button size="tiny" :disabled="!minkDayBars.length" @click="openReplay()"
@@ -291,6 +293,7 @@
             <div><span>每股风险</span><b>¥{{ rPerShare.toFixed(2) }}</b></div>
             <div><span>可买</span><b>{{ rShares }} 股</b></div>
             <div><span>止损亏损</span><b>¥{{ rActualRisk.toFixed(0) }}（1R）</b></div>
+            <div v-if="rShares === 0" class="r-note">风险预算不足 1 手：1 手止损约 ¥{{ (rPerShare * 100).toFixed(0) }}，需提高风险预算或收紧止损。</div>
             <template v-if="execEstimate">
               <div><span>五档可买</span><b>{{ execEstimate.depth_shares }} 股（{{ (execEstimate.covered * 100).toFixed(0) }}%）</b></div>
               <div><span>预计成交</span><b>¥{{ execEstimate.avg.toFixed(2) }} · 滑点 {{ execEstimate.slip_bp >= 0 ? '+' : '' }}{{ execEstimate.slip_bp }}bp</b></div>
@@ -552,6 +555,7 @@
           <span class="fs-panel-tools">
             <n-button size="tiny" text @click="callFsAi(p)">AI</n-button>
             <n-button v-if="p.alerts?.length" size="tiny" text @click="p.alertsOpen=!p.alertsOpen">提醒 {{ p.alerts.length }}</n-button>
+            <n-button size="tiny" text @click="openTape(p.code)">逐笔</n-button>
             <n-button size="tiny" text @click="openFsVp(p)">量分布</n-button>
             <n-button size="tiny" text @click="openReplay(p)">回放</n-button>
             <n-button size="tiny" text @click="exportFsPanel(p)">导出</n-button>
@@ -676,6 +680,48 @@
         </n-space>
       </template>
     </n-card>
+  </n-modal>
+
+  <!-- 逐笔成交 / 大单：腾讯 detail 最近约 4 分钟窗口 -->
+  <n-modal v-model:show="showTape" preset="card" :title="tapeTitle"
+    style="width:760px;max-width:94vw">
+    <div v-if="tapeLoading && !tapeData" class="tape-loading">加载逐笔…</div>
+    <template v-else-if="tapeData?.ok">
+      <div class="tape-sum">
+        <span>窗口 {{ tapeData.window.from }}–{{ tapeData.window.to }} · {{ tapeData.window.ticks }} 笔</span>
+        <span>主动买 <b style="color:var(--c-up)">{{ fmtTapeAmount(tapeData.summary.buy_amount) }}</b></span>
+        <span>主动卖 <b style="color:var(--c-down)">{{ fmtTapeAmount(tapeData.summary.sell_amount) }}</b></span>
+        <span>净额 <b :style="{color: tapeData.summary.net_amount >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtTapeAmount(tapeData.summary.net_amount) }}</b></span>
+        <span v-if="tapeData.summary.buy_ratio != null">买占比 {{ (tapeData.summary.buy_ratio * 100).toFixed(1) }}%</span>
+      </div>
+      <div v-if="tapeData.large?.length" class="tape-large">
+        <div class="tape-label">大单 ≥ {{ fmtTapeAmount(1000000) }}</div>
+        <div class="tape-large-list">
+          <span v-for="t in tapeData.large.slice(0, 10)" :key="t.idx"
+            :style="{color: t.side === 'B' ? 'var(--c-up)' : t.side === 'S' ? 'var(--c-down)' : 'var(--c-text-dim)'}">
+            {{ t.time }} {{ t.price.toFixed(2) }} {{ t.volume }}手 / {{ t.amount_wan }}万
+          </span>
+        </div>
+      </div>
+      <div class="tape-wrap">
+        <table class="tape-table">
+          <thead><tr><th>时间</th><th>价格</th><th>量(手)</th><th>成交额</th><th>方向</th></tr></thead>
+          <tbody>
+            <tr v-for="t in tapeData.ticks" :key="t.idx">
+              <td>{{ t.time }}</td>
+              <td :style="{color: t.change >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ t.price.toFixed(2) }}</td>
+              <td>{{ t.volume }}</td>
+              <td>{{ t.amount_wan }}万</td>
+              <td :style="{color: t.side === 'B' ? 'var(--c-up)' : t.side === 'S' ? 'var(--c-down)' : 'var(--c-text-faint)'}">
+                {{ TAPE_SIDE[t.side] || t.side }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tape-note">仅最近 2 页逐笔（约 2–6 分钟），不是全天主动买卖；大单阈值 100 万元。</div>
+    </template>
+    <n-empty v-else :description="tapeData?.error || '逐笔数据不可用'" />
   </n-modal>
 
   <!-- 成交量分布（当日）：POC / VAH / VAL，基于当前周期已加载的 bar -->
@@ -1131,6 +1177,8 @@ async function load(){
   benchMink.value = []
   showVp.value = false
   vpData.value = null
+  showTape.value = false
+  tapeData.value = null
   showReplay.value = false
   showCompare.value = false
   if (showFs.value) closeFs()
@@ -2195,6 +2243,15 @@ const vpData = ref(null)
 const vpTitle = ref('成交量分布（当日）')
 const vpEl = ref(null)
 let vpChart = null
+// 逐笔 / 大单
+const showTape = ref(false)
+const tapeData = ref(null)
+const tapeLoading = ref(false)
+const tapeCode = ref('')
+const tapeTitle = ref('逐笔成交 / 大单')
+let tapeTimer = null
+let tapeSeq = 0
+const TAPE_SIDE = { B: '主动买', S: '主动卖', M: '中性' }
 const MINK_MIN = { m1: 1, m5: 5, m15: 15, m30: 30, m60: 60 }
 
 const minkLastDay = computed(() => minkBars.value[minkBars.value.length - 1]?.datetime.slice(0, 10) || '')
@@ -2402,6 +2459,37 @@ function openVp(){
   vpData.value = computeVolumeProfile(minkDayBars.value)
   showVp.value = true
 }
+
+function fmtTapeAmount(v){
+  if(v == null) return '—'
+  const n = Number(v)
+  return Math.abs(n) >= 1e8 ? (n / 1e8).toFixed(2) + '亿' : (n / 1e4).toFixed(0) + '万'
+}
+async function loadTape(c = tapeCode.value){
+  if(!c) return
+  const req = ++tapeSeq
+  tapeLoading.value = true
+  try{
+    const r = await axios.get(API + '/api/stock/' + c + '/tape?pages=2&limit=120&large_amount=1000000')
+    if(req === tapeSeq) tapeData.value = r.data
+  }catch(e){
+    if(req === tapeSeq) tapeData.value = { ok: false, error: e.response?.data?.detail || '逐笔接口不可用' }
+  }finally{
+    if(req === tapeSeq) tapeLoading.value = false
+  }
+}
+function openTape(c = code.value){
+  if(!c) return
+  tapeCode.value = c
+  tapeTitle.value = '逐笔成交 / 大单 · ' + (c === code.value && detail.value?.stock_name ? detail.value.stock_name + ' ' : '') + c
+  showTape.value = true
+  loadTape(c)
+  clearInterval(tapeTimer)
+  tapeTimer = setInterval(() => loadTape(c), 5000)
+}
+watch(showTape, v => {
+  if(!v){ clearInterval(tapeTimer); tapeTimer = null; tapeSeq++ }
+})
 
 function drawVp(){
   const d = vpData.value
@@ -3430,6 +3518,7 @@ onUnmounted(() => {
   if (alertTimer) clearInterval(alertTimer)
   if (sectorTimer) clearInterval(sectorTimer)
   if (mtfTimer) clearInterval(mtfTimer)
+  if (tapeTimer) clearInterval(tapeTimer)
   if (vpChart) { vpChart.dispose(); vpChart = null }
   pauseReplay()
   if (replayChart) { replayChart.dispose(); replayChart = null }
@@ -3677,6 +3766,34 @@ watch(()=>props.code, v=>{
   display: flex; gap: 10px; flex-wrap: wrap;
 }
 .vp-summary b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+
+/* 逐笔 / 大单弹窗 */
+.tape-loading { padding: 24px; text-align: center; color: var(--c-text-dim); font-size: var(--text-meta); }
+.tape-sum {
+  display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px;
+  font-size: var(--text-meta); color: var(--c-text-dim);
+}
+.tape-sum b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.tape-large {
+  border: 1px solid var(--c-border); border-radius: var(--radius-sm);
+  background: var(--c-bg); padding: 6px 8px; margin-bottom: 8px;
+}
+.tape-label { font-size: var(--text-meta); color: var(--c-text-faint); margin-bottom: 3px; }
+.tape-large-list { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--text-meta); font-variant-numeric: tabular-nums; }
+.tape-wrap {
+  max-height: 52vh; overflow: auto; border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+}
+.tape-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.tape-table th {
+  position: sticky; top: 0; z-index: 1; background: var(--c-card-bg);
+  padding: 5px 8px; text-align: right; font-weight: 500; color: var(--c-text-faint);
+  border-bottom: 1px solid var(--c-border);
+}
+.tape-table td { padding: 3px 8px; text-align: right; border-bottom: 1px solid var(--c-border-light); }
+.tape-table th:first-child, .tape-table td:first-child { text-align: left; }
+.tape-table th:last-child, .tape-table td:last-child { text-align: left; }
+.tape-note { margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-faint); }
 
 /* 分时回放 */
 .replay-meta {
