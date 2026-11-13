@@ -324,6 +324,49 @@
           </div>
         </div>
 
+        <!-- 板块相对强弱：个股 vs 同行业盘中均值 -->
+        <div v-if="sectorRs" class="side-panel">
+          <h4 class="side-title" style="flex-wrap:wrap">
+            <AppIcon name="activity" :size="13" />  板块相对强弱
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim);flex-basis:100%;margin-left:19px">
+              {{ sectorRs.industry }}
+            </span>
+          </h4>
+          <div class="sector-row">
+            <span>个股 <b :style="{color: sectorRs.stock_change_pct >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtPct2(sectorRs.stock_change_pct) }}</b></span>
+            <span>板块 <b>{{ fmtPct2(sectorRs.sector_avg_pct) }}</b></span>
+            <span>超额 <b :style="{color: sectorRs.excess_pp >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ sectorRs.excess_pp >= 0 ? '+' : '' }}{{ sectorRs.excess_pp.toFixed(2) }}pp</b></span>
+          </div>
+          <div class="sector-sub">
+            板块上涨 {{ sectorRs.up_count }}/{{ sectorRs.total }}
+            <span v-if="sectorRs.up_ratio != null">（{{ (sectorRs.up_ratio * 100).toFixed(0) }}%）</span>
+          </div>
+          <div v-if="sectorRs.peers?.length" class="sector-peers">
+            <span v-for="p in sectorRs.peers.slice(0, 4)" :key="p.code">
+              {{ p.name }} <b :style="{color: p.change_pct >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtPct2(p.change_pct) }}</b>
+            </span>
+          </div>
+        </div>
+
+        <!-- 多周期一致性：把分散的 VWAP/OR/均线/板块信号收成一个分数 -->
+        <div v-if="mtfScore" class="side-panel">
+          <h4 class="side-title"><AppIcon name="activity" :size="13" />  多周期一致性
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">VWAP / OR / 5-15-60m / 日线</span></h4>
+          <div class="mtf-score">
+            <b :style="{color: mtfScore.score >= 60 ? 'var(--c-up)' : mtfScore.score <= 40 ? 'var(--c-down)' : 'var(--c-text)'}">{{ mtfScore.score }}</b>
+            <span :style="{color: mtfScore.score >= 60 ? 'var(--c-up)' : mtfScore.score <= 40 ? 'var(--c-down)' : 'var(--c-text-dim)'}">{{ mtfScore.label }}</span>
+          </div>
+          <div class="mtf-bar">
+            <i :style="{width: mtfScore.score + '%', background: mtfScore.score >= 60 ? 'var(--c-up)' : mtfScore.score <= 40 ? 'var(--c-down)' : 'var(--c-text-faint)'}"></i>
+          </div>
+          <div class="mtf-chips">
+            <span v-for="c in mtfScore.components" :key="c.name"
+              :style="{color: c.pts > 0 ? 'var(--c-up)' : c.pts < 0 ? 'var(--c-down)' : 'var(--c-text-faint)'}">
+              {{ c.name }} {{ c.text }}
+            </span>
+          </div>
+        </div>
+
         <!-- 筹码分布 -->
         <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
           <h4 class="side-title" style="flex-wrap:wrap">
@@ -823,6 +866,11 @@ const range = ref(500)
 function switchPeriod(v) { period.value = v; reloadChart() }
 function switchRange(d) { range.value = d; reloadChart() }
 let lastKline = null
+const dailyBars = ref([])        // 日线序列（多周期评分用）
+const mtfBars = ref({ m5: [], m15: [], m60: [] })
+let mtfCode = ''
+let mtfAt = 0
+let mtfTimer = null
 const atr14 = ref(null)          // 日线 ATR14，仓位/R 计算用
 const dateRange = ref('')
 const peData = ref([])
@@ -1064,6 +1112,9 @@ async function load(){
   loadError.value = ''
   detail.value = null
   lastKline = null
+  dailyBars.value = []
+  mtfBars.value = { m5: [], m15: [], m60: [] }
+  mtfCode = ''; mtfAt = 0
   dateRange.value = ''
   quote.value = null        // 换票先清快照，避免旧票价格挂在新票抬头
   quoteError.value = false
@@ -1081,6 +1132,7 @@ async function load(){
   if (showFs.value) closeFs()
   intradayAlerts.value = []
   signalScore.value = null
+  sectorRs.value = null
   atr14.value = null
   rEntry.value = null; rStop.value = null
   rEntryTouched.value = false; rStopTouched.value = false
@@ -1120,6 +1172,7 @@ async function load(){
       || '加载失败，请检查后端服务后重试'
   }
   if(r2.status === 'fulfilled' && r2.value.data?.kline) lastKline = r2.value.data
+  dailyBars.value = lastKline?.kline || []
   loading.value = false
   if(!detail.value) return
 
@@ -1129,6 +1182,8 @@ async function load(){
   loadMink(c)
   loadQuote(c)
   loadIntradayAlerts(c)
+  loadSectorRs(c, seq)
+  loadMtf(c, seq, true)          // 多周期评分用的 5/15/60m 序列
   loadSentiData('xq', c, seq)   // 资讯 tab 懒加载：首屏只取当前激活的雪球页
   try{
     const r = await axios.get(API+'/api/stock/'+c+'/pe_history')
@@ -1638,6 +1693,7 @@ async function reloadChart(){
     const r = await axios.get(API+'/api/stock/'+c+'/kline?days='+rng+'&period='+p+'&adjust='+a)
     if(req !== chartSeq || c !== code.value) return
     if(r.data?.kline) lastKline = r.data
+    dailyBars.value = lastKline?.kline || []
     // 相对强弱的基准与 K 线同窗同周期，换窗/换周期必须重取（其余扩展序列是长窗 reindex）
     try{
       const rb = await axios.get(API+'/api/stock/000300/kline?days='+rng+'&period='+p+'&adjust=none&type=index')
@@ -1675,9 +1731,74 @@ const signalScore = ref(null)    // 近 30 日盘中信号记分卡（全池，�
 const signalScoreItems = computed(() => (signalScore.value?.items || [])
   .filter(s => s.direction !== 0 && s.hit_rate != null)
   .slice(0, 8))
+
+// 多周期一致性：VWAP + OR + 昨高低 + 5/15/60m + 日线 + 板块 RS，权重合计 100
+const mtfScore = computed(() => {
+  const q = quote.value
+  const price = Number(quotePrice.value)
+  if(!q || !(price > 0)) return null
+  const comps = []
+  const push = (name, pts, text, weight) => comps.push({name, pts, text, weight})
+
+  const vwap = Number(q.avg_price)
+  if(vwap > 0){
+    const dev = price / vwap - 1
+    push('VWAP', dev > 0.0005 ? 20 : dev < -0.0005 ? -20 : 0,
+      dev > 0.0005 ? '上' : dev < -0.0005 ? '下' : '平', 20)
+  }
+
+  const m5 = mtfBars.value.m5 || []
+  const day = m5[m5.length - 1]?.datetime.slice(0, 10)
+  const dayBars = day ? m5.filter(b => b.datetime.slice(0, 10) === day) : []
+  const orBars = dayBars.slice(0, 3)
+  if(orBars.length){
+    const hi = Math.max(...orBars.map(b => b.high))
+    const lo = Math.min(...orBars.map(b => b.low))
+    const pts = price > hi ? 20 : price < lo ? -20 : 0
+    push('OR15', pts, pts > 0 ? '上破' : pts < 0 ? '下破' : '区间内', 20)
+  }
+
+  const ph = Number(q.prev_high), pl = Number(q.prev_low)
+  if(ph > 0 || pl > 0){
+    const pts = (ph > 0 && price > ph) ? 10 : (pl > 0 && price < pl) ? -10 : 0
+    push('昨高低', pts, pts > 0 ? '上破' : pts < 0 ? '下破' : '区间内', 10)
+  }
+
+  const trend = (name, arr) => {
+    if(!arr || arr.length < 21) return
+    const cl = arr.map(b => b.close).filter(v => v != null)
+    if(cl.length < 21) return
+    const ma = cl.slice(-20).reduce((a, b) => a + b, 0) / 20
+    const last = cl[cl.length - 1]
+    push(name, last > ma ? 10 : last < ma ? -10 : 0, last >= ma ? '多' : '空', 10)
+  }
+  trend('5m', m5)
+  trend('15m', mtfBars.value.m15)
+  trend('60m', mtfBars.value.m60)
+
+  if(dailyBars.value.length >= 21){
+    const cl = dailyBars.value.map(b => b.close)
+    const ma = cl.slice(-20).reduce((a, b) => a + b, 0) / 20
+    const last = cl[cl.length - 1]
+    push('日线', last > ma ? 10 : last < ma ? -10 : 0, last >= ma ? '多' : '空', 10)
+  }
+
+  if(sectorRs.value){
+    const e = Number(sectorRs.value.excess_pp)
+    if(Number.isFinite(e)) push('板块RS', e > 0 ? 10 : e < 0 ? -10 : 0, e > 0 ? '强' : '弱', 10)
+  }
+
+  const raw = comps.reduce((s, c) => s + c.pts, 0)
+  const score = Math.max(0, Math.min(100, Math.round(50 + raw / 2)))
+  const label = score >= 80 ? '强多' : score >= 60 ? '偏多' : score <= 20 ? '强空' : score <= 40 ? '偏空' : '中性'
+  return { score, label, components: comps }
+})
+const sectorRs = ref(null)       // 个股 vs 同行业的盘中相对强弱
 let alertTimer = null
+let sectorTimer = null
 const qfmt = v => (v == null || v === 0) ? '—' : Number(v).toFixed(2)
 const fmtScorePct = v => v == null ? '—' : ((v * 100 >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%')
+const fmtPct2 = v => v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%')
 const quotePrice = computed(() => {
   const p = quote.value?.price
   return (p != null && p > 0) ? p : (detail.value?.close ?? null)
@@ -1909,6 +2030,36 @@ async function loadAiInsight(){
 function closeAi(){ aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = ''; aiEvent.value = false }
 
 // 盘中提醒列表（仅该股；Chrome 通知走全局 WS，不依赖这个轮询）
+async function loadSectorRs(c = code.value, seq = loadSeq){
+  if(!c) return
+  try{
+    const r = await axios.get(API+'/api/stock/'+c+'/sector-rs')
+    if(seq !== loadSeq || c !== code.value) return
+    sectorRs.value = r.data?.ok ? r.data : null
+  }catch(e){
+    if(seq === loadSeq && c === code.value) sectorRs.value = null
+  }
+}
+
+async function loadMtf(c = code.value, seq = loadSeq, force = false){
+  if(!c) return
+  const now = Date.now()
+  if(!force && mtfCode === c && now - mtfAt < 240000) return
+  const specs = [['m5', 160], ['m15', 160], ['m60', 160]]
+  try{
+    const rs = await Promise.allSettled(specs.map(([p, n]) =>
+      axios.get(API+'/api/stock/'+c+'/minkline?period='+p+'&count='+n)))
+    if(seq !== loadSeq || c !== code.value) return
+    const out = { m5: [], m15: [], m60: [] }
+    rs.forEach((r, i) => {
+      if(r.status === 'fulfilled') out[specs[i][0]] = r.value.data?.bars || []
+    })
+    mtfBars.value = out
+    mtfCode = c
+    mtfAt = Date.now()
+  }catch(e){ /* 多周期评分是增强项，失败不打扰详情页 */ }
+}
+
 async function loadIntradayAlerts(c = code.value){
   if(!c) return
   try{
@@ -3228,6 +3379,8 @@ onMounted(() => {
   if(code.value) load()
   minkTimer = setInterval(loadMink, 30000)
   alertTimer = setInterval(loadIntradayAlerts, 30000)
+  sectorTimer = setInterval(loadSectorRs, 60000)
+  mtfTimer = setInterval(loadMtf, 300000)
 })
 onBeforeUnmount(() => {
   // ECharts 实例挂在 DOM 上，必须在 DOM 移除前 dispose（onUnmounted 时已经查不到节点）
@@ -3245,6 +3398,8 @@ onUnmounted(() => {
   if (minkTimer) clearInterval(minkTimer)
   if (quoteTimer) clearTimeout(quoteTimer)
   if (alertTimer) clearInterval(alertTimer)
+  if (sectorTimer) clearInterval(sectorTimer)
+  if (mtfTimer) clearInterval(mtfTimer)
   if (vpChart) { vpChart.dispose(); vpChart = null }
   pauseReplay()
   if (replayChart) { replayChart.dispose(); replayChart = null }
@@ -3340,6 +3495,19 @@ watch(()=>props.code, v=>{
 .r-result > div { display: flex; justify-content: space-between; gap: 8px; color: var(--c-text-dim); }
 .r-result b { color: var(--c-text); font-variant-numeric: tabular-nums; }
 .r-note { font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; margin-top: 5px; }
+.sector-row { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--text-meta); color: var(--c-text-dim); }
+.sector-row b { color: var(--c-text); font-variant-numeric: tabular-nums; margin-left: 2px; }
+.sector-sub { margin-top: 4px; font-size: var(--text-meta); color: var(--c-text-faint); }
+.sector-peers { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-dim); }
+.sector-peers span { display: flex; justify-content: space-between; gap: 8px; }
+.sector-peers b { font-variant-numeric: tabular-nums; }
+.mtf-score { display: flex; align-items: baseline; gap: 8px; }
+.mtf-score b { font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
+.mtf-score span { font-size: var(--text-meta); font-weight: 600; }
+.mtf-bar { height: 5px; border-radius: 3px; background: var(--c-border); overflow: hidden; margin: 7px 0 6px; }
+.mtf-bar i { display: block; height: 100%; border-radius: 3px; transition: width .2s; }
+.mtf-chips { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--text-meta); }
+.mtf-chips span { white-space: nowrap; }
 @media (max-width: 1100px) {
   .detail-sidebar { position: static; max-height: none; overflow: visible; padding-right: 0; }
 }

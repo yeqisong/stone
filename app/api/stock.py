@@ -998,6 +998,89 @@ def get_stock_ai_intraday(code: str, type: str = Query(None),
         raise HTTPException(status_code=500, detail="AI 解读失败，请稍后重试")
 
 
+# ── 板块/同业相对强弱（盘中）：行业映射 + 腾讯批量快照，30s 缓存 ──
+_sector_cache: dict = {}
+_SECTOR_TTL_S = 30
+
+
+@router.get("/stock/{code}/sector-rs")
+def get_stock_sector_rs(code: str):
+    """个股 vs 同行业（L2 优先，缺省 L1）的盘中相对强弱。
+
+    只做一张行业快照：同行前 30 只（市值优先）一次批量报价，不逐只请求。
+    """
+    now = time.time()
+    hit = _sector_cache.get(code)
+    if hit and now - hit[0] < _SECTOR_TTL_S:
+        return hit[1]
+
+    db = get_sync_db()
+    try:
+        row = db.execute(text("""
+            SELECT stock_name, industry_l1, industry_l2
+            FROM stock_master WHERE stock_code=:c AND stock_type='stock'
+            ORDER BY CASE stock_type WHEN 'stock' THEN 1 WHEN 'etf' THEN 2 ELSE 3 END
+            LIMIT 1
+        """), {'c': code}).fetchone()
+        if not row:
+            return {'ok': False, 'error': '无行业分类'}
+        name, l1, l2 = row[0] or code, row[1] or '', row[2] or ''
+        ind_col, ind_val = ('industry_l2', l2) if l2 else ('industry_l1', l1)
+        if not ind_val:
+            return {'ok': False, 'error': '无行业分类'}
+        peers = db.execute(text(f"""
+            SELECT sm.stock_code, sm.stock_name, COALESCE(sf.market_cap, 0) AS mc
+            FROM stock_master sm
+            LEFT JOIN stock_fundamentals sf ON sf.stock_code = sm.stock_code
+            WHERE sm.stock_type='stock' AND sm.{ind_col}=:ind
+            ORDER BY mc DESC NULLS LAST, sm.stock_code
+            LIMIT 30
+        """), {'ind': ind_val}).fetchall()
+    finally:
+        db.close()
+
+    codes = [code]
+    for r in peers:
+        if r[0] and r[0] != code and r[0] not in codes:
+            codes.append(r[0])
+    try:
+        from crawler.adapters.tencent_adapter import realtime_quotes
+        raw = realtime_quotes(codes[:50], 'stock')
+    except Exception as e:
+        logger.warning(f"[sector-rs] {code} 快照失败: {str(e)[:120]}")
+        return {'ok': False, 'error': '行业快照不可用'}
+    qmap = {q.get('code'): q for q in raw.values() if q.get('code')}
+    target = qmap.get(code)
+    if not target:
+        return {'ok': False, 'error': '个股快照不可用'}
+
+    changes = [q.get('change_pct') for q in qmap.values()
+               if q.get('code') != code and q.get('change_pct') is not None]
+    if not changes:
+        return {'ok': False, 'error': '行业样本不足'}
+    avg = sum(changes) / len(changes)
+    up = sum(1 for c in changes if c > 0)
+    peers_out = [{
+        'code': r[0], 'name': r[1],
+        'change_pct': qmap.get(r[0], {}).get('change_pct'),
+    } for r in peers if r[0] != code and qmap.get(r[0], {}).get('change_pct') is not None]
+    peers_out.sort(key=lambda x: -x['change_pct'])
+    payload = {
+        'ok': True, 'code': code, 'name': name,
+        'industry': ind_val, 'industry_l1': l1, 'industry_l2': l2,
+        'stock_change_pct': target.get('change_pct'),
+        'sector_avg_pct': round(avg, 3),
+        'excess_pp': round((target.get('change_pct') or 0) - avg, 3),
+        'up_count': up, 'total': len(changes),
+        'up_ratio': round(up / len(changes), 3),
+        'peers': peers_out[:5],
+    }
+    _sector_cache[code] = (now, payload)
+    if len(_sector_cache) > 200:
+        _sector_cache.clear()
+    return payload
+
+
 # ── 腾讯分钟K线（design/06 外延：详情页盘中分钟图；不入库，30s 内存缓存防刷）──
 
 _mk_cache: dict = {}   # (code, period, count, type) -> (ts, payload)
