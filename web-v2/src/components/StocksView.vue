@@ -8,10 +8,22 @@
     </n-button-group>
     <StockSuggestInput v-model:value="kw" size="tiny" width="180px" placeholder="搜索代码或名称..." @select="onSuggestPick" @enter="doSearch" />
     <n-button class="cta" type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>
+    <n-button size="tiny" :type="radarMode?'primary':'default'" @click="toggleRadar"><AppIcon name="activity" :size="13" />  盘中雷达</n-button>
   </n-space>
 
-  <n-data-table class="fill-table" flex-height :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
-  <ListPagination :total="total" :page="page" :page-size="50" @change="goPage" />
+  <template v-if="radarMode">
+    <div class="radar-head">
+      <span>关注池实时排序 · {{ radarAt || '—' }} · 15s 刷新</span>
+      <n-button size="tiny" text :loading="radarLoading" @click="loadRadar">刷新</n-button>
+    </div>
+    <n-data-table class="fill-table" flex-height :columns="radarColumns" :data="radarRows"
+      size="small" :row-props="rowProps" :loading="radarLoading" :bordered="false" scroll-x="1100" />
+    <n-empty v-if="!radarLoading && !radarRows.length" description="关注池暂无实时快照" style="padding:24px" />
+  </template>
+  <template v-else>
+    <n-data-table class="fill-table" flex-height :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
+    <ListPagination :total="total" :page="page" :page-size="50" @change="goPage" />
+  </template>
 </div>
 </template>
 <script setup>
@@ -22,7 +34,7 @@ import { useViewport } from '../utils/viewport'
 const { isNarrow } = useViewport()
 import { ref, reactive, h, computed, onMounted, onUnmounted } from 'vue'
 import { useNavStore } from '../stores/nav'
-import { NCard, NDataTable, NButton, NButtonGroup, NInput, NPagination, NTag, NSpace, NSpin, useMessage } from 'naive-ui'
+import { NCard, NDataTable, NButton, NButtonGroup, NInput, NEmpty, NPagination, NTag, NSpace, NSpin, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const emit = defineEmits(['show-detail'])
@@ -116,6 +128,61 @@ function doSearch(){ page.value = 1; load() }
 function goPage(p){ page.value = p; load() }
 function switchCat(c){ cat.value = c; page.value = 1; load() }
 
+// ── 盘中雷达：关注池实时排序 ──
+const radarMode = ref(false)
+const radarRows = ref([])
+const radarLoading = ref(false)
+const radarAt = ref('')
+let radarTimer = null
+const radarPct = v => v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%')
+const radarScoreLabel = s => s >= 70 ? '强' : s >= 55 ? '偏强' : s > 45 ? '中性' : s > 30 ? '偏弱' : '弱'
+
+async function loadRadar(){
+  if(!radarMode.value) return
+  radarLoading.value = true
+  try{
+    const r = await axios.get(API + '/api/stock/radar')
+    radarRows.value = r.data?.items || []
+    radarAt.value = r.data?.asof || ''
+  }catch(e){
+    message.error(e.response?.data?.detail || '雷达快照失败')
+  }finally{
+    radarLoading.value = false
+  }
+}
+function toggleRadar(){
+  radarMode.value = !radarMode.value
+  clearInterval(radarTimer); radarTimer = null
+  if(radarMode.value){
+    loadRadar()
+    radarTimer = setInterval(loadRadar, 15000)
+  }
+}
+
+const radarColumns = computed(() => [
+  { title:'代码', key:'code', width:82, fixed:'left',
+    render:r => h('span', { style:{color:'var(--c-text-dim)', cursor:'pointer'}, onClick:()=>emit('show-detail', r.code) }, r.code) },
+  { title:'名称', key:'name', width:140, fixed:'left',
+    render:r => ell(r.name, { maxWidth:'128px', color:'var(--c-text)', cursor:'pointer', onClick:()=>emit('show-detail', r.code) }) },
+  { title:'行业', key:'industry', width:120, render:r => ell(r.industry, { maxWidth:'110px' }) },
+  { title:'最新价', key:'price', width:95, align:'right',
+    render:r => h('span',{style:{fontWeight:600,fontVariantNumeric:'tabular-nums'}}, r.price != null ? '¥'+Number(r.price).toFixed(2) : '—') },
+  { title:'涨跌幅', key:'change_pct', width:88, align:'right',
+    render:r => h('span',{style:{color:r.change_pct>=0?'var(--c-up)':'var(--c-down)',fontVariantNumeric:'tabular-nums'}}, radarPct(r.change_pct)) },
+  { title:'跳空', key:'gap_pct', width:80, align:'right',
+    render:r => h('span',{style:{color:r.gap_pct>=0?'var(--c-up)':'var(--c-down)'}}, radarPct(r.gap_pct)) },
+  { title:'VWAP偏离', key:'vwap_dev_pct', width:96, align:'right',
+    render:r => h('span',{style:{color:r.vwap_dev_pct>=0?'var(--c-up)':'var(--c-down)'}}, radarPct(r.vwap_dev_pct)) },
+  { title:'日位置', key:'day_position_pct', width:82, align:'right',
+    render:r => h('span',{style:{fontVariantNumeric:'tabular-nums'}}, r.day_position_pct != null ? r.day_position_pct.toFixed(0)+'%' : '—') },
+  { title:'量比', key:'volume_ratio', width:72, align:'right',
+    render:r => h('span',{style:{fontVariantNumeric:'tabular-nums'}}, r.volume_ratio != null ? Number(r.volume_ratio).toFixed(2) : '—') },
+  { title:'成交额', key:'amount', width:92, align:'right',
+    render:r => h('span',{style:{fontVariantNumeric:'tabular-nums'}}, r.amount != null ? (r.amount/1e8).toFixed(2)+'亿' : '—') },
+  { title:'雷达分', key:'score', width:130,
+    render:r => h('span',{style:{color:r.score>=60?'var(--c-up)':r.score<=40?'var(--c-down)':'var(--c-text-dim)',fontWeight:600}}, `${r.score.toFixed(1)} ${radarScoreLabel(r.score)}`) },
+])
+
 const nav = useNavStore()
 function onPopstate() {
   // 组件可能已卸载（v-if 切换）：非本页时不响应，避免用本页 URL 覆盖地址栏
@@ -128,5 +195,15 @@ onMounted(() => {
   load()
   window.addEventListener('popstate', onPopstate)
 })
-onUnmounted(() => window.removeEventListener('popstate', onPopstate))
+onUnmounted(() => {
+  window.removeEventListener('popstate', onPopstate)
+  if (radarTimer) clearInterval(radarTimer)
+})
 </script>
+
+<style scoped>
+.radar-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 6px; font-size: var(--text-meta); color: var(--c-text-dim);
+}
+</style>

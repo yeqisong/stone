@@ -291,7 +291,11 @@
             <div><span>每股风险</span><b>¥{{ rPerShare.toFixed(2) }}</b></div>
             <div><span>可买</span><b>{{ rShares }} 股</b></div>
             <div><span>止损亏损</span><b>¥{{ rActualRisk.toFixed(0) }}（1R）</b></div>
-            <div class="r-note">100 股整手 · T+1 · 未计滑点</div>
+            <template v-if="execEstimate">
+              <div><span>五档可买</span><b>{{ execEstimate.depth_shares }} 股（{{ (execEstimate.covered * 100).toFixed(0) }}%）</b></div>
+              <div><span>预计成交</span><b>¥{{ execEstimate.avg.toFixed(2) }} · 滑点 {{ execEstimate.slip_bp >= 0 ? '+' : '' }}{{ execEstimate.slip_bp }}bp</b></div>
+            </template>
+            <div class="r-note">100 股整手 · T+1 · 滑点按五档卖盘估算</div>
           </div>
           <div v-else class="r-note">止损价需低于入场价；先填入场/止损。</div>
         </div>
@@ -1834,6 +1838,32 @@ const rShares = computed(() => {
   return per ? Math.floor(rRiskAmount.value / per / 100) * 100 : 0
 })
 const rActualRisk = computed(() => rShares.value * (rPerShare.value || 0))
+// 按五档卖盘估算买入滑点；超出五档的部分按最后一档价格近似
+const execEstimate = computed(() => {
+  const q = quote.value
+  const shares = rShares.value
+  if(!q?.asks?.length || !(shares > 0)) return null
+  const levels = q.asks
+    .map(a => ({ price: Number(a.price), shares: Number(a.volume || 0) * 100 }))
+    .filter(x => x.price > 0 && x.shares > 0)
+  if(!levels.length) return null
+  const depthShares = levels.reduce((s, x) => s + x.shares, 0)
+  let remain = shares, cost = 0
+  for(const lv of levels){
+    const take = Math.min(remain, lv.shares)
+    cost += take * lv.price
+    remain -= take
+    if(remain <= 0) break
+  }
+  if(remain > 0) cost += remain * levels[levels.length - 1].price
+  const avg = cost / shares
+  return {
+    avg: +avg.toFixed(3),
+    slip_bp: +((avg / levels[0].price - 1) * 1e4).toFixed(1),
+    depth_shares: Math.round(depthShares),
+    covered: Math.min(1, depthShares / shares),
+  }
+})
 
 watch(quotePrice, p => {
   const v = Number(p)

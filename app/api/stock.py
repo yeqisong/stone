@@ -998,6 +998,85 @@ def get_stock_ai_intraday(code: str, type: str = Query(None),
         raise HTTPException(status_code=500, detail="AI 解读失败，请稍后重试")
 
 
+# ── 盘中雷达：关注池实时排序（涨速/量比/VWAP 偏离/日内位置），10s 缓存 ──
+_radar_cache: dict = {}
+_RADAR_TTL_S = 10
+
+
+@router.get("/stock/radar")
+def get_intraday_radar():
+    """关注池盘中雷达：一次批量快照 + 规则打分，点进详情做进一步验证。"""
+    now = time.time()
+    hit = _radar_cache.get('all')
+    if hit and now - hit[0] < _RADAR_TTL_S:
+        return hit[1]
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (fp.stock_code) fp.stock_code, sm.stock_name, sm.industry_l1
+            FROM v_focus_pool fp
+            JOIN LATERAL (
+                SELECT stock_name, stock_type, industry_l1 FROM stock_master
+                WHERE stock_code = fp.stock_code AND stock_type IN ('stock', 'etf')
+                ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END
+                LIMIT 1
+            ) sm ON true
+            ORDER BY fp.stock_code
+            LIMIT 50
+        """)).fetchall()
+    finally:
+        db.close()
+    if not rows:
+        return {'asof': None, 'items': []}
+    metas = {r[0]: {'name': r[1], 'industry': r[2]} for r in rows}
+    try:
+        from crawler.adapters.tencent_adapter import realtime_quotes
+        raw = realtime_quotes(list(metas.keys()), 'stock')
+    except Exception as e:
+        logger.warning(f"[radar] 快照失败: {str(e)[:120]}")
+        return {'asof': None, 'items': []}
+    items = []
+    for q in raw.values():
+        code = q.get('code')
+        if code not in metas:
+            continue
+        price, prev = q.get('price'), q.get('prev_close')
+        op, hi, lo = q.get('open'), q.get('high'), q.get('low')
+        vwap, vr = q.get('avg_price'), q.get('volume_ratio')
+        if not price or price <= 0:
+            continue
+        chg = q.get('change_pct')
+        gap = (op / prev - 1) * 100 if op and prev else None
+        vdev = (price / vwap - 1) * 100 if vwap else None
+        pos = (price - lo) / (hi - lo) * 100 if hi and lo and hi > lo else None
+        score = 50.0
+        if chg is not None:
+            score += max(-15, min(15, chg * 3))
+        if vdev is not None:
+            score += max(-10, min(10, vdev * 10))
+        if pos is not None:
+            score += (pos - 50) / 5
+        if vr is not None:
+            score += 10 if vr >= 1.5 else (-10 if vr < 0.8 else 0)
+        if gap is not None:
+            score += max(-5, min(5, gap * 2))
+        score = round(max(0, min(100, score)), 1)
+        items.append({
+            'code': code, 'name': q.get('name') or metas[code]['name'],
+            'industry': metas[code]['industry'], 'price': price,
+            'change_pct': chg, 'gap_pct': round(gap, 2) if gap is not None else None,
+            'vwap_dev_pct': round(vdev, 2) if vdev is not None else None,
+            'day_position_pct': round(pos, 1) if pos is not None else None,
+            'volume_ratio': vr, 'amount': q.get('amount'),
+            'turnover_pct': q.get('turnover_pct'), 'score': score,
+        })
+    items.sort(key=lambda x: -x['score'])
+    payload = {'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
+               'items': items}
+    _radar_cache['all'] = (now, payload)
+    return payload
+
+
 # ── 板块/同业相对强弱（盘中）：行业映射 + 腾讯批量快照，30s 缓存 ──
 _sector_cache: dict = {}
 _SECTOR_TTL_S = 30
