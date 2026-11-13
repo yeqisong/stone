@@ -22,11 +22,16 @@ export async function openFloatingWatch({ openDetail } = {}) {
   const pip = await window.documentPictureInPicture.requestWindow({ width, height })
   pip.document.title = '浮窗盯盘'
   // 复用主窗口的主题变量与样式（含 Vue scoped CSS）
-  pip.document.documentElement.style.cssText = document.documentElement.style.cssText
-  pip.document.documentElement.style.background = 'transparent'
+  // 注意：主题变量挂在 .app-root 上；只复制 documentElement 会拿不到 --c-bg 等变量
+  const appRoot = document.querySelector('.app-root')
+  pip.document.documentElement.style.cssText =
+    document.documentElement.style.cssText + ';' + (appRoot?.style.cssText || '')
   pip.document.body.className = document.body.className
   pip.document.body.style.margin = '0'
-  pip.document.body.style.background = 'transparent'
+  // Document PiP 的顶层窗口本身是不透明浏览器窗口，CSS 透明无法透出桌面；
+  // 用主题背景色填满窗口，避免白底（真正透明需要原生悬浮窗）。
+  pip.document.documentElement.style.background = 'var(--c-bg)'
+  pip.document.body.style.background = 'var(--c-bg)'
   for (const sheet of Array.from(document.styleSheets)) {
     try {
       const css = Array.from(sheet.cssRules || []).map(r => r.cssText).join('')
