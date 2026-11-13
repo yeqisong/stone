@@ -99,6 +99,77 @@ def get_watch_window(user: str = Depends(get_current_user)):
     return payload
 
 
+def _write_watch_token(user: str) -> bool:
+    """把当前登录态写入 WPF 的 %APPDATA%\\KdaoWatch\\token.txt（24h 有效）。"""
+    import subprocess
+    from pathlib import Path
+    from app.auth.auth import create_token
+    ps = Path('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe')
+    if not ps.exists():
+        return False
+    appdata = subprocess.check_output(
+        [str(ps), '-NoProfile', '-Command', '$env:APPDATA'],
+        text=True, timeout=8).strip()
+    wsl_appdata = subprocess.check_output(
+        ['wslpath', '-u', appdata], text=True, timeout=5).strip()
+    tokdir = Path(wsl_appdata) / 'KdaoWatch'
+    tokdir.mkdir(parents=True, exist_ok=True)
+    (tokdir / 'token.txt').write_text(create_token(user), encoding='utf-8')
+    return True
+
+
+def _watch_protocol_registered() -> bool:
+    import subprocess
+    from pathlib import Path
+    ps = Path('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe')
+    if not ps.exists():
+        return False
+    try:
+        out = subprocess.check_output(
+            [str(ps), '-NoProfile', '-Command',
+             "Test-Path 'HKCU:\\Software\\Classes\\kdaowatch'"],
+            text=True, timeout=6).strip()
+        return out.lower() == 'true'
+    except Exception:
+        return False
+
+
+@router.post("/portfolio/watch/prepare")
+def prepare_watch_window(user: str = Depends(get_current_user)):
+    """网页按钮调用：写入 WPF token，并返回 kdaowatch:// 是否已注册。"""
+    try:
+        _write_watch_token(user)
+        return {'ok': True, 'scheme': 'kdaowatch://open',
+                'registered': _watch_protocol_registered()}
+    except Exception as e:
+        return {'ok': False, 'error': f'准备失败：{str(e)[:120]}'}
+
+
+@router.post("/portfolio/watch/launch")
+def launch_watch_window(user: str = Depends(get_current_user)):
+    """后端直接拉起 WPF（备用；某些 WSL/服务会话下窗口可能不在交互桌面）。"""
+    import subprocess
+    from pathlib import Path
+    ps = Path('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe')
+    script = Path(__file__).resolve().parents[2] / 'desktop' / 'watch-window.ps1'
+    if not ps.exists() or not script.exists():
+        return {'ok': False, 'error': '仅支持 Windows/WSL 本机启动'}
+    try:
+        try:
+            _write_watch_token(user)
+        except Exception:
+            pass
+        win_path = subprocess.check_output(['wslpath', '-w', str(script)], text=True).strip()
+        cmd = [str(ps), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', win_path]
+        subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+        )
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': f'启动失败：{str(e)[:120]}'}
+
+
 @router.get("/portfolio/risk-heat")
 def get_portfolio_risk_heat(user: str = Depends(get_current_user)):
     """组合风险热度：单票/行业集中度、浮盈、今日盘中 critical 提醒。"""

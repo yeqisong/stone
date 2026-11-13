@@ -13,6 +13,8 @@
       <n-button size="tiny" :disabled="!canFloatWatch()"
         :title="canFloatWatch() ? 'Chrome 置顶悬浮窗，浏览器最小化也保留' : '需要 Chrome/Edge 116+（Document Picture-in-Picture）'"
         @click="openWatchWindow"><AppIcon name="monitor" :size="13" />  浮窗盯盘</n-button>
+      <n-button size="tiny" :loading="launchingDesktop" title="调用 Windows WPF 透明置顶小窗"
+        @click="launchDesktopWatch"><AppIcon name="maximize" :size="13" />  桌面浮窗</n-button>
       <n-button size="small" type="primary" @click="startAdd">+ 新增持仓</n-button>
     </div>
   </div>
@@ -172,6 +174,28 @@ import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
 const emit = defineEmits(['show-detail'])
 
+async function launchDesktopWatch(){
+  if(launchingDesktop.value) return
+  launchingDesktop.value = true
+  try{
+    const r = await axios.post(API + '/api/portfolio/watch/prepare', {})
+    if(!r.data?.ok){
+      message.warning(r.data?.error || '桌面浮窗准备失败')
+      return
+    }
+    if(!r.data.registered){
+      message.warning('桌面浮窗未注册：请在 Windows 运行 desktop/register-protocol.cmd（只需一次）')
+      return
+    }
+    message.info('浏览器若询问是否打开 KdaoWatch，请选择允许')
+    window.location.href = r.data.scheme || 'kdaowatch://open'
+  }catch(e){
+    message.warning(e.response?.data?.detail || '桌面浮窗启动失败')
+  }finally{
+    launchingDesktop.value = false
+  }
+}
+
 function openWatchWindow(){
   openFloatingWatch({
     openDetail: (code) => {
@@ -188,6 +212,7 @@ const auth2 = useAuthStore()
 const { isNarrow } = useViewport()
 const data = reactive({positions:[], count:0, total_value:0, total_pnl:0})
 const riskHeat = ref(null)
+const launchingDesktop = ref(false)
 let riskTimer = null
 const showEdit = ref(false), showDeleteConfirm = ref(false), loading = ref(true)
 

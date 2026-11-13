@@ -13,6 +13,11 @@
 # - 数据复用 /api/portfolio/watch-window（5s 轮询）
 
 $ErrorActionPreference = 'Stop'
+
+# 单实例：网页按钮重复点击时不叠加多个悬浮窗
+$mutex = New-Object System.Threading.Mutex($false, 'Local\KdaoWatchWindow')
+if (-not $mutex.WaitOne(0)) { exit 0 }
+
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
 $AppDir = Join-Path $env:APPDATA 'KdaoWatch'
@@ -20,7 +25,7 @@ New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
 $TokenFile = Join-Path $AppDir 'token.txt'
 $PosFile = Join-Path $AppDir 'positions.json'
 
-$script:token = $Token
+$script:token = if ($Token) { $Token } elseif ($env:KDAO_TOKEN) { $env:KDAO_TOKEN } else { '' }
 $script:cards = @{}
 $script:positions = @{}
 $script:drag = $null

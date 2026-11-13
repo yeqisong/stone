@@ -3,7 +3,18 @@
 Chrome 的 Document PiP 窗口是**不透明浏览器窗口**，CSS 无法透出桌面。  
 这个 WPF 小工具用 `WindowStyle=None + AllowsTransparency=True + Topmost=True` 做到真正的透明、无边框、桌面置顶。
 
-## 运行
+## 网页按钮调起（推荐）
+
+浏览器不能直接执行本地 exe，但可以注册 `kdaowatch://` 自定义协议：
+
+1. 第一次先在 Windows 双击运行 `desktop/register-protocol.cmd`（或 `register-protocol.ps1`）。  
+   它会把脚本复制到 `%LOCALAPPDATA%\KdaoWatch\`，并注册 `HKCU\Software\Classes\kdaowatch`。
+2. 回到网页持仓页点击「桌面浮窗」。
+3. 浏览器第一次会问“是否打开 KdaoWatch”，选择允许；之后可勾选始终允许。
+
+网页按钮会先把当前登录 token 写入 `%APPDATA%\KdaoWatch\token.txt`，所以 WPF 启动时不会再弹登录框。
+
+## 直接运行
 
 后端和前端需要先启动（默认 `:8000` / `:3000`）。
 
