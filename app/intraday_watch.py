@@ -29,6 +29,7 @@
 """
 import asyncio
 import json
+import re
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -299,13 +300,18 @@ def _fmt(v) -> str:
 
 def _cand(code, name, kind, body) -> dict:
     label = KIND_LABEL.get(kind, kind)
-    return {
+    out = {
         'stock_code': code,
         'kind': kind,
         'level': 'critical' if kind in CRITICAL else 'warn',
         'title': f'{name}({code}) {label}'[:100],
         'body': body,
     }
+    # 所有规则 body 都以「现价 X」开头；顺手抽成结构化触发价，供信号结果追踪使用
+    m = re.search(r'现价\s*([0-9]+(?:\.[0-9]+)?)', body or '')
+    if m:
+        out['price'] = float(m.group(1))
+    return out
 
 
 def _break_side(price: float, level: float, min_pct: float):
@@ -649,10 +655,11 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
                     continue
             row = db.execute(text(
                 "INSERT INTO risk_alerts "
-                "(trade_date, kind, stock_code, level, title, body, created_at) "
-                "VALUES (:d, :k, :c, :lv, :t, :b, :ts) RETURNING id"
+                "(trade_date, kind, stock_code, level, title, body, trigger_price, created_at) "
+                "VALUES (:d, :k, :c, :lv, :t, :b, :p, :ts) RETURNING id"
             ), {"d": now.date(), "k": c['kind'], "c": c['stock_code'],
-                "lv": c['level'], "t": c['title'], "b": c['body'], "ts": now}).fetchone()
+                "lv": c['level'], "t": c['title'], "b": c['body'],
+                "p": c.get('price'), "ts": now}).fetchone()
             count += 1
             inserted += 1
             logger.info(f"[intraday] {c['title']} | {c['body']}")
@@ -823,6 +830,12 @@ async def intraday_watch_loop():
         while True:
             try:
                 now = _bj_now()
+                # 信号结果追踪：60s 节流，独立于行情/提醒开关
+                try:
+                    from app.intraday_outcome import maybe_evaluate_outcomes
+                    await asyncio.to_thread(maybe_evaluate_outcomes)
+                except Exception as e:
+                    logger.debug(f"[outcome] 评估循环失败: {str(e)[:120]}")
                 ctx = await asyncio.to_thread(_load_context)
                 rules = ctx['rules']
                 collect = bool(rules.get('collect_minute', True))

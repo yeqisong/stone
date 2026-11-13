@@ -1184,6 +1184,7 @@ CREATE TABLE IF NOT EXISTS risk_alerts (
     level       VARCHAR(10) DEFAULT 'warn', -- warn / critical
     title       VARCHAR(100) NOT NULL,
     body        TEXT,
+    trigger_price NUMERIC(12,3),           -- 触发时现价（信号结果追踪入口）
     ack         BOOLEAN DEFAULT false,
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -1230,6 +1231,33 @@ CREATE TABLE IF NOT EXISTS intraday_ai_event (
 );
 CREATE INDEX IF NOT EXISTS idx_iae_created ON intraday_ai_event (created_at);
 CREATE INDEX IF NOT EXISTS idx_iae_code ON intraday_ai_event (stock_code, created_at DESC);
+"""
+
+# ── 盘中信号结果追踪（P0 专业交易员闭环）：每条 it_* 提醒的 5/15/30/60m 结果 ──
+# direction=1 看涨、-1 看跌、0 中性；ret/mfe/mae 已按 direction 调整（正=信号方向有利）
+CREATE_INTRADAY_SIGNAL_OUTCOME = """
+CREATE TABLE IF NOT EXISTS intraday_signal_outcome (
+    id            SERIAL PRIMARY KEY,
+    alert_id      INTEGER NOT NULL UNIQUE REFERENCES risk_alerts(id) ON DELETE CASCADE,
+    stock_code    VARCHAR(6) NOT NULL,
+    kind          VARCHAR(20) NOT NULL,
+    trade_date    DATE NOT NULL,
+    alert_time    TIMESTAMP NOT NULL,
+    entry_price   NUMERIC(12,3),
+    direction     SMALLINT NOT NULL DEFAULT 0,
+    ret_5m        NUMERIC(10,4),
+    ret_15m       NUMERIC(10,4),
+    ret_30m       NUMERIC(10,4),
+    ret_60m       NUMERIC(10,4),
+    mfe           NUMERIC(10,4),
+    mae           NUMERIC(10,4),
+    hit           BOOLEAN,
+    status        VARCHAR(12) NOT NULL DEFAULT 'pending',  -- pending/partial/done/no_data
+    evaluated_at  TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_iso_date ON intraday_signal_outcome (trade_date, kind);
+CREATE INDEX IF NOT EXISTS idx_iso_code ON intraday_signal_outcome (stock_code, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_iso_status ON intraday_signal_outcome (status, alert_time);
 """
 
 # ── 拓展回补已核空日期登记（2026-09-04）：事件类拓展表历史上大量"真 0 行"日期
@@ -1318,6 +1346,7 @@ ALL_TABLES = [
     ("risk_alerts", CREATE_RISK_ALERTS),
     ("stock_minute_bar", CREATE_MINUTE_BAR),
     ("intraday_ai_event", CREATE_INTRADAY_AI_EVENT),
+    ("intraday_signal_outcome", CREATE_INTRADAY_SIGNAL_OUTCOME),
     ("backfill_ext_checked", CREATE_BACKFILL_EXT_CHECKED),
     ("moneyflow_hsgt", CREATE_MONEYFLOW_HSGT),
     ("block_trade", CREATE_BLOCK_TRADE),
@@ -2249,6 +2278,14 @@ def init_db(sync_session) -> None:
             )"""))
         sync_session.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_agent_feedback_created ON agent_feedback (created_at DESC)"))
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：risk_alerts 补 trigger_price（信号结果追踪；老提醒由 evaluator 从 body 解析兜底）
+    try:
+        sync_session.execute(text(
+            "ALTER TABLE risk_alerts ADD COLUMN IF NOT EXISTS trigger_price NUMERIC(12,3)"))
         sync_session.commit()
     except Exception:
         sync_session.rollback()

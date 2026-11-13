@@ -271,6 +271,59 @@
           <n-empty v-else description="暂无盘中提醒" style="padding:6px" />
         </div>
 
+        <!-- 仓位 / R：先定止损，再定手数 -->
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="target" :size="13" />  仓位 / R
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">先定亏损，再定手数</span></h4>
+          <div class="r-grid">
+            <label>入场<input type="number" step="0.01" v-model.number="rEntry" @input="touchREntry"></label>
+            <label>止损<input type="number" step="0.01" v-model.number="rStop" @input="touchRStop"></label>
+            <label>权益<input type="number" step="1000" v-model.number="rEquity"></label>
+            <label>风险%<input type="number" step="0.1" min="0" max="10" v-model.number="rRiskPct"></label>
+          </div>
+          <div class="r-quick">
+            <button type="button" @click="setRStop('or')">OR低</button>
+            <button type="button" @click="setRStop('prev')">昨低</button>
+            <button type="button" @click="setRStop('atr')">ATR×1</button>
+            <span>ATR14 {{ atr14 != null ? atr14.toFixed(2) : '—' }}</span>
+          </div>
+          <div v-if="rPerShare" class="r-result">
+            <div><span>每股风险</span><b>¥{{ rPerShare.toFixed(2) }}</b></div>
+            <div><span>可买</span><b>{{ rShares }} 股</b></div>
+            <div><span>止损亏损</span><b>¥{{ rActualRisk.toFixed(0) }}（1R）</b></div>
+            <div class="r-note">100 股整手 · T+1 · 未计滑点</div>
+          </div>
+          <div v-else class="r-note">止损价需低于入场价；先填入场/止损。</div>
+        </div>
+
+        <!-- 信号记分卡：提醒 → 5/15/30/60m 结果，方向调整后统计 -->
+        <div class="side-panel">
+          <h4 class="side-title"><AppIcon name="target" :size="13" />  信号记分卡
+            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 30 日 · 全池</span></h4>
+          <template v-if="signalScoreItems.length">
+            <table class="score-table">
+              <thead><tr><th>信号</th><th>样本</th><th>胜率</th><th>30m</th></tr></thead>
+              <tbody>
+                <tr v-for="s in signalScoreItems" :key="s.kind"
+                  :title="`5m ${fmtScorePct(s.ret_5m)} · 15m ${fmtScorePct(s.ret_15m)} · 60m ${fmtScorePct(s.ret_60m)}\nMFE ${fmtScorePct(s.mfe)} / MAE ${fmtScorePct(s.mae)}`">
+                  <td>{{ s.label }}</td>
+                  <td style="text-align:right">{{ s.n }}</td>
+                  <td style="text-align:right" :style="{color: s.hit_rate != null && s.hit_rate >= 0.5 ? 'var(--c-up)' : 'var(--c-text-dim)'}">
+                    {{ s.hit_rate == null ? '—' : (s.hit_rate * 100).toFixed(0) + '%' }}
+                  </td>
+                  <td style="text-align:right" :style="{color: s.ret_30m != null ? (s.ret_30m >= 0 ? 'var(--c-up)' : 'var(--c-down)') : 'var(--c-text-faint)'}">
+                    {{ fmtScorePct(s.ret_30m) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="side-more">30m 已扣 0.2% 成本 · 悬停看 MFE/MAE</div>
+          </template>
+          <div v-else style="font-size:var(--text-meta);color:var(--c-text-faint);line-height:1.6">
+            样本积累中：每条盘中提醒会自动记录 5/15/30/60 分钟结果。
+          </div>
+        </div>
+
         <!-- 筹码分布 -->
         <div v-if="chipData && chipData.buckets && chipData.buckets.length" class="side-panel">
           <h4 class="side-title" style="flex-wrap:wrap">
@@ -770,6 +823,7 @@ const range = ref(500)
 function switchPeriod(v) { period.value = v; reloadChart() }
 function switchRange(d) { range.value = d; reloadChart() }
 let lastKline = null
+const atr14 = ref(null)          // 日线 ATR14，仓位/R 计算用
 const dateRange = ref('')
 const peData = ref([])
 const peRange = ref('')
@@ -1026,6 +1080,10 @@ async function load(){
   showCompare.value = false
   if (showFs.value) closeFs()
   intradayAlerts.value = []
+  signalScore.value = null
+  atr14.value = null
+  rEntry.value = null; rStop.value = null
+  rEntryTouched.value = false; rStopTouched.value = false
   aiReqSeq++; aiLoading.value = false; aiInsight.value = null; aiError.value = ''; aiEvent.value = false
   hoverInfo.value = null
   // 清掉上一只票的全部扩展数据：这些都是 best-effort 补的（allSettled 吞错、空数据隐藏卡片），
@@ -1101,6 +1159,7 @@ async function load(){
     axios.get(API+'/api/stock/'+c+'/top_list?days=3650').then(r=>{ if(seq === loadSeq) toplistData.value = r.data.data||[] }),
     axios.get(API+'/api/stock/'+c+'/chip').then(r=>{ if(seq === loadSeq) chipData.value = r.data }),
     axios.get(API+'/api/stock/'+c+'/signals?days=1095').then(r=>{ if(seq === loadSeq) sigData.value = r.data.data||[] }),
+    axios.get(API+'/api/risk/signal-stats?days=30').then(r=>{ if(seq === loadSeq) signalScore.value = r.data }),
   ])
   if(seq !== loadSeq) return
   computeSigStats()
@@ -1441,6 +1500,8 @@ function drawAuxCharts(kd){
       const pc=ohlc[i-1][1], h=o[3], l=o[2]
       return Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)) })
     const atr = tr.map((_,i)=>{ if(i<14) return null; let s=0; for(let j=i-13;j<=i;j++) s+=tr[j]; return +(s/14).toFixed(3) })
+    const lastAtr = [...atr].reverse().find(v => v != null)
+    atr14.value = lastAtr != null ? +lastAtr : null
     const atrPct = atr.map((v,i)=>v!=null&&closes[i]?+(v/closes[i]*100).toFixed(2):null)
     const c11 = makeChart('c11', {
       tooltip:tt, grid:{...GRID_STD, top:8},
@@ -1610,8 +1671,13 @@ const quoteLoading = ref(false)
 let quoteTimer = null
 let quoteBusy = false
 const intradayAlerts = ref([])   // 该股近 8 条盘中提醒（后端 watcher 写 risk_alerts）
+const signalScore = ref(null)    // 近 30 日盘中信号记分卡（全池，方向调整后）
+const signalScoreItems = computed(() => (signalScore.value?.items || [])
+  .filter(s => s.direction !== 0 && s.hit_rate != null)
+  .slice(0, 8))
 let alertTimer = null
 const qfmt = v => (v == null || v === 0) ? '—' : Number(v).toFixed(2)
+const fmtScorePct = v => v == null ? '—' : ((v * 100 >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%')
 const quotePrice = computed(() => {
   const p = quote.value?.price
   return (p != null && p > 0) ? p : (detail.value?.close ?? null)
@@ -1629,6 +1695,52 @@ const chipProfit = computed(() => {
   const below = d.buckets.reduce((s, b) => s + (b.price <= chipCurrent.value ? (b.vol || 0) : 0), 0)
   return below / total
 })
+
+// ── 仓位 / R 计算：先定止损，再定手数 ──
+const rEntry = ref(null)
+const rStop = ref(null)
+const rEquity = ref(Math.max(0, Number(localStorage.getItem('r_equity') || 100000) || 100000))
+const rRiskPct = ref(Math.max(0, Number(localStorage.getItem('r_risk_pct') || 1) || 1))
+const rEntryTouched = ref(false)
+const rStopTouched = ref(false)
+const rRiskAmount = computed(() => rEquity.value * rRiskPct.value / 100)
+const rPerShare = computed(() => {
+  const e = Number(rEntry.value), s = Number(rStop.value)
+  return (e > 0 && s > 0 && e > s) ? e - s : null
+})
+const rShares = computed(() => {
+  const per = rPerShare.value
+  return per ? Math.floor(rRiskAmount.value / per / 100) * 100 : 0
+})
+const rActualRisk = computed(() => rShares.value * (rPerShare.value || 0))
+
+watch(quotePrice, p => {
+  const v = Number(p)
+  if (!(v > 0)) return
+  if (!rEntryTouched.value || rEntry.value == null) rEntry.value = +v.toFixed(2)
+  if (!rStopTouched.value && rStop.value == null) rStop.value = +(v - (atr14.value || v * 0.01)).toFixed(2)
+})
+watch(atr14, a => {
+  if (!rStopTouched.value && a != null && Number(rEntry.value) > 0) {
+    rStop.value = +(Number(rEntry.value) - a).toFixed(2)
+  }
+})
+watch(rEquity, v => { try { localStorage.setItem('r_equity', String(v)) } catch (e) {} })
+watch(rRiskPct, v => { try { localStorage.setItem('r_risk_pct', String(v)) } catch (e) {} })
+function touchREntry(){ rEntryTouched.value = true }
+function touchRStop(){ rStopTouched.value = true }
+function setRStop(kind){
+  const e = Number(rEntry.value)
+  if (!(e > 0)) return
+  let s = null
+  if (kind === 'or') s = minkLevelChips.value.find(x => x.name === 'OR15低')?.value
+  else if (kind === 'prev') s = quote.value?.prev_low
+  else if (kind === 'atr') s = atr14.value != null ? e - atr14.value : null
+  if (s != null && s > 0 && s < e) {
+    rStop.value = +Number(s).toFixed(2)
+    rStopTouched.value = true
+  }
+}
 const quoteChgPct = computed(() => quote.value?.change_pct ?? priceChg.value)
 const quoteColor = computed(() => quoteChgPct.value == null ? 'var(--c-text)'
   : (quoteChgPct.value >= 0 ? UP_COLOR : DOWN_COLOR))
@@ -3197,6 +3309,37 @@ watch(()=>props.code, v=>{
 .side-item:first-child { padding-top: 0; border-top: 0; }
 .side-well { margin-bottom: 8px; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; }
 .side-more { margin-top: 8px; font-size: var(--text-meta); color: var(--c-text-faint); }
+.score-table { width: 100%; border-collapse: collapse; font-size: var(--text-meta); }
+.score-table th {
+  padding: 2px 0 4px; text-align: left; font-weight: 500;
+  color: var(--c-text-faint); border-bottom: 1px solid var(--c-border-light);
+}
+.score-table td {
+  padding: 4px 0; border-bottom: 1px solid var(--c-border-light);
+  color: var(--c-text-dim); white-space: nowrap;
+}
+.score-table td:first-child { white-space: normal; padding-right: 6px; }
+.score-table tr:last-child td { border-bottom: 0; }
+.r-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.r-grid label { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-meta); color: var(--c-text-faint); }
+.r-grid input {
+  width: 100%; box-sizing: border-box; padding: 4px 6px;
+  border: 1px solid var(--c-border); border-radius: var(--radius-sm);
+  background: var(--c-bg); color: var(--c-text); font-size: 12px;
+  font-variant-numeric: tabular-nums; outline: none;
+}
+.r-grid input:focus { border-color: var(--c-accent); }
+.r-quick { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+.r-quick button {
+  padding: 2px 7px; border-radius: var(--radius-sm); border: 1px solid var(--c-border);
+  background: transparent; color: var(--c-text-dim); font-size: var(--text-meta); cursor: pointer;
+}
+.r-quick button:hover { color: var(--c-accent); border-color: var(--c-accent); }
+.r-quick span { margin-left: auto; font-size: var(--text-meta); color: var(--c-text-faint); }
+.r-result { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; font-size: var(--text-meta); }
+.r-result > div { display: flex; justify-content: space-between; gap: 8px; color: var(--c-text-dim); }
+.r-result b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.r-note { font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; margin-top: 5px; }
 @media (max-width: 1100px) {
   .detail-sidebar { position: static; max-height: none; overflow: visible; padding-right: 0; }
 }
