@@ -10,6 +10,9 @@
     </n-button-group>
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
       <n-button size="tiny" quaternary @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
+      <n-button size="tiny" :disabled="!canFloatWatch()"
+        :title="canFloatWatch() ? 'Chrome 置顶悬浮窗，浏览器最小化也保留' : '需要 Chrome/Edge 116+（Document Picture-in-Picture）'"
+        @click="openWatchWindow"><AppIcon name="monitor" :size="13" />  浮窗盯盘</n-button>
       <n-button size="small" type="primary" @click="startAdd">+ 新增持仓</n-button>
     </div>
   </div>
@@ -145,10 +148,22 @@ import WatchTable from './WatchTable.vue'
 import { ref, reactive, h, computed, onMounted } from 'vue'
 import { useMessage, NButton, NSpace, NCard, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NDatePicker, NEmpty, NSpin, NTag, NButtonGroup } from 'naive-ui'
 import axios from 'axios'
+import { openFloatingWatch, canFloatWatch } from '../utils/floatingWatch'
 import { useAuthStore } from '../stores/auth'
 import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
 const emit = defineEmits(['show-detail'])
+
+function openWatchWindow(){
+  openFloatingWatch({
+    openDetail: (code) => {
+      if(window.closed) return false
+      window.focus()
+      emit('show-detail', code)
+      return true
+    },
+  }).catch(e => message.warning(e?.message || '浮窗打开失败'))
+}
 const API = window.location.origin
 const message = useMessage()
 const auth2 = useAuthStore()

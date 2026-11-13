@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from app.db.connection import get_sync_db
-from app.auth.auth import optional_auth
+from app.auth.auth import optional_auth, get_current_user
 
 router = APIRouter(tags=["portfolio"])
 
@@ -24,6 +24,78 @@ class UpdatePosition(BaseModel):
 
 
 # ── 查（同步，确保读写同一连接看到最新数据）──
+
+_watch_cache = {'ts': 0.0, 'payload': None}
+_WATCH_TTL_S = 5
+
+
+@router.get("/portfolio/watch-window")
+def get_watch_window(user: str = Depends(get_current_user)):
+    """浮窗盯盘：全部持仓的最新价/涨跌 + 当日 1 分钟收盘迷你序列。
+
+    一次批量腾讯快照 + 一次 stock_minute_bar 查询；供 Document PiP 悬浮窗 5s 轮询。
+    """
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+    now = _time.time()
+    if _watch_cache['payload'] and now - _watch_cache['ts'] < _WATCH_TTL_S:
+        return _watch_cache['payload']
+    db = get_sync_db()
+    try:
+        pos = db.execute(text("""
+            SELECT stock_code, stock_name, quantity, cost_price
+            FROM portfolio WHERE is_active=true AND quantity > 0
+            ORDER BY stock_code
+        """)).fetchall()
+        codes = [r[0] for r in pos]
+        sparks = {}
+        if codes:
+            brow = db.execute(text("""
+                SELECT stock_code, bar_time, close FROM (
+                    SELECT stock_code, bar_time, close,
+                           row_number() OVER (PARTITION BY stock_code ORDER BY bar_time DESC) AS rn
+                    FROM stock_minute_bar
+                    WHERE stock_code = ANY(CAST(:codes AS varchar[]))
+                      AND bar_time::date = CURRENT_DATE
+                ) t WHERE rn <= 60 ORDER BY stock_code, bar_time
+            """), {'codes': codes}).fetchall()
+            for r in brow:
+                sparks.setdefault(r[0], []).append(float(r[2]) if r[2] is not None else None)
+    finally:
+        db.close()
+    if not codes:
+        payload = {'asof': None, 'items': []}
+        _watch_cache.update(ts=now, payload=payload)
+        return payload
+    try:
+        from crawler.adapters.tencent_adapter import realtime_quotes
+        raw = realtime_quotes(codes, 'stock')
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"[watch-window] 快照失败: {str(e)[:120]}")
+        return {'asof': None, 'items': [], 'error': '实时快照不可用'}
+    qmap = {q.get('code'): q for q in raw.values() if q.get('code')}
+    items = []
+    for r in pos:
+        code, name, qty, cost = r[0], r[1], r[2], float(r[3] or 0)
+        q = qmap.get(code) or {}
+        price = q.get('price')
+        prev = q.get('prev_close')
+        change = price - prev if price is not None and prev is not None else None
+        pct = (change / prev * 100) if change is not None and prev else None
+        items.append({
+            'code': code, 'name': name, 'quantity': qty, 'cost_price': cost,
+            'price': price, 'prev_close': prev, 'change': change,
+            'change_pct': round(pct, 3) if pct is not None else None,
+            'spark': sparks.get(code, []),
+        })
+    payload = {
+        'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
+        'items': items,
+    }
+    _watch_cache.update(ts=now, payload=payload)
+    return payload
+
 
 @router.get("/portfolio")
 def get_portfolio():
