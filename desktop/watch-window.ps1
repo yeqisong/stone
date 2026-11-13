@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $mutex = New-Object System.Threading.Mutex($false, 'Local\KdaoWatchWindow')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Net.Http
 
 $AppDir = Join-Path $env:APPDATA 'KdaoWatch'
 New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
@@ -88,21 +88,37 @@ function Login {
 
 function Get-WatchData {
   $t = Login
-  $headers = @{ Authorization = "Bearer $t" }
-  try {
-    return Invoke-RestMethod -Uri "$ApiBase/api/portfolio/watch-window" -Headers $headers -TimeoutSec 6
-  } catch {
-    $status = 0
-    if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-    if ($status -eq 401) {
-      Remove-Item $TokenFile -ErrorAction SilentlyContinue
-      $script:token = $null
-      $t = Login
-      $headers = @{ Authorization = "Bearer $t" }
-      return Invoke-RestMethod -Uri "$ApiBase/api/portfolio/watch-window" -Headers $headers -TimeoutSec 6
+  $uri = "$ApiBase/api/portfolio/watch-window"
+  # Windows PowerShell 5.1 的 Invoke-RestMethod 会把 UTF-8 JSON 按 Latin-1 解码，
+  # 中文名变乱码；这里直接读字节再按 UTF-8 解码。
+  for ($attempt = 0; $attempt -lt 2; $attempt++) {
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(6)
+    $client.DefaultRequestHeaders.Authorization =
+      New-Object System.Net.Http.Headers.AuthenticationHeaderValue('Bearer', $t)
+    try {
+      $resp = $client.GetAsync($uri).GetAwaiter().GetResult()
+      if ([int]$resp.StatusCode -eq 401) {
+        $resp.Dispose()
+        Remove-Item $TokenFile -ErrorAction SilentlyContinue
+        $script:token = $null
+        $t = Login
+        continue
+      }
+      if (-not $resp.IsSuccessStatusCode) {
+        $code = [int]$resp.StatusCode
+        $resp.Dispose()
+        throw "HTTP $code"
+      }
+      $bytes = $resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+      $resp.Dispose()
+      $json = [System.Text.Encoding]::UTF8.GetString($bytes)
+      return ($json | ConvertFrom-Json)
+    } finally {
+      $client.Dispose()
     }
-    throw
   }
+  throw '认证失败'
 }
 
 function New-Card($item) {

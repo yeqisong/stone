@@ -12,8 +12,13 @@ New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 $destScript = Join-Path $destDir 'watch-window.ps1'
 Copy-Item -Path $src -Destination $destScript -Force
 
-$ps = (Get-Command powershell.exe).Source
-$command = '"{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}"' -f $ps, $destScript
+$vbsSrc = Join-Path $PSScriptRoot 'launch-watch.vbs'
+$destVbs = Join-Path $destDir 'launch-watch.vbs'
+if (Test-Path $vbsSrc) { Copy-Item -Path $vbsSrc -Destination $destVbs -Force }
+
+# 用 wscript 隐藏启动 PowerShell，避免控制台窗口；关闭 cmd 不会带走悬浮窗
+$wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
+$command = '"{0}" //B //Nologo "{1}"' -f $wscript, $destVbs
 $root = 'HKCU:\Software\Classes\kdaowatch'
 
 New-Item -Path $root -Force | Out-Null

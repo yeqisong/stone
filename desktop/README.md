@@ -14,6 +14,13 @@ Chrome 的 Document PiP 窗口是**不透明浏览器窗口**，CSS 无法透出
 
 网页按钮会先把当前登录 token 写入 `%APPDATA%\KdaoWatch\token.txt`，所以 WPF 启动时不会再弹登录框。
 
+注册后的命令使用 `wscript.exe //B //Nologo launch-watch.vbs` 隐藏启动 PowerShell：
+- 不会出现黑色 cmd 窗口；
+- 关闭入口/浏览器不会关闭悬浮窗；
+- 悬浮窗是独立进程，退出用 Esc 或右键「退出」。
+
+如果之前注册过旧版本，重新运行一次 `register-protocol.cmd` 覆盖即可。
+
 ## 直接运行
 
 后端和前端需要先启动（默认 `:8000` / `:3000`）。
