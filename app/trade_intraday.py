@@ -649,11 +649,22 @@ def delete_action(db, action_id: int) -> dict:
 
 
 def reconcile(db) -> int:
-    """导入交割单后，把已覆盖日期的临时记录标记为已对账（不再参与临时持仓）。"""
+    """导入交割单后，把已覆盖日期的临时记录标记为已对账（不再参与临时持仓）。
+
+    同时清掉这些日期的现金快照：交割单里的资金余额是权威值，
+    之前手动修正的现金可能已过期；用户如仍有出入金，重新修正即可。
+    """
     n = db.execute(text("""
         UPDATE trade_intraday SET reconciled=true
         WHERE reconciled=false
           AND trade_date <= (SELECT COALESCE(MAX(trade_date), '1900-01-01') FROM trade_slip)
     """)).rowcount or 0
+    try:
+        db.execute(text("""
+            DELETE FROM trade_cash_snapshot
+            WHERE trade_date <= (SELECT COALESCE(MAX(trade_date), '1900-01-01') FROM trade_slip)
+        """))
+    except Exception:
+        pass
     db.commit()
     return n
