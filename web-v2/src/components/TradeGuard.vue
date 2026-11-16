@@ -5,15 +5,21 @@
     <span v-if="st" class="tg-asof">{{ st.asof }} · 20s 刷新</span>
     <span v-if="st" class="tg-source">{{ sourceText }}</span>
     <span v-if="st && !isToday(st.slip_end)" class="tg-warn-chip">今日交割单未导入</span>
+    <span v-if="collapsed && st" class="tg-mini">
+      仓位 {{ pct(st.position_ratio) }} · 现金 {{ pct(st.cash_ratio) }} · 今日开仓 {{ st.daily_buy_count }}/{{ st.max_new_buys_per_day }} · 还能买 {{ money(st.max_buy_amount) }}
+    </span>
+    <n-button size="tiny" quaternary class="tg-toggle" @click="toggleCollapsed">
+      {{ collapsed ? '展开' : '收起' }}<span class="tg-caret">{{ collapsed ? '▾' : '▴' }}</span>
+    </n-button>
   </div>
 
   <div v-if="loading && !st" class="tg-loading"><n-spin size="small" /></div>
 
   <template v-else-if="st">
-    <div v-if="!isToday(st.slip_end) && !st.today_actions.length" class="tg-stale">
+    <div v-if="!collapsed && !isToday(st.slip_end) && !st.today_actions.length" class="tg-stale">
       今天有操作？先点「记录今日操作」；否则下面的仓位/现金还是 {{ st.slip_end || '上次' }} 的。
     </div>
-    <div class="tg-metrics">
+    <div v-if="!collapsed" class="tg-metrics">
       <div class="tg-m">
         <span>仓位</span>
         <b :style="{ color: ratioColor }">{{ pct(st.position_ratio) }}</b>
@@ -46,17 +52,19 @@
       </div>
     </div>
 
-    <div class="tg-bar">
-      <div class="tg-fill" :style="{ width: posPct + '%', background: ratioColor }"></div>
-      <span class="tg-mark" :style="{ left: targetPct + '%' }" :title="'目标 ' + pct(st.target_position_ratio,0)"></span>
-      <span class="tg-mark tg-hard" :style="{ left: hardPct + '%' }" :title="'硬上限 ' + pct(st.max_position_ratio,0)"></span>
-    </div>
-    <div class="tg-legend">
-      <span>0%</span>
-      <span class="tg-legend-target">目标 {{ pct(st.target_position_ratio, 0) }}</span>
-      <span class="tg-legend-hard">硬上限 {{ pct(st.max_position_ratio, 0) }}</span>
-      <span>100%</span>
-    </div>
+    <template v-if="!collapsed">
+      <div class="tg-bar">
+        <div class="tg-fill" :style="{ width: posPct + '%', background: ratioColor }"></div>
+        <span class="tg-mark" :style="{ left: targetPct + '%' }" :title="'目标 ' + pct(st.target_position_ratio,0)"></span>
+        <span class="tg-mark tg-hard" :style="{ left: hardPct + '%' }" :title="'硬上限 ' + pct(st.max_position_ratio,0)"></span>
+      </div>
+      <div class="tg-legend">
+        <span>0%</span>
+        <span class="tg-legend-target">目标 {{ pct(st.target_position_ratio, 0) }}</span>
+        <span class="tg-legend-hard">硬上限 {{ pct(st.max_position_ratio, 0) }}</span>
+        <span>100%</span>
+      </div>
+    </template>
 
     <div class="tg-advice" :class="st.level">{{ st.advice }}</div>
 
@@ -67,7 +75,7 @@
       <n-button size="small" quaternary @click="emit('import')">导入交割单</n-button>
     </div>
 
-    <div class="tg-today">
+    <div v-if="!collapsed" class="tg-today">
       <div class="tg-today-head">
         今日记录
         <span>{{ st.today_actions.length ? `${st.daily_buy_count} 买 / ${st.daily_sell_count} 卖` : '今天还没有记录' }}</span>
@@ -87,7 +95,7 @@
       </div>
     </div>
 
-    <div class="tg-note">
+    <div v-if="!collapsed" class="tg-note">
       临时口径：{{ st.slip_end || '无' }} 交割单 + 今日手动记录；{{ st.quote_ok ? '实时价' : '收盘价（快照不可用）' }}。
       手动记录只影响护栏，不改写持仓表；导入今日交割单后自动校准。
     </div>
@@ -130,6 +138,7 @@ const message = useMessage()
 
 const st = ref(null)
 const loading = ref(false), error = ref('')
+const collapsed = ref(localStorage.getItem('trade_guard_collapsed') === '1')
 const showCheck = ref(false), checkSide = ref('buy')
 const showCash = ref(false), cashValue = ref(0), savingCash = ref(false)
 let timer = null
@@ -184,6 +193,10 @@ async function load(){
   }finally{ loading.value = false }
 }
 
+function toggleCollapsed(){
+  collapsed.value = !collapsed.value
+  localStorage.setItem('trade_guard_collapsed', collapsed.value ? '1' : '0')
+}
 function openCheck(side){ checkSide.value = side; showCheck.value = true }
 function onRecorded(s){
   st.value = s
@@ -230,6 +243,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tg-source { font-size: var(--text-meta); color: var(--c-text-dim); }
 .tg-warn-chip { font-size:10px; padding:1px 6px; border-radius:3px; color: var(--c-warning);
   border:1px solid color-mix(in srgb, var(--c-warning) 40%, transparent); }
+.tg-toggle { margin-left:auto; align-self:center; font-size: var(--text-meta); color: var(--c-text-dim); }
+.tg-mini { font-size: var(--text-meta); color: var(--c-text-dim); }
+.tg-caret { font-size:9px; margin-left:2px; }
 .tg-loading { padding:16px; text-align:center; }
 .tg-stale { margin-bottom:8px; padding:6px 9px; border-radius: var(--radius-sm); font-size: var(--text-meta);
   line-height:1.6; color: var(--c-warning);

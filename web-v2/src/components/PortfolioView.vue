@@ -1,5 +1,5 @@
 <template>
-<div class="page-fill">
+<div class="page-fill portfolio-page">
   <!-- Tab 行：持仓 / 自选 / 动态分组（右侧新增分组） -->
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;flex-shrink:0">
     <n-button-group size="tiny">
@@ -56,7 +56,7 @@
 
     <n-spin v-if="loading" style="padding:40px" />
     <template v-else>
-      <div v-if="data.positions&&data.positions.length" class="fill-table" style="display:flex;flex-direction:column">
+      <div v-if="data.positions&&data.positions.length" style="display:flex;flex-direction:column">
         <div v-if="isNarrow" class="pos-cards">
           <div v-for="row in data.positions" :key="row.stock_code" class="pos-card">
             <div class="pos-card-head">
@@ -86,7 +86,7 @@
             </div>
           </div>
         </div>
-        <n-data-table v-else :class="data.positions.length > 8 ? 'fill-table' : ''" :flex-height="data.positions.length > 8" :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
+        <n-data-table v-else :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
       </div>
       <n-empty v-else description="暂无持仓" style="flex:1" />
     </template>
@@ -464,4 +464,7 @@ async function confirmDelete(){
 .tg-sum { color: var(--c-text); }
 .tg-item { padding:1px 6px; border-radius:3px; color: var(--c-warning); border:1px solid color-mix(in srgb, var(--c-warning) 35%, transparent); }
 .tg-bad .tg-item { color: var(--c-error); border-color: color-mix(in srgb, var(--c-error) 35%, transparent); }
+
+/* 持仓页内容已超过一屏（统计条 + 实时护栏 + 风险 + 表格）：整页滚动，别再裁掉表格 */
+.portfolio-page { overflow-y: auto; overflow-x: hidden; }
 </style>
