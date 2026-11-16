@@ -24,6 +24,8 @@
   <!-- 持仓 tab：统计区 + 持仓表（统计区仅持仓 tab 显示） -->
   <template v-if="activeTab==='pos'">
     <StatStrip v-if="data.count" :items="statItems" />
+    <!-- 实时仓位护栏：当前仓位/现金/今日开仓额度 + 交易前检查 -->
+    <TradeGuard @import="showTradeImport=true" />
     <div v-if="riskHeat?.positions" class="risk-heat"
       :class="riskHeat.label === '高' ? 'rh-high' : riskHeat.label === '中' ? 'rh-mid' : 'rh-low'">
       <div class="rh-head">
@@ -188,6 +190,7 @@ import { useAuthStore } from '../stores/auth'
 import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
 import TradeImport from './TradeImport.vue'
+import TradeGuard from './TradeGuard.vue'
 import { useNavStore } from '../stores/nav'
 const emit = defineEmits(['show-detail'])
 const nav = useNavStore()

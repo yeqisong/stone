@@ -41,6 +41,12 @@ DEFAULT_DISCIPLINE: dict[str, Any] = {
     "max_daily_loss_pct": -0.03,   # 单日账户亏损上限
     "consecutive_loss_trigger": 2, # 连续亏损 N 日 → 次日只减不加
     "max_single_risk_pct": 0.02,   # 单笔最大风险预算（账户 %）
+    # ── 仓位护栏（实时，交易前检查用）──
+    "target_position_ratio": 0.70, # 新开仓要求：仓位先降到这个目标以下
+    "max_position_ratio": 0.90,    # 硬上限：超过必须减仓
+    "cash_floor": 0.30,            # 现金底线（与 target 一致）
+    "max_daily_buy_pct": 0.30,     # 单日买入总额 ≤ 账户 30%
+    "risk_per_trade": 0.02,        # 单笔风险预算 ≤ 账户 2%
 }
 
 

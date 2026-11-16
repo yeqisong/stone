@@ -28,9 +28,32 @@ from app.trade_slip import (
     list_batches,
     list_trades,
 )
+from app.trade_intraday import (
+    check as intraday_check,
+    delete_action as intraday_delete,
+    quote as intraday_quote,
+    reconcile as intraday_reconcile,
+    record as intraday_record,
+    set_cash as intraday_set_cash,
+    state as intraday_state,
+)
 
 router = APIRouter(tags=["trades"])
 MAX_UPLOAD = 20 * 1024 * 1024
+
+
+class TradeCheckBody(BaseModel):
+    stock_code: str
+    side: str = "buy"
+    quantity: float = 0
+    price: float = 0
+    stop_price: Optional[float] = None
+    reason: str = ""
+    cash: Optional[float] = None
+
+
+class CashBody(BaseModel):
+    cash: float
 
 
 class DisciplineBody(BaseModel):
@@ -43,12 +66,22 @@ class DisciplineBody(BaseModel):
     max_daily_loss_pct: Optional[float] = None
     consecutive_loss_trigger: Optional[int] = None
     max_single_risk_pct: Optional[float] = None
+    target_position_ratio: Optional[float] = None
+    max_position_ratio: Optional[float] = None
+    cash_floor: Optional[float] = None
+    max_daily_buy_pct: Optional[float] = None
+    risk_per_trade: Optional[float] = None
 
 
 def _do_import(data: bytes, filename: str, do_apply: bool) -> dict:
     db = get_sync_db()
     try:
         result = import_slip(db, filename, data)
+        try:
+            result["reconciled_intraday"] = intraday_reconcile(db)
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"[trade-slip] 临时记录对账失败: {e}")
         preview = build_positions(db)
         if do_apply:
             result["applied"] = apply_positions(db, preview)
@@ -112,6 +145,78 @@ def get_trades(
     try:
         return list_trades(db, start=start, end=end, code=code, side=side,
                            keyword=q, page=page, page_size=page_size)
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/intraday/state")
+def intraday_guard_state(user: str = Depends(optional_auth)):
+    """实时仓位护栏状态：交割单 + 今日临时记录 + 实时价。"""
+    db = get_sync_db()
+    try:
+        return {"ok": True, "state": intraday_state(db)}
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/intraday/quote")
+def intraday_guard_quote(code: str, user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        return {"ok": True, **intraday_quote(db, code)}
+    finally:
+        db.close()
+
+
+@router.post("/portfolio/trades/intraday/check")
+def intraday_guard_check(body: TradeCheckBody, user: str = Depends(optional_auth)):
+    """下单前检查：返回 ALLOW/BLOCK、最大可买股数、买完后的仓位与风险。"""
+    db = get_sync_db()
+    try:
+        return {"ok": True, "result": intraday_check(db, body.model_dump())}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        from loguru import logger
+        logger.exception(f"[intraday] 检查失败: {e}")
+        raise HTTPException(500, f"检查失败：{str(e)[:160]}")
+    finally:
+        db.close()
+
+
+@router.post("/portfolio/trades/intraday/record")
+def intraday_guard_record(body: TradeCheckBody, user: str = Depends(optional_auth)):
+    """记录今天已发生的操作；即使检查会拦截也照实入库，并返回违规提示。"""
+    db = get_sync_db()
+    try:
+        return intraday_record(db, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        from loguru import logger
+        logger.exception(f"[intraday] 记录失败: {e}")
+        raise HTTPException(500, f"记录失败：{str(e)[:160]}")
+    finally:
+        db.close()
+
+
+@router.put("/portfolio/trades/intraday/cash")
+def intraday_guard_cash(body: CashBody, user: str = Depends(optional_auth)):
+    """修正券商当前可用资金（出入金/未记录交易导致的偏差）。"""
+    db = get_sync_db()
+    try:
+        return {"ok": True, "state": intraday_set_cash(db, body.cash)}
+    finally:
+        db.close()
+
+
+@router.delete("/portfolio/trades/intraday/{action_id}")
+def intraday_guard_delete(action_id: int, user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        return {"ok": True, "state": intraday_delete(db, action_id)}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
     finally:
         db.close()
 

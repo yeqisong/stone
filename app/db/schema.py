@@ -195,6 +195,44 @@ CREATE TABLE IF NOT EXISTS trade_import_batch (
 );
 """
 
+# ── 盘中临时操作（交割单导入前的实时报备）──
+# 只用于「今天还没导入交割单」的实时护栏；导入后按 trade_slip 为准，
+# 早于最后交割单日期的临时记录自动忽略（reconciled=true）。
+
+CREATE_TRADE_INTRADAY = """
+CREATE TABLE IF NOT EXISTS trade_intraday (
+    id            BIGSERIAL PRIMARY KEY,
+    trade_date    DATE NOT NULL DEFAULT CURRENT_DATE,
+    trade_time    VARCHAR(8) NOT NULL DEFAULT '',
+    stock_code    VARCHAR(8) NOT NULL,
+    stock_name    VARCHAR(32) NOT NULL DEFAULT '',
+    side          VARCHAR(8) NOT NULL,             -- buy / sell
+    quantity      NUMERIC(16,2) NOT NULL,
+    price         NUMERIC(12,4) NOT NULL,
+    amount        NUMERIC(16,2) NOT NULL DEFAULT 0,
+    commission    NUMERIC(12,2) NOT NULL DEFAULT 0,
+    stamp_tax     NUMERIC(12,2) NOT NULL DEFAULT 0,
+    transfer_fee  NUMERIC(12,2) NOT NULL DEFAULT 0,
+    extra_fee     NUMERIC(12,2) NOT NULL DEFAULT 0,
+    stop_price    NUMERIC(12,4),
+    reason        VARCHAR(200) NOT NULL DEFAULT '',
+    source        VARCHAR(12) NOT NULL DEFAULT 'manual',
+    reconciled    BOOLEAN NOT NULL DEFAULT false,
+    note          VARCHAR(200) NOT NULL DEFAULT '',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_trade_intraday_date ON trade_intraday (trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_trade_intraday_code ON trade_intraday (stock_code, trade_date);
+"""
+
+CREATE_TRADE_CASH_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS trade_cash_snapshot (
+    trade_date DATE PRIMARY KEY,
+    cash       NUMERIC(16,2) NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 CREATE_SIGNAL_HISTORY = """
 CREATE TABLE IF NOT EXISTS signal_history (
     id                SERIAL PRIMARY KEY,
@@ -1388,6 +1426,8 @@ ALL_TABLES = [
     ("portfolio_history", CREATE_PORTFOLIO_HISTORY),
     ("trade_import_batch", CREATE_TRADE_IMPORT_BATCH),
     ("trade_slip", CREATE_TRADE_SLIP),
+    ("trade_intraday", CREATE_TRADE_INTRADAY),
+    ("trade_cash_snapshot", CREATE_TRADE_CASH_SNAPSHOT),
     ("watch_groups", CREATE_WATCH_GROUPS),
     ("signal_history", CREATE_SIGNAL_HISTORY),
     ("strategy_config", CREATE_STRATEGY_CONFIG),
