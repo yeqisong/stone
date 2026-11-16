@@ -133,3 +133,24 @@ class TestPositionReplay:
     def test_pre_balance(self):
         assert _pre_balance(dict(side="buy", quantity=100, balance_qty=300)) == 200
         assert _pre_balance(dict(side="sell", quantity=100, balance_qty=200)) == 300
+
+    def test_estimated_flag_clears_when_seed_shares_exhausted(self):
+        st = {"600000": {"qty": 100, "avg": 10, "realized": 0,
+                         "estimated": True, "seed_qty": 100}}
+        # 部分卖出：还剩估算股 → 仍然是估算
+        _apply_row(st, dict(stock_code="600000", side="sell", quantity=40, price=12,
+                            amount=480, commission=5, stamp_tax=0, transfer_fee=0,
+                            extra_fee=0, subtype="", balance_qty=60))
+        assert st["600000"]["seed_qty"] == 60
+        assert st["600000"]["estimated"] is True
+        # 清掉剩余估算股 → 复位；之后重新买入的成本是精确的
+        _apply_row(st, dict(stock_code="600000", side="sell", quantity=60, price=8,
+                            amount=480, commission=5, stamp_tax=0, transfer_fee=0,
+                            extra_fee=0, subtype="", balance_qty=0))
+        assert st["600000"]["seed_qty"] == 0
+        assert st["600000"]["estimated"] is False
+        _apply_row(st, dict(stock_code="600000", side="buy", quantity=100, price=20,
+                            amount=2000, commission=5, stamp_tax=0, transfer_fee=0,
+                            extra_fee=0, subtype="", balance_qty=100))
+        assert st["600000"]["estimated"] is False
+        assert abs(st["600000"]["avg"] - 20.05) < 1e-9

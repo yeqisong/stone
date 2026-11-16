@@ -523,9 +523,17 @@ def _pre_balance(row: dict) -> float:
 
 
 def _apply_row(state: dict, row: dict) -> None:
-    """把一行成交应用到持仓状态（原地）。state: {qty, avg, realized, estimated}"""
+    """把一行成交应用到持仓状态（原地）。
+
+    state: {qty, avg, realized, estimated, seed_qty}
+    - estimated 只表示「当前剩余股数里是否还有期初未覆盖的估算股」；
+    - 期初估算股按先进先出消耗，清仓/耗尽后必须复位为 False，
+      否则空仓后重新买入的精确成本会被永久误标为估算值。
+    """
     code = row["stock_code"]
-    st = state.setdefault(code, {"qty": 0.0, "avg": 0.0, "realized": 0.0, "estimated": False})
+    st = state.setdefault(code, {"qty": 0.0, "avg": 0.0, "realized": 0.0,
+                                 "estimated": False, "seed_qty": 0.0})
+    prev_qty = float(st["qty"])
     q = float(row.get("quantity") or 0)
     px = float(row.get("price") or 0)
     amt = float(row.get("amount") or 0)
@@ -535,6 +543,10 @@ def _apply_row(state: dict, row: dict) -> None:
     if side == "buy":
         if q <= 0:
             return
+        if prev_qty <= 0.5:
+            # 空仓后重新建仓：这批股票全部由交割单覆盖，成本可精确计算
+            st["seed_qty"] = 0.0
+            st["estimated"] = False
         new_qty = st["qty"] + q
         st["avg"] = (st["avg"] * st["qty"] + (amt if amt > 0 else px * q) + fees) / new_qty
         st["qty"] = new_qty
@@ -543,6 +555,10 @@ def _apply_row(state: dict, row: dict) -> None:
             return
         st["realized"] += (px - st["avg"]) * q - fees
         st["qty"] = max(0.0, st["qty"] - q)
+        # 估算股按先进先出消耗；耗尽后剩余股数全部可验证
+        st["seed_qty"] = max(0.0, float(st.get("seed_qty") or 0) - q)
+        if st["seed_qty"] <= 0.5:
+            st["estimated"] = False
     elif row.get("subtype") == "bonus" and q > 0:
         new_qty = st["qty"] + q
         st["avg"] = (st["avg"] * st["qty"]) / new_qty if new_qty > 0 else 0.0
@@ -555,6 +571,9 @@ def _apply_row(state: dict, row: dict) -> None:
         bal = row.get("balance_qty")
         if bal is not None and abs(float(bal) - st["qty"]) > 0.5:
             st["qty"] = float(bal)
+            if st["qty"] <= 0.5:
+                st["seed_qty"] = 0.0
+                st["estimated"] = False
 
 
 def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
@@ -586,6 +605,7 @@ def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
                 "avg": float(portfolio_costs.get(code) or seed.get(code) or r0.get("price") or 0),
                 "realized": 0.0,
                 "estimated": est,
+                "seed_qty": pre,
                 "first_date": r0["trade_date"],
                 "last_date": r0["trade_date"],
             }
