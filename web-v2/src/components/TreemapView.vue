@@ -64,6 +64,7 @@
         <span class="tm-flow-mode" @click="cycleFlowMode" :title="flowModeTip">
           {{ flowModeLabel }}<span class="tm-flow-cycle">⇄</span>
         </span>
+        <span class="tm-flow-trend" @click="openTrend" title="多日资金流趋势">趋势</span>
       </div>
       <div class="tm-flow-cols">
         <span>行业</span>
@@ -112,6 +113,51 @@
       <div style="display:flex;gap:10px;justify-content:center">
         <n-button @click="showGenModal = false">取消</n-button>
         <n-button type="primary" @click="doGenerate" :loading="genLoading">生成</n-button>
+      </div>
+    </div>
+  </n-modal>
+
+  <!-- 行业资金流多日趋势 -->
+  <n-modal v-model:show="showTrend" preset="card" title="行业资金流趋势"
+    style="width:min(980px,96vw)" :bordered="false">
+    <div class="tm-trend-body">
+      <div class="tm-trend-head">
+        <n-button-group size="tiny">
+          <n-button v-for="d in [20,60,120]" :key="d" size="tiny" :type="trendDays===d?'primary':'default'"
+            @click="setTrendDays(d)">{{ d }}日</n-button>
+        </n-button-group>
+        <span class="tm-trend-sub">主力净流入日累计（亿）· tushare 大单+特大单</span>
+      </div>
+      <n-spin v-if="trendLoading" style="padding:30px" />
+      <template v-else-if="trendData && trendData.dates?.length">
+        <div ref="trendChartEl" style="width:100%;height:340px"></div>
+        <div class="tm-trend-table-wrap">
+          <table class="tm-trend-table">
+            <thead>
+              <tr><th>行业</th><th>今日</th><th>5日</th><th>20日</th><th>连续</th><th>排名</th><th>涨跌(等权)</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in trendRows" :key="s.id">
+                <td>{{ s.name }}</td>
+                <td :style="{color: s.today>=0?'var(--c-up)':'var(--c-down)'}">{{ fmtYi(s.today) }}</td>
+                <td :style="{color: s.sum5>=0?'var(--c-up)':'var(--c-down)'}">{{ fmtYi(s.sum5) }}</td>
+                <td :style="{color: s.sum20>=0?'var(--c-up)':'var(--c-down)'}">{{ fmtYi(s.sum20) }}</td>
+                <td :style="{color: s.streak_sign>0?'var(--c-up)':s.streak_sign<0?'var(--c-down)':'var(--c-text-dim)'}">
+                  {{ s.streak ? (s.streak_sign>0?'+':'-')+s.streak+'天' : '—' }}
+                </td>
+                <td>
+                  {{ s.rank_prev ?? '—' }}→{{ s.rank_today ?? '—' }}
+                  <span v-if="s.rank_change" :style="{color: s.rank_change>0?'var(--c-up)':'var(--c-down)'}">{{ s.rank_change>0?'↑':'↓' }}{{ Math.abs(s.rank_change) }}</span>
+                </td>
+                <td :style="{color: (s.chg_pct||0)>=0?'var(--c-up)':'var(--c-down)'}">{{ s.chg_pct==null?'—':(s.chg_pct>0?'+':'')+s.chg_pct.toFixed(2)+'%' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tm-trend-note">主力净流入 = tushare 大单+特大单净额（收盘后）；正=净流入、负=净流出。涨跌为行业内个股等权平均。多日累计看趋势，单日看方向；与“压力估算”不要混用。</div>
+      </template>
+      <div v-else class="tm-trend-empty">
+        暂无日频数据；请先运行 <code>python -m scripts.sector_flow --days 120</code> 回补。
       </div>
     </div>
   </n-modal>
@@ -217,6 +263,80 @@ const flowRows = computed(() => {
 })
 const flowMax = computed(() => Math.max(1, ...flowRows.value.map(f => Math.abs(flowKey(f)))))
 const flowBarW = f => Math.max(1.5, Math.abs(flowKey(f)) / flowMax.value * 50)
+
+// ── 行业资金流多日趋势 ──
+const showTrend = ref(false)
+const trendDays = ref(60)
+const trendData = ref(null)
+const trendLoading = ref(false)
+const trendChartEl = ref(null)
+let trendChart = null
+const trendRows = computed(() => trendData.value?.sectors || [])
+const fmtYi = v => {
+  if (v == null) return '—'
+  const sign = v > 0 ? '+' : v < 0 ? '-' : ''
+  const a = Math.abs(v) / 1e8
+  return sign + (Math.abs(a) >= 100 ? a.toFixed(0) : a.toFixed(1)) + '亿'
+}
+function openTrend(){ showTrend.value = true; loadTrend() }
+async function loadTrend(){
+  trendLoading.value = true
+  try{
+    const r = await axios.get(API + '/api/sector_flow_history', { params: { days: trendDays.value } })
+    trendData.value = r.data
+  }catch(e){ trendData.value = null }
+  trendLoading.value = false
+  await nextTick()
+  if (trendData.value) setTimeout(renderTrend, 60)
+}
+function setTrendDays(d){ trendDays.value = d; loadTrend() }
+function renderTrend(){
+  if (!trendChartEl.value || !trendData.value?.dates?.length) return
+  if (!trendChart) trendChart = echarts.init(trendChartEl.value)
+  const dates = trendData.value.dates
+  const top = new Set(trendData.value.top || [])
+  let sectors = (trendData.value.sectors || []).filter(s => top.has(s.id))
+  if (!sectors.length) sectors = (trendData.value.sectors || []).slice(0, 8)
+  const palette = ['#5b8ff9', '#61d9a9', '#f6bd16', '#e8684a', '#8b6af7', '#4fd1d9', '#c76ee8', '#9aa0a6']
+  const textDim = theme.colors.textDim
+  const border = theme.colors.border
+  trendChart.setOption({
+    backgroundColor: theme.colors.bg,
+    grid: { left: 58, right: 16, top: 34, bottom: 28 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: theme.colors.cardBg,
+      borderColor: border,
+      textStyle: { color: theme.colors.text, fontSize: 12 },
+      formatter: ps => {
+        const d = ps[0]?.axisValue || ''
+        return `<b>${d}</b><br/>` + ps.map(p => `${p.marker}${p.seriesName}: ${p.value == null ? '—' : (p.value > 0 ? '+' : '') + Number(p.value).toFixed(1) + '亿'}`).join('<br/>')
+      },
+    },
+    legend: { top: 0, left: 0, itemWidth: 10, itemHeight: 8, textStyle: { color: textDim, fontSize: 11 } },
+    xAxis: {
+      type: 'category', data: dates, boundaryGap: false,
+      axisLine: { lineStyle: { color: border } },
+      axisLabel: { color: textDim, fontSize: 10, formatter: v => String(v).slice(5) },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: textDim, fontSize: 10, formatter: v => v + '亿' },
+      splitLine: { lineStyle: { color: border, type: 'dashed' } },
+    },
+    series: sectors.map((s, i) => ({
+      name: s.name, type: 'line', showSymbol: false,
+      data: s.cumulative.map(v => +(v / 1e8).toFixed(2)),
+      lineStyle: { width: 1.8, color: palette[i % palette.length] },
+      itemStyle: { color: palette[i % palette.length] },
+    })),
+  }, true)
+  trendChart.resize()
+}
+function disposeTrend(){ try{ trendChart?.dispose() }catch(e){} trendChart = null }
+watch(showTrend, v => {
+  if (v) { nextTick(() => setTimeout(renderTrend, 80)) } else { disposeTrend() }
+})
 
 const METRICS = ['mcap', 'volume', 'amount', 'pe']
 const COLORS = ['chg1d', 'chg20d', 'volr', 'chg10m']
@@ -611,6 +731,7 @@ async function loadLatestDate() {
 const _tm_resize = () => {
   const el = document.getElementById('treemap-chart')
   if (el && el._echart) el._echart.resize()
+  trendChart?.resize()
 }
 const _tm_popstate = () => {
   if (navStore.tab !== 'm') return   // 组件已卸载时守卫
@@ -620,6 +741,7 @@ window.addEventListener('popstate', _tm_popstate)
 window.addEventListener('resize', _tm_resize)
 onUnmounted(() => {
   clearTimeout(intradayTimer)
+  disposeTrend()
   window.removeEventListener('resize', _tm_resize)
   window.removeEventListener('popstate', _tm_popstate)
   const el = document.getElementById('treemap-chart')
@@ -640,6 +762,7 @@ watch(() => theme.isDark, () => {
   if (!loading.value && !noData.value) {
     nextTick(() => renderChart())
   }
+  if (showTrend.value) nextTick(() => renderTrend())
 })
 </script>
 
@@ -673,6 +796,25 @@ watch(() => theme.isDark, () => {
   cursor: pointer; user-select: none; white-space: nowrap; }
 .tm-flow-mode:hover { color: var(--c-text); background: var(--c-card-bg-hover); }
 .tm-flow-cycle { font-size: 10px; margin-left: 2px; opacity: .55; }
+.tm-flow-trend { font-size: var(--text-meta); color: var(--c-text-faint); padding: 1px 3px; border-radius: 3px;
+  cursor: pointer; user-select: none; white-space: nowrap; }
+.tm-flow-trend:hover { color: var(--c-text); background: var(--c-card-bg-hover); }
+.tm-trend-body { max-height: 76vh; overflow-y: auto; }
+.tm-trend-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.tm-trend-sub { font-size: var(--text-meta); color: var(--c-text-faint); }
+.tm-trend-table-wrap { max-height: 260px; overflow-y: auto; border: 1px solid var(--c-border); border-radius: var(--radius-sm); }
+.tm-trend-table { width: 100%; border-collapse: collapse; font-size: var(--text-meta); }
+.tm-trend-table th, .tm-trend-table td {
+  padding: 4px 8px; border-bottom: 1px solid var(--c-border);
+  text-align: right; white-space: nowrap;
+}
+.tm-trend-table th:first-child, .tm-trend-table td:first-child { text-align: left; }
+.tm-trend-table thead th {
+  position: sticky; top: 0; z-index: 1; background: var(--c-card-bg);
+  color: var(--c-text-dim); font-weight: 500;
+}
+.tm-trend-note { margin-top: 8px; font-size: 10px; color: var(--c-text-faint); line-height: 1.6; }
+.tm-trend-empty { padding: 30px; text-align: center; color: var(--c-text-faint); font-size: 13px; }
 .tm-flow-empty { margin-bottom: 6px; font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; }
 .tm-flow-cols {
   display: grid; grid-template-columns: 64px 1fr; gap: 6px; align-items: center;

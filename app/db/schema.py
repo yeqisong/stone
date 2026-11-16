@@ -252,6 +252,32 @@ CREATE TABLE IF NOT EXISTS stock_treemap_intraday (
 CREATE INDEX IF NOT EXISTS idx_sti_date_slot ON stock_treemap_intraday (trade_date, slot);
 """
 
+# ── 行业资金流日频明细（多日趋势分析）──
+# main_net = tushare 大单+特大单净额（收盘后，元）
+# pressure = Σ 成交额 × CLV（当日买卖压力估算，元）
+# amount   = 行业成交额（元）
+
+CREATE_SECTOR_FLOW_DAILY = """
+CREATE TABLE IF NOT EXISTS sector_flow_daily (
+    trade_date   DATE NOT NULL,
+    level        VARCHAR(4) NOT NULL DEFAULT 'l1',
+    sector_id    VARCHAR(20) NOT NULL,
+    sector_name  VARCHAR(40) NOT NULL DEFAULT '',
+    main_net     NUMERIC(20,2) NOT NULL DEFAULT 0,
+    net_mf       NUMERIC(20,2) NOT NULL DEFAULT 0,
+    amount       NUMERIC(20,2) NOT NULL DEFAULT 0,
+    pressure     NUMERIC(20,2) NOT NULL DEFAULT 0,
+    chg_pct      NUMERIC(8,2),
+    up_count     INT NOT NULL DEFAULT 0,
+    down_count   INT NOT NULL DEFAULT 0,
+    stock_count  INT NOT NULL DEFAULT 0,
+    updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, level, sector_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sfd_sector
+    ON sector_flow_daily (level, sector_id, trade_date DESC);
+"""
+
 CREATE_SIGNAL_HISTORY = """
 CREATE TABLE IF NOT EXISTS signal_history (
     id                SERIAL PRIMARY KEY,
@@ -1454,6 +1480,7 @@ ALL_TABLES = [
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
     ("stock_treemap_intraday", CREATE_TREEMAP_INTRADAY),
+    ("sector_flow_daily", CREATE_SECTOR_FLOW_DAILY),
     ("daily_completeness", CREATE_DAILY_COMPLETENESS),
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),

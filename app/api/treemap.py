@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 from app.db.connection import get_sync_db
 from app.treemap_intraday import get_tree as get_intraday_tree
+from app.sector_flow import history as sector_flow_history
 import json
 
 router = APIRouter(tags=["treemap"])
@@ -30,6 +31,20 @@ def get_treemap_intraday(
     db = get_sync_db()
     try:
         return get_intraday_tree(db, trade_date, parent, slot)
+    finally:
+        db.close()
+
+
+@router.get("/sector_flow_history")
+def get_sector_flow_history(
+    days: int = Query(60, ge=5, le=250),
+    level: str = Query("l1", description="行业层级，目前 l1"),
+    sector: str = Query("", description="指定行业 id（可选）"),
+):
+    """行业资金流多日趋势：主力净流入累计、5/20日、连续流入流出、排名变化。"""
+    db = get_sync_db()
+    try:
+        return sector_flow_history(db, days=days, level=level, sector=sector)
     finally:
         db.close()
 
