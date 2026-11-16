@@ -15,6 +15,8 @@
         @click="openWatchWindow"><AppIcon name="monitor" :size="13" />  浮窗盯盘</n-button>
       <n-button size="tiny" :loading="launchingDesktop" title="调用 Windows WPF 透明置顶小窗"
         @click="launchDesktopWatch"><AppIcon name="maximize" :size="13" />  桌面浮窗</n-button>
+      <n-button size="tiny" @click="openTradeReview('review')" title="交割单明细与交易复盘"><AppIcon name="activity" :size="13" />  交易复盘</n-button>
+      <n-button size="tiny" @click="showTradeImport=true" title="导入券商交割单，自动去重并按股份余额更新持仓"><AppIcon name="upload" :size="13" />  导入交割单</n-button>
       <n-button size="small" type="primary" @click="startAdd">+ 新增持仓</n-button>
     </div>
   </div>
@@ -39,6 +41,15 @@
         <span v-for="f in riskHeat.flags" :key="f">{{ f }}</span>
         <span v-if="!riskHeat.flags.length" class="rh-ok">结构正常</span>
       </div>
+    </div>
+
+    <!-- 今日纪律闸门：有越界才显示，避免常驻噪音 -->
+    <div v-if="tradeGate && tradeGate.violations && tradeGate.violations.length"
+      class="trade-gate" :class="tradeGate.allow_new_buy ? 'tg-warn' : 'tg-bad'">
+      <b>今日纪律</b>
+      <span class="tg-sum">{{ tradeGate.summary }}</span>
+      <span v-for="v in tradeGate.violations" :key="v.rule + v.message" class="tg-item">{{ v.message }}</span>
+      <n-button size="tiny" quaternary style="margin-left:auto" @click="openTradeReview('rules')">处理</n-button>
     </div>
 
     <n-spin v-if="loading" style="padding:40px" />
@@ -140,6 +151,10 @@
   </n-card>
 </n-modal>
 
+<!-- 交割单 / 交易复盘 -->
+<TradeReview v-model:show="showTradeReview" :initial-tab="tradeInitialTab" @changed="onTradeChanged" />
+<TradeImport v-model:show="showTradeImport" @imported="onTradeImported" />
+
 <!-- History Modal -->
 <n-modal v-model:show="showHistoryModal">
   <n-card style="width:600px" title="持仓明细" role="dialog" aria-modal="true">
@@ -173,7 +188,21 @@ import { rememberDetailNavList } from '../utils/detailNav'
 import { useAuthStore } from '../stores/auth'
 import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
+import TradeReview from './TradeReview.vue'
+import TradeImport from './TradeImport.vue'
 const emit = defineEmits(['show-detail'])
+
+// ── 交割单 / 交易复盘 ──
+const showTradeReview = ref(false), showTradeImport = ref(false)
+const tradeInitialTab = ref('review')
+const tradeGate = ref(null)
+function openTradeReview(tab = 'review'){ tradeInitialTab.value = tab; showTradeReview.value = true }
+async function loadTradeGate(){
+  try{ tradeGate.value = (await axios.get(API + '/api/portfolio/trades/discipline/today')).data }
+  catch(e){ tradeGate.value = null }
+}
+function onTradeChanged(){ load(); loadRiskHeat(); loadTradeGate() }
+function onTradeImported(res){ showTradeImport.value = false; if(res?.synced) load(); loadRiskHeat(); loadTradeGate() }
 
 async function launchDesktopWatch(){
   if(launchingDesktop.value) return
@@ -331,7 +360,7 @@ async function loadRiskHeat(){
   catch(e){ riskHeat.value = null }
 }
 onMounted(() => {
-  load(); loadGroups(); loadRiskHeat()
+  load(); loadGroups(); loadRiskHeat(); loadTradeGate()
   riskTimer = setInterval(loadRiskHeat, 30000)
 })
 onUnmounted(() => { if(riskTimer) clearInterval(riskTimer) })
@@ -402,4 +431,17 @@ async function confirmDelete(){
   color: var(--c-success);
   border-color: color-mix(in srgb, var(--c-success) 35%, transparent);
 }
+
+/* 今日纪律闸门 */
+.trade-gate {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex-shrink:0;
+  margin-bottom:10px; padding:7px 12px; font-size: var(--text-meta);
+  border:1px solid var(--c-border); border-left:3px solid var(--c-warning);
+  border-radius: var(--radius-sm); background: var(--c-card-bg); color: var(--c-text-dim);
+}
+.trade-gate.tg-bad { border-left-color: var(--c-error); }
+.trade-gate b { color: var(--c-text); font-size:12px; }
+.tg-sum { color: var(--c-text); }
+.tg-item { padding:1px 6px; border-radius:3px; color: var(--c-warning); border:1px solid color-mix(in srgb, var(--c-warning) 35%, transparent); }
+.tg-bad .tg-item { color: var(--c-error); border-color: color-mix(in srgb, var(--c-error) 35%, transparent); }
 </style>

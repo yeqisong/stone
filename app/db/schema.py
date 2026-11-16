@@ -135,6 +135,66 @@ CREATE TABLE IF NOT EXISTS portfolio_history (
 CREATE INDEX IF NOT EXISTS idx_ph_stock ON portfolio_history (stock_code, created_at DESC);
 """
 
+# ── 交割单（券商成交明细）──
+# 去重双保险：有真实成交编号时用 (account_no, trade_date, order_no) 唯一；
+# 红利/送股等行的成交编号常为 '0'（不可用），只落 row_hash 唯一键。
+
+CREATE_TRADE_SLIP = """
+CREATE TABLE IF NOT EXISTS trade_slip (
+    id              BIGSERIAL PRIMARY KEY,
+    account_no      VARCHAR(32) NOT NULL DEFAULT '',
+    trade_date      DATE NOT NULL,
+    trade_time      VARCHAR(8) NOT NULL DEFAULT '',
+    stock_code      VARCHAR(8) NOT NULL,
+    stock_name      VARCHAR(32) NOT NULL DEFAULT '',
+    side            VARCHAR(8) NOT NULL,             -- buy / sell / other
+    business_name   VARCHAR(40) NOT NULL DEFAULT '',
+    quantity        NUMERIC(16,2) NOT NULL DEFAULT 0,
+    price           NUMERIC(12,4) NOT NULL DEFAULT 0,
+    amount          NUMERIC(16,2) NOT NULL DEFAULT 0,
+    balance_qty     NUMERIC(16,2),
+    clean_amount    NUMERIC(16,2) NOT NULL DEFAULT 0,
+    commission      NUMERIC(12,2) NOT NULL DEFAULT 0,
+    stamp_tax       NUMERIC(12,2) NOT NULL DEFAULT 0,
+    transfer_fee    NUMERIC(12,2) NOT NULL DEFAULT 0,
+    extra_fee       NUMERIC(12,2) NOT NULL DEFAULT 0,
+    cash_balance    NUMERIC(16,2),
+    order_no        VARCHAR(40) NOT NULL DEFAULT '',
+    exchange_name   VARCHAR(20) NOT NULL DEFAULT '',
+    source_file     VARCHAR(200) NOT NULL DEFAULT '',
+    import_batch_id INTEGER,
+    row_hash        CHAR(40) NOT NULL,
+    raw             JSONB,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_trade_slip_order
+    ON trade_slip (account_no, trade_date, order_no) WHERE order_no <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_trade_slip_hash ON trade_slip (row_hash);
+CREATE INDEX IF NOT EXISTS idx_trade_slip_date ON trade_slip (trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_trade_slip_code ON trade_slip (stock_code, trade_date);
+CREATE INDEX IF NOT EXISTS idx_trade_slip_batch ON trade_slip (import_batch_id);
+"""
+
+CREATE_TRADE_IMPORT_BATCH = """
+CREATE TABLE IF NOT EXISTS trade_import_batch (
+    id               SERIAL PRIMARY KEY,
+    filename         VARCHAR(200) NOT NULL DEFAULT '',
+    file_size        INTEGER NOT NULL DEFAULT 0,
+    file_format      VARCHAR(20) NOT NULL DEFAULT '',
+    rows_total       INTEGER NOT NULL DEFAULT 0,
+    rows_inserted    INTEGER NOT NULL DEFAULT 0,
+    rows_duplicate   INTEGER NOT NULL DEFAULT 0,
+    rows_invalid     INTEGER NOT NULL DEFAULT 0,
+    date_min         DATE,
+    date_max         DATE,
+    side_counts      JSONB NOT NULL DEFAULT '{}',
+    positions_synced BOOLEAN NOT NULL DEFAULT false,
+    synced_at        TIMESTAMP,
+    detail           JSONB NOT NULL DEFAULT '{}',
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 CREATE_SIGNAL_HISTORY = """
 CREATE TABLE IF NOT EXISTS signal_history (
     id                SERIAL PRIMARY KEY,
@@ -1326,6 +1386,8 @@ ALL_TABLES = [
     ("index_daily_quote", CREATE_INDEX_DAILY_QUOTE),
     ("portfolio", CREATE_PORTFOLIO),
     ("portfolio_history", CREATE_PORTFOLIO_HISTORY),
+    ("trade_import_batch", CREATE_TRADE_IMPORT_BATCH),
+    ("trade_slip", CREATE_TRADE_SLIP),
     ("watch_groups", CREATE_WATCH_GROUPS),
     ("signal_history", CREATE_SIGNAL_HISTORY),
     ("strategy_config", CREATE_STRATEGY_CONFIG),

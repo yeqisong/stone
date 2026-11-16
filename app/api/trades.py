@@ -1,0 +1,183 @@
+"""交割单导入 / 明细 / 交易复盘 / 纪律闸门 API。
+
+上传走原始字节流（不依赖 python-multipart），与 agent 附件上传保持一致。
+"""
+from __future__ import annotations
+
+from datetime import date
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
+
+from app.auth.auth import optional_auth
+from app.db.connection import get_sync_db
+from app.trade_review import (
+    build_review,
+    get_discipline,
+    save_discipline,
+    today_gate,
+)
+from app.trade_slip import (
+    TradeParseError,
+    apply_positions,
+    build_positions,
+    delete_batch,
+    import_slip,
+    list_batches,
+    list_trades,
+)
+
+router = APIRouter(tags=["trades"])
+MAX_UPLOAD = 20 * 1024 * 1024
+
+
+class DisciplineBody(BaseModel):
+    max_new_buys_per_day: Optional[int] = None
+    max_positions: Optional[int] = None
+    max_single_weight: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    no_rebuy_days: Optional[int] = None
+    no_same_day_roundtrip: Optional[bool] = None
+    max_daily_loss_pct: Optional[float] = None
+    consecutive_loss_trigger: Optional[int] = None
+    max_single_risk_pct: Optional[float] = None
+
+
+def _do_import(data: bytes, filename: str, do_apply: bool) -> dict:
+    db = get_sync_db()
+    try:
+        result = import_slip(db, filename, data)
+        preview = build_positions(db)
+        if do_apply:
+            result["applied"] = apply_positions(db, preview)
+            preview = build_positions(db)
+        result["preview"] = preview
+        return result
+    finally:
+        db.close()
+
+
+@router.post("/portfolio/trades/import")
+async def import_trades(
+    request: Request,
+    filename: str = Query("交割单.xls", max_length=200),
+    apply_positions_now: bool = Query(False, alias="apply"),
+    user: str = Depends(optional_auth),
+):
+    """上传交割单（原始字节）。自动去重；默认只入库不改进持仓。"""
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "文件为空")
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "文件超过 20MB，请拆分后再导入")
+    try:
+        return await run_in_threadpool(_do_import, data, filename, apply_positions_now)
+    except TradeParseError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        from loguru import logger
+        logger.exception(f"[trade-slip] 导入失败: {e}")
+        raise HTTPException(500, f"导入失败：{str(e)[:160]}")
+
+
+@router.post("/portfolio/trades/apply-positions")
+def sync_positions(user: str = Depends(optional_auth)):
+    """按当前交割单重建并同步持仓（用户确认后调用）。"""
+    db = get_sync_db()
+    try:
+        preview = build_positions(db)
+        if not preview.get("positions") and not preview.get("diff"):
+            raise HTTPException(400, "尚无交割单数据")
+        applied = apply_positions(db, preview)
+        return {"ok": True, "applied": applied, "preview": build_positions(db)}
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades")
+def get_trades(
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+    code: str = "",
+    side: str = "",
+    q: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    user: str = Depends(optional_auth),
+):
+    """交割单明细（分页 + 筛选）。"""
+    db = get_sync_db()
+    try:
+        return list_trades(db, start=start, end=end, code=code, side=side,
+                           keyword=q, page=page, page_size=page_size)
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/review")
+def review(
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+    benchmark: str = Query("000300", max_length=12),
+    user: str = Depends(optional_auth),
+):
+    """交易复盘：收益/回撤/行为画像/纪律评分/建议。"""
+    db = get_sync_db()
+    try:
+        r = build_review(db, start=start, end=end, benchmark=benchmark)
+        if not r.get("ok"):
+            raise HTTPException(400, r.get("error") or "复盘失败")
+        return r
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/batches")
+def batches(limit: int = Query(50, ge=1, le=200), user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        return {"items": list_batches(db, limit=limit)}
+    finally:
+        db.close()
+
+
+@router.delete("/portfolio/trades/batches/{batch_id}")
+def remove_batch(batch_id: int, user: str = Depends(optional_auth)):
+    """撤销一次导入（删除该批次成交；持仓需重新同步）。"""
+    db = get_sync_db()
+    try:
+        r = delete_batch(db, batch_id)
+        return {"ok": True, **r, "hint": "成交已删除；如已同步过持仓，请重新导入或手动调整持仓"}
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/discipline/rules")
+def discipline_rules(user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        return {"rules": get_discipline(db)}
+    finally:
+        db.close()
+
+
+@router.put("/portfolio/trades/discipline/rules")
+def update_discipline_rules(body: DisciplineBody, user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        params = {k: v for k, v in body.model_dump().items() if v is not None}
+        return {"ok": True, "rules": save_discipline(db, params)}
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/discipline/today")
+def discipline_today(user: str = Depends(optional_auth)):
+    """今日纪律闸门：开仓数/当日回转/回补/连亏冷静期/集中度。"""
+    db = get_sync_db()
+    try:
+        return today_gate(db)
+    finally:
+        db.close()
