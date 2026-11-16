@@ -61,19 +61,23 @@
     <div v-if="intraday && sectorFlows" class="tm-flow-panel">
       <div class="tm-flow-head">
         <b>行业资金流</b>
-        <span class="tm-flow-tag">估算</span>
+        <span class="tm-flow-tag">{{ flowMode==='main' ? '收盘后' : '实时估算' }}</span>
         <n-button-group size="tiny">
-          <n-button size="tiny" :type="flowMode==='day'?'primary':'default'" @click="flowMode='day'">日累计</n-button>
-          <n-button size="tiny" :type="flowMode==='m10'?'primary':'default'" @click="flowMode='m10'">近10分钟</n-button>
+          <n-button size="tiny" :type="flowMode==='main'?'primary':'default'" @click="setFlowMode('main')" title="tushare 大单+特大单净流入，收盘后更新">主力</n-button>
+          <n-button size="tiny" :type="flowMode==='day'?'primary':'default'" @click="setFlowMode('day')" title="成交额×收盘位置，实时压力估算">压力·日</n-button>
+          <n-button size="tiny" :type="flowMode==='m10'?'primary':'default'" @click="setFlowMode('m10')" title="相邻两档成交额增量×价格方向">压力·10分</n-button>
         </n-button-group>
-        <span class="tm-flow-asof">{{ sectorFlows.slot }}</span>
+        <span class="tm-flow-asof">{{ flowMode==='main' ? (sectorFlows.main_date || '—') : sectorFlows.slot }}</span>
       </div>
       <div v-if="flowMode==='m10' && !sectorFlows.has_prev" class="tm-flow-empty">
         首档没有上一档对比；10 分钟后第二档生成后，这里显示这 10 分钟的资金方向。
       </div>
-      <div v-if="!(flowMode==='m10' && !sectorFlows.has_prev)" class="tm-flow-list">
+      <div v-if="flowMode==='main' && !sectorFlows.main_date" class="tm-flow-empty">
+        该日期没有收盘后的主力资金数据。
+      </div>
+      <div v-if="!(flowMode==='m10' && !sectorFlows.has_prev) && !(flowMode==='main' && !sectorFlows.main_date)" class="tm-flow-list">
         <div v-for="f in flowRows" :key="f.id" class="tm-flow-row"
-          :title="`${f.name}：估算资金流 ${fmtFlow(flowKey(f))}；成交额 ${fmtFlow(f.amount)}；涨跌 ${f.chg_pct>0?'+':''}${f.chg_pct}%`">
+          :title="`${f.name}：主力净流入 ${fmtFlow(f.main_net)}（${sectorFlows.main_date||'—'}）；压力日 ${fmtFlow(f.flow_day)} / 10分 ${fmtFlow(f.flow_10m)}；成交额 ${fmtFlow(f.amount)}；涨跌 ${f.chg_pct>0?'+':''}${f.chg_pct}%`">
           <span class="tm-flow-name">{{ f.name }}</span>
           <div class="tm-flow-track">
             <span class="tm-flow-zero"></span>
@@ -89,8 +93,14 @@
         </div>
       </div>
       <div class="tm-flow-note">
-        估算口径：日累计 = 成交额 × 收盘在当日振幅中的位置（CLV）；近10分钟 = 相邻两档成交额增量 × 价格方向。
-        绝对值是“买卖压力强度”，不是 Level-2 主力净流入；看方向和排序，不要当精确金额。
+        <template v-if="flowMode==='main'">
+          主力净流入 = tushare 大单+特大单净额（收盘后，数据日期 {{ sectorFlows.main_date || '—' }}）；
+          单位元；与压力估算不要相加。
+        </template>
+        <template v-else>
+          压力估算：日累计 = 成交额 × CLV（收盘在当日振幅中的位置）；近10分钟 = 相邻两档成交额增量 × 价格方向。
+          绝对值是“买卖压力强度”，不是净流出金额；看方向和排序，不要当精确金额。
+        </template>
       </div>
     </div>
   </div>
@@ -137,8 +147,10 @@ const intradaySlots = ref([])
 const breadth = ref(null)
 const refreshing = ref(false)
 const sectorFlows = ref(null)
-const flowMode = ref('day')   // day | m10
+const flowMode = ref('day')   // main | day | m10
+let flowModePinned = false
 let intradayTimer = null
+function setFlowMode(m){ flowMode.value = m; flowModePinned = true }
 const slotOptions = computed(() => [
   { label: '最新', value: 'latest' },
   ...intradaySlots.value.map(s => ({ label: s, value: s })),
@@ -165,10 +177,13 @@ const fmtFlow = v => {
   if (a >= 1e4) return sign + (a / 1e4).toFixed(0) + '万'
   return sign + a.toFixed(0)
 }
-const flowKey = f => flowMode.value === 'm10' ? f.flow_10m : f.flow_day
+const flowKey = f => flowMode.value === 'main' ? (f.main_net || 0)
+  : flowMode.value === 'm10' ? f.flow_10m : f.flow_day
 // 按绝对金额排序：最大的流入/流出都在最上面（方向看颜色）
 const flowRows = computed(() => {
-  const rows = sectorFlows.value?.[flowMode.value] || []
+  const rows = flowMode.value === 'm10'
+    ? (sectorFlows.value?.m10 || [])
+    : (sectorFlows.value?.day || [])
   return [...rows].sort((a, b) => Math.abs(flowKey(b)) - Math.abs(flowKey(a)))
 })
 const flowMax = computed(() => Math.max(1, ...flowRows.value.map(f => Math.abs(flowKey(f)))))
@@ -211,6 +226,7 @@ function switchMode(on) {
   drillStack.value = []
   store.drillStack = []
   colorMode.value = 'chg1d'
+  flowModePinned = false
   if (on) {
     metric.value = 'mcap'
     intradaySlot.value = 'latest'
@@ -252,6 +268,7 @@ const levelLabel = computed(() => {
 
 function onDateChange() {
   drillStack.value = []
+  flowModePinned = false
   if (intraday.value) { intradaySlot.value = 'latest'; refreshing.value = false }
   store.setDate(selDate.value)
   if (selDate.value) syncQuery()
@@ -344,6 +361,10 @@ async function loadTree() {
       intradaySlots.value = r.data.slots || []
       breadth.value = r.data.breadth || null
       sectorFlows.value = r.data.sector_flows || null
+      // 收盘后默认看主力净流入（真实口径）；盘中默认看实时压力估算
+      if (!flowModePinned && sectorFlows.value) {
+        flowMode.value = sectorFlows.value.main_date === selDate.value ? 'main' : 'day'
+      }
       refreshing.value = !!r.data.refreshing
       treeData.value = r.data.children || []
       noData.value = !treeData.value.length && !refreshing.value

@@ -19,6 +19,7 @@ import math
 import statistics
 import threading
 import time
+from collections import defaultdict
 from datetime import date as _date, datetime, time as _time, timedelta, timezone
 from typing import Any, Optional
 
@@ -371,13 +372,39 @@ def _breadth(stocks: list[dict], l1_map: dict[str, dict], snap: dict[str, dict])
     }
 
 
-def _sector_flows(cache_rows: list[dict], snap: dict[str, dict],
-                  prev_snap: dict[str, dict], built: dict) -> dict:
-    """行业资金流估算。
+def _main_net_by_l1(db, day: _date, stock_l1: dict[str, str]) -> tuple[dict[str, float], Optional[_date]]:
+    """tushare 主力净流入（大单+特大单）按一级行业汇总，单位元。
 
-    - 日累计：Σ 成交额 × CLV（收盘在当日振幅中的位置，[-1,1]）
-    - 近10分钟：Σ 相邻两档成交额增量 × 价格方向（Δ收益 / 0.5% 截断到 [-1,1]）
-    这是“买卖压力”估算，不是 Level-2 主力净流入；接口与 UI 均明确标注。
+    这是收盘后数据（moneyflow DAG 节点），不是盘中实时；返回实际数据日期，
+    前端据此标注“收盘后/上一交易日”，避免和实时压力估算混淆。
+    """
+    d = db.execute(text(
+        "SELECT MAX(trade_date) FROM stock_moneyflow WHERE trade_date <= :d"
+    ), {"d": day}).scalar()
+    if not d:
+        return {}, None
+    rows = db.execute(text("""
+        SELECT stock_code,
+               COALESCE(buy_lg_amt,0) + COALESCE(buy_elg_amt,0)
+               - COALESCE(sell_lg_amt,0) - COALESCE(sell_elg_amt,0)
+        FROM stock_moneyflow WHERE trade_date=:d
+    """), {"d": d}).fetchall()
+    out: dict[str, float] = defaultdict(float)
+    for code, main_wan in rows:
+        l1 = stock_l1.get(code)
+        if l1:
+            out[l1] += float(main_wan or 0) * 1e4  # 万元 -> 元
+    return dict(out), d
+
+
+def _sector_flows(db, cache_rows: list[dict], snap: dict[str, dict],
+                  prev_snap: dict[str, dict], built: dict, day: _date) -> dict:
+    """行业资金流。
+
+    - main：tushare 主力净流入（大单+特大单，收盘后，单位元）
+    - day：Σ 成交额 × CLV（收盘在当日振幅中的位置，[-1,1]）——实时压力估算
+    - m10：Σ 相邻两档成交额增量 × 价格方向——近10分钟压力估算
+    绝对压力值是“买卖压力强度”，不是净流出金额；UI 分档标注。
     """
     by_id = {r["node_id"]: r for r in cache_rows}
     stock_l1: dict[str, str] = {}
@@ -394,10 +421,12 @@ def _sector_flows(cache_rows: list[dict], snap: dict[str, dict],
             if l1 and l1["node_type"] == "l1":
                 stock_l1[r["node_id"]] = l1["node_id"]
 
+    main_map, main_date = _main_net_by_l1(db, day, stock_l1)
     flows: dict[str, dict] = {}
     for l1id, node in built["l1_map"].items():
         flows[l1id] = {"id": l1id, "name": node["name"], "flow_day": 0.0,
-                       "flow_10m": 0.0, "amount": 0.0, "chg_pct": node["chg_pct"], "n": 0}
+                       "flow_10m": 0.0, "amount": 0.0, "chg_pct": node["chg_pct"], "n": 0,
+                       "main_net": round(main_map.get(l1id, 0.0), 2)}
     for code, s in snap.items():
         l1id = stock_l1.get(code)
         if not l1id or l1id not in flows:
@@ -433,7 +462,8 @@ def _sector_flows(cache_rows: list[dict], snap: dict[str, dict],
         return rows
 
     return {"day": _rows("flow_day"), "m10": _rows("flow_10m"),
-            "has_prev": bool(prev_snap)}
+            "has_prev": bool(prev_snap),
+            "main_date": main_date.isoformat() if main_date else None}
 
 
 def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dict:
@@ -480,7 +510,7 @@ def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dic
     breadth = _breadth(built["stocks"], built["l1_map"], snap)
     breadth["asof"] = effective
     breadth["cache_date"] = cache_day.isoformat() if cache_day else None
-    sector_flows = _sector_flows(cache_rows, snap, prev, built)
+    sector_flows = _sector_flows(db, cache_rows, snap, prev, built, day)
     sector_flows["slot"] = effective
 
     if not parent:
