@@ -53,8 +53,46 @@
     <div v-if="intraday" style="font-size:14px">{{selDate}} 暂无分时快照<br><span style="font-size: var(--text-meta)">分时快照只在交易日 09:30–15:00 每 10 分钟生成，保留最近 5 个交易日</span></div>
     <div v-else style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size: var(--text-meta)">请等待数据采集完成后重试，或选择其他日期</span></div>
   </div>
-  <div v-else>
-    <div :id="'treemap-chart'" :class="{ 'tm-chart-intraday': intraday }" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
+  <div v-else class="tm-intraday-flex">
+    <div class="tm-chart-col">
+      <div :id="'treemap-chart'" :class="{ 'tm-chart-intraday': intraday }" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
+    </div>
+    <!-- 行业资金流：与树图并排，按日累计/近10分钟切换 -->
+    <div v-if="intraday && sectorFlows" class="tm-flow-panel">
+      <div class="tm-flow-head">
+        <b>行业资金流</b>
+        <span class="tm-flow-tag">估算</span>
+        <n-button-group size="tiny">
+          <n-button size="tiny" :type="flowMode==='day'?'primary':'default'" @click="flowMode='day'">日累计</n-button>
+          <n-button size="tiny" :type="flowMode==='m10'?'primary':'default'" @click="flowMode='m10'">近10分钟</n-button>
+        </n-button-group>
+        <span class="tm-flow-asof">{{ sectorFlows.slot }}</span>
+      </div>
+      <div v-if="flowMode==='m10' && !sectorFlows.has_prev" class="tm-flow-empty">
+        首档没有上一档对比；10 分钟后第二档生成后，这里显示这 10 分钟的资金方向。
+      </div>
+      <div v-if="!(flowMode==='m10' && !sectorFlows.has_prev)" class="tm-flow-list">
+        <div v-for="f in flowRows" :key="f.id" class="tm-flow-row"
+          :title="`${f.name}：估算资金流 ${fmtFlow(flowKey(f))}；成交额 ${fmtFlow(f.amount)}；涨跌 ${f.chg_pct>0?'+':''}${f.chg_pct}%`">
+          <span class="tm-flow-name">{{ f.name }}</span>
+          <div class="tm-flow-track">
+            <span class="tm-flow-zero"></span>
+            <i :style="{
+              width: flowBarW(f) + '%',
+              left: flowKey(f) >= 0 ? '50%' : (50 - flowBarW(f)) + '%',
+              background: flowKey(f) >= 0 ? 'var(--c-up)' : 'var(--c-down)'
+            }"></i>
+          </div>
+          <span class="tm-flow-val" :style="{ color: flowKey(f) >= 0 ? 'var(--c-up)' : 'var(--c-down)' }">
+            {{ (flowMode==='m10' && !sectorFlows.has_prev) ? '—' : fmtFlow(flowKey(f)) }}
+          </span>
+        </div>
+      </div>
+      <div class="tm-flow-note">
+        估算口径：日累计 = 成交额 × 收盘在当日振幅中的位置（CLV）；近10分钟 = 相邻两档成交额增量 × 价格方向。
+        绝对值是“买卖压力强度”，不是 Level-2 主力净流入；看方向和排序，不要当精确金额。
+      </div>
+    </div>
   </div>
 
   <!-- 生成确认弹窗 -->
@@ -98,6 +136,8 @@ const intradaySlot = ref('latest')
 const intradaySlots = ref([])
 const breadth = ref(null)
 const refreshing = ref(false)
+const sectorFlows = ref(null)
+const flowMode = ref('day')   // day | m10
 let intradayTimer = null
 const slotOptions = computed(() => [
   { label: '最新', value: 'latest' },
@@ -117,6 +157,22 @@ const fmtAmount = v => {
   if (v >= 1e8) return (v / 1e8).toFixed(0) + '亿'
   return (v / 1e4).toFixed(0) + '万'
 }
+const fmtFlow = v => {
+  if (v == null) return '—'
+  const sign = v > 0 ? '+' : v < 0 ? '-' : ''
+  const a = Math.abs(v)
+  if (a >= 1e8) return sign + (a / 1e8).toFixed(a >= 1e10 ? 0 : 1) + '亿'
+  if (a >= 1e4) return sign + (a / 1e4).toFixed(0) + '万'
+  return sign + a.toFixed(0)
+}
+const flowKey = f => flowMode.value === 'm10' ? f.flow_10m : f.flow_day
+// 按绝对金额排序：最大的流入/流出都在最上面（方向看颜色）
+const flowRows = computed(() => {
+  const rows = sectorFlows.value?.[flowMode.value] || []
+  return [...rows].sort((a, b) => Math.abs(flowKey(b)) - Math.abs(flowKey(a)))
+})
+const flowMax = computed(() => Math.max(1, ...flowRows.value.map(f => Math.abs(flowKey(f)))))
+const flowBarW = f => Math.max(1.5, Math.abs(flowKey(f)) / flowMax.value * 50)
 
 const METRICS = ['mcap', 'volume', 'amount', 'pe']
 const COLORS = ['chg1d', 'chg20d', 'volr', 'chg10m']
@@ -160,6 +216,7 @@ function switchMode(on) {
     intradaySlot.value = 'latest'
   } else {
     breadth.value = null
+    sectorFlows.value = null
     refreshing.value = false
     clearTimeout(intradayTimer)
   }
@@ -286,6 +343,7 @@ async function loadTree() {
       const r = await axios.get(API + '/api/treemap_intraday', { params })
       intradaySlots.value = r.data.slots || []
       breadth.value = r.data.breadth || null
+      sectorFlows.value = r.data.sector_flows || null
       refreshing.value = !!r.data.refreshing
       treeData.value = r.data.children || []
       noData.value = !treeData.value.length && !refreshing.value
@@ -296,6 +354,7 @@ async function loadTree() {
       }
       const r = await axios.get(API+'/api/treemap_data', { params })
       breadth.value = null
+      sectorFlows.value = null
       refreshing.value = false
       treeData.value = r.data.children || []
       noData.value = !treeData.value.length
@@ -549,6 +608,32 @@ watch(() => theme.isDark, () => {
 .tm-b-hint { color: var(--c-text-faint); }
 /* 分时模式多一条宽度条：图表高度相应收一点 */
 .tm-chart-intraday { height: calc(100vh - 238px - var(--h5-tabbar-h, 0px)) !important; }
+/* 分时模式：树图 + 行业资金流并排 */
+.tm-intraday-flex { display: flex; gap: 8px; align-items: stretch; }
+.tm-chart-col { flex: 1; min-width: 0; }
+.tm-flow-panel {
+  width: 320px; flex-shrink: 0; display: flex; flex-direction: column;
+  max-height: calc(100vh - 238px - var(--h5-tabbar-h, 0px));
+  padding: 8px; border: 1px solid var(--c-border); border-radius: var(--radius-sm);
+  background: var(--c-card-bg);
+}
+.tm-flow-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 6px; }
+.tm-flow-head b { font-size: 13px; }
+.tm-flow-tag { font-size: 10px; padding: 0 4px; border: 1px solid var(--c-border); border-radius: 3px; color: var(--c-text-faint); }
+.tm-flow-asof { margin-left: auto; font-size: var(--text-meta); color: var(--c-text-faint); }
+.tm-flow-empty { margin-bottom: 6px; font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; }
+.tm-flow-list { flex: 1; min-height: 0; overflow-y: auto; }
+.tm-flow-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px; gap: 6px; align-items: center; padding: 2px 0; font-size: var(--text-meta); }
+.tm-flow-name { color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-flow-track { position: relative; height: 8px; border-radius: 4px; background: var(--c-border); }
+.tm-flow-track i { position: absolute; top: 0; height: 100%; border-radius: 3px; }
+.tm-flow-zero { position: absolute; left: 50%; top: -2px; width: 1px; height: 12px; background: var(--c-text-faint); opacity: .55; }
+.tm-flow-val { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tm-flow-note { margin-top: 6px; font-size: 10px; color: var(--c-text-faint); line-height: 1.5; }
+@media (max-width: 900px) {
+  .tm-intraday-flex { flex-direction: column; }
+  .tm-flow-panel { width: 100%; max-height: 280px; }
+}
 @media (max-width: 768px) {
   .tm-breadth { gap: 9px; }
   .tm-chart-intraday { height: calc(100vh - 300px - var(--h5-tabbar-h, 0px)) !important; }

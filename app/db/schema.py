@@ -244,6 +244,9 @@ CREATE TABLE IF NOT EXISTS stock_treemap_intraday (
     chg_pct     NUMERIC(8,2),
     mcap        NUMERIC(20,2),
     amount      NUMERIC(20,2),
+    open        NUMERIC(12,4),
+    high        NUMERIC(12,4),
+    low         NUMERIC(12,4),
     PRIMARY KEY (trade_date, slot, stock_code)
 );
 CREATE INDEX IF NOT EXISTS idx_sti_date_slot ON stock_treemap_intraday (trade_date, slot);
@@ -1587,6 +1590,15 @@ def init_db(sync_session) -> None:
         sync_session.commit()
     except Exception:
         sync_session.rollback()
+
+    # 迁移：分时树图快照补 open/high/low（行业资金流估算用 CLV）
+    for _col in ("open", "high", "low"):
+        try:
+            sync_session.execute(text(
+                f"ALTER TABLE stock_treemap_intraday ADD COLUMN IF NOT EXISTS {_col} NUMERIC(12,4)"))
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
 
     # 迁移：雪球情绪治理视图（design/06 数据治理层，规则可随噪音形态演进直接改视图定义）
     #  - 公告帖：user_id=-1（雪球官方系统号）或 source='公告'，零互动纯播报

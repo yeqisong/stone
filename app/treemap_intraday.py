@@ -119,6 +119,10 @@ def fetch_all_quotes() -> dict[str, dict]:
                 "mcap": (mcap_wan * 1e4) if mcap_wan else None,
                 "amount": _num(it.get("amount")),
                 "turnover": _num(it.get("turnoverratio")),
+                "open": _num(it.get("open")),
+                "high": _num(it.get("high")),
+                "low": _num(it.get("low")),
+                "prev_close": _num(it.get("settlement")),
             }
         if len(arr) < _PAGE:
             break
@@ -168,15 +172,18 @@ def _store_snapshot(db, day: _date, slot: str, quotes: dict[str, dict]) -> int:
             "d": day, "s": slot, "c": code,
             "p": q.get("price"), "chg": q.get("chg"),
             "m": q.get("mcap"), "a": q.get("amount"),
+            "o": q.get("open"), "h": q.get("high"), "l": q.get("low"),
         })
     if not rows:
         return 0
     db.execute(text("""
-        INSERT INTO stock_treemap_intraday (trade_date, slot, stock_code, price, chg_pct, mcap, amount)
-        VALUES (:d, :s, :c, :p, :chg, :m, :a)
+        INSERT INTO stock_treemap_intraday
+            (trade_date, slot, stock_code, price, chg_pct, mcap, amount, open, high, low)
+        VALUES (:d, :s, :c, :p, :chg, :m, :a, :o, :h, :l)
         ON CONFLICT (trade_date, slot, stock_code) DO UPDATE SET
             price=EXCLUDED.price, chg_pct=EXCLUDED.chg_pct,
-            mcap=EXCLUDED.mcap, amount=EXCLUDED.amount
+            mcap=EXCLUDED.mcap, amount=EXCLUDED.amount,
+            open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low
     """), rows)
     # 只保留最近 5 个自然日的分时快照
     db.execute(text("""
@@ -219,13 +226,13 @@ def _ensure_async(day: _date, slot: str) -> bool:
 
 def _snapshot(db, day: _date, slot: str) -> dict[str, dict]:
     rows = db.execute(text("""
-        SELECT stock_code, price, chg_pct, mcap, amount
+        SELECT stock_code, price, chg_pct, mcap, amount, open, high, low
         FROM stock_treemap_intraday WHERE trade_date=:d AND slot=:s
     """), {"d": day, "s": slot}).mappings().fetchall()
     return {r["stock_code"]: dict(r) for r in rows}
 
 
-def _prev_prices(db, day: _date, slot: str) -> dict[str, float]:
+def _prev_snapshot(db, day: _date, slot: str) -> dict[str, dict]:
     prev = db.execute(text("""
         SELECT MAX(slot) FROM stock_treemap_intraday
         WHERE trade_date=:d AND slot < :s
@@ -233,10 +240,10 @@ def _prev_prices(db, day: _date, slot: str) -> dict[str, float]:
     if not prev:
         return {}
     rows = db.execute(text("""
-        SELECT stock_code, price FROM stock_treemap_intraday
-        WHERE trade_date=:d AND slot=:s AND price IS NOT NULL
-    """), {"d": day, "s": prev}).fetchall()
-    return {r[0]: float(r[1]) for r in rows}
+        SELECT stock_code, price, amount FROM stock_treemap_intraday
+        WHERE trade_date=:d AND slot=:s
+    """), {"d": day, "s": prev}).mappings().fetchall()
+    return {r["stock_code"]: dict(r) for r in rows}
 
 
 def _is_trade_day(db, day: _date) -> bool:
@@ -262,7 +269,7 @@ def _limit_pct(code: str) -> float:
     return 19.8 if code.startswith(("300", "301", "688", "689")) else 9.8
 
 
-def _build(cache_rows: list[dict], snap: dict[str, dict], prev_prices: dict[str, float]) -> dict:
+def _build(cache_rows: list[dict], snap: dict[str, dict], prev_snap: dict[str, dict]) -> dict:
     by_id = {r["node_id"]: r for r in cache_rows}
     stocks: list[dict] = []
     for r in cache_rows:
@@ -277,8 +284,8 @@ def _build(cache_rows: list[dict], snap: dict[str, dict], prev_prices: dict[str,
         if chg is None:
             # 快照里有这只票但涨跌为空 = 停牌；没有快照 = 用日线缓存兜底
             chg = 0.0 if (code in snap and price is None) else float(r["chg_pct"] or 0)
-        prev = prev_prices.get(code)
-        d10 = ((price / prev - 1) * 100) if price and prev else 0.0
+        prev_price = _num((prev_snap.get(code) or {}).get("price"))
+        d10 = ((price / prev_price - 1) * 100) if price and prev_price else 0.0
         detail = _detail(r.get("detail"))
         detail["d10"] = round(d10, 2)
         stocks.append({
@@ -364,6 +371,71 @@ def _breadth(stocks: list[dict], l1_map: dict[str, dict], snap: dict[str, dict])
     }
 
 
+def _sector_flows(cache_rows: list[dict], snap: dict[str, dict],
+                  prev_snap: dict[str, dict], built: dict) -> dict:
+    """行业资金流估算。
+
+    - 日累计：Σ 成交额 × CLV（收盘在当日振幅中的位置，[-1,1]）
+    - 近10分钟：Σ 相邻两档成交额增量 × 价格方向（Δ收益 / 0.5% 截断到 [-1,1]）
+    这是“买卖压力”估算，不是 Level-2 主力净流入；接口与 UI 均明确标注。
+    """
+    by_id = {r["node_id"]: r for r in cache_rows}
+    stock_l1: dict[str, str] = {}
+    for r in cache_rows:
+        if r["node_type"] != "stock":
+            continue
+        p = by_id.get(r["parent"])
+        if not p:
+            continue
+        if p["node_type"] == "l1":
+            stock_l1[r["node_id"]] = p["node_id"]
+        elif p["node_type"] == "l2":
+            l1 = by_id.get(p["parent"])
+            if l1 and l1["node_type"] == "l1":
+                stock_l1[r["node_id"]] = l1["node_id"]
+
+    flows: dict[str, dict] = {}
+    for l1id, node in built["l1_map"].items():
+        flows[l1id] = {"id": l1id, "name": node["name"], "flow_day": 0.0,
+                       "flow_10m": 0.0, "amount": 0.0, "chg_pct": node["chg_pct"], "n": 0}
+    for code, s in snap.items():
+        l1id = stock_l1.get(code)
+        if not l1id or l1id not in flows:
+            continue
+        f = flows[l1id]
+        amount = _num(s.get("amount")) or 0.0
+        price = _num(s.get("price"))
+        high = _num(s.get("high"))
+        low = _num(s.get("low"))
+        chg = _num(s.get("chg")) or 0.0
+        if high and low and high > low and price:
+            clv = (2 * price - high - low) / (high - low)
+        else:
+            clv = chg / 3.0
+        clv = max(-1.0, min(1.0, clv))
+        f["flow_day"] += amount * clv
+        f["amount"] += amount
+        f["n"] += 1
+        prev = prev_snap.get(code) or {}
+        pamt = _num(prev.get("amount"))
+        pprice = _num(prev.get("price"))
+        if pamt and pprice and amount > pamt and price:
+            dret = price / pprice - 1
+            direction = max(-1.0, min(1.0, dret / 0.005))
+            f["flow_10m"] += (amount - pamt) * direction
+
+    def _rows(key):
+        rows = sorted((dict(x) for x in flows.values()), key=lambda x: -x[key])
+        for x in rows:
+            x["flow_day"] = round(x["flow_day"], 2)
+            x["flow_10m"] = round(x["flow_10m"], 2)
+            x["amount"] = round(x["amount"], 2)
+        return rows
+
+    return {"day": _rows("flow_day"), "m10": _rows("flow_10m"),
+            "has_prev": bool(prev_snap)}
+
+
 def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dict:
     try:
         day = datetime.strptime(trade_date, "%Y-%m-%d").date()
@@ -397,17 +469,19 @@ def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dic
         return {
             "trade_date": day.isoformat(), "slot": effective, "target_slot": target,
             "slots": slots, "refreshing": refreshing, "quote_ok": bool(effective),
-            "children": [], "breadth": None,
+            "children": [], "breadth": None, "sector_flows": None,
             "message": ("正在生成首张分时快照…" if refreshing else
                         "该日期暂无分时快照（仅保留最近 5 个交易日）"),
         }
 
     snap = _snapshot(db, day, effective)
-    prev = _prev_prices(db, day, effective)
+    prev = _prev_snapshot(db, day, effective)
     built = _build(cache_rows, snap, prev)
     breadth = _breadth(built["stocks"], built["l1_map"], snap)
     breadth["asof"] = effective
     breadth["cache_date"] = cache_day.isoformat() if cache_day else None
+    sector_flows = _sector_flows(cache_rows, snap, prev, built)
+    sector_flows["slot"] = effective
 
     if not parent:
         children = built["l1_out"]
@@ -425,4 +499,5 @@ def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dic
         "trade_date": day.isoformat(), "slot": effective, "target_slot": target,
         "slots": slots, "refreshing": refreshing, "quote_ok": bool(snap),
         "children": children, "breadth": breadth,
+        "sector_flows": sector_flows,
     }
