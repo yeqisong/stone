@@ -515,9 +515,11 @@ def _behavior(rows: list[dict], match: dict, closes, bars, equity: list[dict]) -
     max_positions = max((p["n_positions"] for p in equity), default=0)
     daily_returns = []
     for i in range(1, len(equity)):
-        prev = equity[i - 1]["equity"]
+        # 必须用剔除入金/出金后的净值：否则一笔出金会被误判成「单日亏损」
+        prev = equity[i - 1].get("adjusted", equity[i - 1]["equity"])
+        cur = equity[i].get("adjusted", equity[i]["equity"])
         if prev:
-            daily_returns.append((equity[i]["date"], equity[i]["equity"] / prev - 1))
+            daily_returns.append((equity[i]["date"], cur / prev - 1))
     min_daily = min(daily_returns, key=lambda x: x[1], default=(None, None))
 
     return {
