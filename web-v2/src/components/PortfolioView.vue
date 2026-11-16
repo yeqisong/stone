@@ -299,7 +299,11 @@ const historyPos = ref(null)
 const historyRecords = ref([])
 const historyColumns = [
   { title:'时间', key:'created_at', width:160 },
-  { title:'操作', key:'action', width:70, render(r){return h(NTag,{type:r.action==='add'?'success':r.action==='update'?'warning':'error',size:'small'},{default:()=>r.action==='add'?'加仓':r.action==='update'?'调仓':'清仓'})} },
+  { title:'操作', key:'action', width:90, render(r){
+    const m = { add:['加仓','success'], update:['调仓','warning'], delete:['清仓','error'],
+      slip_sync:['交割单同步','info'], slip_out:['交割单清仓','error'] }[r.action] || [r.action,'default']
+    return h(NTag,{type:m[1],size:'small'},{default:()=>m[0]})
+  } },
   { title:'数量(前)', key:'qty_before', width:70, align:'right' },
   { title:'数量(后)', key:'qty_after', width:70, align:'right' },
   { title:'成本(前)', width:90, align:'right', render(r){return '¥'+Number(r.cost_before).toFixed(2)} },
