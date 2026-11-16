@@ -154,9 +154,10 @@
                 <span v-if="quote.take_profit_price"> · 止盈 <b style="color:var(--c-down)">{{ qfmt(quote.take_profit_price) }}</b></span>
               </span>
             </div>
-            <div v-else-if="!quote" class="quote-hint">
-              实时报价接口不可用，当前显示最近日线收盘；若刚更新代码，请重启后端后点「刷新」。
+            <div v-else-if="quoteError" class="quote-hint">
+              实时报价暂不可用（网络/后端超时或鉴权失败），当前显示最近日线收盘；请点「刷新」重试。
             </div>
+            <div v-else class="quote-hint">正在获取实时报价…</div>
           </div>
           <!-- AI 盘面解读：只解读数据，不预测涨跌；结果 90s 服务端缓存 -->
           <div v-if="aiLoading || aiInsight || aiError" ref="aiCardEl" class="ai-card">
@@ -199,10 +200,13 @@
             </template>
           </div>
           <div class="mink-chart-wrap">
-            <div :id="'c0'" style="width:100%;height:260px"></div>
-            <label class="mink-grid-toggle" title="显示/隐藏分时图网格线">
-              <input type="checkbox" v-model="showMinkGrid"> 网格
-            </label>
+            <div :id="'c0'" class="mink-main-chart"></div>
+            <!-- 放在图表 DOM 之后 = 成交量滑轨下方，避免盖住 dataZoom 滑块 -->
+            <div class="mink-chart-foot">
+              <label class="mink-grid-toggle" title="显示/隐藏分时图网格线">
+                <input type="checkbox" v-model="showMinkGrid"> 网格
+              </label>
+            </div>
           </div>
           <div v-if="minkLevelChips.length" class="mink-levels">
             <span v-for="l in minkLevelChips" :key="l.name + l.value">
@@ -266,7 +270,7 @@
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
         <!-- 盘中提醒：后端 watcher 写 risk_alerts，30s 轮询；Chrome 通知走 WS 实时推送 -->
         <div ref="alertsPanelEl" class="side-panel">
-          <h4 class="side-title"><AppIcon name="bell" :size="13" />  盘中提醒 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 8 条 / 实时推送</span></h4>
+          <h4 class="side-title"><AppIcon name="bell" :size="13" />  <span class="st-name">盘中提醒</span> <span class="st-note">近 8 条 / 实时推送</span></h4>
           <div v-if="intradayAlerts.length" class="ia-list">
             <div v-for="a in intradayAlerts" :key="a.id" class="ia-item">
               <div class="ia-head">
@@ -282,8 +286,8 @@
 
         <!-- 仓位 / R：先定止损，再定手数 -->
         <div class="side-panel">
-          <h4 class="side-title"><AppIcon name="target" :size="13" />  仓位 / R
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">先定亏损，再定手数</span>
+          <h4 class="side-title"><AppIcon name="target" :size="13" />  <span class="st-name">仓位 / R</span>
+            <span class="st-note">先定亏损，再定手数</span>
             <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('risk')">?</button></h4>
           <div class="r-grid">
             <label>入场<input type="number" step="0.01" v-model.number="rEntry" @input="touchREntry"></label>
@@ -313,15 +317,15 @@
 
         <!-- 信号记分卡：提醒 → 5/15/30/60m 结果，方向调整后统计 -->
         <div class="side-panel">
-          <h4 class="side-title"><AppIcon name="target" :size="13" />  信号记分卡
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 30 日 · 全池汇总（非单股）</span>
+          <h4 class="side-title"><AppIcon name="target" :size="13" />  <span class="st-name">信号记分卡</span>
+            <span class="st-note">近 30 日 · 全池汇总（非单股）</span>
             <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('score')">?</button></h4>
           <template v-if="signalScoreItems.length">
             <table class="score-table">
               <thead><tr><th>信号</th><th>样本</th><th>胜率</th><th>30m</th></tr></thead>
               <tbody>
                 <tr v-for="s in signalScoreItems" :key="s.kind"
-                  :title="`5m ${fmtScorePct(s.ret_5m)} · 15m ${fmtScorePct(s.ret_15m)} · 60m ${fmtScorePct(s.ret_60m)}\nMFE ${fmtScorePct(s.mfe)} / MAE ${fmtScorePct(s.mae)}`">
+                  :title="`样本区间 ${s.first_date || '—'} ~ ${s.last_date || '—'}\n5m ${fmtScorePct(s.ret_5m)} · 15m ${fmtScorePct(s.ret_15m)} · 60m ${fmtScorePct(s.ret_60m)}\nMFE ${fmtScorePct(s.mfe)} / MAE ${fmtScorePct(s.mae)}`">
                   <td>{{ s.label }}</td>
                   <td style="text-align:right">{{ s.n }}</td>
                   <td style="text-align:right" :style="{color: s.hit_rate != null && s.hit_rate >= 0.5 ? 'var(--c-up)' : 'var(--c-text-dim)'}">
@@ -342,7 +346,14 @@
                 <b :style="{color: a.avg_raw_30m >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtScorePct(a.avg_raw_30m) }}</b>
               </div>
             </div>
-            <div class="side-more">30m 已扣 0.2% 成本 · 悬停看 MFE/MAE · 统计全池，不是单股</div>
+            <div class="side-more">
+              <template v-if="signalScore.sample_from">
+                实际样本 {{ signalScore.sample_from }} ~ {{ signalScore.sample_to }}（{{ signalScore.sample_days }} 个交易日）
+                <span v-if="signalScoreMaxN < 20" style="color:var(--c-warn)"> · 样本不足 20，胜率仅参考</span>
+                <br>
+              </template>
+              30m 命中门槛 0.2%（覆盖成本） · 悬停看 MFE/MAE · 统计全池，不是单股
+            </div>
           </template>
           <div v-else style="font-size:var(--text-meta);color:var(--c-text-faint);line-height:1.6">
             样本积累中：每条盘中提醒会自动记录 5/15/30/60 分钟结果。
@@ -376,8 +387,8 @@
 
         <!-- 多周期一致性：把分散的 VWAP/OR/均线/板块信号收成一个分数 -->
         <div v-if="mtfScore" class="side-panel">
-          <h4 class="side-title"><AppIcon name="activity" :size="13" />  多周期一致性
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">VWAP / OR / 5-15-60m / 日线</span>
+          <h4 class="side-title"><AppIcon name="activity" :size="13" />  <span class="st-name">多周期一致性</span>
+            <span class="st-note">VWAP / OR / 5-15-60m / 日线</span>
             <button type="button" class="card-help" title="这张卡怎么用" @click="openHelp('mtf')">?</button></h4>
           <div class="mtf-score">
             <b :style="{color: mtfScore.score >= 60 ? 'var(--c-up)' : mtfScore.score <= 40 ? 'var(--c-down)' : 'var(--c-text)'}">{{ mtfScore.score }}</b>
@@ -1074,12 +1085,16 @@ const latestSignalCard = computed(() => {
   const dir = dirName(s.direction)
   const value = s.strength != null ? `${dir} ${s.strength}` : dir
   const color = s.direction === 'buy' ? UP_COLOR : (s.direction === 'sell' ? DOWN_COLOR : 'var(--c-text-faint)')
-  const sub = (s.reason || '') + (list.length > 1 ? `  +${list.length - 1}` : '')
+  const latestPx = quotePrice.value
+  const latestText = latestPx != null ? `最新 ¥${Number(latestPx).toFixed(2)}` : ''
+  const sub = [latestText, s.reason, list.length > 1 ? `+${list.length - 1}` : ''].filter(Boolean).join(' · ')
   const title = list.map(x => {
     const dd = dirName(x.direction)
     const st = x.strength != null ? ` 强度 ${x.strength}` : ''
     const mv = x.model_version ? ` / ${x.model_version}` : ''
-    return `${x.signal_date || ''} ${dd}${st}${mv}\n${x.reason || ''}`
+    const px = x.real_price ?? x.price
+    const pt = [latestText, px != null ? `信号日 ¥${Number(px).toFixed(2)}（不复权）` : ''].filter(Boolean).join(' · ')
+    return `${x.signal_date || ''} ${dd}${st}${mv}${pt ? ' · ' + pt : ''}\n${x.reason || ''}`
   }).join('\n\n')
   return { label, value, color, sub, title: title || sub }
 })
@@ -1439,8 +1454,18 @@ function drawCharts(kd){
     const s = sigData.value.find(x=>x.date===dates[idx])
     const t = toplistData.value.find(x=>x.date===dates[idx])
     let extra = ''
-    if(s) extra += `<br/><span style="color:${s.direction==='buy'?T.up:T.down}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} @¥${s.price!=null?s.price.toFixed(2):'—'}</span>`
-      + (s.f10d!=null ? ` <span style="font-size: var(--text-meta)">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
+    if(s){
+      const sp = s.real_price ?? s.price
+      const lp = quote.value?.price ?? detail.value?.close
+      const isLatest = s.date === detail.value?.latest_signal_date
+      let priceTxt = `@¥${sp!=null?Number(sp).toFixed(2):'—'}（信号日，不复权）`
+      if(isLatest && lp != null){
+        priceTxt = `@¥${Number(lp).toFixed(2)}（最新）`
+          + (sp != null ? ` · 信号日 ¥${Number(sp).toFixed(2)}` : '')
+      }
+      extra += `<br/><span style="color:${s.direction==='buy'?T.up:T.down}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} ${priceTxt}</span>`
+        + (s.f10d!=null ? ` <span style="font-size: var(--text-meta)">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
+    }
     if(t) extra += `<br/><span style="color:${T.warn}">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
     return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
       开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
@@ -1873,6 +1898,7 @@ const signalScore = ref(null)    // 近 30 日盘中信号记分卡（全池，�
 const signalScoreItems = computed(() => (signalScore.value?.items || [])
   .filter(s => s.direction !== 0 && s.hit_rate != null)
   .slice(0, 8))
+const signalScoreMaxN = computed(() => Math.max(0, ...signalScoreItems.value.map(s => s.n || 0)))
 
 // 多周期一致性：VWAP + OR + 昨高低 + 5/15/60m + 日线 + 板块 RS，权重合计 100
 const mtfScore = computed(() => {
@@ -2452,6 +2478,7 @@ const HELP_TOPICS = {
       ] },
       { title: '列怎么读', bullets: [
         '样本 n：这条规则近 30 日触发并完成评估的次数。',
+        '「近 30 日」是查询窗口，不是样本量；卡片底部会显示实际样本日期区间和交易日数。',
         '胜率：方向调整后达到 0.2% 的比例。',
         '30m：平均 30 分钟方向收益，红色为正、绿色为负。',
         '悬停整行可看 5m/15m/60m 与 MFE/MAE（期间最大有利/不利波动）。',
@@ -2467,7 +2494,7 @@ const HELP_TOPICS = {
         '胜率低或 30m 持续为负：降低对它的信任，甚至关闭该规则。',
         'MFE/MAE 用来校准止损和目标：MAE 很大说明止损太近，MFE 很大说明目标可能太保守。',
       ] },
-      { title: '注意', text: '这张卡是“全池所有股票”的规则汇总，不是当前个股的单独统计，所以每只股票页面看到的是同一组数字；单股样本通常太少，不适合据此下结论。记分卡是历史统计，不是预测，不同市场 regime 下同一规则表现会变。' },
+      { title: '注意', text: '这张卡是“全池所有股票”的规则汇总，不是当前个股的单独统计，所以每只股票页面看到的是同一组数字；单股样本通常太少，不适合据此下结论。记分卡是历史统计，不是预测，不同市场 regime 下同一规则表现会变。VWAP 上破/下破尤其吃环境：下跌日下破容易顺势、上破多是反弹陷阱；上涨日反过来。只看总胜率会被样本期间的市场方向带偏。' },
     ],
   },
   sector: {
@@ -3863,6 +3890,12 @@ watch(()=>props.code, v=>{
   color: var(--ink);
 }
 .side-title .nav-svg { color: var(--muted); }
+/* 卡片标题固定单行：主标题不收缩，备注只做省略，避免标题被挤成两行 */
+.side-title .st-name { flex: none; white-space: nowrap; }
+.side-title .st-note {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-meta); color: var(--c-text-dim);
+}
 .card-help {
   margin-left: auto; flex: none; width: 17px; height: 17px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
@@ -4082,8 +4115,14 @@ watch(()=>props.code, v=>{
 
 /* 分时图下方的价位条：图上只画线，名称/数值在这里统一列 */
 .mink-chart-wrap { position: relative; }
+/* 分时主图：不靠全屏也能看清价格轨迹；窄屏适当收一点，避免一屏只剩图 */
+.mink-main-chart { width: 100%; height: 360px; }
+@media (max-width: 768px) { .mink-main-chart { height: 300px; } }
+.mink-chart-foot {
+  display: flex; justify-content: flex-end;
+  margin-top: 0; padding-right: 14px;
+}
 .mink-grid-toggle {
-  position: absolute; right: 14px; bottom: 22px; z-index: 2;
   display: inline-flex; align-items: center; gap: 4px;
   padding: 1px 4px; border-radius: 3px;
   background: var(--c-card-bg); color: var(--c-text-faint);

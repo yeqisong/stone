@@ -11,6 +11,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.db.connection import get_sync_db
+from app.api.pricing import hfq_to_raw_factors, raw_price
 from strategy.indicators import bollinger_bands, rsi, macd
 
 router = APIRouter(tags=["stock"])
@@ -83,6 +84,8 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                 ORDER BY combined_signal DESC, strength DESC
             """), {"c": code, "d": str(latest_signal_date)})
             rc_map = _real_close_map(db, code, [latest_signal_date])
+            fac = hfq_to_raw_factors(db, [(code, latest_signal_date)])
+            factor = fac.get((code, str(latest_signal_date)[:10]))
             seen = set()
             for r in result.fetchall():
                 key = r.strategy_name
@@ -95,10 +98,14 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
                         src = json.loads(src)
                     except (json.JSONDecodeError, TypeError):
                         src = [src] if src else []
+                price_hfq = float(r.price) if r.price else None
                 latest_signals.append({
                     "signal_date": str(r.signal_date), "direction": r.direction,
                     "strength": r.strength, "strategy_name": r.strategy_name,
-                    "reason": r.reason, "price": float(r.price) if r.price else 0,
+                    "reason": r.reason,
+                    # 展示价统一真实价；后复权原值保留在 price_hfq 供比率计算
+                    "price": raw_price(price_hfq, factor),
+                    "price_hfq": price_hfq,
                     "real_price": rc_map.get(str(r.signal_date)[:10]),
                     "suggested_action": r.suggested_action or "",
                     "combined_signal": r.combined_signal,
@@ -602,7 +609,11 @@ def get_stock_moneyflow(code: str, days: int = Query(7000, ge=20, le=7000)):
 
 @router.get("/stock/{code}/signals")
 def get_stock_signals(code: str, days: int = Query(1095, ge=30, le=3650)):
-    """该股模型信号史（signal_history 已存前瞻收益），供 K 线信号回看叠加。"""
+    """该股模型信号史（signal_history 已存前瞻收益），供 K 线信号回看叠加。
+
+    价格口径：price=真实价（展示用），price_hfq=后复权价（signal_history 原值，
+    供比率/前瞻收益计算）；换算统一走 app.api.pricing。
+    """
     db = get_sync_db()
     try:
         rows = db.execute(text("""
@@ -614,15 +625,23 @@ def get_stock_signals(code: str, days: int = Query(1095, ge=30, le=3650)):
               AND signal_date >= CURRENT_DATE - :days * INTERVAL '1 day'
             ORDER BY signal_date DESC
         """), {"c": code, "days": days}).fetchall()
-        return {"data": [{
-            "date": str(r[0]), "direction": r[1], "price": float(r[2]) if r[2] else None,
-            "score": float(r[3]) if r[3] is not None else None,
-            "pred_10d": float(r[4]) if r[4] is not None else None,
-            "f5d": float(r[5]) if r[5] is not None else None,
-            "f10d": float(r[6]) if r[6] is not None else None,
-            "f20d": float(r[7]) if r[7] is not None else None,
-            "status": r[8], "close_reason": r[9], "model": r[10],
-        } for r in rows]}
+        fac = hfq_to_raw_factors(db, [(code, r[0]) for r in rows])
+        data = []
+        for r in rows:
+            price_hfq = float(r[2]) if r[2] else None
+            data.append({
+                "date": str(r[0]), "direction": r[1],
+                # 展示价统一真实价；后复权原值保留供比率计算
+                "price": raw_price(price_hfq, fac.get((code, str(r[0])[:10]))),
+                "price_hfq": price_hfq,
+                "score": float(r[3]) if r[3] is not None else None,
+                "pred_10d": float(r[4]) if r[4] is not None else None,
+                "f5d": float(r[5]) if r[5] is not None else None,
+                "f10d": float(r[6]) if r[6] is not None else None,
+                "f20d": float(r[7]) if r[7] is not None else None,
+                "status": r[8], "close_reason": r[9], "model": r[10],
+            })
+        return {"data": data}
     finally:
         db.close()
 

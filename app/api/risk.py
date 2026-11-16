@@ -75,13 +75,21 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
             SELECT kind, COUNT(*) AS n,
                    AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) AS hit_rate,
                    AVG(ret_5m), AVG(ret_15m), AVG(ret_30m), AVG(ret_60m),
-                   AVG(mfe), AVG(mae), MAX(direction)
+                   AVG(mfe), AVG(mae), MIN(trade_date), MAX(trade_date), MAX(direction)
             FROM intraday_signal_outcome
             WHERE trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
               AND status IN ('done', 'partial')
             GROUP BY kind
             ORDER BY COUNT(*) DESC, kind
         """), {'d': days}).fetchall()
+        # 实际样本区间：卡片写「近 30 日」但系统可能只积累了几天，
+        # 不标出来会被误读成 30 天的统计结论。
+        span = db.execute(text("""
+            SELECT MIN(trade_date), MAX(trade_date), COUNT(DISTINCT trade_date)
+            FROM intraday_signal_outcome
+            WHERE trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
+              AND status IN ('done', 'partial')
+        """), {'d': days}).fetchone()
         def f(v):
             return round(float(v), 6) if v is not None else None
         # 事件 AI 观点验证：把 stance 与 30m「原始方向收益」对齐
@@ -107,12 +115,17 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
         """), {'d': days}).fetchall()
         return {
             'days': days,
+            'sample_from': str(span[0]) if span and span[0] else None,
+            'sample_to': str(span[1]) if span and span[1] else None,
+            'sample_days': int(span[2] or 0) if span else 0,
             'items': [{
                 'kind': r[0], 'label': KIND_LABEL.get(r[0], r[0]),
                 'n': int(r[1] or 0), 'hit_rate': f(r[2]),
                 'ret_5m': f(r[3]), 'ret_15m': f(r[4]),
                 'ret_30m': f(r[5]), 'ret_60m': f(r[6]),
-                'mfe': f(r[7]), 'mae': f(r[8]), 'direction': int(r[9] or 0),
+                'mfe': f(r[7]), 'mae': f(r[8]), 'direction': int(r[11] or 0),
+                'first_date': str(r[9]) if r[9] else None,
+                'last_date': str(r[10]) if r[10] else None,
             } for r in rows],
             'ai_items': [{
                 'stance': r[0], 'n': int(r[1] or 0),

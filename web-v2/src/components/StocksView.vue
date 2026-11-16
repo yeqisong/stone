@@ -17,7 +17,7 @@
       <n-button size="tiny" text :loading="radarLoading" @click="loadRadar">刷新</n-button>
     </div>
     <n-data-table class="fill-table" flex-height :columns="radarColumns" :data="radarRows"
-      size="small" :row-props="rowProps" :loading="radarLoading" :bordered="false" scroll-x="1100" />
+      size="small" :row-props="radarRowProps" :loading="radarLoading" :bordered="false" scroll-x="1100" />
     <n-empty v-if="!radarLoading && !radarRows.length" description="关注池暂无实时快照" style="padding:24px" />
   </template>
   <template v-else>
@@ -60,12 +60,15 @@ function parseHash() {
     const p = parseInt(q.get('page')); if (p && p > 0) page.value = p
     const sf = q.get('sf'); if (sf) sortField.value = sf
     const sd = q.get('sd'); if (sd === 'ascend' || sd === 'descend') sortDir.value = sd
+    // tab=radar 是独立视图；普通个股列表不带该参数（返回/前进时也要能复位）
+    radarMode.value = q.get('tab') === 'radar'
   } catch (e) {}
 }
 function syncHash() {
   const q = new URLSearchParams()
   q.set('cat', cat.value); q.set('kw', kw.value); q.set('page', page.value)
   q.set('sf', sortField.value); q.set('sd', sortDir.value)
+  if (radarMode.value) q.set('tab', 'radar')
   history.replaceState(null, '', location.pathname + '#/stocks?' + q.toString())
 }
 
@@ -95,11 +98,15 @@ const columns = computed(() => [
 ])
 
 function openDetail(code, list){
+  if (!code) return
   rememberDetailNavList((list || []).map(r => r.stock_code || r.code))
   emit('show-detail', code)
 }
 function rowProps(row){
   return { style:'cursor:pointer', onClick:()=>openDetail(row.stock_code, rows.value) }
+}
+function radarRowProps(row){
+  return { style:'cursor:pointer', onClick:()=>openDetail(row.code, radarRows.value) }
 }
 function handleSorter(sorter){
   const map = {price:'price',chg_pct:'chg_pct',pe_ttm:'pe_ttm',market_cap:'market_cap'}
@@ -125,13 +132,14 @@ async function load(){
   }catch(e){ message.error('列表加载失败，请重试') } finally { loading.value = false }
 }
 function onSuggestPick(o) {
+  exitRadar()
   kw.value = o.code
   page.value = 1
   load()
 }
-function doSearch(){ page.value = 1; load() }
+function doSearch(){ exitRadar(); page.value = 1; load() }
 function goPage(p){ page.value = p; load() }
-function switchCat(c){ cat.value = c; page.value = 1; load() }
+function switchCat(c){ exitRadar(); cat.value = c; page.value = 1; load() }
 
 // ── 盘中雷达：关注池实时排序 ──
 const radarMode = ref(false)
@@ -155,12 +163,27 @@ async function loadRadar(){
     radarLoading.value = false
   }
 }
+function startRadar(){
+  clearInterval(radarTimer); radarTimer = null
+  loadRadar()
+  radarTimer = setInterval(loadRadar, 15000)
+}
+function stopRadar(){
+  clearInterval(radarTimer); radarTimer = null
+}
+function exitRadar(){
+  if(!radarMode.value) return
+  radarMode.value = false
+  stopRadar()
+}
 function toggleRadar(){
   radarMode.value = !radarMode.value
-  clearInterval(radarTimer); radarTimer = null
+  syncHash()                       // tab=radar 写回地址栏，刷新/直达可还原
   if(radarMode.value){
-    loadRadar()
-    radarTimer = setInterval(loadRadar, 15000)
+    startRadar()
+  }else{
+    stopRadar()
+    load()
   }
 }
 
@@ -189,20 +212,27 @@ const radarColumns = computed(() => [
 ])
 
 const nav = useNavStore()
+function applyRoute(){
+  parseHash()
+  if (radarMode.value) {
+    startRadar()
+  } else {
+    stopRadar()
+    load()
+  }
+}
 function onPopstate() {
   // 组件可能已卸载（v-if 切换）：非本页时不响应，避免用本页 URL 覆盖地址栏
   if (nav.tab !== 'l') return
-  parseHash()
-  load()
+  applyRoute()
 }
 onMounted(() => {
-  parseHash()
-  load()
+  applyRoute()
   window.addEventListener('popstate', onPopstate)
 })
 onUnmounted(() => {
   window.removeEventListener('popstate', onPopstate)
-  if (radarTimer) clearInterval(radarTimer)
+  stopRadar()
 })
 </script>
 
