@@ -69,13 +69,11 @@
         </n-button-group>
         <span class="tm-flow-asof">{{ flowMode==='main' ? (sectorFlows.main_date || '—') : sectorFlows.slot }}</span>
       </div>
-      <div class="tm-flow-sortbar">
-        <span>排序</span>
-        <n-button-group size="tiny">
-          <n-button size="tiny" :type="sortMode==='abs'?'primary':'default'" @click="sortMode='abs'" title="按绝对金额：最大的流入/流出都在最前面">绝对值</n-button>
-          <n-button size="tiny" :type="sortMode==='in'?'primary':'default'" @click="sortMode='in'" title="按净流入从大到小">流入优先</n-button>
-          <n-button size="tiny" :type="sortMode==='out'?'primary':'default'" @click="sortMode='out'" title="按净流出从大到小">流出优先</n-button>
-        </n-button-group>
+      <div class="tm-flow-cols">
+        <span>行业</span>
+        <span class="tm-flow-col-sort" @click="cycleSort" :title="sortTip">
+          资金流 <b>{{ sortLabel }}</b>
+        </span>
       </div>
       <div v-if="flowMode==='m10' && !sectorFlows.has_prev" class="tm-flow-empty">
         首档没有上一档对比；10 分钟后第二档生成后，这里显示这 10 分钟的资金方向。
@@ -157,6 +155,15 @@ const refreshing = ref(false)
 const sectorFlows = ref(null)
 const flowMode = ref('day')   // main | day | m10
 const sortMode = ref('abs')   // abs | in | out
+const sortLabel = computed(() => sortMode.value === 'in' ? '↓流入' : sortMode.value === 'out' ? '↑流出' : '⇅绝对值')
+const sortTip = computed(() => sortMode.value === 'in'
+  ? '当前按流入优先排序；点击切换为流出优先'
+  : sortMode.value === 'out'
+    ? '当前按流出优先排序；点击切换为绝对值'
+    : '当前按绝对值排序；点击切换为流入优先')
+function cycleSort(){
+  sortMode.value = sortMode.value === 'abs' ? 'in' : sortMode.value === 'in' ? 'out' : 'abs'
+}
 let flowModePinned = false
 let intradayTimer = null
 function setFlowMode(m){ flowMode.value = m; flowModePinned = true }
@@ -660,7 +667,14 @@ watch(() => theme.isDark, () => {
 .tm-flow-tag { font-size: 10px; padding: 0 4px; border: 1px solid var(--c-border); border-radius: 3px; color: var(--c-text-faint); }
 .tm-flow-asof { margin-left: auto; font-size: var(--text-meta); color: var(--c-text-faint); }
 .tm-flow-empty { margin-bottom: 6px; font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; }
-.tm-flow-sortbar { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: var(--text-meta); color: var(--c-text-dim); }
+.tm-flow-cols {
+  display: grid; grid-template-columns: 64px 1fr; gap: 6px; align-items: center;
+  padding: 2px 0 3px; margin-bottom: 2px; font-size: 10px; color: var(--c-text-faint);
+  border-bottom: 1px solid var(--c-border);
+}
+.tm-flow-col-sort { text-align: right; cursor: pointer; user-select: none; white-space: nowrap; }
+.tm-flow-col-sort:hover { color: var(--c-text-dim); }
+.tm-flow-col-sort b { font-weight: 500; color: var(--c-text-dim); }
 .tm-flow-list { flex: 1; min-height: 0; overflow-y: auto; }
 .tm-flow-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px; gap: 6px; align-items: center; padding: 2px 0; font-size: var(--text-meta); }
 .tm-flow-name { color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
