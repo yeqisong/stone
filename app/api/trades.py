@@ -116,6 +116,31 @@ def get_trades(
         db.close()
 
 
+@router.get("/portfolio/trades/account-summary")
+def account_summary(user: str = Depends(optional_auth)):
+    """账户级累计盈亏（含已清仓、剔除入金）。持仓页统计条使用。"""
+    db = get_sync_db()
+    try:
+        r = build_review(db)
+        if not r.get("ok"):
+            return {"ok": False, "error": r.get("error") or "尚无交割单数据"}
+        s = r["summary"]
+        return {
+            "ok": True,
+            "period": r["period"],
+            "trading_pnl": s.get("pnl"),
+            "realized_pnl": s.get("realized_pnl"),
+            "net_deposit": s.get("net_deposit"),
+            "return_pct": s.get("return_pct"),
+            "max_drawdown": s.get("max_drawdown"),
+            "equity_start": s.get("equity_start"),
+            "equity_end": s.get("equity_end"),
+            "benchmark_return": s.get("benchmark_return"),
+        }
+    finally:
+        db.close()
+
+
 @router.get("/portfolio/trades/review")
 def review(
     start: Optional[date] = None,

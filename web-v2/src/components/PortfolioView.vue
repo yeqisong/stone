@@ -195,12 +195,17 @@ const nav = useNavStore()
 // ── 交割单 / 交易复盘（复盘为二级页面，有自己的 URL 和返回）──
 const showTradeImport = ref(false)
 const tradeGate = ref(null)
+const accountSummary = ref(null)
 function openTradeReview(tab = 'review'){ nav.openTradeReview(tab) }
 async function loadTradeGate(){
   try{ tradeGate.value = (await axios.get(API + '/api/portfolio/trades/discipline/today')).data }
   catch(e){ tradeGate.value = null }
 }
-function onTradeImported(res){ showTradeImport.value = false; if(res?.synced) load(); loadRiskHeat(); loadTradeGate() }
+async function loadAccountSummary(){
+  try{ const r = await axios.get(API + '/api/portfolio/trades/account-summary'); accountSummary.value = r.data?.ok ? r.data : null }
+  catch(e){ accountSummary.value = null }
+}
+function onTradeImported(res){ showTradeImport.value = false; if(res?.synced) load(); loadRiskHeat(); loadTradeGate(); loadAccountSummary() }
 
 async function launchDesktopWatch(){
   if(launchingDesktop.value) return
@@ -319,12 +324,22 @@ async function showHistory(code){
 import { fmtMoney } from '../utils/ui'
 const fmt = v => v!=null?fmtMoney(Number(v)):'0'
 const signalCount = computed(() => (data.positions || []).filter(p => p.signal_direction).length)
-const statItems = computed(() => [
-  { label: '持仓', value: data.count },
-  { label: '总市值', value: '¥' + fmt(data.total_value) },
-  { label: '浮动盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? 'var(--c-up)' : 'var(--c-down)' },
-  { label: '今日信号', value: signalCount.value },
-])
+const statItems = computed(() => {
+  const a = accountSummary.value
+  const realized = a?.realized_pnl
+  return [
+    { label: '持仓', value: data.count },
+    { label: '总市值', value: '¥' + fmt(data.total_value) },
+    { label: '浮动盈亏', value: '¥' + fmt(data.total_pnl), color: data.total_pnl >= 0 ? 'var(--c-up)' : 'var(--c-down)',
+      sub: '仅当前持仓' },
+    // 真正的总账：含已清仓，且已剔除净入金（否则「亏了再加钱」会把亏损看小）
+    { label: '累计盈亏', value: a ? '¥' + fmt(a.trading_pnl) : '—',
+      color: (a?.trading_pnl ?? 0) >= 0 ? 'var(--c-up)' : 'var(--c-down)',
+      sub: a && realized != null ? `含已清仓 · 已实现(FIFO) ${realized < 0 ? '-¥' : '¥'}${fmt(Math.abs(realized))}` : '含已清仓',
+      title: a ? `账户级交易盈亏（${a.period?.start} ~ ${a.period?.end}）：含已清仓与当前持仓，已剔除净入金 ¥${fmt(a.net_deposit)}。累计是账户口径，已实现是 FIFO 口径，二者不直接相加（当前持仓成本口径不同）。` : '导入交割单后显示' },
+    { label: '今日信号', value: signalCount.value },
+  ]
+})
 const columns = [
   { title:'代码', key:'stock_code', width:85, fixed:'left', render(r){return h('span',{style:{color:'var(--c-text-dim)'}},r.stock_code)} },
   { title:'名称', key:'stock_name', width:100, fixed:'left' },
@@ -362,7 +377,7 @@ async function loadRiskHeat(){
   catch(e){ riskHeat.value = null }
 }
 onMounted(() => {
-  load(); loadGroups(); loadRiskHeat(); loadTradeGate()
+  load(); loadGroups(); loadRiskHeat(); loadTradeGate(); loadAccountSummary()
   riskTimer = setInterval(loadRiskHeat, 30000)
 })
 onUnmounted(() => { if(riskTimer) clearInterval(riskTimer) })
