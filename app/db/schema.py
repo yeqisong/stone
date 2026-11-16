@@ -233,6 +233,22 @@ CREATE TABLE IF NOT EXISTS trade_cash_snapshot (
 );
 """
 
+# ── 分时市值树图快照（每 10 分钟一个 slot，仅保留最近几天）──
+
+CREATE_TREEMAP_INTRADAY = """
+CREATE TABLE IF NOT EXISTS stock_treemap_intraday (
+    trade_date  DATE NOT NULL,
+    slot        VARCHAR(5) NOT NULL,        -- 09:30 / 09:40 / ... / 15:00
+    stock_code  VARCHAR(8) NOT NULL,
+    price       NUMERIC(12,4),
+    chg_pct     NUMERIC(8,2),
+    mcap        NUMERIC(20,2),
+    amount      NUMERIC(20,2),
+    PRIMARY KEY (trade_date, slot, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_sti_date_slot ON stock_treemap_intraday (trade_date, slot);
+"""
+
 CREATE_SIGNAL_HISTORY = """
 CREATE TABLE IF NOT EXISTS signal_history (
     id                SERIAL PRIMARY KEY,
@@ -1434,6 +1450,7 @@ ALL_TABLES = [
     ("stock_fundamentals", CREATE_STOCK_FUNDAMENTALS),
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
+    ("stock_treemap_intraday", CREATE_TREEMAP_INTRADAY),
     ("daily_completeness", CREATE_DAILY_COMPLETENESS),
     ("data_stats_cache", CREATE_STATS_CACHE),
     ("dag_run_log", CREATE_DAG_RUN_LOG),

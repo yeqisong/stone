@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 from app.db.connection import get_sync_db
+from app.treemap_intraday import get_tree as get_intraday_tree
 import json
 
 router = APIRouter(tags=["treemap"])
@@ -15,6 +16,20 @@ def get_treemap_latest_date():
         result = db.execute(text("SELECT MAX(trade_date) FROM stock_treemap_cache"))
         latest = result.scalar()
         return {"latest_date": str(latest) if latest else None}
+    finally:
+        db.close()
+
+
+@router.get("/treemap_intraday")
+def get_treemap_intraday(
+    trade_date: str = Query(..., description="日期 YYYY-MM-DD"),
+    parent: str = Query("", description="父节点: 空=全量, l1/l2=下钻"),
+    slot: str = Query("latest", description="快照 slot，如 10:30；latest=最新"),
+):
+    """分时市值树图：实时市值层级 + 日涨跌/近10分钟 + 市场宽度。"""
+    db = get_sync_db()
+    try:
+        return get_intraday_tree(db, trade_date, parent, slot)
     finally:
         db.close()
 

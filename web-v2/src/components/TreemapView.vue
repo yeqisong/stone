@@ -2,17 +2,26 @@
 <div>
   <n-space align="center" style="margin-bottom:8px" wrap>
     <n-button-group size="tiny">
+      <n-button size="tiny" :type="!intraday?'primary':'default'" @click="switchMode(false)">日线</n-button>
+      <n-button size="tiny" :type="intraday?'primary':'default'" @click="switchMode(true)">分时市值</n-button>
+    </n-button-group>
+    <n-button-group v-if="!intraday" size="tiny">
   <n-button size="tiny" :type="metric==='mcap'?'primary':'default'" @click="switchMetric('mcap')"><AppIcon name="bar-chart-2" :size="13" />  市值</n-button>
   <n-button size="tiny" :type="metric==='volume'?'primary':'default'" @click="switchMetric('volume')"><AppIcon name="bar-chart-2" :size="13" />  成交量</n-button>
   <n-button size="tiny" :type="metric==='amount'?'primary':'default'" @click="switchMetric('amount')"><AppIcon name="dollar-sign" :size="13" />  成交额</n-button>
   <n-button size="tiny" :type="metric==='pe'?'primary':'default'" @click="switchMetric('pe')"><AppIcon name="bar-chart-2" :size="13" />  PE</n-button>
 </n-button-group>
     <n-date-picker v-model:formatted-value="selDate" type="date" value-format="yyyy-MM-dd" size="tiny" style="width:140px" @update:formatted-value="onDateChange" />
-    <n-button size="tiny" @click="showGenModal = true"><AppIcon name="zap" :size="13" />  生成</n-button>
-    <n-button-group size="tiny">
+    <n-button v-if="!intraday" size="tiny" @click="showGenModal = true"><AppIcon name="zap" :size="13" />  生成</n-button>
+    <n-select v-if="intraday" v-model:value="intradaySlot" size="tiny" :options="slotOptions" style="width:110px" @update:value="onSlotChange" />
+    <n-button-group v-if="!intraday" size="tiny">
       <n-button size="tiny" :type="colorMode==='chg1d'?'primary':'default'" @click="switchColorMode('chg1d')" title="当日涨跌">日涨跌</n-button>
       <n-button size="tiny" :type="colorMode==='chg20d'?'primary':'default'" @click="switchColorMode('chg20d')" title="20 日涨跌（超跌=深绿，反转视角）">20日</n-button>
       <n-button size="tiny" :type="colorMode==='volr'?'primary':'default'" @click="switchColorMode('volr')" title="量比（今日量/前20日均量）">量比</n-button>
+    </n-button-group>
+    <n-button-group v-else size="tiny">
+      <n-button size="tiny" :type="colorMode==='chg1d'?'primary':'default'" @click="switchColorMode('chg1d')" title="当日涨跌（相对昨收）">日涨跌</n-button>
+      <n-button size="tiny" :type="colorMode==='chg10m'?'primary':'default'" @click="switchColorMode('chg10m')" title="近 10 分钟变化（资金刚去哪）">近10分钟</n-button>
     </n-button-group>
     <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="s" :size="13" />  只看信号</n-button>
     <span v-if="!loading && !noData" style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 / 蓝实线=实盘持仓 / 青虚线=纸面组合">
@@ -22,13 +31,30 @@
     <n-button v-if="drillStack.length>0" size="tiny" @click="goBack"><AppIcon name="arrow-left" :size="12" /> {{drillStack.length>1?drillStack[drillStack.length-2].name:'全部行业'}}</n-button>
   </n-space>
 
+  <!-- 市场宽度：分时模式的核心“风向” -->
+  <div v-if="intraday && breadth" class="tm-breadth">
+    <span>上涨 <b class="up">{{ breadth.up }}</b> / 下跌 <b class="down">{{ breadth.down }}</b> / 平 {{ breadth.flat }}</span>
+    <span>中位数 <b :class="breadth.median >= 0 ? 'up' : 'down'">{{ breadth.median > 0 ? '+' : '' }}{{ breadth.median }}%</b></span>
+    <span>成交 <b>{{ fmtAmount(breadth.amount) }}</b></span>
+    <span>涨停 <b class="up">{{ breadth.limit_up }}</b> / 跌停 <b class="down">{{ breadth.limit_down }}</b></span>
+    <span>领涨 <b class="up">{{ breadth.top_l1?.[0]?.name || '—' }} {{ breadth.top_l1?.[0] ? (breadth.top_l1[0].chg_pct > 0 ? '+' : '') + breadth.top_l1[0].chg_pct + '%' : '' }}</b></span>
+    <span>领跌 <b class="down">{{ breadth.bottom_l1?.[0]?.name || '—' }} {{ breadth.bottom_l1?.[0] ? (breadth.bottom_l1[0].chg_pct > 0 ? '+' : '') + breadth.bottom_l1[0].chg_pct + '%' : '' }}</b></span>
+    <span v-if="colorMode==='chg10m' && !hasPrevSlot" class="tm-b-hint">近10分钟：首档暂无对比</span>
+    <span class="tm-b-asof">{{ breadth.asof }} 快照<template v-if="refreshing"> · 正在生成新快照…</template></span>
+  </div>
+
   <n-spin v-if="loading" style="padding:60px" />
+  <div v-else-if="intraday && refreshing && !treeData.length" style="text-align:center;padding:60px;color:var(--c-text-dim)">
+    <n-spin size="large" style="margin-bottom:14px" />
+    <div style="font-size:14px">正在生成首张分时快照…<br><span style="font-size: var(--text-meta)">全市场约 5,500 只，第一次约需 15–25 秒</span></div>
+  </div>
   <div v-else-if="noData" style="text-align:center;padding:60px;color:var(--c-text-dim)">
     <div style="font-size:48px;margin-bottom:12px"><AppIcon name="inbox" :size="44" style="color:var(--c-text-faint)" /></div>
-    <div style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size: var(--text-meta)">请等待数据采集完成后重试，或选择其他日期</span></div>
+    <div v-if="intraday" style="font-size:14px">{{selDate}} 暂无分时快照<br><span style="font-size: var(--text-meta)">分时快照只在交易日 09:30–15:00 每 10 分钟生成，保留最近 5 个交易日</span></div>
+    <div v-else style="font-size:14px">{{selDate}} 暂无树图数据<br><span style="font-size: var(--text-meta)">请等待数据采集完成后重试，或选择其他日期</span></div>
   </div>
   <div v-else>
-    <div :id="'treemap-chart'" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
+    <div :id="'treemap-chart'" :class="{ 'tm-chart-intraday': intraday }" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
   </div>
 
   <!-- 生成确认弹窗 -->
@@ -48,7 +74,7 @@
 import AppIcon from './AppIcon.vue'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { chartColors as T } from '../utils/chart'
-import { NSpace, NDatePicker, NTag, NButton, NButtonGroup, NSpin, NModal } from 'naive-ui'
+import { NSpace, NDatePicker, NTag, NButton, NButtonGroup, NSpin, NModal, NSelect } from 'naive-ui'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { useMarketStore } from '../stores/market'
@@ -66,16 +92,44 @@ const loading = ref(true)
 const showGenModal = ref(false)
 const genLoading = ref(false)
 
+// ── 分时市值模式 ──
+const intraday = ref(false)
+const intradaySlot = ref('latest')
+const intradaySlots = ref([])
+const breadth = ref(null)
+const refreshing = ref(false)
+let intradayTimer = null
+const slotOptions = computed(() => [
+  { label: '最新', value: 'latest' },
+  ...intradaySlots.value.map(s => ({ label: s, value: s })),
+])
+const hasPrevSlot = computed(() => {
+  if (!intraday.value) return false
+  const s = intradaySlot.value
+  if (s === 'latest') return intradaySlots.value.length > 1
+  return intradaySlots.value.indexOf(s) > 0
+})
+
 const fmt = v => v != null ? Number(v).toLocaleString() : '0'
+const fmtAmount = v => {
+  if (v == null) return '—'
+  if (v >= 1e12) return (v / 1e12).toFixed(2) + '万亿'
+  if (v >= 1e8) return (v / 1e8).toFixed(0) + '亿'
+  return (v / 1e4).toFixed(0) + '万'
+}
 
 const METRICS = ['mcap', 'volume', 'amount', 'pe']
-const COLORS = ['chg1d', 'chg20d', 'volr']
+const COLORS = ['chg1d', 'chg20d', 'volr', 'chg10m']
 
 function syncQuery() {
-  // metric/color 体现在 URL：#/market/:date?metric=volume&color=chg20d（分享/刷新可恢复）
+  // metric/color/mode/slot 体现在 URL（分享/刷新可恢复）
   const q = []
-  if (metric.value !== 'mcap') q.push('metric=' + metric.value)
+  if (!intraday.value && metric.value !== 'mcap') q.push('metric=' + metric.value)
   if (colorMode.value !== 'chg1d') q.push('color=' + colorMode.value)
+  if (intraday.value) {
+    q.push('mode=intraday')
+    if (intradaySlot.value !== 'latest') q.push('slot=' + intradaySlot.value)
+  }
   const qs = q.length ? '?' + q.join('&') : ''
   const target = '/market/' + selDate.value + qs
   if (location.hash.slice(1) !== target) history.replaceState(null, '', '#' + target)
@@ -87,9 +141,37 @@ function applyQuery() {
   if (!q) return false
   let changed = false
   const m = q.get('metric'), c = q.get('color')
+  const mode = q.get('mode'), slot = q.get('slot')
   if (METRICS.includes(m) && m !== metric.value) { metric.value = m; changed = true }
   if (COLORS.includes(c) && c !== colorMode.value) { colorMode.value = c; changed = true }
+  if (mode === 'intraday' && !intraday.value) { intraday.value = true; changed = true }
+  if (slot && slot !== intradaySlot.value) { intradaySlot.value = slot; changed = true }
   return changed
+}
+
+function switchMode(on) {
+  if (intraday.value === on) return
+  intraday.value = on
+  drillStack.value = []
+  store.drillStack = []
+  colorMode.value = 'chg1d'
+  if (on) {
+    metric.value = 'mcap'
+    intradaySlot.value = 'latest'
+  } else {
+    breadth.value = null
+    refreshing.value = false
+    clearTimeout(intradayTimer)
+  }
+  syncQuery()
+  loadTree()
+}
+
+function onSlotChange(v) {
+  intradaySlot.value = v
+  drillStack.value = []
+  syncQuery()
+  loadTree()
 }
 
 function switchMetric(m) {
@@ -113,6 +195,7 @@ const levelLabel = computed(() => {
 
 function onDateChange() {
   drillStack.value = []
+  if (intraday.value) { intradaySlot.value = 'latest'; refreshing.value = false }
   store.setDate(selDate.value)
   if (selDate.value) syncQuery()
   loadTree()
@@ -161,6 +244,10 @@ async function loadSignals() {
 
 // 色带：按模式取值 → 颜色
 function colorOfNode(n) {
+  if (colorMode.value === 'chg10m') {
+    const v = n.detail?.d10
+    return v == null ? 'var(--c-text-faint)' : colorForChg(v, 1.2)  // 10 分钟幅度小，±1.2% 封顶
+  }
   if (colorMode.value === 'chg20d') {
     const v = n.detail?.s20
     return v == null ? 'var(--c-text-faint)' : colorForChg(v / 4)   // 20 日幅度大，±12% 封顶
@@ -175,14 +262,14 @@ function colorOfNode(n) {
   return colorForChg(n.chg_pct)
 }
 
-function colorForChg(chg) {
-  // 固定色相：涨=红、跌=绿；幅度越大颜色越深（±3% 封顶）
+function colorForChg(chg, cap = 3) {
+  // 固定色相：涨=红、跌=绿；幅度越大颜色越深（默认 ±3% 封顶）
   if (chg > 0) {
-    const p = Math.min(chg / 3, 1)
+    const p = Math.min(chg / cap, 1)
     return `rgb(235,${Math.round(95 - p * 72)},${Math.round(95 - p * 72)})`
   }
   if (chg < 0) {
-    const p = Math.min(Math.abs(chg) / 3, 1)
+    const p = Math.min(Math.abs(chg) / cap, 1)
     return `rgb(${Math.round(95 - p * 72)},200,${Math.round(95 - p * 72)})`
   }
   return '#555'
@@ -191,25 +278,48 @@ function colorForChg(chg) {
 async function loadTree() {
   loading.value = true; noData.value = false
   try {
-    const params = { trade_date: selDate.value, metric: metric.value }
-    if (drillStack.value.length > 0) {
-      params.parent = drillStack.value[drillStack.value.length-1].id
+    if (intraday.value) {
+      const params = { trade_date: selDate.value, slot: intradaySlot.value }
+      if (drillStack.value.length > 0) {
+        params.parent = drillStack.value[drillStack.value.length-1].id
+      }
+      const r = await axios.get(API + '/api/treemap_intraday', { params })
+      intradaySlots.value = r.data.slots || []
+      breadth.value = r.data.breadth || null
+      refreshing.value = !!r.data.refreshing
+      treeData.value = r.data.children || []
+      noData.value = !treeData.value.length && !refreshing.value
+    } else {
+      const params = { trade_date: selDate.value, metric: metric.value }
+      if (drillStack.value.length > 0) {
+        params.parent = drillStack.value[drillStack.value.length-1].id
+      }
+      const r = await axios.get(API+'/api/treemap_data', { params })
+      breadth.value = null
+      refreshing.value = false
+      treeData.value = r.data.children || []
+      noData.value = !treeData.value.length
     }
-    const r = await axios.get(API+'/api/treemap_data', { params })
-    treeData.value = r.data.children || []
     await Promise.all([loadSignals(), loadHoldings()])
-    noData.value = !treeData.value.length
     loading.value = false; await nextTick()
-    if (!noData.value) renderChart()
+    if (!noData.value && treeData.value.length) renderChart()
   } catch(e) {
     noData.value = true
     loading.value = false
+  } finally {
+    // 分时模式：新快照生成中 5s 后重试，否则 60s 轮询一次；
+    // 后端按 10 分钟 slot 判断是否需要重新拉全市场，页面轮询本身很轻。
+    clearTimeout(intradayTimer)
+    if (intraday.value) {
+      intradayTimer = setTimeout(loadTree, refreshing.value ? 5000 : 60000)
+    }
   }
 }
 
-// 行业块统计按当前着色模式计算：chg20d 模式用 20 日涨跌（s20），其余用当日涨跌
+// 行业块统计按当前着色模式计算：20日用 s20，10分钟用 d10，其余用当日涨跌
 function indStats(list) {
-  const vals = list.map(v => colorMode.value === 'chg20d' ? v.detail?.s20 : v.chg)
+  const vals = list.map(v => colorMode.value === 'chg20d' ? v.detail?.s20
+    : colorMode.value === 'chg10m' ? v.detail?.d10 : v.chg)
     .filter(v => v != null)
   const up = vals.length ? Math.round(vals.filter(v => v > 0).length / vals.length * 1000) / 10 : null
   const vs = [...vals].sort((a, b) => a - b)
@@ -295,6 +405,7 @@ function renderChart() {
           else if (metric.value === 'pe') html += `<br/>${mLabel}: ${(100-(val||0)).toFixed(0)}%`
           else html += `<br/>${mLabel}: ¥${(val/1e8).toFixed(1)}亿`
           html += `<br/>涨跌: ${d.chg_pct>0?'+':''}${(d.chg_pct||0).toFixed(2)}%`
+          if (intraday.value && detail.d10 != null) html += `<br/>近10分钟: ${detail.d10>0?'+':''}${detail.d10.toFixed(2)}%`
           if (detail.s20 != null) html += `<br/>20日: ${detail.s20>0?'+':''}${detail.s20.toFixed(1)}%`
           if (detail.vr != null) html += `<br/>量比: ${detail.vr.toFixed(2)}`
           if (detail.tr != null) html += `<br/>换手: ${detail.tr.toFixed(2)}%`
@@ -305,8 +416,9 @@ function renderChart() {
         } else {
           html += `<br/>${mLabel}: ${metric.value==='volume'?fmt(val)+'股':metric.value==='amount'?'¥'+(val/1e8).toFixed(1)+'亿':metric.value==='pe'?(100-(val||0)/100).toFixed(0)+'%':'¥'+(val/1e8).toFixed(1)+'亿'}`
           html += `<br/>涨跌: ${(d.chg_pct||0)>0?'+':''}${(d.chg_pct||0).toFixed(2)}%`
+          if (intraday.value && detail.d10 != null) html += `<br/>近10分钟: ${detail.d10>0?'+':''}${detail.d10.toFixed(2)}%`
           const up = d._up || {}
-          const tag = colorMode.value === 'chg20d' ? '20日' : '当日'
+          const tag = colorMode.value === 'chg20d' ? '20日' : colorMode.value === 'chg10m' ? '10分钟' : '当日'
           if (up.up != null) html += `<br/>上涨家数(${tag}): ${up.up}%`
           else if (detail.up_ratio != null) html += `<br/>上涨家数: ${detail.up_ratio}%`
           if (up.med != null) html += `<br/>中位涨跌(${tag}): ${up.med>0?'+':''}${up.med}%`
@@ -398,6 +510,7 @@ const _tm_popstate = () => {
 window.addEventListener('popstate', _tm_popstate)
 window.addEventListener('resize', _tm_resize)
 onUnmounted(() => {
+  clearTimeout(intradayTimer)
   window.removeEventListener('resize', _tm_resize)
   window.removeEventListener('popstate', _tm_popstate)
   const el = document.getElementById('treemap-chart')
@@ -420,3 +533,24 @@ watch(() => theme.isDark, () => {
   }
 })
 </script>
+
+<style scoped>
+/* 市场宽度条：分时模式的“风向”摘要 */
+.tm-breadth {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin: 0 0 6px; padding: 6px 10px; font-size: var(--text-meta);
+  color: var(--c-text-dim); background: var(--c-card-bg);
+  border: 1px solid var(--c-border); border-radius: var(--radius-sm);
+}
+.tm-breadth b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.tm-breadth b.up { color: var(--c-up); }
+.tm-breadth b.down { color: var(--c-down); }
+.tm-b-asof { margin-left: auto; color: var(--c-text-faint); white-space: nowrap; }
+.tm-b-hint { color: var(--c-text-faint); }
+/* 分时模式多一条宽度条：图表高度相应收一点 */
+.tm-chart-intraday { height: calc(100vh - 238px - var(--h5-tabbar-h, 0px)) !important; }
+@media (max-width: 768px) {
+  .tm-breadth { gap: 9px; }
+  .tm-chart-intraday { height: calc(100vh - 300px - var(--h5-tabbar-h, 0px)) !important; }
+}
+</style>
