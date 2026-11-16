@@ -69,6 +69,14 @@
         </n-button-group>
         <span class="tm-flow-asof">{{ flowMode==='main' ? (sectorFlows.main_date || '—') : sectorFlows.slot }}</span>
       </div>
+      <div class="tm-flow-sortbar">
+        <span>排序</span>
+        <n-button-group size="tiny">
+          <n-button size="tiny" :type="sortMode==='abs'?'primary':'default'" @click="sortMode='abs'" title="按绝对金额：最大的流入/流出都在最前面">绝对值</n-button>
+          <n-button size="tiny" :type="sortMode==='in'?'primary':'default'" @click="sortMode='in'" title="按净流入从大到小">流入优先</n-button>
+          <n-button size="tiny" :type="sortMode==='out'?'primary':'default'" @click="sortMode='out'" title="按净流出从大到小">流出优先</n-button>
+        </n-button-group>
+      </div>
       <div v-if="flowMode==='m10' && !sectorFlows.has_prev" class="tm-flow-empty">
         首档没有上一档对比；10 分钟后第二档生成后，这里显示这 10 分钟的资金方向。
       </div>
@@ -148,6 +156,7 @@ const breadth = ref(null)
 const refreshing = ref(false)
 const sectorFlows = ref(null)
 const flowMode = ref('day')   // main | day | m10
+const sortMode = ref('abs')   // abs | in | out
 let flowModePinned = false
 let intradayTimer = null
 function setFlowMode(m){ flowMode.value = m; flowModePinned = true }
@@ -184,7 +193,15 @@ const flowRows = computed(() => {
   const rows = flowMode.value === 'm10'
     ? (sectorFlows.value?.m10 || [])
     : (sectorFlows.value?.day || [])
-  return [...rows].sort((a, b) => Math.abs(flowKey(b)) - Math.abs(flowKey(a)))
+  const out = [...rows]
+  if (sortMode.value === 'in') {
+    out.sort((a, b) => flowKey(b) - flowKey(a))
+  } else if (sortMode.value === 'out') {
+    out.sort((a, b) => flowKey(a) - flowKey(b))
+  } else {
+    out.sort((a, b) => Math.abs(flowKey(b)) - Math.abs(flowKey(a)))
+  }
+  return out
 })
 const flowMax = computed(() => Math.max(1, ...flowRows.value.map(f => Math.abs(flowKey(f)))))
 const flowBarW = f => Math.max(1.5, Math.abs(flowKey(f)) / flowMax.value * 50)
@@ -643,6 +660,7 @@ watch(() => theme.isDark, () => {
 .tm-flow-tag { font-size: 10px; padding: 0 4px; border: 1px solid var(--c-border); border-radius: 3px; color: var(--c-text-faint); }
 .tm-flow-asof { margin-left: auto; font-size: var(--text-meta); color: var(--c-text-faint); }
 .tm-flow-empty { margin-bottom: 6px; font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; }
+.tm-flow-sortbar { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: var(--text-meta); color: var(--c-text-dim); }
 .tm-flow-list { flex: 1; min-height: 0; overflow-y: auto; }
 .tm-flow-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px; gap: 6px; align-items: center; padding: 2px 0; font-size: var(--text-meta); }
 .tm-flow-name { color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
