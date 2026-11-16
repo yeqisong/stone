@@ -151,8 +151,7 @@
   </n-card>
 </n-modal>
 
-<!-- 交割单 / 交易复盘 -->
-<TradeReview v-model:show="showTradeReview" :initial-tab="tradeInitialTab" @changed="onTradeChanged" />
+<!-- 交割单导入（复盘本身是二级页面，由 App.vue 路由渲染） -->
 <TradeImport v-model:show="showTradeImport" @imported="onTradeImported" />
 
 <!-- History Modal -->
@@ -188,20 +187,19 @@ import { rememberDetailNavList } from '../utils/detailNav'
 import { useAuthStore } from '../stores/auth'
 import { useViewport } from '../utils/viewport'
 import StatStrip from './StatStrip.vue'
-import TradeReview from './TradeReview.vue'
 import TradeImport from './TradeImport.vue'
+import { useNavStore } from '../stores/nav'
 const emit = defineEmits(['show-detail'])
+const nav = useNavStore()
 
-// ── 交割单 / 交易复盘 ──
-const showTradeReview = ref(false), showTradeImport = ref(false)
-const tradeInitialTab = ref('review')
+// ── 交割单 / 交易复盘（复盘为二级页面，有自己的 URL 和返回）──
+const showTradeImport = ref(false)
 const tradeGate = ref(null)
-function openTradeReview(tab = 'review'){ tradeInitialTab.value = tab; showTradeReview.value = true }
+function openTradeReview(tab = 'review'){ nav.openTradeReview(tab) }
 async function loadTradeGate(){
   try{ tradeGate.value = (await axios.get(API + '/api/portfolio/trades/discipline/today')).data }
   catch(e){ tradeGate.value = null }
 }
-function onTradeChanged(){ load(); loadRiskHeat(); loadTradeGate() }
 function onTradeImported(res){ showTradeImport.value = false; if(res?.synced) load(); loadRiskHeat(); loadTradeGate() }
 
 async function launchDesktopWatch(){

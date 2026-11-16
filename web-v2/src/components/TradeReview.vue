@@ -1,10 +1,11 @@
 <template>
-<n-modal v-model:show="show" :mask-closable="false">
-  <n-card class="tr-card" :bordered="false">
+<component :is="page ? 'div' : NModal" v-bind="shellProps">
+  <n-card class="tr-card" :class="{ 'tr-card-page': page }" :bordered="false">
     <template #header>
       <div class="tr-head">
         <div class="tr-title">
-          <b><AppIcon name="activity" :size="15" />  交易复盘</b>
+          <n-button v-if="page" size="tiny" quaternary @click="emit('back')" style="margin-right:2px">← 返回</n-button>
+          <b v-else><AppIcon name="activity" :size="15" />  交易复盘</b>
           <span v-if="review" class="tr-sub">
             {{ review.period.start }} ~ {{ review.period.end }} · {{ review.period.trades }} 笔 / {{ review.period.active_days }} 个交易日
           </span>
@@ -15,7 +16,7 @@
           </n-button-group>
           <n-button size="tiny" @click="showImport=true"><AppIcon name="upload" :size="12" />  导入交割单</n-button>
           <n-button size="tiny" quaternary :loading="loading" @click="loadAll"><AppIcon name="refresh" :size="12" /></n-button>
-          <n-button size="tiny" quaternary @click="show=false">关闭</n-button>
+          <n-button v-if="!page" size="tiny" quaternary @click="show=false">关闭</n-button>
         </div>
       </div>
     </template>
@@ -35,7 +36,7 @@
 
       <n-tabs v-model:value="tab" type="line" size="small" class="tr-tabs" @update:value="onTab">
         <!-- ── 复盘 ── -->
-        <n-tab-pane name="review" tab="复盘结论">
+        <n-tab-pane name="review" :tab="isNarrow ? '复盘' : '复盘结论'">
           <div class="tr-grid">
             <div class="tr-col">
               <!-- 纪律分 -->
@@ -111,7 +112,7 @@
         </n-tab-pane>
 
         <!-- ── 交割单明细 ── -->
-        <n-tab-pane name="trades" tab="交割单明细">
+        <n-tab-pane name="trades" :tab="isNarrow ? '明细' : '交割单明细'">
           <div class="tr-filter">
             <n-date-picker v-model:formatted-value="tFilters.range" type="daterange" value-format="yyyy-MM-dd" size="tiny" clearable style="width:230px" />
             <n-input v-model:value="tFilters.code" size="tiny" placeholder="代码 / 名称" clearable style="width:140px" />
@@ -128,14 +129,14 @@
         </n-tab-pane>
 
         <!-- ── 个股汇总 ── -->
-        <n-tab-pane name="stocks" tab="个股盈亏">
+        <n-tab-pane name="stocks" :tab="isNarrow ? '个股' : '个股盈亏'">
           <div class="tr-muted" style="margin-bottom:6px">按已实现盈亏从差到好排序；点击一行查看该股明细。</div>
           <n-data-table :columns="stockCols" :data="review.stocks" size="small" :bordered="false"
             :max-height="calcTableH" scroll-x="820" :row-props="stockRowProps" />
         </n-tab-pane>
 
         <!-- ── 纪律 ── -->
-        <n-tab-pane name="rules" tab="纪律规则">
+        <n-tab-pane name="rules" :tab="isNarrow ? '纪律' : '纪律规则'">
           <div class="tr-grid">
             <div class="tr-col">
               <div class="tr-panel" :class="gate && !gate.allow_new_buy ? 'tr-gate-bad' : ''">
@@ -200,7 +201,7 @@
 
     <TradeImport v-model:show="showImport" @imported="onImported" />
   </n-card>
-</n-modal>
+</component>
 </template>
 
 <script setup>
@@ -218,10 +219,15 @@ import { useViewport } from '../utils/viewport'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
+  page: { type: Boolean, default: false },   // true=二级页面，false=弹窗
   initialTab: { type: String, default: 'review' },
 })
-const emit = defineEmits(['update:show', 'changed'])
+const emit = defineEmits(['update:show', 'changed', 'back'])
 const show = computed({ get: () => props.show, set: v => emit('update:show', v) })
+// 同一个卡片内容，page 模式用普通 div 包裹（整页滚动），否则用 NModal
+const shellProps = computed(() => props.page
+  ? { class: 'tr-page' }
+  : { show: show.value, maskClosable: false, 'onUpdate:show': v => { show.value = v } })
 const message = useMessage()
 const API = window.location.origin
 const { isNarrow } = useViewport()
@@ -573,15 +579,23 @@ watch(() => props.show, v => {
   }
 })
 onMounted(() => {
-  if (props.show) { loadAll(); loadTrades() }
+  if (props.show || props.page) {
+    tab.value = props.initialTab || 'review'
+    loadAll(); loadTrades()
+    nextTick(() => setTimeout(renderChart, 150))
+  }
   window.addEventListener('resize', resizeChart)
 })
 onUnmounted(() => { window.removeEventListener('resize', resizeChart); disposeChart() })
 </script>
 
 <style scoped>
-.tr-card { width: min(1400px, 96vw); height: 92vh; display:flex; flex-direction:column; }
-.tr-card :deep(.n-card__content) { flex:1; min-height:0; overflow-y:auto; padding-top:4px; }
+.tr-card { width: min(1400px, 96vw); height: 92vh; display:flex; flex-direction:column; overflow:hidden; }
+/* 关键：Naive UI 的内容层是 .n-card-content（不是 .n-card__content）。
+   之前选择器写错，内容高度 2000+px 直接溢出固定高度的卡片。 */
+.tr-card :deep(.n-card-content) { flex:1; min-height:0; overflow-y:auto; padding-top:4px; }
+.tr-page { flex:1; min-height:0; display:flex; flex-direction:column; }
+.tr-card-page { width:100%; height:100%; border-radius:0; border:none; background:var(--c-bg); }
 .tr-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .tr-title { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
 .tr-title b { font-size:15px; }

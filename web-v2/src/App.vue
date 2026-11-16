@@ -60,6 +60,7 @@
             <span>{{ pageMeta.sub }}</span>
           </div>
           <div v-if="nav.tab==='p'" style="flex:1;min-height:0;display:flex;flex-direction:column"><PortfolioView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='t'" style="flex:1;min-height:0;display:flex;flex-direction:column"><TradeReview :page="true" :initial-tab="nav.tradeReviewTab" @back="nav.backFromTradeReview()" /></div>
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='l'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StocksView @show-detail="nav.showDetail" /></div>
@@ -194,6 +195,7 @@ onMounted(() => {
 })
 import LoginView from './components/LoginView.vue'
 import PortfolioView from './components/PortfolioView.vue'
+import TradeReview from './components/TradeReview.vue'
 import SignalsView from './components/SignalsView.vue'
 import TreemapView from './components/TreemapView.vue'
 import StocksView from './components/StocksView.vue'
@@ -354,6 +356,7 @@ watch(showLogin, (v) => {
 
 const pageMeta = computed(() => ({
   p: { title: '持仓', sub: '账户与持仓' },
+  t: { title: '交易复盘', sub: '交割单、行为画像与纪律闸门' },
   m: { title: '选股', sub: '全市场市值分布' },
   s: { title: '信号', sub: '模型信号与模拟交易' },
   l: { title: '个股', sub: '全市场个股列表' },
@@ -370,6 +373,7 @@ const pageMeta = computed(() => ({
 
 const titleMap = {
   p: '持仓 - K道',
+  t: '交易复盘 - K道',
   m: '选股 - 市值 - K道',
   s: '买点信号 - K道',
   l: '个股列表 - K道',

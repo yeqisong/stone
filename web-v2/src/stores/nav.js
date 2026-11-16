@@ -17,6 +17,7 @@ export const useNavStore = defineStore('nav', () => {
   const statusMonth = ref('')
   const bfLogPage = ref(1)
   const agentSeed = ref(null)   // 跨页面带入问答页的预填问题 { text, at }
+  const tradeReviewTab = ref('review')  // 交易复盘二级页的初始 tab
 
   // URL hash 路由
   function parseHash() {
@@ -36,6 +37,7 @@ export const useNavStore = defineStore('nav', () => {
     if (hash.startsWith('/dag-flow-view/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'r'; return }
     if (hash.startsWith('/market/')) { marketDate.value = hash.split('/')[2] || ''; tab.value = 'm'; return }
     if (hash.startsWith('/stock-fund/')) { stockFundType.value = hash.split('/')[2] || 'stock'; tab.value = 'u'; return }
+    if (path === '/trade-review') { tradeReviewTab.value = q('tab') || 'review'; tab.value = 't'; return }
     if (path.startsWith('/models')) {
       const parts = path.split('/')
       modelEntity.value = parts[2] || 'stock'
@@ -98,6 +100,7 @@ export const useNavStore = defineStore('nav', () => {
       case 'q': target = '/dag-logs/' + (flowId.value || ''); break
       case 'r': target = '/dag-flow-view/' + (flowId.value || ''); break
       case 'u': target = '/stock-fund/' + stockFundType.value; break
+      case 't': target = '/trade-review' + (tradeReviewTab.value && tradeReviewTab.value !== 'review' ? '?tab=' + tradeReviewTab.value : ''); break
       case 'w': target = '/dbx'; break
       case 'i': target = '/agent'; break
       case 'n': {
@@ -140,6 +143,19 @@ export const useNavStore = defineStore('nav', () => {
     tab.value = prevTab.value || 'g'
   }
 
+  /** 打开交易复盘二级页；reviewTab 可取 review/trades/stocks/rules。 */
+  function openTradeReview(reviewTab = 'review') {
+    prevTab.value = tab.value
+    tradeReviewTab.value = reviewTab || 'review'
+    tab.value = 't'
+  }
+
+  function backFromTradeReview() {
+    // 从持仓页进来走浏览器历史，保留原页面状态；直链进入则回持仓
+    if (prevTab.value) { history.back(); return }
+    tab.value = 'p'
+  }
+
   function showDetail(code) {
     prevTab.value = tab.value
     dcode.value = code
@@ -174,5 +190,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, parseHash, syncHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
 })
