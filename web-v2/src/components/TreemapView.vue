@@ -61,13 +61,9 @@
     <div v-if="intraday && sectorFlows" class="tm-flow-panel">
       <div class="tm-flow-head">
         <b>行业资金流</b>
-        <span class="tm-flow-tag">{{ flowMode==='main' ? '收盘后' : '实时估算' }}</span>
-        <n-button-group size="tiny">
-          <n-button size="tiny" :type="flowMode==='main'?'primary':'default'" @click="setFlowMode('main')" title="tushare 大单+特大单净流入，收盘后更新">主力</n-button>
-          <n-button size="tiny" :type="flowMode==='day'?'primary':'default'" @click="setFlowMode('day')" title="成交额×收盘位置，实时压力估算">压力·日</n-button>
-          <n-button size="tiny" :type="flowMode==='m10'?'primary':'default'" @click="setFlowMode('m10')" title="相邻两档成交额增量×价格方向">压力·10分</n-button>
-        </n-button-group>
-        <span class="tm-flow-asof">{{ flowMode==='main' ? (sectorFlows.main_date || '—') : sectorFlows.slot }}</span>
+        <span class="tm-flow-mode" @click="cycleFlowMode" :title="flowModeTip">
+          {{ flowModeLabel }}<span class="tm-flow-cycle">⇄</span>
+        </span>
       </div>
       <div class="tm-flow-cols">
         <span>行业</span>
@@ -100,12 +96,10 @@
       </div>
       <div class="tm-flow-note">
         <template v-if="flowMode==='main'">
-          主力净流入 = tushare 大单+特大单净额（收盘后，数据日期 {{ sectorFlows.main_date || '—' }}）；
-          单位元；与压力估算不要相加。
+          主力 = tushare 大单+特大单净额（收盘后，{{ sectorFlows.main_date || '—' }}）；与压力估算不要相加。
         </template>
         <template v-else>
-          压力估算：日累计 = 成交额 × CLV（收盘在当日振幅中的位置）；近10分钟 = 相邻两档成交额增量 × 价格方向。
-          绝对值是“买卖压力强度”，不是净流出金额；看方向和排序，不要当精确金额。
+          压力 = 成交额×CLV（日）/ 相邻增量×方向（10分）；绝对值是买卖压力强度，不是净流出金额。
         </template>
       </div>
     </div>
@@ -166,7 +160,18 @@ function cycleSort(){
 }
 let flowModePinned = false
 let intradayTimer = null
-function setFlowMode(m){ flowMode.value = m; flowModePinned = true }
+const flowModeLabel = computed(() => flowMode.value === 'main' ? '主力'
+  : flowMode.value === 'm10' ? '压力·10分' : '压力·日')
+const flowModeTip = computed(() => {
+  const sf = sectorFlows.value || {}
+  if (flowMode.value === 'main') return `主力净流入（tushare 大单+特大单，收盘后，数据 ${sf.main_date || '—'}）；点击切换 → 压力·日`
+  if (flowMode.value === 'day') return `压力·日（成交额×CLV，实时估算，快照 ${sf.slot || '—'}）；点击切换 → 压力·10分`
+  return `压力·10分（相邻两档成交额增量×价格方向，快照 ${sf.slot || '—'}）；点击切换 → 主力`
+})
+function cycleFlowMode(){
+  flowMode.value = flowMode.value === 'main' ? 'day' : flowMode.value === 'day' ? 'm10' : 'main'
+  flowModePinned = true
+}
 const slotOptions = computed(() => [
   { label: '最新', value: 'latest' },
   ...intradaySlots.value.map(s => ({ label: s, value: s })),
@@ -662,10 +667,12 @@ watch(() => theme.isDark, () => {
   padding: 8px; border: 1px solid var(--c-border); border-radius: var(--radius-sm);
   background: var(--c-card-bg);
 }
-.tm-flow-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 6px; }
+.tm-flow-head { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; }
 .tm-flow-head b { font-size: 13px; }
-.tm-flow-tag { font-size: 10px; padding: 0 4px; border: 1px solid var(--c-border); border-radius: 3px; color: var(--c-text-faint); }
-.tm-flow-asof { margin-left: auto; font-size: var(--text-meta); color: var(--c-text-faint); }
+.tm-flow-mode { font-size: var(--text-meta); color: var(--c-text-dim); padding: 1px 4px; border-radius: 3px;
+  cursor: pointer; user-select: none; white-space: nowrap; }
+.tm-flow-mode:hover { color: var(--c-text); background: var(--c-card-bg-hover); }
+.tm-flow-cycle { font-size: 10px; margin-left: 2px; opacity: .55; }
 .tm-flow-empty { margin-bottom: 6px; font-size: var(--text-meta); color: var(--c-text-faint); line-height: 1.5; }
 .tm-flow-cols {
   display: grid; grid-template-columns: 64px 1fr; gap: 6px; align-items: center;
