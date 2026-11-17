@@ -836,10 +836,10 @@ watch(() => theme.isDark, () => {
 .tm-flow-col-sort { text-align: right; cursor: pointer; user-select: none; white-space: nowrap; }
 .tm-flow-col-sort:hover { color: var(--c-text-dim); }
 .tm-flow-col-sort b { font-weight: 500; color: var(--c-text-dim); }
-.tm-flow-list { flex: 1; min-height: 0; overflow-y: auto; }
+.tm-flow-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .tm-flow-row {
   display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px; gap: 6px; align-items: center;
-  padding: 2px 4px; margin: 0 -4px; font-size: var(--text-meta);
+  padding: 2px 4px; margin: 0; font-size: var(--text-meta);
   cursor: pointer; border-radius: 3px;
 }
 .tm-flow-row:hover { background: var(--c-card-bg-hover); }
