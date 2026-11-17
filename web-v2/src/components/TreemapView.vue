@@ -80,7 +80,9 @@
       </div>
       <div v-if="!(flowMode==='m10' && !sectorFlows.has_prev) && !(flowMode==='main' && !sectorFlows.main_date)" class="tm-flow-list">
         <div v-for="f in flowRows" :key="f.id" class="tm-flow-row"
-          :title="`${f.name}：主力净流入 ${fmtFlow(f.main_net)}（${sectorFlows.main_date||'—'}）；压力日 ${fmtFlow(f.flow_day)} / 10分 ${fmtFlow(f.flow_10m)}；成交额 ${fmtFlow(f.amount)}；涨跌 ${f.chg_pct>0?'+':''}${f.chg_pct}%`">
+          :class="{ active: activeSector === f.id }"
+          @click="drillSector(f)"
+          :title="`${f.name}：主力净流入 ${fmtFlow(f.main_net)}（${sectorFlows.main_date||'—'}）；压力日 ${fmtFlow(f.flow_day)} / 10分 ${fmtFlow(f.flow_10m)}；成交额 ${fmtFlow(f.amount)}；涨跌 ${f.chg_pct>0?'+':''}${f.chg_pct}%；点击查看该板块二级树图`">
           <span class="tm-flow-name">{{ f.name }}</span>
           <div class="tm-flow-track">
             <span class="tm-flow-zero"></span>
@@ -699,6 +701,16 @@ function renderChart() {
   })
 }
 
+const activeSector = computed(() => drillStack.value[0]?.id || '')
+
+/** 从资金流面板点击行业：直接下钻该 l1 的二级树图（与树图点击同一套分类）。 */
+function drillSector(f) {
+  if (!f?.id) return
+  drillStack.value = [{ name: f.name, id: f.id }]
+  store.drillStack = drillStack.value
+  loadTree()
+}
+
 function goBack() {
   if (drillStack.value.length > 0) {
     drillStack.value.pop()
@@ -825,7 +837,13 @@ watch(() => theme.isDark, () => {
 .tm-flow-col-sort:hover { color: var(--c-text-dim); }
 .tm-flow-col-sort b { font-weight: 500; color: var(--c-text-dim); }
 .tm-flow-list { flex: 1; min-height: 0; overflow-y: auto; }
-.tm-flow-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px; gap: 6px; align-items: center; padding: 2px 0; font-size: var(--text-meta); }
+.tm-flow-row {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px; gap: 6px; align-items: center;
+  padding: 2px 4px; margin: 0 -4px; font-size: var(--text-meta);
+  cursor: pointer; border-radius: 3px;
+}
+.tm-flow-row:hover { background: var(--c-card-bg-hover); }
+.tm-flow-row.active { background: color-mix(in srgb, var(--c-accent) 10%, transparent); }
 .tm-flow-name { color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tm-flow-track { position: relative; height: 8px; border-radius: 4px; background: var(--c-border); }
 .tm-flow-track i { position: absolute; top: 0; height: 100%; border-radius: 3px; }
