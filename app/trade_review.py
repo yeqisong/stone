@@ -1092,20 +1092,46 @@ def _daily_realized(rows: list[dict], state0: dict) -> dict[_date, float]:
     return out
 
 
+def _manual_today(db, day: _date) -> list[dict]:
+    """今日临时记录；交割单尚未覆盖今天时，用它补齐当日买卖/违规统计。"""
+    try:
+        rows = db.execute(text("""
+            SELECT id, trade_date, trade_time, stock_code, stock_name, side,
+                   quantity, price, amount, stop_price, reason, source
+            FROM trade_intraday
+            WHERE trade_date=:d AND COALESCE(reconciled, false)=false
+            ORDER BY trade_time, id
+        """), {"d": day}).mappings().fetchall()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("quantity", "price", "amount", "stop_price"):
+            d[k] = float(d[k]) if d[k] is not None else None
+        out.append(d)
+    return out
+
+
 def today_gate(db, today: Optional[_date] = None) -> dict:
     today = today or _date.today()
     cfg = get_discipline(db)
     rows = load_slip_rows(db, end=today)
-    if not rows:
+    slip_end = max((r["trade_date"] for r in rows), default=None)
+    manual_today = _manual_today(db, today) if (slip_end is None or slip_end < today) else []
+    if not rows and not manual_today:
         return {"ok": True, "date": today.isoformat(), "checked": False,
                 "message": "尚无交割单数据", "violations": [], "allow_new_buy": True}
-    today_rows = [r for r in rows if r["trade_date"] == today]
+    today_rows = [r for r in rows if r["trade_date"] == today] + manual_today
     lookback = max(30, cfg["no_rebuy_days"] + 10)
     window_start = today - timedelta(days=lookback)
     recent = [r for r in rows if r["trade_date"] >= window_start]
     # 过去 30 天的逐日已实现盈亏：从窗口开始前的持仓状态起算
-    state_win, _ = replay_positions(db, rows, until=window_start)
-    daily = _daily_realized(recent, state_win)
+    if rows:
+        state_win, _ = replay_positions(db, rows, until=window_start)
+        daily = _daily_realized(recent, state_win)
+    else:
+        daily = {}
     prev_days = sorted(d for d in daily if d < today)
     consec = 0
     for d in reversed(prev_days):
@@ -1151,7 +1177,25 @@ def today_gate(db, today: Optional[_date] = None) -> dict:
     # 当前持仓集中度（用最新收盘）
     from app.trade_slip import build_positions
     preview = build_positions(db)
-    positions = preview.get("positions") or []
+    positions = [dict(p) for p in (preview.get("positions") or [])]
+    # 叠加今日临时成交的净数量，避免用旧 portfolio 算集中度（如今天已清仓的票）
+    manual_net: dict[str, float] = defaultdict(float)
+    for r in manual_today:
+        manual_net[r["stock_code"]] += (r["quantity"] if r["side"] == "buy" else -r["quantity"])
+    by_code = {p["stock_code"]: p for p in positions}
+    for code, delta in manual_net.items():
+        p = by_code.get(code)
+        if p:
+            p["quantity"] = max(0.0, float(p["quantity"]) + delta)
+        elif delta > 0:
+            buys = [r for r in manual_today if r["stock_code"] == code and r["side"] == "buy"]
+            qty = sum(r["quantity"] for r in buys)
+            amt = sum(r["amount"] for r in buys)
+            p = {"stock_code": code, "stock_name": buys[0]["stock_name"] if buys else code,
+                 "quantity": qty, "cost_price": (amt / qty) if qty else 0}
+            positions.append(p)
+            by_code[code] = p
+    positions = [p for p in positions if (p.get("quantity") or 0) > 0]
     last_px = _last_close_map(db, [p["stock_code"] for p in positions])
     mv = {p["stock_code"]: (p["quantity"] * (last_px.get(p["stock_code"]) or p.get("cost_price") or 0))
           for p in positions}
