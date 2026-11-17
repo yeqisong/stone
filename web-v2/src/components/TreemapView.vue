@@ -176,6 +176,7 @@ import * as echarts from 'echarts'
 import { useMarketStore } from '../stores/market'
 import { useNavStore } from '../stores/nav'
 import { useThemeStore } from '../stores/theme'
+import { bjDateStr } from '../utils/date'
 
 const store = useMarketStore()
 const navStore = useNavStore()
@@ -381,6 +382,12 @@ function switchMode(on) {
   if (on) {
     metric.value = 'mcap'
     intradaySlot.value = 'latest'
+    // 分时市值是“当日盘中”视图：从日线/历史日期切过来时自动回到今天
+    const today = bjDateStr()
+    if (selDate.value !== today) {
+      selDate.value = today
+      store.setDate(today)
+    }
   } else {
     breadth.value = null
     sectorFlows.value = null
@@ -730,6 +737,7 @@ async function doGenerate() {
 }
 
 async function loadLatestDate() {
+  if (intraday.value) return   // 分时模式默认当日，不能被日线树图的最新日期覆盖
   try {
     const r = await axios.get(API + '/api/treemap_latest_date')
     if (r.data && r.data.latest_date) {
@@ -762,9 +770,29 @@ onUnmounted(() => {
 
 watch(() => theme.isDark, () => nextTick(() => { renderChart() }))
 
+function hashDate() {
+  const m = location.hash.slice(1).match(/^\/market\/(\d{4}-\d{2}-\d{2})/)
+  return m ? m[1] : ''
+}
+
 onMounted(async () => {
   applyQuery()
-  await loadLatestDate()
+  const urlDate = hashDate()
+  const today = bjDateStr()
+  if (intraday.value) {
+    // 分时模式：直达链接的日期优先（可看历史分时）；没有日期则用今天
+    const d = urlDate || today
+    selDate.value = d
+    store.setDate(d)
+  } else if (!urlDate || urlDate >= today) {
+    // 日线模式：没有日期、或 URL 被路由补成“今天”但今日树图尚未生成 → 回落到最新日线日期
+    await loadLatestDate()
+  } else {
+    // 历史日期的直达/刷新链接要尊重，不能被 latest_date 覆盖
+    selDate.value = urlDate
+    store.setDate(urlDate)
+  }
+  syncQuery()
   await nextTick()
   loadTree()
 })

@@ -280,11 +280,12 @@ def _build(cache_rows: list[dict], snap: dict[str, dict], prev_snap: dict[str, d
         s = snap.get(code)
         s = s or {}
         value = _num(s.get("mcap")) or float(r["value"] or 0)
-        chg = _num(s.get("chg"))
+        # _snapshot() 的列名是 chg_pct，不是 chg；读错会把日线缓存里的昨日涨跌当成今日
+        chg = _num(s.get("chg_pct"))
         price = _num(s.get("price"))
         if chg is None:
-            # 快照里有这只票但涨跌为空 = 停牌；没有快照 = 用日线缓存兜底
-            chg = 0.0 if (code in snap and price is None) else float(r["chg_pct"] or 0)
+            # 快照缺失/停牌：按 0 处理，不能回填昨日涨跌
+            chg = 0.0
         prev_price = _num((prev_snap.get(code) or {}).get("price"))
         d10 = ((price / prev_price - 1) * 100) if price and prev_price else 0.0
         detail = _detail(r.get("detail"))
@@ -436,7 +437,7 @@ def _sector_flows(db, cache_rows: list[dict], snap: dict[str, dict],
         price = _num(s.get("price"))
         high = _num(s.get("high"))
         low = _num(s.get("low"))
-        chg = _num(s.get("chg")) or 0.0
+        chg = _num(s.get("chg_pct")) or 0.0
         if high and low and high > low and price:
             clv = (2 * price - high - low) / (high - low)
         else:
