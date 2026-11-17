@@ -1142,13 +1142,26 @@ def get_intraday_radar():
             ORDER BY fp.stock_code
             LIMIT 50
         """)).fetchall()
-        positions = {
-            r[0]: {"qty": int(r[1] or 0), "cost": float(r[2] or 0)}
-            for r in db.execute(text("""
-                SELECT stock_code, quantity, cost_price FROM portfolio
-                WHERE is_active=true AND quantity > 0
-            """)).fetchall()
-        }
+        # 与护栏/教练同一口径：portfolio + 今日临时成交（手工卖出/回补）
+        # 只读 portfolio 会把今天已卖出的票继续当成持仓，继续发止损信号。
+        try:
+            from app.trade_intraday import state as intraday_state
+            _st = intraday_state(db)
+            positions = {
+                p["stock_code"]: {"qty": int(p["quantity"] or 0),
+                                  "cost": float(p["cost_price"] or 0)}
+                for p in (_st.get("positions") or [])
+                if (p.get("quantity") or 0) > 0
+            }
+        except Exception as e:
+            logger.warning(f"[radar] 实时持仓口径失败，回退 portfolio: {str(e)[:120]}")
+            positions = {
+                r[0]: {"qty": int(r[1] or 0), "cost": float(r[2] or 0)}
+                for r in db.execute(text("""
+                    SELECT stock_code, quantity, cost_price FROM portfolio
+                    WHERE is_active=true AND quantity > 0
+                """)).fetchall()
+            }
         from app.trade_review import get_discipline
         _disc = get_discipline(db)
         max_single = float(_disc.get("max_single_weight") or 0.20)
