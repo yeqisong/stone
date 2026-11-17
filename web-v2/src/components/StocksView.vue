@@ -9,6 +9,7 @@
     <StockSuggestInput v-model:value="kw" size="tiny" width="180px" placeholder="搜索代码或名称..." @select="onSuggestPick" @enter="doSearch" />
     <n-button class="cta" type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>
     <n-button size="tiny" :type="radarMode?'primary':'default'" @click="toggleRadar"><AppIcon name="activity" :size="13" />  盘中雷达</n-button>
+    <n-button size="tiny" @click="openBuyCheck()"><AppIcon name="target" :size="13" />  买点检查</n-button>
   </n-space>
 
   <template v-if="radarMode">
@@ -35,6 +36,23 @@
         <span class="rs-reason" :title="s.signal.reason">{{ s.signal.reason }}</span>
       </div>
     </div>
+    <!-- 买点候选：只在“仓位/纪律允许开新仓 + 市场闸门通过”时出现 -->
+    <div v-if="buyCandidates.allowed && buyCandidates.items.length" class="buy-candidates">
+      <div class="bc-title">
+        <span>买点候选</span>
+        <span class="bc-note">市场/板块/结构/风险四道闸门全过；仅候选，下单前再检查</span>
+        <n-button size="tiny" text :loading="buyLoading" @click="loadBuyCandidates">刷新</n-button>
+      </div>
+      <div v-for="c in buyCandidates.items" :key="c.code" class="bc-row" @click="openBuyCheck(c)"
+        :title="c.reason">
+        <span class="bc-name">{{ c.name }}</span>
+        <span class="bc-industry">{{ c.industry }}</span>
+        <span class="bc-setup">{{ c.setup?.label }}</span>
+        <span class="bc-plan">买 {{ fmtPrice(c.price) }} / 止 {{ fmtPrice(c.setup?.stop) }} / 目标 {{ fmtPrice(c.setup?.target) }}</span>
+        <span class="bc-rr">盈亏比 {{ Number(c.setup?.rr || 0).toFixed(1) }}</span>
+        <span class="bc-qty">最多 {{ c.max_qty }} 股</span>
+      </div>
+    </div>
     <n-data-table class="fill-table" flex-height :columns="radarColumns" :data="radarRows"
       size="small" :row-props="radarRowProps" :loading="radarLoading" :bordered="false" scroll-x="1100" />
     <n-empty v-if="!radarLoading && !radarRows.length" description="关注池暂无实时快照" style="padding:24px" />
@@ -43,12 +61,14 @@
     <n-data-table class="fill-table" flex-height :columns="columns" :data="rows" size="small" :row-props="rowProps" :loading="loading" :bordered="false" @update:sorter="handleSorter" scroll-x="900" />
     <ListPagination :total="total" :page="page" :page-size="50" @change="goPage" />
   </template>
+  <BuyCheck v-model:show="buyCheckShow" :preset="buyPreset" />
 </div>
 </template>
 <script setup>
 import AppIcon from './AppIcon.vue'
 import ListPagination from './ListPagination.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
+import BuyCheck from './BuyCheck.vue'
 import { useViewport } from '../utils/viewport'
 import { rememberDetailNavList } from '../utils/detailNav'
 const { isNarrow } = useViewport()
@@ -166,6 +186,12 @@ const radarRows = ref([])
 const radarLoading = ref(false)
 const radarAt = ref('')
 let radarTimer = null
+const buyCandidates = ref({ allowed: false, items: [] })
+const buyLoading = ref(false)
+const buyCheckShow = ref(false)
+const buyPreset = ref(null)
+let buyTimer = null
+const fmtPrice = v => v == null ? '—' : Number(v).toFixed(2)
 const radarPct = v => v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%')
 const radarScoreLabel = s => s >= 70 ? '强' : s >= 55 ? '偏强' : s > 45 ? '中性' : s > 30 ? '偏弱' : '弱'
 const SIGNAL_META = {
@@ -195,13 +221,38 @@ async function loadRadar(){
     radarLoading.value = false
   }
 }
+async function loadBuyCandidates(){
+  if(!radarMode.value) return
+  buyLoading.value = true
+  try{
+    const r = await axios.get(API + '/api/buy/candidates', { timeout: 30000 })
+    buyCandidates.value = r.data || { allowed: false, items: [] }
+  }catch(e){
+    buyCandidates.value = { allowed: false, items: [], reason: e.response?.data?.detail || '候选加载失败' }
+  }finally{
+    buyLoading.value = false
+  }
+}
+function openBuyCheck(c){
+  buyPreset.value = c ? {
+    code: c.code,
+    entry: c.price ?? c.setup?.entry,
+    stop: c.setup?.stop,
+    target: c.setup?.target,
+  } : null
+  buyCheckShow.value = true
+}
 function startRadar(){
   clearInterval(radarTimer); radarTimer = null
+  clearInterval(buyTimer); buyTimer = null
   loadRadar()
+  loadBuyCandidates()
   radarTimer = setInterval(loadRadar, 15000)
+  buyTimer = setInterval(loadBuyCandidates, 60000)
 }
 function stopRadar(){
   clearInterval(radarTimer); radarTimer = null
+  clearInterval(buyTimer); buyTimer = null
 }
 function exitRadar(){
   if(!radarMode.value) return
@@ -302,6 +353,33 @@ onUnmounted(() => {
 .rs-chg, .rs-cost, .rs-weight { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rs-tag { font-size: 10px; padding: 1px 5px; border-radius: 3px; color: #fff; text-align: center; white-space: nowrap; }
 .rs-reason { color: var(--c-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 买点候选：只在仓位/纪律允许且市场闸门通过时出现 */
+.buy-candidates {
+  margin-bottom: 6px; padding: 6px 9px; flex-shrink: 0;
+  border: 1px solid var(--c-border); border-left: 3px solid var(--c-info);
+  border-radius: var(--radius-sm); background: var(--c-card-bg);
+}
+.bc-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; font-weight: 600; }
+.bc-note { flex: 1; min-width: 0; font-size: var(--text-meta); color: var(--c-text-faint); font-weight: 400; }
+.bc-row {
+  display: grid; grid-template-columns: 96px 72px 72px minmax(0, 1fr) 76px 96px;
+  gap: 8px; align-items: center; padding: 4px 2px;
+  font-size: var(--text-meta); cursor: pointer; border-top: 1px dashed var(--c-border);
+}
+.bc-title + .bc-row { border-top: none; }
+.bc-row:hover { background: var(--c-card-bg-hover); }
+.bc-name { font-weight: 600; color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bc-industry, .bc-plan, .bc-rr, .bc-qty {
+  color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.bc-setup { color: var(--c-info); font-weight: 600; white-space: nowrap; }
+@media (max-width: 900px) {
+  .bc-row { grid-template-columns: 84px 1fr 72px; row-gap: 2px; }
+  .bc-industry, .bc-rr { display: none; }
+  .bc-plan { grid-column: 1 / -1; white-space: normal; }
+  .bc-qty { grid-column: 3; grid-row: 1; text-align: right; }
+}
 @media (max-width: 900px) {
   .rs-row { grid-template-columns: 84px 56px 1fr; row-gap: 2px; }
   .rs-cost, .rs-weight { display: none; }

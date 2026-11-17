@@ -11,6 +11,7 @@ from app.db.connection import async_engine, check_db_connection
 from app.db.schema import init_db, DEFAULT_STRATEGY_CONFIG
 from app.api.portfolio import router as portfolio_router
 from app.api.trades import router as trades_router
+from app.api.buy import router as buy_router
 from app.api.watch import router as watch_router
 from app.api.agent import router as agent_router
 from app.api.treemap import router as treemap_router
@@ -171,6 +172,7 @@ app.add_middleware(
 # ── 路由注册 ──
 app.include_router(portfolio_router, prefix="/api")
 app.include_router(trades_router, prefix="/api")
+app.include_router(buy_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(watch_router, prefix="/api")
 app.include_router(agent_router)  # /api/agent 已含前缀
 app.include_router(treemap_router, prefix="/api")

@@ -119,7 +119,8 @@ def _stock_name(db, code: str) -> str:
     # 同一代码可能在 stock_master 里既有股票行又有指数行（如 000001），优先股票
     row = db.execute(text("""
         SELECT stock_name FROM stock_master WHERE stock_code=:c
-        ORDER BY (stock_type='stock') DESC, id LIMIT 1
+        ORDER BY CASE stock_type WHEN 'stock' THEN 1 WHEN 'etf' THEN 2 ELSE 3 END
+        LIMIT 1
     """), {"c": code}).fetchone()
     return row[0] if row else code
 
