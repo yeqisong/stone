@@ -53,6 +53,8 @@ DEFAULT_CONFIG = {
     'high_low_min_pct': 0.2,       # 新高/新低相对上次提醒位的最小幅度（过滤 0.01 元级噪声）
     'stop_loss_pct': 8.0,          # 持仓成本回撤阈值
     'take_profit_pct': 20.0,       # 持仓成本盈利阈值
+    'reduce_weight_pct': 20.0,     # 单票市值占比超过该值 + 日内反弹 → 减仓提示
+    'reduce_bounce_pct': 2.0,      # 日内涨幅阈值（%），配合超配触发减仓
     'cooldown_min': 30,            # 同类提醒默认冷却
     'stock_cooldown_min': 5,       # 同股非 critical 提醒冷却（压单股刷屏；止损/跌停/急跌不受限）
     'family_cooldown_min': 15,     # 同族提醒冷却（VWAP 上/下、OR 上/下、昨高/昨低共用一个窗口）
@@ -69,7 +71,7 @@ DEFAULT_CONFIG = {
     # P1 事件 AI：默认这些高信号提醒自动触发解读（新高/新低/量比不触发）
     'ai_event_enabled': True,
     'ai_event_kinds': ['it_stop', 'it_take', 'it_limit_up', 'it_limit_down',
-                       'it_surge', 'it_drop',
+                       'it_surge', 'it_drop', 'it_reduce_bounce',
                        'it_vwap_up', 'it_vwap_down', 'it_or_up', 'it_or_down',
                        'it_prev_high', 'it_prev_low'],
     'ai_event_cooldown_min': 15,   # 同股冷却：15 分钟内只解读一次
@@ -78,7 +80,7 @@ DEFAULT_CONFIG = {
 
 # 止损/止盈一天只提醒一次（4 小时覆盖整个连续竞价时段）；新高/新低/量比/关键价位 1 小时
 COOLDOWN_MIN = {
-    'it_stop': 240, 'it_take': 240,
+    'it_stop': 240, 'it_take': 240, 'it_reduce_bounce': 240,
     'it_high': 60, 'it_low': 60, 'it_vol': 60,
     'it_vwap_up': 30, 'it_vwap_down': 30,
     'it_or_up': 60, 'it_or_down': 60,
@@ -96,9 +98,10 @@ for _k, _fam in COOLDOWN_FAMILY.items():
     FAMILY_KINDS.setdefault(_fam, []).append(_k)
 # 这些高信号不受「同股 5 分钟冷却」限制；否则急涨/止盈可能被前面的 VWAP 提醒压掉
 STOCK_COOLDOWN_BYPASS = {'it_stop', 'it_take', 'it_limit_up', 'it_limit_down',
-                         'it_drop', 'it_surge'}
+                         'it_drop', 'it_surge', 'it_reduce_bounce'}
 PRIORITY = {
     'it_stop': 0, 'it_take': 0, 'it_limit_down': 1, 'it_limit_up': 2,
+    'it_reduce_bounce': 2,
     'it_drop': 3, 'it_surge': 4,
     'it_prev_low': 5, 'it_or_down': 6, 'it_vwap_down': 7,
     'it_prev_high': 8, 'it_or_up': 9, 'it_vwap_up': 10,
@@ -108,6 +111,7 @@ KIND_LABEL = {
     'it_stop': '触及止损', 'it_take': '触及止盈',
     'it_limit_up': '逼近涨停', 'it_limit_down': '逼近跌停',
     'it_surge': '盘中急涨', 'it_drop': '盘中急跌',
+    'it_reduce_bounce': '超配反弹减仓',
     'it_high': '日内新高', 'it_low': '日内新低', 'it_vol': '量比异动',
     'it_vwap_up': '上穿 VWAP', 'it_vwap_down': '下破 VWAP',
     'it_or_up': '突破开盘区间', 'it_or_down': '跌破开盘区间',
@@ -215,10 +219,10 @@ def _load_pool(db) -> list:
 
 def _load_costs(db) -> dict:
     rows = db.execute(text(
-        "SELECT stock_code, stock_name, cost_price FROM portfolio "
-        "WHERE is_active = true AND cost_price > 0"
+        "SELECT stock_code, stock_name, cost_price, quantity FROM portfolio "
+        "WHERE is_active = true AND quantity > 0 AND cost_price > 0"
     )).fetchall()
-    return {r[0]: {'name': r[1], 'cost': float(r[2])} for r in rows}
+    return {r[0]: {'name': r[1], 'cost': float(r[2]), 'qty': int(r[3] or 0)} for r in rows}
 
 
 def _load_prev_levels(db, codes: list, day) -> dict:
@@ -422,10 +426,17 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
     hl_min = max(0.0, _num(rules.get('high_low_min_pct'), 0.2))
     stop_pct = _num(rules.get('stop_loss_pct'), 8.0)
     take_pct = _num(rules.get('take_profit_pct'), 20.0)
+    reduce_weight = _num(rules.get('reduce_weight_pct'), 20.0) / 100.0
+    reduce_pct = _num(rules.get('reduce_bounce_pct'), 2.0)
     vwap_pct = max(0.0, _num(rules.get('vwap_break_min_pct'), 0.1))
     or_pct = max(0.0, _num(rules.get('or_break_min_pct'), 0.1))
     prev_pct = max(0.0, _num(rules.get('prev_level_min_pct'), 0.1))
     prev_levels = prev_levels or {}
+    # 持仓市值总额（不含现金）：用于单票占比，触发“超配反弹减仓”
+    total_mv = sum(
+        _num((p or {}).get('qty'), 0.0) * _num((quotes.get(c) or {}).get('price'), 0.0)
+        for c, p in costs.items()
+    )
     out = []
 
     for code, q in quotes.items():
@@ -460,21 +471,33 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
             st['vwap_side'] = _break_side(price, q.get('avg_price'), vwap_pct)
             st['prev_side'] = _prev_side(price, prev, prev_pct)
 
-        # 1) 持仓止损/止盈（真实价 vs 持仓成本价，均不复权）
+        # 1) 持仓止盈/超配反弹减仓/止损（真实价 vs 持仓成本价，均不复权）
+        #    顺序：止盈 → 超配反弹减仓 → 止损。
+        #    超配深亏的持仓日内 +3% 时，应该提示“反弹减仓”，而不是被“已破止损”吞掉。
         pos = costs.get(code) or {}
         cost = pos.get('cost')
-        if cost and stop_pct > 0:
-            chg = price / cost - 1
-            if chg <= -stop_pct / 100:
-                out.append(_cand(code, name, 'it_stop',
-                                 f'现价 {_fmt(price)}，成本 {_fmt(cost)}，回撤 {chg * 100:.2f}%'
-                                 f'（阈值 {stop_pct:.1f}%）'))
+        cost_chg = (price / cost - 1) if cost else None
+        if cost_chg is not None and take_pct > 0 and cost_chg >= take_pct / 100:
+            out.append(_cand(code, name, 'it_take',
+                             f'现价 {_fmt(price)}，成本 {_fmt(cost)}，盈利 +{cost_chg * 100:.2f}%'
+                             f'（阈值 {take_pct:.1f}%）'))
+            continue
+
+        qty = _num(pos.get('qty'), 0.0)
+        if cost and qty > 0 and total_mv > 0:
+            weight = qty * price / total_mv
+            day_chg = _num(q.get('change_pct'), 0.0)
+            if weight >= reduce_weight and day_chg >= reduce_pct:
+                out.append(_cand(code, name, 'it_reduce_bounce',
+                                 f'现价 {_fmt(price)}，日内 +{day_chg:.2f}%，'
+                                 f'单票 {weight * 100:.1f}% 超配；反弹减仓，不补'))
                 continue
-            if take_pct > 0 and chg >= take_pct / 100:
-                out.append(_cand(code, name, 'it_take',
-                                 f'现价 {_fmt(price)}，成本 {_fmt(cost)}，盈利 +{chg * 100:.2f}%'
-                                 f'（阈值 {take_pct:.1f}%）'))
-                continue
+
+        if cost_chg is not None and stop_pct > 0 and cost_chg <= -stop_pct / 100:
+            out.append(_cand(code, name, 'it_stop',
+                             f'现价 {_fmt(price)}，成本 {_fmt(cost)}，回撤 {cost_chg * 100:.2f}%'
+                             f'（阈值 {stop_pct:.1f}%）'))
+            continue
 
         # 2) 逼近涨跌停：只在状态切换时报，避免全天横在涨停反复推
         lu, ld = q.get('limit_up'), q.get('limit_down')

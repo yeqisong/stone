@@ -77,6 +77,24 @@ class TestRules:
         assert len(out) == 1 and out[0]['kind'] == 'it_take'
         assert '盈利 +25.00%' in out[0]['body']
 
+    def test_reduce_bounce_when_overweight(self):
+        # 单票占比 100%、日内 +3% → 超配反弹减仓（不是追涨）
+        out = iw.evaluate_tick({'600519': _q(price=103.0)},
+                               {}, {'600519': {'name': '贵州茅台', 'cost': 100.0, 'qty': 100}},
+                               _rules(), NOW)
+        assert len(out) == 1
+        assert out[0]['kind'] == 'it_reduce_bounce'
+        assert '单票 100.0% 超配' in out[0]['body']
+
+    def test_no_reduce_bounce_when_small_position(self):
+        # 同样 +3%，但只有 10% 仓位 → 不触发减仓提示
+        out = iw.evaluate_tick(
+            {'600519': _q(price=103.0), '000001': _q(code='000001', price=100.0)},
+            {}, {'600519': {'name': '贵州茅台', 'cost': 100.0, 'qty': 10},
+                 '000001': {'name': '平安银行', 'cost': 100.0, 'qty': 90}},
+            _rules(), NOW)
+        assert not any(c['kind'] == 'it_reduce_bounce' for c in out)
+
     def test_limit_up_state_only_fires_once(self):
         state = {'600519': {'day': TODAY, 'high': 109.6, 'low': 100.0,
                             'vol_hot': False, 'limit_near': None,

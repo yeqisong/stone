@@ -1142,6 +1142,17 @@ def get_intraday_radar():
             ORDER BY fp.stock_code
             LIMIT 50
         """)).fetchall()
+        positions = {
+            r[0]: {"qty": int(r[1] or 0), "cost": float(r[2] or 0)}
+            for r in db.execute(text("""
+                SELECT stock_code, quantity, cost_price FROM portfolio
+                WHERE is_active=true AND quantity > 0
+            """)).fetchall()
+        }
+        from app.trade_review import get_discipline
+        _disc = get_discipline(db)
+        max_single = float(_disc.get("max_single_weight") or 0.20)
+        stop_loss = float(_disc.get("stop_loss_pct") or -0.08)
     finally:
         db.close()
     if not rows:
@@ -1188,6 +1199,25 @@ def get_intraday_radar():
             'volume_ratio': vr, 'amount': q.get('amount'),
             'turnover_pct': q.get('turnover_pct'), 'score': score,
         })
+    # 持仓动作：把价格变化翻译成 reduce/stop/hold（只对持仓；买点仅观察）
+    from app.intraday_signal import holding_signal
+    price_map = {it['code']: it['price'] for it in items}
+    total_mv = sum((p['qty'] or 0) * (price_map.get(c) or 0) for c, p in positions.items())
+    for it in items:
+        p = positions.get(it['code'])
+        it['is_holding'] = bool(p)
+        if p:
+            w = (p['qty'] * it['price'] / total_mv) if total_mv else 0.0
+            it['qty'] = p['qty']
+            it['cost'] = p['cost']
+            it['weight'] = round(w, 4)
+            it['vs_cost_pct'] = round(it['price'] / p['cost'] - 1, 4) if p['cost'] else None
+            it['signal'] = holding_signal(
+                it['price'], it['change_pct'], it['vwap_dev_pct'], it['day_position_pct'],
+                p['cost'], w, max_single=max_single, stop_loss=stop_loss,
+            )
+        else:
+            it['signal'] = None
     items.sort(key=lambda x: -x['score'])
     payload = {'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
                'items': items}
