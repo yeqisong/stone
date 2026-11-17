@@ -68,6 +68,31 @@
 
     <div class="tg-advice" :class="st.level">{{ st.advice }}</div>
 
+    <!-- 今日教练：基于交易画像 + 当前仓位 + 持仓板块资金流 -->
+    <div v-if="st.coach" class="tg-coach">
+      <div class="tg-coach-head">
+        <b>今日教练</b>
+        <span class="tg-coach-next">{{ st.coach.next }}</span>
+        <span class="tg-coach-toggle" @click="coachOpen = !coachOpen">{{ coachOpen ? '收起计划' : '看计划' }}</span>
+      </div>
+      <div v-if="st.coach.profile?.length" class="tg-coach-tags">
+        <span v-for="p in st.coach.profile" :key="p.key" class="tg-coach-tag" :title="p.evidence">{{ p.label }}</span>
+      </div>
+      <div v-if="coachOpen" class="tg-coach-detail">
+        <div v-for="a in st.coach.active" :key="a.title" class="tg-coach-risk" :class="'lv-' + a.level">
+          <b>{{ a.title }}</b><span>{{ a.action }}</span>
+          <i>{{ a.rule }}</i>
+        </div>
+        <div v-if="st.coach.tranches?.length" class="tg-coach-tranches">
+          <div v-for="(t, i) in st.coach.tranches" :key="i" class="tg-coach-tranche">
+            <span class="tg-t-when">{{ t.when }}</span>
+            <b>{{ money(t.amount) }}</b>
+            <span class="tg-t-hint">{{ t.hint }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="tg-actions">
       <n-button size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
       <n-button size="small" @click="openCheck('buy')">记录今日操作</n-button>
@@ -139,6 +164,7 @@ const message = useMessage()
 const st = ref(null)
 const loading = ref(false), error = ref('')
 const collapsed = ref(localStorage.getItem('trade_guard_collapsed') === '1')
+const coachOpen = ref(false)
 const showCheck = ref(false), checkSide = ref('buy')
 const showCash = ref(false), cashValue = ref(0), savingCash = ref(false)
 let timer = null
@@ -268,6 +294,33 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   background: var(--c-card-bg-hover); border-left:2px solid var(--c-down); }
 .tg-advice.tg-warn { border-left-color: var(--c-warning); color: var(--c-warning); }
 .tg-advice.tg-critical { border-left-color: var(--c-error); color: var(--c-error); }
+.tg-coach {
+  margin-top: 9px; padding: 8px 9px; border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-accent); border-radius: var(--radius-sm);
+  background: var(--c-card-bg);
+}
+.tg-coach-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tg-coach-head b { font-size: 12px; flex-shrink: 0; }
+.tg-coach-next { flex: 1; min-width: 0; font-size: var(--text-meta); color: var(--c-text); line-height: 1.6; }
+.tg-coach-toggle { font-size: var(--text-meta); color: var(--c-text-faint); cursor: pointer; user-select: none; flex-shrink: 0; }
+.tg-coach-toggle:hover { color: var(--c-text); }
+.tg-coach-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.tg-coach-tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px; cursor: help;
+  color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 35%, transparent);
+}
+.tg-coach-detail { margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--c-border); }
+.tg-coach-risk { font-size: var(--text-meta); line-height: 1.6; margin-bottom: 4px; }
+.tg-coach-risk b { font-weight: 600; }
+.tg-coach-risk span { color: var(--c-text); margin-left: 4px; }
+.tg-coach-risk i { display: block; color: var(--c-text-faint); font-style: normal; }
+.tg-coach-risk.lv-critical b { color: var(--c-error); }
+.tg-coach-risk.lv-warn b { color: var(--c-warning); }
+.tg-coach-tranches { margin-top: 5px; }
+.tg-coach-tranche { display: flex; gap: 8px; align-items: baseline; font-size: var(--text-meta); line-height: 1.7; }
+.tg-t-when { width: 78px; color: var(--c-text-dim); flex-shrink: 0; }
+.tg-coach-tranche b { width: 68px; text-align: right; flex-shrink: 0; }
+.tg-t-hint { color: var(--c-text-faint); }
 .tg-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
 .tg-today { margin-top:10px; border-top:1px dashed var(--c-border); padding-top:7px; }
 .tg-today-head { display:flex; align-items:baseline; gap:8px; font-size:12px; font-weight:600; margin-bottom:4px; }

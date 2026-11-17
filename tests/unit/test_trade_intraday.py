@@ -1,5 +1,12 @@
 """实时仓位护栏纯逻辑单测（无 DB）：费用估算、最大可买、现金/成本更新。"""
-from app.trade_intraday import _apply_manual, _estimate_fees, _max_buy_qty
+from app.trade_intraday import (
+    _apply_manual,
+    _build_coach,
+    _estimate_fees,
+    _max_buy_qty,
+    _money,
+    _profile_from_review,
+)
 
 
 def _state(**kw):
@@ -66,6 +73,57 @@ class TestMaxBuyQty:
         st = _state(positions=[{"market_value": 10000.0}] * 6,
                     rules={**_state()["rules"], "max_positions": 6})
         assert _max_buy_qty(st, None, price=10.0, stop=9.2) == 0
+
+
+class TestCoach:
+    def test_money_units(self):
+        assert _money(14765) == "¥1.5万"
+        assert _money(569390000) == "¥5.69亿"
+        assert _money(-1000) == "-¥1,000"
+
+    def test_profile_detects_weaknesses(self):
+        r = {
+            "ok": True,
+            "summary": {"max_drawdown": 0.5, "net_deposit": 20000,
+                        "equity_start": 100000, "return_pct": -0.5},
+            "behavior": {
+                "add_loss_amount": 200000, "add_win_amount": 50000,
+                "add_loss_count": 20, "add_win_count": 5,
+                "post_loss_next_day": {"avg_buy_amount": 40000},
+                "post_win_next_day": {"avg_buy_amount": 30000},
+                "trades_per_day": 5, "same_day_roundtrips": 20,
+                "rebuy_within_7d": 30, "trades": 500, "active_days": 100,
+                "max_single_weight": 0.5, "max_weight_date": "2026-01-01",
+                "disposition_ratio": 1.5, "hold_days_win": 5, "hold_days_loss": 8,
+            },
+            "equity": [{"equity": 100000, "cash": 1000},
+                       {"equity": 110000, "cash": 2000}],
+        }
+        p = _profile_from_review(r)
+        keys = {t["key"] for t in p["types"]}
+        assert {"loss_add", "full_position", "revenge", "overtrade",
+                "concentration", "drawdown", "disposition", "deposit"} <= keys
+        assert p["types"][0]["key"] == "loss_add"
+
+    def test_coach_plan_and_tranches(self):
+        st = {
+            "trade_date": "2026-11-17", "slip_end": "2026-11-17",
+            "target_position_ratio": 0.70, "max_position_ratio": 0.90,
+            "position_ratio": 0.95, "market_value": 95000.0, "equity": 100000.0,
+            "top_weight": 0.40, "top_position": {"stock_name": "A"},
+            "positions": [{"stock_name": "A", "pnl_pct": -0.20}],
+            "consecutive_loss_days": 2, "remaining_new_buys": 0,
+            "today_actions": [], "rules": {"max_single_weight": 0.20},
+        }
+        sectors = [{"name": "A", "industry": "电子", "sum3": -1e9,
+                    "streak": 3, "sign": -1}]
+        c = _build_coach(st, {"types": [{"key": "x", "label": "测试"}], "metrics": {}}, sectors)
+        assert c["next"].startswith("今天只做一件事")
+        assert "A" in c["next"] and "电子" in c["next"]
+        assert any("最大单票" in a["title"] for a in c["active"])
+        assert any("电子" in a["title"] for a in c["active"])
+        assert len(c["tranches"]) == 3
+        assert abs(c["tranches"][0]["amount"] - 8333.33) < 0.01
 
 
 class TestApplyManual:

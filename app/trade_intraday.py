@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
 from datetime import date as _date, datetime, timedelta, timezone
 from typing import Any, Optional
@@ -22,7 +23,7 @@ from typing import Any, Optional
 from loguru import logger
 from sqlalchemy import text
 
-from app.trade_review import get_discipline, today_gate
+from app.trade_review import build_review, get_discipline, today_gate
 from app.trade_slip import build_positions, load_slip_rows
 
 _CST = timezone(timedelta(hours=8))
@@ -42,6 +43,8 @@ def _money(v: Optional[float]) -> str:
     n = float(v)
     sign = "-" if n < 0 else ""
     a = abs(n)
+    if a >= 1e8:
+        return f"{sign}¥{a/1e8:.2f}亿"
     if a >= 1e4:
         return f"{sign}¥{a/1e4:.1f}万"
     return f"{sign}¥{a:,.0f}"
@@ -182,6 +185,254 @@ def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
         "quantity": _f(r["quantity"]), "price": _f(r["price"]), "amount": _f(r["amount"]),
         "reason": r["reason"] or "", "stop_price": _f(r["stop_price"]) or None,
     } for r in rows]
+
+
+# ── 交易画像 / 针对性教练 ──
+# 从交割单重放里识别用户的高风险模式；缓存 10 分钟，避免每次 20s 轮询都重算。
+
+_PROFILE_CACHE: dict = {"key": None, "ts": 0.0, "data": None}
+
+
+def _avg_position(r: dict) -> tuple[float, int, int]:
+    eq = r.get("equity") or []
+    ratios = []
+    for p in eq:
+        e = _f(p.get("equity"))
+        c = _f(p.get("cash"))
+        if e > 0:
+            ratios.append(max(0.0, min(1.0, (e - c) / e)))
+    if not ratios:
+        return 0.0, 0, 0
+    return sum(ratios) / len(ratios), sum(1 for x in ratios if x >= 0.9), len(ratios)
+
+
+def _profile_from_review(r: dict) -> dict:
+    if not r.get("ok"):
+        return {"types": [], "metrics": {}}
+    s, b = r.get("summary") or {}, r.get("behavior") or {}
+    avg_pos, full_days, n_days = _avg_position(r)
+    types: list[dict] = []
+
+    def add(key, label, severity, evidence, rule):
+        types.append({"key": key, "label": label, "severity": severity,
+                      "evidence": evidence, "rule": rule})
+
+    add_loss = _f(b.get("add_loss_amount"))
+    add_win = _f(b.get("add_win_amount"))
+    if add_loss > max(add_win * 1.2, 50000) and int(b.get("add_loss_count") or 0) >= 10:
+        add("loss_add", "亏损加仓型", 100,
+            f"亏损时加仓 {b.get('add_loss_count')} 笔 / {_money(add_loss)}，"
+            f"盈利时 {b.get('add_win_count')} 笔 / {_money(add_win)}",
+            "浮亏超过 -8% 禁止加仓；加仓只在盈利且收盘站上 20 日线时，单次 ≤ 原仓位 50%")
+    if avg_pos >= 0.80:
+        add("full_position", "长期满仓型", 98,
+            f"平均仓位 {_pct(avg_pos)}，{full_days}/{n_days} 个交易日仓位 ≥90%",
+            "账户常态仓位 ≤70%、现金 ≥30%；仓位 >90% 只减不加")
+    pl, pw = b.get("post_loss_next_day") or {}, b.get("post_win_next_day") or {}
+    if _f(pl.get("avg_buy_amount")) > _f(pw.get("avg_buy_amount")) * 1.2 > 0:
+        add("revenge", "报复交易型", 95,
+            f"亏损日次日日均 {pl.get('avg_trades')} 笔 / 买入 {_money(pl.get('avg_buy_amount'))}；"
+            f"盈利日次日 {pw.get('avg_trades')} 笔 / {_money(pw.get('avg_buy_amount'))}",
+            "连续 2 个亏损日 → 次日只减不加；单日 -3% 停手")
+    if (_f(b.get("trades_per_day")) > 3 or int(b.get("same_day_roundtrips") or 0) >= 10
+            or int(b.get("rebuy_within_7d") or 0) >= 20):
+        add("overtrade", "高频交易型", 92,
+            f"{b.get('trades')} 笔 / {b.get('active_days')} 天，日均 {b.get('trades_per_day')} 笔；"
+            f"同日回转 {b.get('same_day_roundtrips')} 天；7 日回补 {b.get('rebuy_within_7d')} 次",
+            "每日新开仓 ≤2；同日不回转；卖出后 5 个交易日内不回补")
+    if _f(b.get("max_single_weight")) > 0.35:
+        add("concentration", "单票集中型", 90,
+            f"最大单票 {_pct(b.get('max_single_weight'))}（{b.get('max_weight_date')}）",
+            "单票 ≤20%，单一行业 ≤35%；超过只减不加")
+    if _f(s.get("max_drawdown")) > 0.25:
+        add("drawdown", "回撤失控型", 88,
+            f"最大回撤 {_pct(s.get('max_drawdown'))}（{s.get('peak_date')} → {s.get('trough_date')}）",
+            "账户回撤 -15% 降半仓，-20% 停手 5 个交易日")
+    if _f(b.get("disposition_ratio")) > 1.25:
+        add("disposition", "处置效应型", 80,
+            f"盈利单平均持有 {b.get('hold_days_win')} 天，亏损单 {b.get('hold_days_loss')} 天",
+            "入场先写止损；亏损单 5 个交易日未回成本减半；盈利单按 20 日线持有")
+    net_dep = _f(s.get("net_deposit"))
+    eq_start = _f(s.get("equity_start"))
+    if net_dep > 0 and eq_start > 0 and net_dep > eq_start * 0.05:
+        add("deposit", "入金翻本型", 75,
+            f"期间净入金 {_money(net_dep)}；剔除入金后收益 {_pct(s.get('return_pct'))}",
+            "入金与交易成绩分开记账；复盘只看剔除入金后的净值；亏损后不要加钱翻本")
+
+    types.sort(key=lambda x: -x["severity"])
+    return {
+        "types": types,
+        "metrics": {
+            "avg_position": round(avg_pos, 4),
+            "full_days": full_days, "days": n_days,
+            "max_drawdown": s.get("max_drawdown"),
+            "net_deposit": s.get("net_deposit"),
+            "trades_per_day": b.get("trades_per_day"),
+        },
+    }
+
+
+def _get_profile(db) -> dict:
+    row = db.execute(text("SELECT COUNT(*), MAX(trade_date) FROM trade_slip")).fetchone()
+    key = (int(row[0] or 0), str(row[1] or ""))
+    now = time.time()
+    cached = _PROFILE_CACHE
+    if cached["data"] is not None and cached["key"] == key and now - cached["ts"] < 600:
+        return cached["data"]
+    try:
+        data = _profile_from_review(build_review(db))
+    except Exception as e:
+        logger.warning(f"[intraday] 交易画像失败: {str(e)[:120]}")
+        data = {"types": [], "metrics": {}}
+    _PROFILE_CACHE.update(key=key, ts=now, data=data)
+    return data
+
+
+def _top_sectors(db, positions: list[dict]) -> list[dict]:
+    """最大 3 个持仓所属行业的近 3 日主力净流入与连续天数。"""
+    tops = positions[:3]
+    codes = [p["stock_code"] for p in tops]
+    if not codes:
+        return []
+    rows = db.execute(text("""
+        SELECT stock_code, MAX(industry_l1)
+        FROM stock_master
+        WHERE stock_code = ANY(CAST(:codes AS varchar[])) AND stock_type='stock'
+        GROUP BY stock_code
+    """), {"codes": codes}).fetchall()
+    ind = {r[0]: r[1] for r in rows if r[1]}
+    names = sorted({v for v in ind.values()})
+    if not names:
+        return []
+    flow_rows = db.execute(text("""
+        SELECT sector_name, trade_date, main_net
+        FROM sector_flow_daily
+        WHERE level='l1' AND sector_name = ANY(CAST(:names AS varchar[]))
+          AND trade_date >= (SELECT MAX(trade_date) FROM sector_flow_daily) - INTERVAL '10 days'
+        ORDER BY sector_name, trade_date
+    """), {"names": names}).fetchall()
+    by_name: dict[str, list] = defaultdict(list)
+    for r in flow_rows:
+        by_name[r[0]].append((r[1], _f(r[2])))
+    out = []
+    for p in tops:
+        industry = ind.get(p["stock_code"])
+        if not industry:
+            continue
+        series = by_name.get(industry) or []
+        if not series:
+            continue
+        series.sort(key=lambda x: x[0])
+        last3 = [v for _, v in series[-3:]]
+        streak, sign = 0, 0
+        for _, v in reversed(series):
+            if v == 0:
+                break
+            sg = 1 if v > 0 else -1
+            if sign == 0:
+                sign = sg
+            if sg != sign:
+                break
+            streak += 1
+        out.append({
+            "code": p["stock_code"], "name": p["stock_name"], "industry": industry,
+            "main_net": round(series[-1][1], 2), "sum3": round(sum(last3), 2),
+            "streak": streak, "sign": sign, "date": series[-1][0].isoformat(),
+        })
+    return out
+
+
+def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
+    active: list[dict] = []
+    today = st["trade_date"]
+    target = _f(st.get("target_position_ratio"), 0.70)
+    hard = _f(st.get("max_position_ratio"), 0.90)
+    pos = _f(st.get("position_ratio"))
+    mv = _f(st.get("market_value"))
+    equity = _f(st.get("equity"))
+    top_w = _f(st.get("top_weight"))
+    top_p = st.get("top_position") or {}
+    max_single = _f((st.get("rules") or {}).get("max_single_weight"), 0.20)
+    worst_sector = min(sectors, key=lambda x: _f(x.get("sum3"))) if sectors else None
+    sector_bad = bool(worst_sector and _f(worst_sector.get("sum3")) < 0
+                      and int(worst_sector.get("streak") or 0) >= 2
+                      and int(worst_sector.get("sign") or 0) < 0)
+
+    if pos >= hard:
+        active.append({"level": "critical", "title": f"仓位 {_pct(pos)} 已超硬上限 {_pct(hard)}",
+                       "action": "今天只减不加；先减 1/3 到目标仓位",
+                       "rule": "目标 ≤70%，硬上限 90%"})
+    elif pos > target:
+        active.append({"level": "warn", "title": f"仓位 {_pct(pos)} 高于目标 {_pct(target)}",
+                       "action": "先分批减到 70% 以下，再考虑新开仓",
+                       "rule": "目标仓位 ≤70%"})
+    if top_w > max_single and top_p:
+        active.append({"level": "critical" if top_w > 0.35 else "warn",
+                       "title": f"最大单票 {top_p.get('stock_name')} {_pct(top_w)} 超上限 {_pct(max_single)}",
+                       "action": f"只减不加；优先把 {top_p.get('stock_name')} 降到 20% 以下",
+                       "rule": "单票 ≤20%；超过只减不加"})
+    if int(st.get("consecutive_loss_days") or 0) >= 2:
+        active.append({"level": "critical",
+                       "title": f"连续亏损 {st['consecutive_loss_days']} 天",
+                       "action": "今天只减不加；收盘后复盘，不做新开仓",
+                       "rule": "连续 2 个亏损日 → 次日冷却"})
+    losers = [p for p in (st.get("positions") or []) if _f(p.get("pnl_pct")) < -0.08]
+    if losers:
+        worst = min(losers, key=lambda p: _f(p.get("pnl_pct")))
+        active.append({"level": "warn",
+                       "title": f"{worst['stock_name']} 浮亏 {_pct(_f(worst.get('pnl_pct')))}",
+                       "action": f"禁止补仓；优先减 {worst['stock_name']}",
+                       "rule": "浮亏 >8% 禁止加仓；-8% 无条件减半"})
+    if sector_bad:
+        w = worst_sector
+        active.append({"level": "warn",
+                       "title": f"持仓板块 {w['industry']} 持续流出",
+                       "action": f"优先减 {w['name']}（{w['industry']}），不补",
+                       "rule": f"近3日主力净流出 {_money(abs(w['sum3']))}，连续 {w['streak']} 天"})
+    if int(st.get("remaining_new_buys") or 0) <= 0:
+        active.append({"level": "warn", "title": "今日新开仓已用完",
+                       "action": "今天不再买；有仓位就按计划减",
+                       "rule": "每日新开仓 ≤2 笔"})
+    if st.get("slip_end") != today and not (st.get("today_actions") or []):
+        active.append({"level": "info", "title": "今日操作/交割单未记录",
+                       "action": "先把今天成交记一笔或导入交割单，否则仓位数据是旧的",
+                       "rule": "数据不完整时不做交易决定"})
+
+    need = max(0.0, mv - target * equity)
+    tranches = []
+    if need > 0:
+        each = round(need / 3, 2)
+        tranches = [
+            {"amount": each, "when": "10:00-10:30",
+             "hint": "开盘 15 分钟不操作；优先减流出最久的板块"},
+            {"amount": each, "when": "14:00-14:30",
+             "hint": "若大盘/板块资金流转正，暂停这一份"},
+            {"amount": each, "when": "条件单",
+             "hint": "跌破前低再卖；站回 5 日线保留；剩余单票 -8% 减半"},
+        ]
+    if need > 0:
+        prio = []
+        if top_w > max_single and top_p:
+            prio.append(f"{top_p.get('stock_name')}（单票 {_pct(top_w)}）")
+        if sector_bad:
+            prio.append(f"{worst_sector['name']}（{worst_sector['industry']} 连续流出）")
+        nxt = f"今天只做一件事：10:00 后先减 1/3（约 {_money(need/3)}）到 70% 方向"
+        if prio:
+            nxt += "，优先减 " + "、".join(prio[:2])
+        nxt += "；不补任何亏损仓。"
+    elif int(st.get("consecutive_loss_days") or 0) >= 2:
+        nxt = "今天只做一件事：只减不加，收盘后复盘。"
+    elif st.get("slip_end") != today and not (st.get("today_actions") or []):
+        nxt = "今天只做一件事：先把今天成交记录/导入交割单，再谈操作。"
+    elif active:
+        nxt = f"今天只做一件事：{active[0]['action']}。"
+    else:
+        nxt = "今天只做一件事：按计划执行，不追涨；收盘后导入交割单。"
+
+    return {"next": nxt, "active": active[:5], "tranches": tranches,
+            "profile": (profile.get("types") or [])[:4],
+            "metrics": profile.get("metrics") or {},
+            "sectors": sectors}
 
 
 def _build_state(db, cash_override: Optional[float] = None) -> dict:
@@ -326,7 +577,7 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
         if top and top_weight > max_single_w:
             advice += f" 最大单票 {top['stock_name']} 占 {_pct(top_weight)} 超上限，只减不加。"
 
-    return {
+    state = {
         "asof": now.strftime("%H:%M:%S"),
         "trade_date": today.isoformat(),
         "slip_end": slip_end.isoformat() if slip_end else None,
@@ -372,6 +623,14 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
             "max_daily_buy_pct": _f(rules.get("max_daily_buy_pct"), 0.30),
         },
     }
+    try:
+        profile = _get_profile(db)
+        sectors = _top_sectors(db, positions)
+        state["coach"] = _build_coach(state, profile, sectors)
+    except Exception as e:
+        logger.warning(f"[intraday] 教练生成失败: {str(e)[:120]}")
+        state["coach"] = None
+    return state
 
 
 def state(db) -> dict:
