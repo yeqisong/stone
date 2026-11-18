@@ -70,6 +70,24 @@ class TestRules:
         assert out[0]['level'] == 'critical'
         assert '回撤 -10.00%' in out[0]['body']
 
+    def test_stop_stages_half_when_weak_market_above_vwap(self):
+        out = iw.evaluate_tick({'600519': _q(price=90.0, avg_price=89.0)},
+                               {}, {'600519': {'name': '贵州茅台', 'cost': 100.0}},
+                               _rules(stop_loss_pct=8.0), NOW,
+                               sentiment={'level': 'weak', 'label': '偏弱'})
+        assert len(out) == 1 and out[0]['kind'] == 'it_stop'
+        assert '先卖50%' in out[0]['body']
+        assert 'VWAP' in out[0]['body']
+
+    def test_stop_full_when_weak_market_below_vwap(self):
+        out = iw.evaluate_tick({'600519': _q(price=90.0, avg_price=91.0)},
+                               {}, {'600519': {'name': '贵州茅台', 'cost': 100.0}},
+                               _rules(stop_loss_pct=8.0), NOW,
+                               sentiment={'level': 'weak', 'label': '偏弱'})
+        assert len(out) == 1 and out[0]['kind'] == 'it_stop'
+        assert '直接止损' in out[0]['body']
+        assert '先卖50%' not in out[0]['body']
+
     def test_take_profit(self):
         out = iw.evaluate_tick({'600519': _q(price=125.0)},
                                {}, {'600519': {'name': '贵州茅台', 'cost': 100.0}},

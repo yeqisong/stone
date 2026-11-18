@@ -121,7 +121,7 @@ CRITICAL = {'it_stop', 'it_limit_down', 'it_drop'}
 
 _CTX_TTL_S = 60
 _ctx = {'ts': 0.0, 'rules': dict(DEFAULT_CONFIG), 'pool': [], 'costs': {},
-        'cash': 0.0, 'prev_levels': {}, 'trade_day': True}
+        'cash': 0.0, 'sentiment': None, 'prev_levels': {}, 'trade_day': True}
 _trade_day_cache = {'day': None, 'ok': True}
 _prev_cache = {'day': None, 'key': None, 'levels': {}}
 _state: dict = {}          # code -> 日内状态（高低/量比/限价/采样 + VWAP/OR/昨高昨低侧别）
@@ -282,12 +282,18 @@ def _load_context() -> dict:
     try:
         pool = _load_pool(db)
         costs, cash = _load_live(db)
+        try:
+            from app.market_sentiment import get as market_sentiment
+            sentiment = market_sentiment.get(db)
+        except Exception:
+            sentiment = None
         _ctx.update(
             ts=now,
             rules=get_intraday_rules(db),
             pool=pool,
             costs=costs,
             cash=cash,
+            sentiment=sentiment,
             prev_levels=_load_prev_levels(db, [p['code'] for p in pool], _bj_now().date()),
             trade_day=_is_trade_day(db, _bj_now().date()),
         )
@@ -429,7 +435,7 @@ def _update_or_state(st: dict, q: dict, price: float, rules: dict, now: datetime
 
 def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
                   now: datetime, prev_levels: dict | None = None,
-                  cash: float = 0.0) -> list:
+                  cash: float = 0.0, sentiment: dict | None = None) -> list:
     """纯规则评估：返回候选告警（未落库、未查冷却）。同一只票一次最多一条。
 
     state 会被就地更新（日内高低基线、量比状态、急涨急跌采样、
@@ -514,9 +520,21 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
                 continue
 
         if cost_chg is not None and stop_pct > 0 and cost_chg <= -stop_pct / 100:
-            out.append(_cand(code, name, 'it_stop',
-                             f'现价 {_fmt(price)}，成本 {_fmt(cost)}，回撤 {cost_chg * 100:.2f}%'
-                             f'（阈值 {stop_pct:.1f}%）'))
+            sent_level = (sentiment or {}).get('level')
+            sent_label = (sentiment or {}).get('label') or ''
+            above_vwap = bool(q.get('avg_price') and price >= _num(q.get('avg_price'), 0.0))
+            if sent_level in ('panic', 'weak'):
+                if above_vwap:
+                    body = (f'现价 {_fmt(price)}，成本 {_fmt(cost)}，回撤 {cost_chg * 100:.2f}%；'
+                            f'市场{sent_label}但个股站上VWAP：先卖50%，剩余挂VWAP/前高，'
+                            f'14:50无条件处理')
+                else:
+                    body = (f'现价 {_fmt(price)}，成本 {_fmt(cost)}，回撤 {cost_chg * 100:.2f}%；'
+                            f'市场{sent_label}且个股跌破VWAP：直接止损，不等反弹')
+            else:
+                body = (f'现价 {_fmt(price)}，成本 {_fmt(cost)}，回撤 {cost_chg * 100:.2f}%'
+                        f'（阈值 {stop_pct:.1f}%）')
+            out.append(_cand(code, name, 'it_stop', body))
             continue
 
         # 2) 逼近涨跌停：只在状态切换时报，避免全天横在涨停反复推
@@ -857,7 +875,8 @@ def _tick(now: datetime, rules: dict | None = None) -> int:
     if not rules.get('enabled'):
         return 0
     candidates = evaluate_tick(quotes, _state, ctx['costs'], rules, now,
-                               ctx.get('prev_levels'), cash=ctx.get('cash', 0.0))
+                               ctx.get('prev_levels'), cash=ctx.get('cash', 0.0),
+                               sentiment=ctx.get('sentiment'))
     return _persist(candidates, rules, now)
 
 

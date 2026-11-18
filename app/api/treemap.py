@@ -9,6 +9,17 @@ import json
 router = APIRouter(tags=["treemap"])
 
 
+@router.get("/market_sentiment")
+def get_market_sentiment():
+    """市场情绪仪表：宽度/中位数/涨跌停/指数 VWAP → 恐慌/偏弱/中性/偏强。"""
+    from app.market_sentiment import get as market_sentiment
+    db = get_sync_db()
+    try:
+        return market_sentiment(db)
+    finally:
+        db.close()
+
+
 @router.get("/treemap_latest_date")
 def get_treemap_latest_date():
     """返回 stock_treemap_cache 中最新有数据的日期，无数据返回 null。"""
