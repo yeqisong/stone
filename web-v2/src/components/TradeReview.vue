@@ -147,6 +147,13 @@
                 <i>{{ x.sub }}</i>
               </div>
             </div>
+            <div v-if="execution.emotions?.length" class="tr-emotions">
+              <span class="tr-muted" style="margin-left:0">手工情绪：</span>
+              <span v-for="e in execution.emotions" :key="e.emotion + e.side"
+                class="tr-emotion-chip" :class="['报复','追涨','恐惧'].includes(e.emotion) ? 'em-bad' : ''">
+                {{ e.emotion }} {{ e.count }} 笔（{{ e.side === 'buy' ? '买' : '卖' }}）
+              </span>
+            </div>
             <div class="tr-panel-title">卖出执行 <span class="tr-muted">正值=卖在之后更高位；负值=卖飞</span></div>
             <n-data-table :columns="execSellCols" :data="execution.sells" size="small"
               :bordered="false" :max-height="320" scroll-x="980" />
@@ -707,6 +714,9 @@ onUnmounted(() => { window.removeEventListener('resize', resizeChart); disposeCh
 .tr-exec-card span { display:block; font-size:var(--text-meta); color:var(--c-text-dim); }
 .tr-exec-card b { display:block; margin-top:2px; font-size:14px; font-variant-numeric:tabular-nums; }
 .tr-exec-card i { display:block; margin-top:1px; font-size:var(--text-meta); color:var(--c-text-faint); font-style:normal; }
+.tr-emotions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+.tr-emotion-chip { font-size: var(--text-meta); padding:1px 6px; border-radius:3px; color: var(--c-text-dim); background: var(--c-card-bg-hover); }
+.tr-emotion-chip.em-bad { color:#fff; background: var(--c-error); }
 
 /* 纪律分 */
 .tr-score-panel { border-left:3px solid var(--c-accent); }

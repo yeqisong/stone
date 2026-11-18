@@ -33,6 +33,8 @@ from app.trade_slip import (
 from app.trade_intraday import (
     check as intraday_check,
     delete_action as intraday_delete,
+    journal_get,
+    journal_save,
     quote as intraday_quote,
     reconcile as intraday_reconcile,
     record as intraday_record,
@@ -51,11 +53,17 @@ class TradeCheckBody(BaseModel):
     price: float = 0
     stop_price: Optional[float] = None
     reason: str = ""
+    emotion: Optional[str] = None
     cash: Optional[float] = None
 
 
 class CashBody(BaseModel):
     cash: float
+
+
+class JournalBody(BaseModel):
+    pre_plan: Optional[str] = None
+    post_review: Optional[str] = None
 
 
 class DisciplineBody(BaseModel):
@@ -234,6 +242,24 @@ def intraday_guard_delete(action_id: int, user: str = Depends(optional_auth)):
         return {"ok": True, "state": state}
     except ValueError as e:
         raise HTTPException(404, str(e))
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/journal")
+def trade_journal(user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        return {"ok": True, **journal_get(db)}
+    finally:
+        db.close()
+
+
+@router.put("/portfolio/trades/journal")
+def save_trade_journal(body: JournalBody, user: str = Depends(optional_auth)):
+    db = get_sync_db()
+    try:
+        return {"ok": True, **journal_save(db, body.pre_plan, body.post_review)}
     finally:
         db.close()
 

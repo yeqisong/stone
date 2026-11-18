@@ -176,7 +176,8 @@ def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
             "id": None, "source": "slip", "trade_time": r.get("trade_time") or "",
             "side": r["side"], "stock_code": r["stock_code"], "stock_name": r["stock_name"],
             "quantity": _f(r["quantity"]), "price": _f(r["price"]), "amount": _f(r["amount"]),
-            "reason": "", "stop_price": None, "hard_block": False, "override_reason": "",
+            "reason": "", "stop_price": None, "hard_block": False,
+            "override_reason": "", "emotion": "",
         } for r in rows]
     rows = db.execute(text(
         "SELECT * FROM trade_intraday WHERE trade_date=:d ORDER BY trade_time, id"
@@ -188,6 +189,7 @@ def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
         "reason": r["reason"] or "", "stop_price": _f(r["stop_price"]) or None,
         "hard_block": bool(r.get("hard_block")),
         "override_reason": r.get("override_reason") or "",
+        "emotion": r.get("emotion") or "",
     } for r in rows]
 
 
@@ -877,11 +879,51 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
     except Exception as e:
         logger.warning(f"[intraday] 教练生成失败: {str(e)[:120]}")
         state["coach"] = None
+    try:
+        state["journal"] = journal_get(db, today)
+    except Exception:
+        state["journal"] = None
     return state
 
 
 def state(db) -> dict:
     return _build_state(db)
+
+
+def journal_get(db, day: Optional[_date] = None) -> dict:
+    day = day or _today()
+    try:
+        row = db.execute(text("""
+            SELECT trade_date, pre_plan, post_review, updated_at
+            FROM trade_journal WHERE trade_date=:d
+        """), {"d": day}).mappings().fetchone()
+    except Exception:
+        row = None
+    if not row:
+        return {"trade_date": day.isoformat(), "pre_plan": "",
+                "post_review": "", "updated_at": None}
+    return {"trade_date": row["trade_date"].isoformat(),
+            "pre_plan": row["pre_plan"] or "",
+            "post_review": row["post_review"] or "",
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None}
+
+
+def journal_save(db, pre_plan: Optional[str] = None,
+                 post_review: Optional[str] = None,
+                 day: Optional[_date] = None) -> dict:
+    day = day or _today()
+    cur = journal_get(db, day)
+    pre = cur["pre_plan"] if pre_plan is None else str(pre_plan)[:4000]
+    post = cur["post_review"] if post_review is None else str(post_review)[:4000]
+    db.execute(text("""
+        INSERT INTO trade_journal (trade_date, pre_plan, post_review, updated_at)
+        VALUES (:d, :pre, :post, CURRENT_TIMESTAMP)
+        ON CONFLICT (trade_date) DO UPDATE SET
+            pre_plan=EXCLUDED.pre_plan, post_review=EXCLUDED.post_review,
+            updated_at=CURRENT_TIMESTAMP
+    """), {"d": day, "pre": pre, "post": post})
+    db.commit()
+    return journal_get(db, day)
 
 
 def quote(db, code: str) -> dict:
@@ -1163,9 +1205,9 @@ def record(db, body: dict) -> dict:
         INSERT INTO trade_intraday
             (trade_date, trade_time, stock_code, stock_name, side, quantity, price, amount,
              commission, stamp_tax, transfer_fee, extra_fee, stop_price, reason,
-             hard_block, override_reason, source)
+             hard_block, override_reason, emotion, source)
         VALUES (:d, :t, :c, :n, :s, :q, :p, :a, :com, :st, :tr, :ex, :stop, :r,
-                :hb, :or, 'manual')
+                :hb, :or, :em, 'manual')
     """), {
         "d": now.date(), "t": now.strftime("%H:%M:%S"), "c": code,
         "n": chk.get("stock_name") or _stock_name(db, code), "s": side, "q": qty, "p": price,
@@ -1173,6 +1215,7 @@ def record(db, body: dict) -> dict:
         "tr": fees["transfer_fee"], "ex": fees["extra_fee"],
         "stop": _f(body.get("stop_price")) or None, "r": reason_text,
         "hb": hard_block, "or": reason_text,
+        "em": str(body.get("emotion") or "")[:16],
     })
     # 如果用户已经修正过当前现金，记录操作后同步扣/加现金
     snap = _snapshot(db, now.date())

@@ -100,10 +100,15 @@
       </div>
     </div>
 
+    <div v-if="journalHint && !collapsed" class="tg-journal-hint" @click="openJournal">
+      {{ journalHint }}
+    </div>
+
     <div class="tg-actions">
       <n-button size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
       <n-button size="small" @click="openCheck('buy')">记录今日操作</n-button>
       <n-button size="small" quaternary @click="showReduction = true">减仓清单</n-button>
+      <n-button size="small" quaternary @click="openJournal">今日计划/复盘</n-button>
       <n-button size="small" quaternary @click="openCash">修正现金</n-button>
       <n-button size="small" quaternary @click="emit('import')">导入交割单</n-button>
     </div>
@@ -124,6 +129,7 @@
         <span class="tg-code">{{ a.stock_code }}</span>
         <span class="tg-qty">{{ a.quantity }} 股 @ ¥{{ a.price }}</span>
         <span v-if="a.reason" class="tg-reason" :title="a.reason">{{ a.reason }}</span>
+        <span v-if="a.emotion" class="tg-emotion" :class="emotionClass(a.emotion)">{{ a.emotion }}</span>
         <span v-if="a.hard_block" class="tg-hard-chip" :title="a.override_reason || ''">硬拦截</span>
         <n-button v-if="a.source === 'manual'" size="tiny" quaternary type="error" @click="remove(a.id)">删除</n-button>
       </div>
@@ -142,6 +148,29 @@
 
   <TradeCheck v-model:show="showCheck" :default-side="checkSide" @recorded="onRecorded" />
   <ReductionPlan v-model:show="showReduction" />
+
+  <n-modal v-model:show="showJournal">
+    <n-card style="width:min(600px,94vw)" title="今日计划 / 收盘复盘" :bordered="false">
+      <div class="tg-journal-form">
+        <label>
+          <span>盘前计划（最多几笔 / 仓位上限 / 只做什么 / 不做什么）</span>
+          <n-input v-model:value="journalForm.pre_plan" type="textarea" :rows="3"
+            maxlength="1000" show-count placeholder="例：今天只减不加，优先卖阳光500/沪电100，不开新仓" />
+        </label>
+        <label>
+          <span>收盘复盘（哪里执行了 / 哪里违背计划 / 当时情绪）</span>
+          <n-input v-model:value="journalForm.post_review" type="textarea" :rows="3"
+            maxlength="1000" show-count placeholder="例：14:00减了阳光300；收盘前想追涨但没动手" />
+        </label>
+      </div>
+      <template #footer>
+        <n-space justify="flex-end">
+          <n-button size="small" @click="showJournal=false">取消</n-button>
+          <n-button size="small" type="primary" :loading="savingJournal" @click="saveJournal">保存</n-button>
+        </n-space>
+      </template>
+    </n-card>
+  </n-modal>
 
   <n-modal v-model:show="showCash">
     <n-card style="width:min(400px,92vw)" title="修正当前可用资金" :bordered="false">
@@ -164,8 +193,8 @@
 import AppIcon from './AppIcon.vue'
 import TradeCheck from './TradeCheck.vue'
 import ReductionPlan from './ReductionPlan.vue'
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { NButton, NSpin, NModal, NCard, NInputNumber, NSpace, useMessage } from 'naive-ui'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { NButton, NSpin, NModal, NCard, NInput, NInputNumber, NSpace, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const emit = defineEmits(['import', 'recorded'])
@@ -178,7 +207,23 @@ const collapsed = ref(localStorage.getItem('trade_guard_collapsed') === '1')
 const coachOpen = ref(false)
 const showCheck = ref(false), checkSide = ref('buy')
 const showReduction = ref(false)
+const showJournal = ref(false), savingJournal = ref(false)
+const journalForm = reactive({ pre_plan: '', post_review: '' })
 const showCash = ref(false), cashValue = ref(0), savingCash = ref(false)
+const journalHint = computed(() => {
+  const j = st.value?.journal
+  if (!j) return ''
+  const hm = String(st.value?.asof || '').slice(0, 5)
+  if (!j.pre_plan && hm && hm < '14:00') {
+    return '今天还没写计划：先写一句最多几笔/仓位上限/只做什么'
+  }
+  if (!j.post_review && hm && hm >= '14:50') {
+    return '收盘前写一句复盘：今天哪里执行/哪里违背计划'
+  }
+  return ''
+})
+const emotionClass = e => ['报复', '追涨', '恐惧'].includes(e)
+  ? 'em-bad' : e === '计划内' ? 'em-ok' : 'em-warn'
 let timer = null
 
 const money = v => v == null ? '—' : (v < 0 ? '-¥' : '¥') + Number(Math.abs(v)).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
@@ -226,6 +271,10 @@ async function load(){
   try{
     const r = await axios.get(API + '/api/portfolio/trades/intraday/state', { timeout: 30000 })
     st.value = r.data.state
+    if (!showJournal.value) {
+      journalForm.pre_plan = st.value?.journal?.pre_plan || ''
+      journalForm.post_review = st.value?.journal?.post_review || ''
+    }
     maybeNotify(st.value)
   }catch(e){
     error.value = e.response?.data?.detail || e.message || '加载失败'
@@ -241,6 +290,24 @@ function onRecorded(s){
   st.value = s
   emit('recorded', s)
   setTimeout(load, 800)
+}
+function openJournal(){
+  journalForm.pre_plan = st.value?.journal?.pre_plan || ''
+  journalForm.post_review = st.value?.journal?.post_review || ''
+  showJournal.value = true
+}
+async function saveJournal(){
+  savingJournal.value = true
+  try{
+    const r = await axios.put(API + '/api/portfolio/trades/journal', {
+      pre_plan: journalForm.pre_plan,
+      post_review: journalForm.post_review,
+    })
+    if (st.value) st.value.journal = r.data
+    showJournal.value = false
+    message.success('计划/复盘已保存')
+  }catch(e){ message.error(e.response?.data?.detail || '保存失败') }
+  finally{ savingJournal.value = false }
 }
 function openCash(){
   cashValue.value = st.value?.cash ?? 0
@@ -352,6 +419,17 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tg-action { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size: var(--text-meta); color: var(--c-text-dim); line-height:1.9; }
 .tg-action b { color: var(--c-text); font-weight:500; }
 .tg-hard-chip { padding:0 4px; border-radius:3px; font-size:10px; color:#fff; background: var(--c-error); }
+.tg-emotion { padding:0 4px; border-radius:3px; font-size:10px; color: var(--c-text-dim); background: var(--c-card-bg-hover); }
+.tg-emotion.em-bad { color:#fff; background: var(--c-error); }
+.tg-emotion.em-warn { color:#fff; background: var(--c-warning); }
+.tg-emotion.em-ok { color: var(--c-info); background: color-mix(in srgb, var(--c-info) 12%, transparent); }
+.tg-journal-hint { margin-top:7px; padding:5px 8px; border-radius: var(--radius-sm); cursor:pointer;
+  font-size: var(--text-meta); color: var(--c-warning);
+  background: color-mix(in srgb, var(--c-warning) 8%, transparent); }
+.tg-journal-hint:hover { background: color-mix(in srgb, var(--c-warning) 14%, transparent); }
+.tg-journal-form { display:flex; flex-direction:column; gap:12px; }
+.tg-journal-form label { display:flex; flex-direction:column; gap:5px; }
+.tg-journal-form label > span { font-size: var(--text-meta); color: var(--c-text-dim); }
 .tg-time { width:36px; color: var(--c-text-faint); font-variant-numeric: tabular-nums; }
 .tg-side { display:inline-block; width:18px; text-align:center; border-radius:3px; font-size:10px; color:#fff; }
 .tg-side.buy { background: var(--c-up); }

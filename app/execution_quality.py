@@ -282,6 +282,21 @@ def alert_execution(db, start: date, limit: int = 100) -> dict:
     }
 
 
+def emotion_summary(db, start: date) -> list[dict]:
+    try:
+        rows = db.execute(text("""
+            SELECT COALESCE(NULLIF(emotion, ''), '未标注') AS emotion,
+                   side, COUNT(*) AS n, SUM(amount) AS amount
+            FROM trade_intraday
+            WHERE trade_date >= :s
+            GROUP BY 1, 2 ORDER BY n DESC
+        """), {"s": start}).fetchall()
+    except Exception:
+        rows = []
+    return [{"emotion": r[0], "side": r[1], "count": int(r[2] or 0),
+             "amount": round(_f(r[3]), 2)} for r in rows]
+
+
 def report(db, days: int = 30) -> dict:
     days = max(1, min(int(days or 30), 180))
     start = date.today() - timedelta(days=days)
@@ -291,4 +306,5 @@ def report(db, days: int = 30) -> dict:
         "ok": True, "days": days, "start": start.isoformat(),
         "sells": sells["rows"], "sell_summary": sells["summary"],
         "alerts": alerts["rows"], "alert_summary": alerts["summary"],
+        "emotions": emotion_summary(db, start),
     }

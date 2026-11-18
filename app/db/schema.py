@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS trade_intraday (
     reconciled    BOOLEAN NOT NULL DEFAULT false,
     hard_block    BOOLEAN NOT NULL DEFAULT false,       -- 当日回补/亏损加仓/连亏冷却等硬拦截
     override_reason VARCHAR(200) NOT NULL DEFAULT '',   -- 用户坚持记录时的理由
+    emotion       VARCHAR(16) NOT NULL DEFAULT '',      -- 计划内/止损纪律/恐惧/追涨/报复/其他
     note          VARCHAR(200) NOT NULL DEFAULT '',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -242,6 +243,16 @@ CREATE TABLE IF NOT EXISTS trade_plan (
     plan       JSONB NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# 每日交易日志：盘前计划 + 收盘复盘（人工填写，不参与自动决策）
+CREATE_TRADE_JOURNAL = """
+CREATE TABLE IF NOT EXISTS trade_journal (
+    trade_date  DATE PRIMARY KEY,
+    pre_plan    TEXT NOT NULL DEFAULT '',
+    post_review TEXT NOT NULL DEFAULT '',
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -1486,6 +1497,7 @@ ALL_TABLES = [
     ("trade_intraday", CREATE_TRADE_INTRADAY),
     ("trade_cash_snapshot", CREATE_TRADE_CASH_SNAPSHOT),
     ("trade_plan", CREATE_TRADE_PLAN),
+    ("trade_journal", CREATE_TRADE_JOURNAL),
     ("watch_groups", CREATE_WATCH_GROUPS),
     ("signal_history", CREATE_SIGNAL_HISTORY),
     ("strategy_config", CREATE_STRATEGY_CONFIG),
@@ -1633,7 +1645,8 @@ def init_db(sync_session) -> None:
 
     # 迁移：盘中手工记录补硬拦截标记/覆盖理由（行为摩擦 + 冷静期）
     for _col, _ddl in (("hard_block", "BOOLEAN NOT NULL DEFAULT false"),
-                       ("override_reason", "VARCHAR(200) NOT NULL DEFAULT ''")):
+                       ("override_reason", "VARCHAR(200) NOT NULL DEFAULT ''"),
+                       ("emotion", "VARCHAR(16) NOT NULL DEFAULT ''")):
         try:
             sync_session.execute(text(
                 f"ALTER TABLE trade_intraday ADD COLUMN IF NOT EXISTS {_col} {_ddl}"))

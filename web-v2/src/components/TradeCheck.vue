@@ -47,6 +47,11 @@
       </div>
 
       <label class="tc-field">
+        <span>这笔操作的情绪 / 计划状态</span>
+        <n-select v-model:value="form.emotion" :options="EMOTIONS" size="small" />
+      </label>
+
+      <label class="tc-field">
         <span>理由（为什么买 / 打算拿几天 / 什么情况认错）</span>
         <n-input v-model:value="form.reason" type="textarea" :rows="2" maxlength="200" show-count
           placeholder="一句话也行；写不出来就先别买" />
@@ -113,7 +118,7 @@
 import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
 import { ref, reactive, computed, watch, onUnmounted } from 'vue'
-import { NModal, NCard, NButton, NInput, NInputNumber, NRadioGroup, NRadioButton, NCheckbox, useMessage } from 'naive-ui'
+import { NModal, NCard, NButton, NInput, NInputNumber, NSelect, NRadioGroup, NRadioButton, NCheckbox, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const props = defineProps({
@@ -125,8 +130,16 @@ const message = useMessage()
 const API = window.location.origin
 const show = computed({ get: () => props.show, set: v => emit('update:show', v) })
 
+const EMOTIONS = [
+  { label: '计划内', value: '计划内' },
+  { label: '止损纪律', value: '止损纪律' },
+  { label: '恐惧', value: '恐惧' },
+  { label: '追涨', value: '追涨' },
+  { label: '报复', value: '报复' },
+  { label: '其他', value: '其他' },
+]
 const side = ref('buy')
-const form = reactive({ code: '', qty: 0, price: null, stop: null, reason: '' })
+const form = reactive({ code: '', qty: 0, price: null, stop: null, reason: '', emotion: '计划内' })
 const result = ref(null)
 const recorded = ref(null)
 const checking = ref(false), recording = ref(false), quoteLoading = ref(false)
@@ -167,7 +180,8 @@ function ratioColor(v){
 
 function reset(){
   side.value = props.defaultSide === 'sell' ? 'sell' : 'buy'
-  form.code = ''; form.qty = 0; form.price = null; form.stop = null; form.reason = ''
+  form.code = ''; form.qty = 0; form.price = null; form.stop = null
+  form.reason = ''; form.emotion = '计划内'
   result.value = null; recorded.value = null; error.value = ''
   quoteName.value = ''; quotePrice.value = null; stopAuto = true
   stopCool(); overrideAck.value = false
@@ -206,6 +220,7 @@ function payload(){
     price: Number(form.price || 0),
     stop_price: side.value === 'buy' ? Number(form.stop || 0) : null,
     reason: form.reason || '',
+    emotion: form.emotion || '',
   }
 }
 
