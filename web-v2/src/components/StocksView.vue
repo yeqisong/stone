@@ -53,6 +53,23 @@
         <span class="bc-qty">最多 {{ c.max_qty }} 股</span>
       </div>
     </div>
+    <!-- 闸门未过时的观察候选：只观察，不下单 -->
+    <div v-else-if="buyCandidates.watch?.length" class="buy-candidates watch">
+      <div class="bc-title">
+        <span>观察候选</span>
+        <span class="bc-note">市场/仓位闸门未过，只观察，不下单；点开看拦截原因</span>
+        <n-button size="tiny" text :loading="buyLoading" @click="loadBuyCandidates">刷新</n-button>
+      </div>
+      <div v-for="c in buyCandidates.watch" :key="c.code" class="bc-row" @click="openBuyCheck(c)"
+        :title="c.reason">
+        <span class="bc-name">{{ c.name }}</span>
+        <span class="bc-industry">{{ c.industry }}</span>
+        <span class="bc-setup">{{ c.setup?.label }}</span>
+        <span class="bc-plan">买 {{ fmtPrice(c.price) }} / 止 {{ fmtPrice(c.setup?.stop) }} / 目标 {{ fmtPrice(c.setup?.target) }}</span>
+        <span class="bc-rr">盈亏比 {{ Number(c.setup?.rr || 0).toFixed(1) }}</span>
+        <span class="bc-qty">观察</span>
+      </div>
+    </div>
     <n-data-table class="fill-table" flex-height :columns="radarColumns" :data="radarRows"
       size="small" :row-props="radarRowProps" :loading="radarLoading" :bordered="false" scroll-x="1100" />
     <n-empty v-if="!radarLoading && !radarRows.length" description="关注池暂无实时快照" style="padding:24px" />
@@ -359,6 +376,8 @@ onUnmounted(() => {
   border: 1px solid var(--c-border); border-left: 3px solid var(--c-info);
   border-radius: var(--radius-sm); background: var(--c-card-bg);
 }
+.buy-candidates.watch { border-left-color: var(--c-warning); }
+.buy-candidates.watch .bc-setup { color: var(--c-warning); }
 .bc-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; font-weight: 600; }
 .bc-note { flex: 1; min-width: 0; font-size: var(--text-meta); color: var(--c-text-faint); font-weight: 400; }
 .bc-row {

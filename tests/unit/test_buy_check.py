@@ -214,9 +214,11 @@ class TestCandidatesGate:
             "allow_new_buy": False, "advice": "仓位高于目标，先减仓",
         })
         monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
+        monkeypatch.setattr(bc, "_focus_pool", lambda db: [])
         r = bc.candidates(None)
         assert r["allowed"] is False
         assert r["items"] == []
+        assert r["watch"] == []
         assert "减仓" in r["reason"]
 
     def test_candidate_requires_market_sector_setup_risk(self, monkeypatch):
@@ -248,3 +250,53 @@ class TestCandidatesGate:
         assert item["setup"]["type"] == "trend_pullback"
         assert item["max_qty"] == 500
         assert item["setup"]["rr"] >= 2
+        assert item["actionable"] is True
+
+    def _patch_candidate(self, monkeypatch, st_over=None, max_qty=500):
+        st = {
+            "allow_new_buy": True, "positions": [], "remaining_new_buys": 2,
+            "daily_buy_budget": 100000, "position_ratio": 0.3, "cash_ratio": 0.7,
+            "target_position_ratio": 0.7, "advice": "可开仓", "level": "ok",
+            "today_actions": [], "rules": {"no_rebuy_days": 5},
+        }
+        st.update(st_over or {})
+        monkeypatch.setattr(bc, "intraday_state", lambda db: st)
+        monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
+        monkeypatch.setattr(bc, "_focus_pool", lambda db: [
+            {"code": "600000", "name": "测试股份", "industry": "银行", "type": "stock"},
+        ])
+        monkeypatch.setattr(bc, "_load_bars", lambda db, codes: {
+            "600000": _trend_pullback_bars(),
+        })
+        monkeypatch.setattr(bc, "_batch_quotes", lambda codes: {
+            "600000": {"code": "600000", "price": 92.2, "change_pct": 1.0},
+        })
+        monkeypatch.setattr(bc, "_load_sector_series", lambda db: {
+            "银行": [{"main": 1e8, "chg": 0.5, "amount": 1e10} for _ in range(5)],
+        })
+        monkeypatch.setattr(bc, "_max_buy_qty", lambda st, existing, price, stop: max_qty)
+
+    def test_gate_closed_returns_watch_not_actionable(self, monkeypatch):
+        self._patch_candidate(monkeypatch, {"allow_new_buy": False,
+                                            "advice": "仓位高于目标，先减仓"})
+        r = bc.candidates(None)
+        assert r["allowed"] is False
+        assert r["items"] == []
+        assert len(r["watch"]) == 1
+        assert r["watch"][0]["actionable"] is False
+        assert "只观察" in r["watch"][0]["reason"]
+
+    def test_recent_sold_candidate_is_excluded(self, monkeypatch):
+        self._patch_candidate(monkeypatch, {
+            "today_actions": [{"side": "sell", "stock_code": "600000", "amount": 10000}],
+        })
+        r = bc.candidates(None)
+        assert all(x["code"] != "600000" for x in r["items"] + r["watch"])
+
+    def test_no_capacity_goes_to_watch(self, monkeypatch):
+        self._patch_candidate(monkeypatch, max_qty=0)
+        r = bc.candidates(None)
+        assert r["allowed"] is True
+        assert r["items"] == []
+        assert len(r["watch"]) == 1
+        assert "仓位/现金不足" in r["reason"]

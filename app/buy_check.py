@@ -677,38 +677,60 @@ def _state_digest(st: dict) -> dict:
     return {k: st.get(k) for k in keys}
 
 
+def _recent_sold_codes(db, st: dict, days: int = 5) -> set[str]:
+    """同日/近期卖出的票不再作为买点候选，避免点进去才发现当日回补/5日回补被拦。"""
+    codes = {a.get("stock_code") for a in (st.get("today_actions") or [])
+             if a.get("side") == "sell" and a.get("stock_code")}
+    if db is None:
+        return codes
+    cutoff = date.today() - timedelta(days=max(1, int(days)) * 2)
+    try:
+        rows = db.execute(text("""
+            SELECT DISTINCT stock_code FROM trade_slip
+            WHERE side='sell' AND trade_date >= :cut
+            UNION
+            SELECT DISTINCT stock_code FROM trade_intraday
+            WHERE side='sell' AND trade_date >= :cut
+              AND COALESCE(reconciled, false)=false
+        """), {"cut": cutoff}).fetchall()
+        codes |= {r[0] for r in rows if r[0]}
+    except Exception:
+        pass
+    return codes
+
+
 def candidates(db, limit: int = 8) -> dict:
     st = intraday_state(db)
     market = market_gate(db)
     digest = _state_digest(st)
     asof = datetime.now().strftime("%H:%M:%S")
-
-    if not st.get("allow_new_buy"):
-        return {
-            "allowed": False, "asof": asof,
-            "reason": st.get("advice") or "当前仓位/纪律不允许开新仓",
-            "market": market, "state": digest, "items": [],
-        }
-    if not market.get("pass"):
-        return {
-            "allowed": False, "asof": asof,
-            "reason": market.get("reason") or "市场闸门未通过",
-            "market": market, "state": digest, "items": [],
-        }
+    state_ok = bool(st.get("allow_new_buy"))
+    market_ok = bool(market.get("pass"))
+    allowed = state_ok and market_ok
+    if not state_ok:
+        gate_reason = st.get("advice") or "当前仓位/纪律不允许开新仓"
+    elif not market_ok:
+        gate_reason = market.get("reason") or "市场闸门未通过"
+    else:
+        gate_reason = ""
 
     pool = _focus_pool(db)
     holdings = {p.get("stock_code") for p in (st.get("positions") or [])}
-    pool = [p for p in pool if p["code"] not in holdings and p.get("type") == "stock"]
+    sold_codes = _recent_sold_codes(
+        db, st, int((st.get("rules") or {}).get("no_rebuy_days") or 5))
+    pool = [p for p in pool if p["code"] not in holdings
+            and p["code"] not in sold_codes and p.get("type") == "stock"]
     codes = [p["code"] for p in pool]
     if not codes:
-        return {"allowed": True, "asof": asof, "reason": "关注池没有可扫描的个股",
-                "market": market, "state": digest, "items": []}
+        return {"allowed": allowed, "asof": asof,
+                "reason": gate_reason or "关注池没有可扫描的个股",
+                "market": market, "state": digest, "items": [], "watch": []}
 
     bars_map = _load_bars(db, codes)
     quotes = _batch_quotes(codes)
     sector_map = {k: _sector_stats(v, k) for k, v in _load_sector_series(db).items()}
 
-    items = []
+    items, watch = [], []
     for p in pool:
         code = p["code"]
         setup = detect_setup(bars_map.get(code) or [], quotes.get(code))
@@ -726,9 +748,7 @@ def candidates(db, limit: int = 8) -> dict:
         if rr_now < RR_MIN:
             continue
         max_qty = _max_buy_qty(st, None, price, stop)
-        if max_qty < 100:
-            continue
-        items.append({
+        item = {
             "code": code, "name": p.get("name") or code,
             "industry": p.get("industry"),
             "price": round(price, 2),
@@ -748,11 +768,28 @@ def candidates(db, limit: int = 8) -> dict:
             "max_qty": max_qty,
             "score": round(setup.get("score", 0) + sec.get("score", 0), 1),
             "reason": f"{setup.get('reason')}；{sec.get('reason')}",
-        })
+            "actionable": bool(allowed and max_qty >= 100),
+        }
+        if item["actionable"]:
+            items.append(item)
+        else:
+            why = gate_reason or ("按当前仓位/现金，最多可买 0 股" if max_qty < 100 else "")
+            why = why.rstrip("。；; ")
+            if why:
+                item["reason"] += f"；{why}"
+            item["reason"] += "；只观察，不下单"
+            watch.append(item)
 
     items.sort(key=lambda x: -x["score"])
+    watch.sort(key=lambda x: -x["score"])
+    if allowed:
+        reason = (f"通过四道闸门的候选 {len(items[:limit])} 只" if items else
+                  ("有结构但当前仓位/现金不足，见观察候选" if watch else
+                   "当前没有同时通过四道闸门的标的"))
+    else:
+        reason = gate_reason
     return {
-        "allowed": True, "asof": asof,
-        "reason": f"通过四道闸门的候选 {len(items[:limit])} 只" if items else "当前没有同时通过四道闸门的标的",
-        "market": market, "state": digest, "items": items[:limit],
+        "allowed": allowed, "asof": asof, "reason": reason,
+        "market": market, "state": digest,
+        "items": items[:limit] if allowed else [], "watch": watch[:5],
     }
