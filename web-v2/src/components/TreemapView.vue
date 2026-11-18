@@ -21,7 +21,7 @@
     </n-button-group>
     <n-button-group v-else size="tiny">
       <n-button size="tiny" :type="colorMode==='chg1d'?'primary':'default'" @click="switchColorMode('chg1d')" title="当日涨跌（相对昨收）">日涨跌</n-button>
-      <n-button size="tiny" :type="colorMode==='chg10m'?'primary':'default'" @click="switchColorMode('chg10m')" title="近 10 分钟变化（资金刚去哪）">近10分钟</n-button>
+      <n-button size="tiny" :type="colorMode==='chg10m'?'primary':'default'" @click="switchColorMode('chg10m')" :title="d10Label + '变化（资金刚去哪）'">近10分钟</n-button>
     </n-button-group>
     <n-button size="tiny" :type="onlySignal ? 'primary' : 'default'" @click="onlySignal = !onlySignal; renderChart()"><AppIcon name="s" :size="13" />  只看信号</n-button>
     <span v-if="!loading && !noData" style="font-size: var(--text-meta);color:var(--c-text-dim);white-space:nowrap" title="金色=当日信号 / 蓝实线=实盘持仓 / 青虚线=纸面组合">
@@ -39,7 +39,9 @@
     <span>涨停 <b class="up">{{ breadth.limit_up }}</b> / 跌停 <b class="down">{{ breadth.limit_down }}</b></span>
     <span>领涨 <b class="up">{{ breadth.top_l1?.[0]?.name || '—' }} {{ breadth.top_l1?.[0] ? (breadth.top_l1[0].chg_pct > 0 ? '+' : '') + breadth.top_l1[0].chg_pct + '%' : '' }}</b></span>
     <span>领跌 <b class="down">{{ breadth.bottom_l1?.[0]?.name || '—' }} {{ breadth.bottom_l1?.[0] ? (breadth.bottom_l1[0].chg_pct > 0 ? '+' : '') + breadth.bottom_l1[0].chg_pct + '%' : '' }}</b></span>
-    <span v-if="colorMode==='chg10m' && !hasPrevSlot" class="tm-b-hint">近10分钟：首档暂无对比</span>
+    <span v-if="colorMode==='chg10m' && (!hasPrevSlot || (slotGapMin && slotGapMin > 12))" class="tm-b-hint">
+      {{ !hasPrevSlot ? '首档暂无对比' : d10Label }}
+    </span>
     <span class="tm-b-asof">{{ breadth.asof }} 快照<template v-if="refreshing"> · 正在生成新快照…</template></span>
   </div>
 
@@ -193,6 +195,9 @@ const genLoading = ref(false)
 const intraday = ref(false)
 const intradaySlot = ref('latest')
 const intradaySlots = ref([])
+const slotGapMin = ref(null)
+const d10Label = computed(() => (slotGapMin.value && slotGapMin.value > 12)
+  ? `较上一快照（${slotGapMin.value}分钟）` : '近10分钟')
 const breadth = ref(null)
 const refreshing = ref(false)
 const sectorFlows = ref(null)
@@ -210,12 +215,14 @@ function cycleSort(){
 let flowModePinned = false
 let intradayTimer = null
 const flowModeLabel = computed(() => flowMode.value === 'main' ? '主力'
-  : flowMode.value === 'm10' ? '压力·10分' : '压力·日')
+  : flowMode.value === 'm10'
+    ? (slotGapMin.value && slotGapMin.value > 12 ? '压力·邻档' : '压力·10分')
+    : '压力·日')
 const flowModeTip = computed(() => {
   const sf = sectorFlows.value || {}
   if (flowMode.value === 'main') return `主力净流入（tushare 大单+特大单，收盘后，数据 ${sf.main_date || '—'}）；点击切换 → 压力·日`
   if (flowMode.value === 'day') return `压力·日（成交额×CLV，实时估算，快照 ${sf.slot || '—'}）；点击切换 → 压力·10分`
-  return `压力·10分（相邻两档成交额增量×价格方向，快照 ${sf.slot || '—'}）；点击切换 → 主力`
+  return `压力·相邻快照（间隔 ${slotGapMin.value ?? '—'} 分钟，快照 ${sf.slot || '—'}）；点击切换 → 主力`
 })
 function cycleFlowMode(){
   flowMode.value = flowMode.value === 'main' ? 'day' : flowMode.value === 'day' ? 'm10' : 'main'
@@ -389,6 +396,7 @@ function switchMode(on) {
       store.setDate(today)
     }
   } else {
+    slotGapMin.value = null
     breadth.value = null
     sectorFlows.value = null
     refreshing.value = false
@@ -517,6 +525,7 @@ async function loadTree() {
       }
       const r = await axios.get(API + '/api/treemap_intraday', { params })
       intradaySlots.value = r.data.slots || []
+      slotGapMin.value = r.data.slot_gap_min ?? null
       breadth.value = r.data.breadth || null
       sectorFlows.value = r.data.sector_flows || null
       // 收盘后默认看主力净流入（真实口径）；盘中默认看实时压力估算
@@ -532,6 +541,7 @@ async function loadTree() {
         params.parent = drillStack.value[drillStack.value.length-1].id
       }
       const r = await axios.get(API+'/api/treemap_data', { params })
+      slotGapMin.value = null
       breadth.value = null
       sectorFlows.value = null
       refreshing.value = false
@@ -643,7 +653,7 @@ function renderChart() {
           else if (metric.value === 'pe') html += `<br/>${mLabel}: ${(100-(val||0)).toFixed(0)}%`
           else html += `<br/>${mLabel}: ¥${(val/1e8).toFixed(1)}亿`
           html += `<br/>涨跌: ${d.chg_pct>0?'+':''}${(d.chg_pct||0).toFixed(2)}%`
-          if (intraday.value && detail.d10 != null) html += `<br/>近10分钟: ${detail.d10>0?'+':''}${detail.d10.toFixed(2)}%`
+          if (intraday.value && detail.d10 != null) html += `<br/>${d10Label.value}: ${detail.d10>0?'+':''}${detail.d10.toFixed(2)}%`
           if (detail.s20 != null) html += `<br/>20日: ${detail.s20>0?'+':''}${detail.s20.toFixed(1)}%`
           if (detail.vr != null) html += `<br/>量比: ${detail.vr.toFixed(2)}`
           if (detail.tr != null) html += `<br/>换手: ${detail.tr.toFixed(2)}%`
@@ -654,9 +664,9 @@ function renderChart() {
         } else {
           html += `<br/>${mLabel}: ${metric.value==='volume'?fmt(val)+'股':metric.value==='amount'?'¥'+(val/1e8).toFixed(1)+'亿':metric.value==='pe'?(100-(val||0)/100).toFixed(0)+'%':'¥'+(val/1e8).toFixed(1)+'亿'}`
           html += `<br/>涨跌: ${(d.chg_pct||0)>0?'+':''}${(d.chg_pct||0).toFixed(2)}%`
-          if (intraday.value && detail.d10 != null) html += `<br/>近10分钟: ${detail.d10>0?'+':''}${detail.d10.toFixed(2)}%`
+          if (intraday.value && detail.d10 != null) html += `<br/>${d10Label.value}: ${detail.d10>0?'+':''}${detail.d10.toFixed(2)}%`
           const up = d._up || {}
-          const tag = colorMode.value === 'chg20d' ? '20日' : colorMode.value === 'chg10m' ? '10分钟' : '当日'
+          const tag = colorMode.value === 'chg20d' ? '20日' : colorMode.value === 'chg10m' ? d10Label.value : '当日'
           if (up.up != null) html += `<br/>上涨家数(${tag}): ${up.up}%`
           else if (detail.up_ratio != null) html += `<br/>上涨家数: ${detail.up_ratio}%`
           if (up.med != null) html += `<br/>中位涨跌(${tag}): ${up.med>0?'+':''}${up.med}%`

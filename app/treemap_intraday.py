@@ -233,18 +233,73 @@ def _snapshot(db, day: _date, slot: str) -> dict[str, dict]:
     return {r["stock_code"]: dict(r) for r in rows}
 
 
-def _prev_snapshot(db, day: _date, slot: str) -> dict[str, dict]:
+def _prev_snapshot(db, day: _date, slot: str) -> tuple[dict[str, dict], Optional[str]]:
     prev = db.execute(text("""
         SELECT MAX(slot) FROM stock_treemap_intraday
         WHERE trade_date=:d AND slot < :s
     """), {"d": day, "s": slot}).scalar()
     if not prev:
-        return {}
+        return {}, None
     rows = db.execute(text("""
         SELECT stock_code, price, amount FROM stock_treemap_intraday
         WHERE trade_date=:d AND slot=:s
     """), {"d": day, "s": prev}).mappings().fetchall()
-    return {r["stock_code"]: dict(r) for r in rows}
+    return {r["stock_code"]: dict(r) for r in rows}, prev
+
+
+def _slot_minutes(slot: Optional[str]) -> Optional[int]:
+    try:
+        h, m = str(slot).split(":")[:2]
+        return int(h) * 60 + int(m)
+    except (TypeError, ValueError):
+        return None
+
+
+def _slot_gap_min(prev: Optional[str], cur: Optional[str]) -> Optional[int]:
+    """两个快照之间的交易分钟数（跨午休不把 90 分钟算进去）。"""
+    a, b = _slot_minutes(prev), _slot_minutes(cur)
+    if a is None or b is None or b < a:
+        return None
+    gap = b - a
+    if a <= 11 * 60 + 30 < b:
+        gap -= 90
+    return max(0, gap)
+
+
+def _in_collect_window(dt: datetime) -> bool:
+    t = dt.time()
+    return (_time(9, 25) <= t <= _time(11, 35)
+            or _time(12, 55) <= t <= _time(15, 5))
+
+
+async def intraday_collect_loop():
+    """交易时段每 30s 检查当前 10 分钟 slot；缺失就后台拉全市场。
+
+    这样即使页面没开，也会连续生成 09:30…15:00 的快照，d10/资金流不会跨 30 分钟。
+    """
+    import asyncio
+    logger.info("[treemap-intraday] 10分钟快照采集任务启动")
+    while True:
+        try:
+            now = _now()
+            if _in_collect_window(now):
+                db = get_sync_db()
+                try:
+                    day = now.date()
+                    if _is_trade_day(db, day):
+                        slot = _slot_of(now)
+                        if slot:
+                            exists = db.execute(text("""
+                                SELECT 1 FROM stock_treemap_intraday
+                                WHERE trade_date=:d AND slot=:s LIMIT 1
+                            """), {"d": day, "s": slot}).scalar()
+                            if not exists:
+                                _ensure_async(day, slot)
+                finally:
+                    db.close()
+        except Exception as e:
+            logger.warning(f"[treemap-intraday] 自动采集检查失败: {str(e)[:160]}")
+        await asyncio.sleep(30)
 
 
 def _is_trade_day(db, day: _date) -> bool:
@@ -501,18 +556,22 @@ def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dic
             "trade_date": day.isoformat(), "slot": effective, "target_slot": target,
             "slots": slots, "refreshing": refreshing, "quote_ok": bool(effective),
             "children": [], "breadth": None, "sector_flows": None,
+            "slot_gap_min": None,
             "message": ("正在生成首张分时快照…" if refreshing else
                         "该日期暂无分时快照（仅保留最近 5 个交易日）"),
         }
 
     snap = _snapshot(db, day, effective)
-    prev = _prev_snapshot(db, day, effective)
+    prev, prev_slot = _prev_snapshot(db, day, effective)
+    gap_min = _slot_gap_min(prev_slot, effective)
     built = _build(cache_rows, snap, prev)
     breadth = _breadth(built["stocks"], built["l1_map"], snap)
     breadth["asof"] = effective
     breadth["cache_date"] = cache_day.isoformat() if cache_day else None
+    breadth["slot_gap_min"] = gap_min
     sector_flows = _sector_flows(db, cache_rows, snap, prev, built, day)
     sector_flows["slot"] = effective
+    sector_flows["slot_gap_min"] = gap_min
 
     if not parent:
         children = built["l1_out"]
@@ -530,5 +589,5 @@ def get_tree(db, trade_date: str, parent: str = "", slot: str = "latest") -> dic
         "trade_date": day.isoformat(), "slot": effective, "target_slot": target,
         "slots": slots, "refreshing": refreshing, "quote_ok": bool(snap),
         "children": children, "breadth": breadth,
-        "sector_flows": sector_flows,
+        "sector_flows": sector_flows, "slot_gap_min": gap_min,
     }

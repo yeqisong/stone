@@ -1,5 +1,5 @@
 """分时市值树图：快照字段映射与聚合的正确性。"""
-from datetime import date
+from datetime import date, datetime
 
 from app import treemap_intraday as ti
 
@@ -52,3 +52,23 @@ class TestSectorFlowFallback:
         # chg_pct=2.0 → clv=2/3，amount=1e8 → 压力约 +6667 万
         assert row["flow_day"] > 6e7
         assert row["chg_pct"] == 2.0
+
+
+class TestSlotGap:
+    def test_same_session_gap(self):
+        assert ti._slot_gap_min("10:50", "11:20") == 30
+        assert ti._slot_gap_min("13:00", "13:10") == 10
+
+    def test_cross_lunch_gap_excludes_break(self):
+        assert ti._slot_gap_min("11:20", "13:00") == 10
+        assert ti._slot_gap_min("11:30", "13:00") == 0
+
+    def test_invalid_slot(self):
+        assert ti._slot_gap_min(None, "10:00") is None
+        assert ti._slot_gap_min("10:00", None) is None
+
+    def test_collect_window(self):
+        assert ti._in_collect_window(datetime(2026, 11, 18, 9, 30)) is True
+        assert ti._in_collect_window(datetime(2026, 11, 18, 12, 0)) is False
+        assert ti._in_collect_window(datetime(2026, 11, 18, 15, 0)) is True
+        assert ti._in_collect_window(datetime(2026, 11, 18, 15, 10)) is False
