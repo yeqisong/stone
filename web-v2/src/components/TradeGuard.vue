@@ -103,6 +103,7 @@
     <div class="tg-actions">
       <n-button size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
       <n-button size="small" @click="openCheck('buy')">记录今日操作</n-button>
+      <n-button size="small" quaternary @click="showReduction = true">减仓清单</n-button>
       <n-button size="small" quaternary @click="openCash">修正现金</n-button>
       <n-button size="small" quaternary @click="emit('import')">导入交割单</n-button>
     </div>
@@ -140,6 +141,7 @@
   </div>
 
   <TradeCheck v-model:show="showCheck" :default-side="checkSide" @recorded="onRecorded" />
+  <ReductionPlan v-model:show="showReduction" />
 
   <n-modal v-model:show="showCash">
     <n-card style="width:min(400px,92vw)" title="修正当前可用资金" :bordered="false">
@@ -161,6 +163,7 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import TradeCheck from './TradeCheck.vue'
+import ReductionPlan from './ReductionPlan.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { NButton, NSpin, NModal, NCard, NInputNumber, NSpace, useMessage } from 'naive-ui'
 import axios from 'axios'
@@ -174,6 +177,7 @@ const loading = ref(false), error = ref('')
 const collapsed = ref(localStorage.getItem('trade_guard_collapsed') === '1')
 const coachOpen = ref(false)
 const showCheck = ref(false), checkSide = ref('buy')
+const showReduction = ref(false)
 const showCash = ref(false), cashValue = ref(0), savingCash = ref(false)
 let timer = null
 

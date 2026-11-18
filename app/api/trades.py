@@ -20,6 +20,7 @@ from app.trade_review import (
     today_gate,
 )
 from app.execution_quality import report as execution_report
+from app.reduction_plan import build_reduction_plan
 from app.trade_slip import (
     TradeParseError,
     apply_positions,
@@ -233,6 +234,26 @@ def intraday_guard_delete(action_id: int, user: str = Depends(optional_auth)):
         return {"ok": True, "state": state}
     except ValueError as e:
         raise HTTPException(404, str(e))
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/reduction-plan")
+def reduction_plan(target: Optional[float] = Query(None, ge=0.1, le=1.0),
+                   max_single: Optional[float] = Query(None, ge=0.05, le=1.0),
+                   user: str = Depends(optional_auth)):
+    """精确减仓清单：同时满足目标仓位与单票上限，按100股整手。"""
+    db = get_sync_db()
+    try:
+        st = intraday_state(db)
+        disc = get_discipline(db)
+        t = target if target is not None else float(disc.get("target_position_ratio") or 0.70)
+        cap = max_single if max_single is not None else float(disc.get("max_single_weight") or 0.20)
+        positions = [{
+            "code": p["stock_code"], "name": p["stock_name"],
+            "qty": p["quantity"], "price": p["price"],
+        } for p in (st.get("positions") or [])]
+        return build_reduction_plan(positions, st.get("cash") or 0.0, t, cap)
     finally:
         db.close()
 

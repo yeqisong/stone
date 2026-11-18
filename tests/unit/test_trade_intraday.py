@@ -245,6 +245,25 @@ class TestHardBlock:
 
 
 class TestTradePlan:
+    def _state_with_positions(self):
+        return {
+            "trade_date": "2026-11-18", "asof": "10:29:00",
+            "target_position_ratio": 0.70, "max_position_ratio": 0.90,
+            "position_ratio": 0.836, "market_value": 132000.0,
+            "equity": 158000.0, "cash": 26000.0,
+            "top_weight": 0.42,
+            "top_position": {"stock_code": "300274", "stock_name": "阳光电源",
+                             "market_value": 66000.0},
+            "positions": [
+                {"stock_code": "300274", "stock_name": "阳光电源",
+                 "quantity": 900, "price": 73.3, "market_value": 65970},
+                {"stock_code": "002463", "stock_name": "沪电股份",
+                 "quantity": 500, "price": 76.0, "market_value": 38000},
+            ],
+            "consecutive_loss_days": 3, "remaining_new_buys": 0,
+            "today_actions": [], "rules": {"max_single_weight": 0.20},
+        }
+
     def _state(self):
         return {
             "trade_date": "2026-11-18", "asof": "10:20:00",
@@ -264,6 +283,24 @@ class TestTradePlan:
         assert p["binding"] == "single"
         assert abs(p["need"] - (66000 - 0.20 * 158000)) < 0.01
         assert len(p["tranches"]) == 3
+
+    def test_plan_includes_all_over_cap_rows(self):
+        p = ti._plan_from_state(self._state_with_positions())
+        # 阳光降到20%后沪电仍超20%，必须两只都进清单
+        names = {r["name"] for r in p["rows"]}
+        assert {"阳光电源", "沪电股份"} <= names
+        assert p["need"] > 38000
+
+    def test_status_tracks_rows_per_stock(self):
+        st = self._state_with_positions()
+        p = ti._plan_from_state(st)
+        st["today_actions"] = [
+            {"side": "sell", "stock_code": r["code"], "amount": r["sell_amount"]}
+            for r in p["rows"]
+        ]
+        out = ti._plan_status(p, st)
+        assert out["remaining"] == 0
+        assert all(r["status"] == "done" for r in out["rows"])
 
     def test_status_counts_only_top_stock_when_single_binding(self):
         p = ti._plan_from_state(self._state())

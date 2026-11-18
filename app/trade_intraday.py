@@ -356,21 +356,45 @@ def _plan_from_state(st: dict) -> Optional[dict]:
     need_pos = max(0.0, mv - target * equity)
     top_mv = _f(top_p.get("market_value"))
     need_single = max(0.0, top_mv - max_single * equity) if top_p and equity > 0 else 0.0
-    need = max(need_pos, need_single)
-    if need <= 0:
-        return None
-    single_binding = need_single > need_pos + 1e-9
-    top_name = top_p.get("stock_name") or "最大单票"
+    positions = st.get("positions") or []
+    rows = []
+    if any(_f(p.get("quantity")) > 0 and _f(p.get("price")) > 0 for p in positions):
+        # 用集中度计算器同时处理「仓位目标 + 所有超标的单票」，
+        # 避免只减最大单票后，第二只票仍超 20% 却没进计划。
+        from app.reduction_plan import build_reduction_plan
+        rp = build_reduction_plan(
+            [{"code": p.get("stock_code"), "name": p.get("stock_name"),
+              "qty": p.get("quantity"), "price": p.get("price")} for p in positions],
+            st.get("cash") or 0.0, target, max_single,
+        )
+        need = _f(rp.get("need"))
+        if need <= 0:
+            return None
+        rows = rp.get("rows") or []
+        binding = rp.get("binding") or "position"
+        top_name = (rows[0]["name"] if rows else top_p.get("stock_name")) or "最大单票"
+        top_code = rows[0]["code"] if rows else top_p.get("stock_code")
+    else:
+        need = max(need_pos, need_single)
+        if need <= 0:
+            return None
+        binding = "single" if need_single > need_pos + 1e-9 else "position"
+        top_name = top_p.get("stock_name") or "最大单票"
+        top_code = top_p.get("stock_code")
+    single_binding = binding == "single"
+    names = [r["name"] for r in rows[:3]] or [top_name]
     each = round(need / 3, 2)
-    first_hint = ("开盘 15 分钟不操作；优先压最大单票" if single_binding
+    first_hint = ("开盘 15 分钟不操作；按清单优先压超标单票" if single_binding
                   else "开盘 15 分钟不操作；优先减流出最久的板块")
     return {
         "need": round(need, 2),
         "need_pos": round(need_pos, 2),
         "need_single": round(need_single, 2),
-        "binding": "single" if single_binding else "position",
-        "top_code": top_p.get("stock_code"),
+        "binding": binding,
+        "top_code": top_code,
         "top_name": top_name,
+        "names": names,
+        "rows": rows,
         "target": target,
         "max_single": max_single,
         "created_asof": st.get("asof"),
@@ -394,13 +418,29 @@ def _window_passed(when: str, now_hm: str) -> bool:
 def _plan_status(plan: dict, st: dict) -> dict:
     """按今日卖出额回填每档执行状态；单票约束只认最大单票的卖出。"""
     actions = st.get("today_actions") or []
-    binding = plan.get("binding")
-    top_code = plan.get("top_code")
-    if binding == "single" and top_code:
-        sold = sum(_f(a.get("amount")) for a in actions
-                   if a.get("side") == "sell" and a.get("stock_code") == top_code)
+    plan_rows = plan.get("rows") or []
+    if plan_rows:
+        rows = []
+        sold = 0.0
+        for row in plan_rows:
+            code = row.get("code")
+            target_amt = _f(row.get("sell_amount"))
+            got = sum(_f(a.get("amount")) for a in actions
+                      if a.get("side") == "sell" and a.get("stock_code") == code)
+            ex = min(target_amt, got)
+            sold += ex
+            status = ("done" if target_amt > 0 and ex >= target_amt * 0.95 else
+                      "partial" if ex > 0 else "pending")
+            rows.append({**row, "executed": round(ex, 2), "status": status})
+        plan = {**plan, "rows": rows}
     else:
-        sold = sum(_f(a.get("amount")) for a in actions if a.get("side") == "sell")
+        binding = plan.get("binding")
+        top_code = plan.get("top_code")
+        if binding == "single" and top_code:
+            sold = sum(_f(a.get("amount")) for a in actions
+                       if a.get("side") == "sell" and a.get("stock_code") == top_code)
+        else:
+            sold = sum(_f(a.get("amount")) for a in actions if a.get("side") == "sell")
     now_hm = str(st.get("asof") or "")[:5]
     rem = sold
     tranches = []
@@ -433,7 +473,18 @@ def get_or_create_plan(db, st: dict, today: Optional[_date] = None) -> Optional[
         "SELECT plan FROM trade_plan WHERE trade_date=:d"
     ), {"d": day}).scalar()
     if row is not None:
-        return json.loads(row) if isinstance(row, str) else row
+        plan = json.loads(row) if isinstance(row, str) else row
+        if "rows" not in plan:
+            # 旧版计划只按最大单票估算，升级为“所有超标单票”清单
+            new_plan = _plan_from_state(st)
+            if new_plan:
+                db.execute(text("""
+                    UPDATE trade_plan SET plan=CAST(:p AS jsonb),
+                        updated_at=CURRENT_TIMESTAMP WHERE trade_date=:d
+                """), {"d": day, "p": json.dumps(new_plan, ensure_ascii=False)})
+                db.commit()
+                return new_plan
+        return plan
     plan = _plan_from_state(st)
     if not plan:
         return None
@@ -515,6 +566,8 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict],
     need = _f(plan.get("need")) if plan else 0.0
     single_binding = bool(plan and plan.get("binding") == "single")
     top_name = (plan or {}).get("top_name") or top_p.get("stock_name") or "最大单票"
+    names = (plan or {}).get("names") or [top_name]
+    names_str = "、".join(names[:2])
     tranches = (plan or {}).get("tranches") or []
     remaining = _f(plan.get("remaining")) if plan else 0.0
     executed = _f(plan.get("executed")) if plan else 0.0
@@ -541,7 +594,7 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict],
             nxt = (f"今天只做一件事：今天窗口已过；剩余 {_money(remaining)} "
                    f"明天第一档处理，收盘前只做条件单")
         if single_binding:
-            nxt += f"，优先把 {top_name} 的单票压到 {_pct(max_single, 0)} 以下"
+            nxt += f"，优先把 {names_str} 的超标单票压到 {_pct(max_single, 0)} 以下"
         else:
             nxt += f"，目标仓位 {_pct(target, 0)}"
         prio = []
@@ -566,7 +619,8 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict],
         plan_out = {
             "need": round(need, 2), "executed": round(executed, 2),
             "remaining": round(remaining, 2), "binding": plan.get("binding"),
-            "top_name": plan.get("top_name"), "now": plan.get("now"),
+            "top_name": plan.get("top_name"), "names": plan.get("names") or [],
+            "rows": plan.get("rows") or [], "now": plan.get("now"),
             "done": remaining <= 0.01,
         }
     return {"next": nxt, "active": active[:5], "tranches": tranches,
