@@ -1,4 +1,6 @@
 """买点检查纯逻辑单测：市场/板块判定、结构识别、候选扫描门控。"""
+from datetime import date
+
 from app import buy_check as bc
 
 
@@ -141,6 +143,46 @@ class TestDetectSetup:
         assert s["broken"] is True
         assert s["pass"] is False
         assert "跌破止损" in s["reason"]
+
+    def test_intraday_breakout_uses_today_quote(self):
+        import math
+        # 已收日线仍在 20 日箱体内；今天盘中放量突破
+        prices = [50 + math.sin(i) * 1.5 for i in range(79)] + [51.0]
+        quote = {
+            "price": 52.3, "high": 52.5, "low": 50.8,
+            "volume_ratio": 1.8, "avg_price": 52.0,
+            "trade_date": date.today().isoformat(),
+        }
+        s = bc.detect_setup(_bars(prices), quote)
+        assert s["type"] == "breakout"
+        assert s["trigger_ok"] is True
+        assert s["trigger_source"] == "intraday"
+        assert s["pass"] is True
+        assert "盘中触发" in s["summary"]
+
+    def test_daily_breakout_failed_intraday_waits(self):
+        # 昨天已突破，今天跌回箱体 → 不能继续算触发
+        quote = {
+            "price": 50.0, "high": 52.0, "low": 49.8,
+            "volume_ratio": 0.8, "avg_price": 50.5,
+            "trade_date": date.today().isoformat(),
+        }
+        s = bc.detect_setup(_breakout_bars(), quote)
+        assert s["type"] == "breakout"
+        assert s["trigger_ok"] is False
+        assert s["pass"] is False
+        assert "等触发" in s["reason"]
+
+    def test_stale_quote_does_not_trigger_intraday(self):
+        import math
+        prices = [50 + math.sin(i) * 1.5 for i in range(79)] + [51.0]
+        quote = {
+            "price": 52.3, "high": 52.5, "low": 50.8,
+            "volume_ratio": 1.8, "avg_price": 52.0,
+            "trade_date": "2020-01-01",   # 非今天，不能当盘中触发
+        }
+        s = bc.detect_setup(_bars(prices), quote)
+        assert s["type"] != "breakout" or s["trigger_source"] != "intraday"
 
 
 class TestRiskGate:

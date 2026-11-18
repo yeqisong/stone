@@ -699,8 +699,22 @@ def state(db) -> dict:
 
 def quote(db, code: str) -> dict:
     code = str(code or "").strip().zfill(6)
-    price, name = _quote_price(db, code)
-    return {"stock_code": code, "stock_name": name, "price": round(price, 4)}
+    qmap, _ = _quotes([code])
+    q = qmap.get(code) or {}
+    price = _f(q.get("price")) or _last_close(db, code)
+    return {
+        "stock_code": code,
+        "stock_name": q.get("name") or _stock_name(db, code),
+        "price": round(price, 4),
+        "change_pct": q.get("change_pct"),
+        "volume_ratio": q.get("volume_ratio"),
+        "avg_price": q.get("avg_price"),
+        "open": q.get("open"),
+        "high": q.get("high"),
+        "low": q.get("low"),
+        "prev_close": q.get("prev_close"),
+        "trade_date": q.get("trade_date"),
+    }
 
 
 def _estimate_fees(side: str, amount: float) -> dict:

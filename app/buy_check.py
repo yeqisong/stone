@@ -309,6 +309,7 @@ def _load_bars(db, codes: list[str], days: int = 180) -> dict[str, list[dict]]:
 def _none_setup(reason: str) -> dict:
     return {
         "type": "none", "label": "无买点结构", "pass": False, "trigger_ok": False,
+        "trigger_source": "none",
         "entry": None, "stop": None, "target": None, "rr": 0.0, "score": 0.0,
         "reason": reason, "summary": reason, "notes": [],
         "chase": False, "broken": False, "price": None,
@@ -367,28 +368,46 @@ def detect_setup(bars: list[dict], quote: Optional[dict] = None,
     prior_down = ma20_prev10 < ma60_prev10
 
     qprice = _f((quote or {}).get("price"))
+    q_vr = _f((quote or {}).get("volume_ratio"))
+    q_vwap = _f((quote or {}).get("avg_price"))
+    q_date = str((quote or {}).get("trade_date") or "")[:10]
+    # 只有今天/未标注日期的实时价才允许触发盘中结构；收盘后/周末不拿旧价冒充盘中
+    q_today = bool(qprice > 0 and (not q_date or q_date == date.today().isoformat()))
+    q_above_vwap = bool(q_today and q_vwap > 0 and qprice >= q_vwap)
+    intraday_vol = q_vr if q_vr > 0 else vol_ratio
     candidates = []
 
     # 1) 趋势回踩：MA20 向上、价格在 MA60 上方，回踩 MA20 附近后重新站上 MA5
     if above_ma60 and ma20 > ma60 and ma20_up and near_ma20 and not_at_low:
-        trigger = close_r > ma5_r and close_r > prev_close
+        trigger_daily = close_r > ma5_r and close_r > prev_close
+        trigger_intraday = bool(q_today and qprice > ma5_r and qprice > prev_close and q_above_vwap)
+        trigger = trigger_daily or trigger_intraday
+        source = "daily" if trigger_daily else ("intraday" if trigger_intraday else "none")
         stop = min(low5_r, ma20_r * 0.97) * 0.995
         stop = min(stop, close_r * 0.97)
         r = close_r - stop
         if r > 0:
             target = max(high20_r, close_r + 2.5 * r)
             rr = (target - close_r) / r
+            note = ("收盘重新站上 MA5" if source == "daily" else
+                    "盘中站上 MA5/VWAP" if source == "intraday" else "等待收盘/盘中站上 MA5")
             candidates.append({
                 "type": "trend_pullback", "label": "趋势回踩",
-                "trigger_ok": bool(trigger), "entry": round(close_r, 2),
+                "trigger_ok": bool(trigger), "trigger_source": source,
+                "entry": round(close_r, 2),
                 "stop": round(stop, 2), "target": round(target, 2),
-                "rr": round(rr, 2), "score": 80 + min(5.0, vol_ratio),
-                "notes": ["站上 MA60，MA20 向上", "回踩 MA20 附近未破", "收盘重新站上 MA5" if trigger else "等待收盘站上 MA5"],
+                "rr": round(rr, 2), "score": 80 + min(5.0, intraday_vol),
+                "notes": ["站上 MA60，MA20 向上", "回踩 MA20 附近未破", note],
             })
 
     # 2) 底部反转：前期下跌后，低点抬高、放量收复 MA20
-    if prior_down and close_r > ma20_r and higher_low and vol_ratio >= 1.1:
-        trigger = close_r > ma20_r and close_r > prev_close
+    reclaim = close_r > ma20_r or (q_today and qprice > ma20_r and q_above_vwap)
+    volume_ok = vol_ratio >= 1.1 or (q_today and q_vr >= 1.1)
+    if prior_down and reclaim and higher_low and volume_ok:
+        trigger_daily = close_r > ma20_r and close_r > prev_close
+        trigger_intraday = bool(q_today and qprice > ma20_r and qprice > prev_close and q_above_vwap)
+        trigger = trigger_daily or trigger_intraday
+        source = "daily" if trigger_daily else ("intraday" if trigger_intraday else "none")
         stop = min(low10_r, ma20_r * 0.97) * 0.995
         stop = min(stop, close_r * 0.97)
         r = close_r - stop
@@ -397,14 +416,24 @@ def detect_setup(bars: list[dict], quote: Optional[dict] = None,
             rr = (target - close_r) / r
             candidates.append({
                 "type": "bottom_reversal", "label": "底部反转",
-                "trigger_ok": bool(trigger), "entry": round(close_r, 2),
+                "trigger_ok": bool(trigger), "trigger_source": source,
+                "entry": round(close_r, 2),
                 "stop": round(stop, 2), "target": round(target, 2),
-                "rr": round(rr, 2), "score": 70 + min(5.0, vol_ratio),
-                "notes": ["前期 MA20 在 MA60 下方", "近期低点抬高", "放量收复 MA20"],
+                "rr": round(rr, 2), "score": 70 + min(5.0, intraday_vol),
+                "notes": ["前期 MA20 在 MA60 下方", "近期低点抬高",
+                          "收复 MA20" if trigger else "等待收复 MA20"],
             })
 
-    # 3) 突破：横盘收敛后放量突破 20 日高点
-    if close_r > high20_r and vol_ratio >= 1.3 and range20 <= 0.25 and above_ma60:
+    # 3) 突破：横盘收敛后放量突破 20 日高点（日线确认或盘中实时突破）
+    daily_break = close_r > high20_r and vol_ratio >= 1.3
+    intraday_break = bool(q_today and qprice > high20_r and q_vr >= 1.3 and q_above_vwap)
+    above_ma60_now = close_r > ma60_r or (q_today and qprice > ma60_r)
+    if range20 <= 0.25 and above_ma60_now and (daily_break or intraday_break):
+        # 日线突破后今天又跌回箱体 → 不算有效触发，等重新站上
+        hold = (not q_today) or qprice >= high20_r * 0.995
+        trigger_daily = daily_break and hold
+        trigger = trigger_daily or intraday_break
+        source = "daily" if trigger_daily else ("intraday" if intraday_break else "none")
         stop = high20_r * 0.97
         stop = min(stop, close_r * 0.97)
         r = close_r - stop
@@ -413,9 +442,10 @@ def detect_setup(bars: list[dict], quote: Optional[dict] = None,
             rr = (target - close_r) / r
             candidates.append({
                 "type": "breakout", "label": "放量突破",
-                "trigger_ok": True, "entry": round(close_r, 2),
+                "trigger_ok": bool(trigger), "trigger_source": source,
+                "entry": round(close_r, 2),
                 "stop": round(stop, 2), "target": round(target, 2),
-                "rr": round(rr, 2), "score": 75 + min(5.0, vol_ratio),
+                "rr": round(rr, 2), "score": 75 + min(5.0, intraday_vol),
                 "notes": ["20 日箱体收敛", "放量突破 20 日高点", "站上 MA60"],
             })
 
@@ -431,7 +461,7 @@ def detect_setup(bars: list[dict], quote: Optional[dict] = None,
     pass_ = bool(best["trigger_ok"] and not chase and not broken and best["rr"] >= RR_MIN)
 
     if not best["trigger_ok"]:
-        reason = "结构在，等触发：收盘站上 MA5/前收"
+        reason = "结构在，等触发：收盘或盘中站上 MA5/前收"
     elif chase:
         reason = f"现价 {qprice:.2f} 高于参考买点 {entry:.2f} 超过 {max_chase*100:.0f}%，不追"
     elif broken:
@@ -444,7 +474,8 @@ def detect_setup(bars: list[dict], quote: Optional[dict] = None,
     best.update({
         "pass": pass_, "reason": reason,
         "summary": (f"{best['label']}：参考买点 {entry:.2f} / 止损 {stop:.2f} / "
-                    f"目标 {best['target']:.2f}，盈亏比 {best['rr']:.1f}"),
+                    f"目标 {best['target']:.2f}，盈亏比 {best['rr']:.1f}"
+                    + ("（盘中触发）" if best.get("trigger_source") == "intraday" else "")),
         "chase": chase, "broken": broken, "price": qprice or None,
     })
     return best
@@ -594,6 +625,10 @@ def check(db, code: str, entry: Optional[float] = None,
             "type": det.get("type"), "label": det.get("label"),
             "entry": det.get("entry"), "stop": det.get("stop"),
             "target": det.get("target"), "rr": det.get("rr"),
+            "trigger_source": det.get("trigger_source"),
+            "trigger_ok": det.get("trigger_ok"),
+            "pass": det.get("pass"),
+            "summary": det.get("summary"),
             "reason": det.get("reason"), "notes": det.get("notes") or [],
         },
         "order": {
@@ -702,6 +737,8 @@ def candidates(db, limit: int = 8) -> dict:
                 "type": setup["type"], "label": setup["label"],
                 "entry": setup["entry"], "stop": setup["stop"],
                 "target": setup["target"], "rr": round(rr_now, 2),
+                "trigger_source": setup.get("trigger_source"),
+                "summary": setup.get("summary"),
                 "notes": setup.get("notes") or [],
             },
             "sector": {
