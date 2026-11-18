@@ -233,6 +233,16 @@ CREATE TABLE IF NOT EXISTS trade_cash_snapshot (
 );
 """
 
+# 每日减仓计划：当天第一次生成后固定，盘中只更新执行状态，不随价格漂移
+CREATE_TRADE_PLAN = """
+CREATE TABLE IF NOT EXISTS trade_plan (
+    trade_date DATE PRIMARY KEY,
+    plan       JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # ── 分时市值树图快照（每 10 分钟一个 slot，仅保留最近几天）──
 
 CREATE_TREEMAP_INTRADAY = """
@@ -1473,6 +1483,7 @@ ALL_TABLES = [
     ("trade_slip", CREATE_TRADE_SLIP),
     ("trade_intraday", CREATE_TRADE_INTRADAY),
     ("trade_cash_snapshot", CREATE_TRADE_CASH_SNAPSHOT),
+    ("trade_plan", CREATE_TRADE_PLAN),
     ("watch_groups", CREATE_WATCH_GROUPS),
     ("signal_history", CREATE_SIGNAL_HISTORY),
     ("strategy_config", CREATE_STRATEGY_CONFIG),

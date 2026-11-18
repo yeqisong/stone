@@ -78,15 +78,22 @@
       <div v-if="st.coach.profile?.length" class="tg-coach-tags">
         <span v-for="p in st.coach.profile" :key="p.key" class="tg-coach-tag" :title="p.evidence">{{ p.label }}</span>
       </div>
+      <div v-if="st.coach.plan" class="tg-plan-progress">
+        计划卖出 <b>{{ money(st.coach.plan.executed) }}</b> / {{ money(st.coach.plan.need) }}
+        <span v-if="st.coach.plan.done" class="tg-plan-done">已完成</span>
+        <span v-else>剩余 {{ money(st.coach.plan.remaining) }}</span>
+      </div>
       <div v-if="coachOpen" class="tg-coach-detail">
         <div v-for="a in st.coach.active" :key="a.title" class="tg-coach-risk" :class="'lv-' + a.level">
           <b>{{ a.title }}</b><span>{{ a.action }}</span>
           <i>{{ a.rule }}</i>
         </div>
         <div v-if="st.coach.tranches?.length" class="tg-coach-tranches">
-          <div v-for="(t, i) in st.coach.tranches" :key="i" class="tg-coach-tranche">
+          <div v-for="(t, i) in st.coach.tranches" :key="i"
+            class="tg-coach-tranche" :class="'tg-t-' + (t.status || 'pending')">
             <span class="tg-t-when">{{ t.when }}</span>
             <b>{{ money(t.amount) }}</b>
+            <span class="tg-t-status">{{ statusLabel(t.status) }}</span>
             <span class="tg-t-hint">{{ t.hint }}</span>
           </div>
         </div>
@@ -171,6 +178,7 @@ let timer = null
 
 const money = v => v == null ? '—' : (v < 0 ? '-¥' : '¥') + Number(Math.abs(v)).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 const pct = (v, d = 1) => v == null ? '—' : (Number(v) * 100).toFixed(d) + '%'
+const statusLabel = s => ({ done: '已完成', partial: '部分完成', missed: '已错过', pending: '待执行' }[s] || '待执行')
 const posPct = computed(() => Math.min(100, Math.max(0, (st.value?.position_ratio || 0) * 100)))
 const targetPct = computed(() => Math.min(100, Math.max(0, (st.value?.target_position_ratio || 0.7) * 100)))
 const hardPct = computed(() => Math.min(100, Math.max(0, (st.value?.max_position_ratio || 0.9) * 100)))
@@ -323,7 +331,14 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tg-coach-tranche { display: flex; gap: 8px; align-items: baseline; font-size: var(--text-meta); line-height: 1.7; }
 .tg-t-when { width: 78px; color: var(--c-text-dim); flex-shrink: 0; }
 .tg-coach-tranche b { width: 68px; text-align: right; flex-shrink: 0; }
+.tg-t-status { width: 52px; flex-shrink: 0; font-size: 10px; color: var(--c-text-faint); }
+.tg-coach-tranche.tg-t-done .tg-t-status { color: var(--c-info); }
+.tg-coach-tranche.tg-t-partial .tg-t-status { color: var(--c-warning); }
+.tg-coach-tranche.tg-t-missed .tg-t-status { color: var(--c-error); }
 .tg-t-hint { color: var(--c-text-faint); }
+.tg-plan-progress { margin-top: 5px; font-size: var(--text-meta); color: var(--c-text-dim); }
+.tg-plan-progress b { color: var(--c-text); }
+.tg-plan-done { margin-left: 6px; color: var(--c-info); font-weight: 600; }
 .tg-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
 .tg-today { margin-top:10px; border-top:1px dashed var(--c-border); padding-top:7px; }
 .tg-today-head { display:flex; align-items:baseline; gap:8px; font-size:12px; font-weight:600; margin-bottom:4px; }

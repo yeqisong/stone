@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections import defaultdict
@@ -343,7 +344,112 @@ def _top_sectors(db, positions: list[dict]) -> list[dict]:
     return out
 
 
-def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
+def _plan_from_state(st: dict) -> Optional[dict]:
+    """从当前状态生成当日减仓计划（只在当天第一次生成时落库）。"""
+    target = _f(st.get("target_position_ratio"), 0.70)
+    mv = _f(st.get("market_value"))
+    equity = _f(st.get("equity"))
+    top_p = st.get("top_position") or {}
+    max_single = _f((st.get("rules") or {}).get("max_single_weight"), 0.20)
+    need_pos = max(0.0, mv - target * equity)
+    top_mv = _f(top_p.get("market_value"))
+    need_single = max(0.0, top_mv - max_single * equity) if top_p and equity > 0 else 0.0
+    need = max(need_pos, need_single)
+    if need <= 0:
+        return None
+    single_binding = need_single > need_pos + 1e-9
+    top_name = top_p.get("stock_name") or "最大单票"
+    each = round(need / 3, 2)
+    first_hint = ("开盘 15 分钟不操作；优先压最大单票" if single_binding
+                  else "开盘 15 分钟不操作；优先减流出最久的板块")
+    return {
+        "need": round(need, 2),
+        "need_pos": round(need_pos, 2),
+        "need_single": round(need_single, 2),
+        "binding": "single" if single_binding else "position",
+        "top_code": top_p.get("stock_code"),
+        "top_name": top_name,
+        "target": target,
+        "max_single": max_single,
+        "created_asof": st.get("asof"),
+        "tranches": [
+            {"amount": each, "when": "10:00-10:30", "hint": first_hint},
+            {"amount": each, "when": "14:00-14:30",
+             "hint": "若大盘/板块资金流转正，暂停这一份"},
+            {"amount": each, "when": "条件单",
+             "hint": "跌破前低再卖；站回 5 日线保留；剩余单票 -8% 减半"},
+        ],
+    }
+
+
+def _window_passed(when: str, now_hm: str) -> bool:
+    end = str(when or "").split("-")[-1]
+    if ":" not in end or ":" not in str(now_hm or ""):
+        return False
+    return str(now_hm) >= end
+
+
+def _plan_status(plan: dict, st: dict) -> dict:
+    """按今日卖出额回填每档执行状态；单票约束只认最大单票的卖出。"""
+    actions = st.get("today_actions") or []
+    binding = plan.get("binding")
+    top_code = plan.get("top_code")
+    if binding == "single" and top_code:
+        sold = sum(_f(a.get("amount")) for a in actions
+                   if a.get("side") == "sell" and a.get("stock_code") == top_code)
+    else:
+        sold = sum(_f(a.get("amount")) for a in actions if a.get("side") == "sell")
+    now_hm = str(st.get("asof") or "")[:5]
+    rem = sold
+    tranches = []
+    for t in plan.get("tranches") or []:
+        amt = _f(t.get("amount"))
+        ex = min(amt, max(0.0, rem))
+        rem -= ex
+        if amt > 0 and ex >= amt * 0.95:
+            status = "done"
+        elif ex > 0:
+            status = "partial"
+        elif _window_passed(t.get("when"), now_hm):
+            status = "missed"
+        else:
+            status = "pending"
+        tranches.append({**t, "executed": round(ex, 2), "status": status})
+    need = _f(plan.get("need"))
+    return {
+        **plan, "tranches": tranches,
+        "executed": round(sold, 2),
+        "remaining": round(max(0.0, need - sold), 2),
+        "now": now_hm or "09:30",
+    }
+
+
+def get_or_create_plan(db, st: dict, today: Optional[_date] = None) -> Optional[dict]:
+    """当天第一次生成后固定计划，盘中只回填执行状态，不随价格漂移。"""
+    day = today or _date.fromisoformat(str(st["trade_date"])[:10])
+    row = db.execute(text(
+        "SELECT plan FROM trade_plan WHERE trade_date=:d"
+    ), {"d": day}).scalar()
+    if row is not None:
+        return json.loads(row) if isinstance(row, str) else row
+    plan = _plan_from_state(st)
+    if not plan:
+        return None
+    db.execute(text("""
+        INSERT INTO trade_plan (trade_date, plan) VALUES (:d, CAST(:p AS jsonb))
+        ON CONFLICT (trade_date) DO NOTHING
+    """), {"d": day, "p": json.dumps(plan, ensure_ascii=False)})
+    db.commit()
+    row = db.execute(text(
+        "SELECT plan FROM trade_plan WHERE trade_date=:d"
+    ), {"d": day}).scalar()
+    if row is None:
+        return plan
+    return json.loads(row) if isinstance(row, str) else row
+
+
+def _build_coach(st: dict, profile: dict, sectors: list[dict],
+                 plan: Optional[dict] = None) -> dict:
     active: list[dict] = []
     today = st["trade_date"]
     target = _f(st.get("target_position_ratio"), 0.70)
@@ -399,37 +505,48 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
                        "action": "先把今天成交记一笔或导入交割单，否则仓位数据是旧的",
                        "rule": "数据不完整时不做交易决定"})
 
-    # 减仓总额取「仓位目标」和「单票上限」中更严格的那个。
-    # 只按 70% 算会出现：减了 1/3 仓位到 70%，但最大单票仍占账户 28%，还在违规。
-    need_pos = max(0.0, mv - target * equity)
-    top_mv = _f(top_p.get("market_value"))
-    need_single = max(0.0, top_mv - max_single * equity) if top_p and equity > 0 else 0.0
-    need = max(need_pos, need_single)
-    single_binding = need_single > need_pos + 1e-9
-    top_name = top_p.get("stock_name") or "最大单票"
-    tranches = []
-    if need > 0:
-        each = round(need / 3, 2)
-        first_hint = ("开盘 15 分钟不操作；优先压最大单票" if single_binding
-                      else "开盘 15 分钟不操作；优先减流出最久的板块")
-        tranches = [
-            {"amount": each, "when": "10:00-10:30", "hint": first_hint},
-            {"amount": each, "when": "14:00-14:30",
-             "hint": "若大盘/板块资金流转正，暂停这一份"},
-            {"amount": each, "when": "条件单",
-             "hint": "跌破前低再卖；站回 5 日线保留；剩余单票 -8% 减半"},
-        ]
-    if need > 0:
+    # 当日计划首次生成后固定（trade_plan），这里只回填执行状态和按时间给下一动作
+    if plan is None:
+        plan = _plan_from_state(st)
+    if plan:
+        plan = _plan_status(plan, st)
+    need = _f(plan.get("need")) if plan else 0.0
+    single_binding = bool(plan and plan.get("binding") == "single")
+    top_name = (plan or {}).get("top_name") or top_p.get("stock_name") or "最大单票"
+    tranches = (plan or {}).get("tranches") or []
+    remaining = _f(plan.get("remaining")) if plan else 0.0
+    executed = _f(plan.get("executed")) if plan else 0.0
+
+    if plan and remaining <= 0.01:
+        nxt = "今天只做一件事：计划已完成，不再交易，收盘后复盘。"
+    elif plan:
+        each = _f((tranches[0] if tranches else {}).get("amount")) or round(need / 3, 2)
+        now_hm = str(plan.get("now") or "09:30")
+        if now_hm < "10:00":
+            step = min(each, remaining)
+            nxt = f"今天只做一件事：下一档 10:00-10:30 先减 {_money(step)}"
+        elif now_hm < "10:30":
+            step = min(each, remaining)
+            nxt = f"今天只做一件事：现在 {now_hm}，第一档窗口，先减 {_money(step)}"
+        elif now_hm < "14:00":
+            step = min(each * 2, remaining)
+            nxt = (f"今天只做一件事：第一档窗口已过；14:00-14:30 "
+                   f"执行剩余 {_money(step)}（可合并两档）")
+        elif now_hm < "14:30":
+            step = min(each, remaining)
+            nxt = f"今天只做一件事：现在 {now_hm}，第二档窗口，减 {_money(step)}"
+        else:
+            nxt = (f"今天只做一件事：今天窗口已过；剩余 {_money(remaining)} "
+                   f"明天第一档处理，收盘前只做条件单")
+        if single_binding:
+            nxt += f"，优先把 {top_name} 的单票压到 {_pct(max_single, 0)} 以下"
+        else:
+            nxt += f"，目标仓位 {_pct(target, 0)}"
         prio = []
         if top_w > max_single and top_p and not single_binding:
             prio.append(f"{top_name}（占账户 {_pct(top_w)}）")
         if sector_bad:
             prio.append(f"{worst_sector['name']}（{worst_sector['industry']} 连续流出）")
-        if single_binding:
-            nxt = (f"今天只做一件事：先减 1/3（约 {_money(need/3)}），"
-                   f"优先把 {top_name} 的单票压到 {_pct(max_single, 0)} 以下")
-        else:
-            nxt = f"今天只做一件事：先减 1/3（约 {_money(need/3)}）到 {_pct(target, 0)} 方向"
         if prio:
             nxt += "，优先减 " + "、".join(prio[:2])
         nxt += "；不补任何亏损仓。"
@@ -442,7 +559,16 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
     else:
         nxt = "今天只做一件事：按计划执行，不追涨；收盘后导入交割单。"
 
+    plan_out = None
+    if plan:
+        plan_out = {
+            "need": round(need, 2), "executed": round(executed, 2),
+            "remaining": round(remaining, 2), "binding": plan.get("binding"),
+            "top_name": plan.get("top_name"), "now": plan.get("now"),
+            "done": remaining <= 0.01,
+        }
     return {"next": nxt, "active": active[:5], "tranches": tranches,
+            "plan": plan_out,
             "profile": (profile.get("types") or [])[:4],
             "metrics": profile.get("metrics") or {},
             "sectors": sectors}
@@ -683,10 +809,15 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
             "max_daily_buy_pct": _f(rules.get("max_daily_buy_pct"), 0.30),
         },
     }
+    plan = None
+    try:
+        plan = get_or_create_plan(db, state, today)
+    except Exception as e:
+        logger.warning(f"[intraday] 计划生成失败: {str(e)[:120]}")
     try:
         profile = _get_profile(db)
         sectors = _top_sectors(db, positions)
-        state["coach"] = _build_coach(state, profile, sectors)
+        state["coach"] = _build_coach(state, profile, sectors, plan=plan)
     except Exception as e:
         logger.warning(f"[intraday] 教练生成失败: {str(e)[:120]}")
         state["coach"] = None

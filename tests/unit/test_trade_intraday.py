@@ -201,6 +201,77 @@ class TestTPlusOne:
         assert "T+1" in res["advice"]
 
 
+class TestTradePlan:
+    def _state(self):
+        return {
+            "trade_date": "2026-11-18", "asof": "10:20:00",
+            "target_position_ratio": 0.70, "max_position_ratio": 0.90,
+            "position_ratio": 0.84, "market_value": 132000.0, "equity": 158000.0,
+            "top_weight": 0.42,
+            "top_position": {"stock_code": "300274", "stock_name": "阳光电源",
+                             "market_value": 66000.0},
+            "positions": [], "consecutive_loss_days": 3,
+            "remaining_new_buys": 0, "today_actions": [],
+            "rules": {"max_single_weight": 0.20},
+        }
+
+    def test_plan_uses_single_cap_when_binding(self):
+        p = ti._plan_from_state(self._state())
+        # 仓位目标需减 21,400；单票 20% 需减 34,400 → 取 34,400
+        assert p["binding"] == "single"
+        assert abs(p["need"] - (66000 - 0.20 * 158000)) < 0.01
+        assert len(p["tranches"]) == 3
+
+    def test_status_counts_only_top_stock_when_single_binding(self):
+        p = ti._plan_from_state(self._state())
+        st = self._state()
+        st["today_actions"] = [
+            {"side": "sell", "stock_code": "002463", "amount": 20000.0},
+        ]
+        out = ti._plan_status(p, st)
+        # 卖的不是最大单票，单票约束没被满足
+        assert out["executed"] == 0
+        assert out["tranches"][0]["status"] == "pending"
+        st["today_actions"] = [
+            {"side": "sell", "stock_code": "300274", "amount": 12000.0},
+        ]
+        out = ti._plan_status(p, st)
+        assert out["tranches"][0]["status"] == "done"
+        assert out["remaining"] > 0
+
+    def test_position_binding_counts_any_sell(self):
+        st = self._state()
+        st["top_position"] = {"stock_code": "300274", "stock_name": "阳光电源",
+                              "market_value": 30000.0}
+        p = ti._plan_from_state(st)
+        assert p["binding"] == "position"
+        st["today_actions"] = [{"side": "sell", "stock_code": "002463", "amount": 9000.0}]
+        out = ti._plan_status(p, st)
+        assert out["executed"] == 9000.0
+        assert out["tranches"][0]["status"] == "done"
+        assert out["tranches"][1]["status"] == "partial"
+
+    def test_coach_time_aware_after_first_window(self):
+        st = self._state()
+        st["asof"] = "14:12:00"
+        p = ti._plan_from_state(st)
+        c = ti._build_coach(st, {"types": []}, [], plan=p)
+        assert "第二档窗口" in c["next"] and "14:12" in c["next"]
+        assert "计划已完成" not in c["next"]
+        assert c["tranches"][0]["status"] == "missed"
+
+    def test_coach_plan_done(self):
+        st = self._state()
+        st["today_actions"] = [
+            {"side": "sell", "stock_code": "300274", "amount": 40000.0},
+        ]
+        p = ti._plan_from_state(st)
+        c = ti._build_coach(st, {"types": []}, [], plan=p)
+        assert "计划已完成" in c["next"]
+        assert c["plan"]["done"] is True
+        assert all(t["status"] == "done" for t in c["tranches"])
+
+
 class TestLivePositions:
     def _patch(self, monkeypatch):
         monkeypatch.setattr(ti, "_today", lambda: date(2026, 11, 17))
