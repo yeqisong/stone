@@ -123,6 +123,7 @@
         <span class="tg-code">{{ a.stock_code }}</span>
         <span class="tg-qty">{{ a.quantity }} 股 @ ¥{{ a.price }}</span>
         <span v-if="a.reason" class="tg-reason" :title="a.reason">{{ a.reason }}</span>
+        <span v-if="a.hard_block" class="tg-hard-chip" :title="a.override_reason || ''">硬拦截</span>
         <n-button v-if="a.source === 'manual'" size="tiny" quaternary type="error" @click="remove(a.id)">删除</n-button>
       </div>
     </div>
@@ -346,6 +347,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tg-none { font-size: var(--text-meta); color: var(--c-text-faint); line-height:1.6; }
 .tg-action { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size: var(--text-meta); color: var(--c-text-dim); line-height:1.9; }
 .tg-action b { color: var(--c-text); font-weight:500; }
+.tg-hard-chip { padding:0 4px; border-radius:3px; font-size:10px; color:#fff; background: var(--c-error); }
 .tg-time { width:36px; color: var(--c-text-faint); font-variant-numeric: tabular-nums; }
 .tg-side { display:inline-block; width:18px; text-align:center; border-radius:3px; font-size:10px; color:#fff; }
 .tg-side.buy { background: var(--c-up); }

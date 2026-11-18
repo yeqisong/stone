@@ -176,7 +176,7 @@ def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
             "id": None, "source": "slip", "trade_time": r.get("trade_time") or "",
             "side": r["side"], "stock_code": r["stock_code"], "stock_name": r["stock_name"],
             "quantity": _f(r["quantity"]), "price": _f(r["price"]), "amount": _f(r["amount"]),
-            "reason": "", "stop_price": None,
+            "reason": "", "stop_price": None, "hard_block": False, "override_reason": "",
         } for r in rows]
     rows = db.execute(text(
         "SELECT * FROM trade_intraday WHERE trade_date=:d ORDER BY trade_time, id"
@@ -186,6 +186,8 @@ def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
         "side": r["side"], "stock_code": r["stock_code"], "stock_name": r["stock_name"],
         "quantity": _f(r["quantity"]), "price": _f(r["price"]), "amount": _f(r["amount"]),
         "reason": r["reason"] or "", "stop_price": _f(r["stop_price"]) or None,
+        "hard_block": bool(r.get("hard_block")),
+        "override_reason": r.get("override_reason") or "",
     } for r in rows]
 
 
@@ -878,6 +880,37 @@ def _recent_sell(db, code: str, today: _date, days: int) -> Optional[str]:
     return row[0].isoformat() if row else None
 
 
+HARD_BLOCK_RULES = {"same_day_roundtrip", "add_to_loser", "loss_cooldown", "cooling_off"}
+COOLING_MIN = 30
+
+
+def _is_hard_block(chk: dict) -> bool:
+    """当日回补/亏损加仓/连亏冷却/冷静期——记录后触发 30 分钟买入冷却。"""
+    return any(v.get("level") == "block" and v.get("rule") in HARD_BLOCK_RULES
+               for v in (chk.get("violations") or []))
+
+
+def _cooling_off(db) -> Optional[dict]:
+    """最近一次硬拦截买入后的 30 分钟冷静期；返回剩余时间或 None。"""
+    try:
+        row = db.execute(text("""
+            SELECT created_at, stock_name FROM trade_intraday
+            WHERE trade_date=CURRENT_DATE AND side='buy' AND hard_block=true
+            ORDER BY created_at DESC LIMIT 1
+        """)).fetchone()
+    except Exception:
+        return None
+    if not row or row[0] is None:
+        return None
+    until = row[0] + timedelta(minutes=COOLING_MIN)
+    now = datetime.now()
+    remain = int(math.ceil((until - now).total_seconds() / 60))
+    if remain <= 0:
+        return None
+    return {"until": until.strftime("%H:%M"), "remaining_min": remain,
+            "stock_name": row[1] or "上一笔"}
+
+
 def _max_buy_qty(st: dict, existing: Optional[dict], price: float, stop: float) -> int:
     r = st["rules"]
     equity = st["equity"]
@@ -931,6 +964,11 @@ def check(db, body: dict) -> dict:
             add("stop_loss", "block", "买入必须填写止损价（建议 -8%）")
         elif stop >= price:
             add("stop_loss", "block", "止损价必须低于买入价")
+        cool = _cooling_off(db)
+        if cool:
+            add("cooling_off", "block",
+                f"{COOLING_MIN}分钟冷静期：{cool['until']} 前禁止新买入"
+                f"（上次硬拦截：{cool['stock_name']}）")
         add("t_plus_1", "warn",
             "T+1：今天买入，今天不能卖出；如果跌破止损，最早明天才能执行")
         max_qty = _max_buy_qty(st, existing, price, stop)
@@ -1064,18 +1102,23 @@ def record(db, body: dict) -> dict:
     amount = round(price * qty, 2)
     fees = _estimate_fees(side, amount)
     chk = check(db, {**body, "stock_code": code, "side": side, "quantity": qty, "price": price})
+    hard_block = _is_hard_block(chk)
+    reason_text = str(body.get("reason") or "")[:200]
     now = _now()
     db.execute(text("""
         INSERT INTO trade_intraday
             (trade_date, trade_time, stock_code, stock_name, side, quantity, price, amount,
-             commission, stamp_tax, transfer_fee, extra_fee, stop_price, reason, source)
-        VALUES (:d, :t, :c, :n, :s, :q, :p, :a, :com, :st, :tr, :ex, :stop, :r, 'manual')
+             commission, stamp_tax, transfer_fee, extra_fee, stop_price, reason,
+             hard_block, override_reason, source)
+        VALUES (:d, :t, :c, :n, :s, :q, :p, :a, :com, :st, :tr, :ex, :stop, :r,
+                :hb, :or, 'manual')
     """), {
         "d": now.date(), "t": now.strftime("%H:%M:%S"), "c": code,
         "n": chk.get("stock_name") or _stock_name(db, code), "s": side, "q": qty, "p": price,
         "a": amount, "com": fees["commission"], "st": fees["stamp_tax"],
         "tr": fees["transfer_fee"], "ex": fees["extra_fee"],
-        "stop": _f(body.get("stop_price")) or None, "r": str(body.get("reason") or "")[:200],
+        "stop": _f(body.get("stop_price")) or None, "r": reason_text,
+        "hb": hard_block, "or": reason_text,
     })
     # 如果用户已经修正过当前现金，记录操作后同步扣/加现金
     snap = _snapshot(db, now.date())
@@ -1086,7 +1129,8 @@ def record(db, body: dict) -> dict:
             snap = snap + amount - fees["total"]
         _save_snapshot(db, now.date(), snap)
     db.commit()
-    logger.info(f"[intraday] 记录 {side} {code} {qty:g}@{price} allow={chk['allow']}")
+    logger.info(f"[intraday] 记录 {side} {code} {qty:g}@{price} allow={chk['allow']} "
+                f"hard_block={hard_block}")
     return {"ok": True, "check": chk, "state": _build_state(db)}
 
 

@@ -169,24 +169,28 @@ class TestApplyManual:
         assert "600000" not in pos
 
 
+def _buy_state():
+    return {
+        "cash": 50000.0, "equity": 100000.0, "market_value": 50000.0,
+        "position_ratio": 0.50, "cash_ratio": 0.50,
+        "target_position_ratio": 0.70, "max_position_ratio": 0.90,
+        "cash_floor": 0.30, "max_buy_amount": 20000.0,
+        "daily_buy_budget": 20000.0, "remaining_new_buys": 2,
+        "max_new_buys_per_day": 2, "consecutive_loss_days": 0,
+        "positions": [], "today_actions": [],
+        "rules": {
+            "max_single_weight": 0.20, "max_positions": 6,
+            "stop_loss_pct": -0.08, "risk_per_trade": 0.02,
+            "no_rebuy_days": 5, "consecutive_loss_trigger": 2,
+            "target_position_ratio": 0.70, "max_position_ratio": 0.90,
+            "cash_floor": 0.30, "max_daily_buy_pct": 0.30,
+        },
+    }
+
+
 class TestTPlusOne:
     def test_buy_check_warns_t_plus_one(self, monkeypatch):
-        st = {
-            "cash": 50000.0, "equity": 100000.0, "market_value": 50000.0,
-            "position_ratio": 0.50, "cash_ratio": 0.50,
-            "target_position_ratio": 0.70, "max_position_ratio": 0.90,
-            "cash_floor": 0.30, "max_buy_amount": 20000.0,
-            "daily_buy_budget": 20000.0, "remaining_new_buys": 2,
-            "max_new_buys_per_day": 2, "consecutive_loss_days": 0,
-            "positions": [], "today_actions": [],
-            "rules": {
-                "max_single_weight": 0.20, "max_positions": 6,
-                "stop_loss_pct": -0.08, "risk_per_trade": 0.02,
-                "no_rebuy_days": 5, "consecutive_loss_trigger": 2,
-                "target_position_ratio": 0.70, "max_position_ratio": 0.90,
-                "cash_floor": 0.30, "max_daily_buy_pct": 0.30,
-            },
-        }
+        st = _buy_state()
         monkeypatch.setattr(ti, "_build_state", lambda db, cash_override=None: st)
         monkeypatch.setattr(ti, "_stock_name", lambda db, code: "测试股份")
         monkeypatch.setattr(ti, "_today", lambda: date(2026, 11, 17))
@@ -199,6 +203,45 @@ class TestTPlusOne:
         assert any(v["rule"] == "t_plus_1" and v["level"] == "warn"
                    for v in res["violations"])
         assert "T+1" in res["advice"]
+
+
+class TestHardBlock:
+    def test_is_hard_block(self):
+        assert ti._is_hard_block({"violations": [
+            {"rule": "same_day_roundtrip", "level": "block"}]}) is True
+        assert ti._is_hard_block({"violations": [
+            {"rule": "add_to_loser", "level": "block"}]}) is True
+        assert ti._is_hard_block({"violations": [
+            {"rule": "target_position_ratio", "level": "block"}]}) is False
+        assert ti._is_hard_block({"violations": []}) is False
+
+    def test_cooling_off_reads_latest_hard_block(self):
+        from datetime import datetime, timedelta
+
+        class _Fake:
+            def execute(self, *a, **k): return self
+            def fetchone(self): return (datetime.now() - timedelta(minutes=5), "沪电股份")
+
+        cool = ti._cooling_off(_Fake())
+        assert cool is not None
+        assert 0 < cool["remaining_min"] <= 30
+        assert cool["stock_name"] == "沪电股份"
+
+    def test_buy_check_blocks_during_cooling_off(self, monkeypatch):
+        st = _buy_state()
+        monkeypatch.setattr(ti, "_build_state", lambda db, cash_override=None: st)
+        monkeypatch.setattr(ti, "_stock_name", lambda db, code: "测试股份")
+        monkeypatch.setattr(ti, "_today", lambda: date(2026, 11, 17))
+        monkeypatch.setattr(ti, "_recent_sell", lambda db, code, day, days: None)
+        monkeypatch.setattr(ti, "_cooling_off", lambda db: {
+            "until": "10:50", "remaining_min": 20, "stock_name": "沪电股份"})
+        res = ti.check(None, {
+            "stock_code": "600000", "side": "buy", "quantity": 100,
+            "price": 10.0, "stop_price": 9.0,
+        })
+        assert res["allow"] is False
+        assert any(v["rule"] == "cooling_off" and v["level"] == "block"
+                   for v in res["violations"])
 
 
 class TestTradePlan:

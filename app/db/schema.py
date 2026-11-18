@@ -218,6 +218,8 @@ CREATE TABLE IF NOT EXISTS trade_intraday (
     reason        VARCHAR(200) NOT NULL DEFAULT '',
     source        VARCHAR(12) NOT NULL DEFAULT 'manual',
     reconciled    BOOLEAN NOT NULL DEFAULT false,
+    hard_block    BOOLEAN NOT NULL DEFAULT false,       -- 当日回补/亏损加仓/连亏冷却等硬拦截
+    override_reason VARCHAR(200) NOT NULL DEFAULT '',   -- 用户坚持记录时的理由
     note          VARCHAR(200) NOT NULL DEFAULT '',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -1628,6 +1630,16 @@ def init_db(sync_session) -> None:
         sync_session.commit()
     except Exception:
         sync_session.rollback()
+
+    # 迁移：盘中手工记录补硬拦截标记/覆盖理由（行为摩擦 + 冷静期）
+    for _col, _ddl in (("hard_block", "BOOLEAN NOT NULL DEFAULT false"),
+                       ("override_reason", "VARCHAR(200) NOT NULL DEFAULT ''")):
+        try:
+            sync_session.execute(text(
+                f"ALTER TABLE trade_intraday ADD COLUMN IF NOT EXISTS {_col} {_ddl}"))
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
 
     # 迁移：分时树图快照补 open/high/low（行业资金流估算用 CLV）
     for _col in ("open", "high", "low"):

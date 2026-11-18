@@ -54,8 +54,10 @@
 
       <div class="tc-actions">
         <n-button size="small" type="primary" :loading="checking" :disabled="!form.code" @click="doCheck">检查</n-button>
-        <n-button size="small" :loading="recording" :disabled="!form.code || form.qty<=0" @click="doRecord">
-          {{ result && !result.allow ? '已下单，照实记录' : '我已下单，记录这笔' }}
+        <n-button size="small" :loading="recording"
+          :disabled="!form.code || form.qty<=0 || !canRecord" @click="doRecord">
+          {{ needsOverride ? (canRecord ? '记录这笔（违规）' : '冷静期后记录') :
+             (result && !result.allow ? '已下单，照实记录' : '我已下单，记录这笔') }}
         </n-button>
         <n-button size="small" quaternary @click="show=false">关闭</n-button>
       </div>
@@ -85,6 +87,17 @@
         </div>
       </div>
 
+      <div v-if="needsOverride" class="tc-hard">
+        <b>硬拦截：当日回补 / 亏损加仓 / 连亏冷却</b>
+        <p>冷静期 {{ coolingLeft }} 秒；确认后仍会记录为违规，并触发 30 分钟禁止新买入。</p>
+        <n-checkbox v-model:checked="overrideAck" :disabled="coolingLeft > 0">
+          我已知晓这是违规操作，仍要记录
+        </n-checkbox>
+        <div class="tc-hard-reason" :class="{ ok: reasonLen >= 10 }">
+          理由 {{ reasonLen }}/10 字（为什么仍要买、什么情况认错）
+        </div>
+      </div>
+
       <div v-if="recorded" class="tc-recorded">
         已记录。当前仓位 <b>{{ pct(recorded.position_ratio) }}</b>，现金 <b>{{ money(recorded.cash) }}</b>。
         <span v-if="!recorded.allow_new_buy">今天不再开新仓。</span>
@@ -99,8 +112,8 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import StockSuggestInput from './StockSuggestInput.vue'
-import { ref, reactive, computed, watch } from 'vue'
-import { NModal, NCard, NButton, NInput, NInputNumber, NRadioGroup, NRadioButton, useMessage } from 'naive-ui'
+import { ref, reactive, computed, watch, onUnmounted } from 'vue'
+import { NModal, NCard, NButton, NInput, NInputNumber, NRadioGroup, NRadioButton, NCheckbox, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const props = defineProps({
@@ -119,7 +132,29 @@ const recorded = ref(null)
 const checking = ref(false), recording = ref(false), quoteLoading = ref(false)
 const error = ref('')
 const quoteName = ref(''), quotePrice = ref(null)
+const overrideAck = ref(false)
+const coolingLeft = ref(0)
+let coolTimer = null
 let stopAuto = true
+const HARD_RULES = ['same_day_roundtrip', 'add_to_loser', 'loss_cooldown', 'cooling_off']
+const hardBlocks = computed(() => (result.value?.violations || [])
+  .filter(v => v.level === 'block' && HARD_RULES.includes(v.rule)))
+const needsOverride = computed(() => hardBlocks.value.length > 0)
+const reasonLen = computed(() => (form.reason || '').trim().length)
+const canRecord = computed(() => !needsOverride.value ||
+  (overrideAck.value && coolingLeft.value <= 0 && reasonLen.value >= 10))
+function stopCool(){
+  if (coolTimer) { clearInterval(coolTimer); coolTimer = null }
+  coolingLeft.value = 0
+}
+function startCool(sec = 15){
+  stopCool()
+  coolingLeft.value = sec
+  coolTimer = setInterval(() => {
+    coolingLeft.value -= 1
+    if (coolingLeft.value <= 0) stopCool()
+  }, 1000)
+}
 
 const money = v => v == null ? '—' : (v < 0 ? '-¥' : '¥') + Number(Math.abs(v)).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 const pct = (v, d = 1) => v == null ? '—' : (v * 100).toFixed(d) + '%'
@@ -135,10 +170,11 @@ function reset(){
   form.code = ''; form.qty = 0; form.price = null; form.stop = null; form.reason = ''
   result.value = null; recorded.value = null; error.value = ''
   quoteName.value = ''; quotePrice.value = null; stopAuto = true
+  stopCool(); overrideAck.value = false
 }
-watch(() => props.show, v => { if (v) reset() })
+watch(() => props.show, v => { if (v) reset(); else stopCool() })
 
-function onSide(v){ stopAuto = true; result.value = null; recorded.value = null }
+function onSide(v){ stopAuto = true; result.value = null; recorded.value = null; stopCool(); overrideAck.value = false }
 function onCodeSelect({ code, name }){
   form.code = code; quoteName.value = name || ''
   useQuote()
@@ -179,12 +215,18 @@ async function doCheck(){
   try{
     const r = await axios.post(API + '/api/portfolio/trades/intraday/check', payload(), { timeout: 30000 })
     result.value = r.data.result
+    overrideAck.value = false
+    if (needsOverride.value) startCool(15); else stopCool()
   }catch(e){ error.value = e.response?.data?.detail || e.message || '检查失败' }
   finally{ checking.value = false }
 }
 
 async function doRecord(){
   if (!form.code || form.qty <= 0) { message.warning('先填代码和数量'); return }
+  if (needsOverride.value && (!overrideAck.value || coolingLeft.value > 0 || reasonLen.value < 10)) {
+    message.warning('硬拦截买入：冷静期结束、勾选确认、写满 10 字理由后才能记录')
+    return
+  }
   recording.value = true; error.value = ''
   try{
     const r = await axios.post(API + '/api/portfolio/trades/intraday/record', payload(), { timeout: 30000 })
@@ -194,8 +236,9 @@ async function doRecord(){
     if (r.data.check?.allow) message.success('已记录')
     else message.warning('已记录，但这笔触发了护栏拦截；今天不要再开新仓')
   }catch(e){ error.value = e.response?.data?.detail || e.message || '记录失败' }
-  finally{ recording.value = false }
+  finally{ recording.value = false; stopCool() }
 }
+onUnmounted(stopCool)
 </script>
 
 <style scoped>
@@ -229,6 +272,13 @@ async function doRecord(){
 .tc-v { font-size: var(--text-meta); line-height:1.6; color: var(--c-text-dim); }
 .tc-v-tag { display:inline-block; margin-right:6px; padding:0 4px; border-radius:3px; font-size:10px; color:#fff; background: var(--c-warning); }
 .tc-v.block .tc-v-tag { background: var(--c-error); }
+.tc-hard { margin-top:10px; padding:8px 10px; display:flex; flex-direction:column; gap:6px;
+  border:1px solid color-mix(in srgb, var(--c-error) 35%, transparent); border-left:3px solid var(--c-error);
+  border-radius: var(--radius-sm); background: color-mix(in srgb, var(--c-error) 5%, transparent); }
+.tc-hard b { color: var(--c-error); font-size:12px; }
+.tc-hard p { margin:0; font-size: var(--text-meta); line-height:1.6; color: var(--c-text-dim); }
+.tc-hard-reason { font-size: var(--text-meta); color: var(--c-warning); }
+.tc-hard-reason.ok { color: var(--c-info); }
 .tc-recorded { margin-top:10px; font-size: var(--text-meta); color: var(--c-text); background: var(--c-card-bg-hover); padding:8px 10px; border-radius: var(--radius-sm); }
 .tc-error { margin-top:10px; font-size:13px; color: var(--c-error); }
 @media (max-width: 560px) { .tc-row { grid-template-columns: 1fr; } }
