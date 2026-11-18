@@ -135,6 +135,28 @@
             :max-height="calcTableH" scroll-x="820" :row-props="stockRowProps" />
         </n-tab-pane>
 
+        <!-- ── 执行质量 ── -->
+        <n-tab-pane name="execution" :tab="isNarrow ? '执行' : '执行质量'">
+          <div v-if="execLoading" class="tr-muted">加载中…</div>
+          <template v-else-if="execution">
+            <div class="tr-muted" style="margin-bottom:8px">近 {{ execDays }} 天 · 卖出价 vs 之后价格；提醒执行率与滑点</div>
+            <div class="tr-exec-sum">
+              <div v-for="x in execSummary" :key="x.label" class="tr-exec-card">
+                <span>{{ x.label }}</span>
+                <b :style="{ color: x.color || 'var(--c-text)' }">{{ x.value }}</b>
+                <i>{{ x.sub }}</i>
+              </div>
+            </div>
+            <div class="tr-panel-title">卖出执行 <span class="tr-muted">正值=卖在之后更高位；负值=卖飞</span></div>
+            <n-data-table :columns="execSellCols" :data="execution.sells" size="small"
+              :bordered="false" :max-height="320" scroll-x="980" />
+            <div class="tr-panel-title" style="margin-top:12px">提醒执行 <span class="tr-muted">系统提醒后是否卖出；滑点=卖价/提醒价-1</span></div>
+            <n-data-table :columns="execAlertCols" :data="execution.alerts" size="small"
+              :bordered="false" :max-height="320" scroll-x="980" />
+          </template>
+          <div v-else class="tr-muted">暂无执行数据。</div>
+        </n-tab-pane>
+
         <!-- ── 纪律 ── -->
         <n-tab-pane name="rules" :tab="isNarrow ? '纪律' : '纪律规则'">
           <div class="tr-grid">
@@ -241,6 +263,58 @@ const loading = ref(false), error = ref('')
 const review = ref(null)
 const tab = ref('review')
 const showImport = ref(false)
+const execution = ref(null)
+const execLoading = ref(false)
+const execDays = computed(() => period.value === 'all' ? 180 :
+  Math.min(180, parseInt(period.value) || 30))
+const execTone = v => v == null ? 'var(--c-text)' : v >= 0 ? 'var(--c-info)' : 'var(--c-error)'
+const execSummary = computed(() => {
+  const s = execution.value?.sell_summary || {}
+  const a = execution.value?.alert_summary || {}
+  return [
+    { label: '卖出笔数', value: s.count || 0,
+      sub: `好 ${s.good || 0} / 卖飞 ${s.poor || 0}` + (s.shown < s.count ? ` · 表格最近 ${s.shown} 笔` : '') },
+    { label: '平均 vs 30分钟', value: pct(s.avg_vs_30m), color: execTone(s.avg_vs_30m), sub: '正=卖在更高位' },
+    { label: '平均 vs 收盘', value: pct(s.avg_vs_close), color: execTone(s.avg_vs_close), sub: '正=卖在收盘上方' },
+    { label: '提醒执行率', value: a.execution_rate == null ? '—' : (a.execution_rate * 100).toFixed(0) + '%', sub: `${a.executed || 0}/${a.count || 0}` },
+    { label: '平均滑点', value: pct(a.avg_slippage), color: execTone(a.avg_slippage), sub: '正=卖得比提醒价高' },
+    { label: '未执行', value: a.missed || 0, sub: `平均变动 ${pct(a.avg_missed_move)}` },
+  ]
+})
+const GRADE = {
+  good: { label: '好', color: 'var(--c-info)' },
+  neutral: { label: '中', color: 'var(--c-text-dim)' },
+  poor: { label: '卖飞', color: 'var(--c-error)' },
+  no_data: { label: '—', color: 'var(--c-text-faint)' },
+}
+const execSellCols = [
+  { title: '日期', key: 'trade_date', width: 96 },
+  { title: '时间', key: 'trade_time', width: 70 },
+  { title: '股票', width: 132, render: r => `${r.stock_name} ${r.stock_code}` },
+  { title: '卖价', key: 'price', width: 72, align: 'right' },
+  { title: 'VWAP', key: 'vwap', width: 72, align: 'right' },
+  { title: '30m后', key: 'p30', width: 72, align: 'right' },
+  { title: '60m后', key: 'p60', width: 72, align: 'right' },
+  { title: '收盘', key: 'close', width: 72, align: 'right' },
+  { title: 'vs 30m', key: 'vs_30m', width: 80, align: 'right',
+    render: r => h('span', { style: { color: execTone(r.vs_30m) } }, pct(r.vs_30m)) },
+  { title: '评级', key: 'grade', width: 62,
+    render: r => { const g = GRADE[r.grade] || GRADE.no_data; return h('span', { style: { color: g.color } }, g.label) } },
+]
+const execAlertCols = [
+  { title: '日期', key: 'trade_date', width: 96 },
+  { title: '时间', key: 'alert_time', width: 70 },
+  { title: '股票', width: 132, render: r => `${r.stock_name} ${r.stock_code}` },
+  { title: '类型', key: 'kind_label', width: 110 },
+  { title: '提醒价', key: 'alert_price', width: 75, align: 'right' },
+  { title: '执行', key: 'executed', width: 56, render: r => r.executed ? '已卖' : '未卖' },
+  { title: '卖价', key: 'sell_price', width: 72, align: 'right' },
+  { title: '滑点', key: 'slippage_pct', width: 76, align: 'right',
+    render: r => r.slippage_pct == null ? '—' : h('span', { style: { color: execTone(r.slippage_pct) } }, pct(r.slippage_pct)) },
+  { title: '收盘', key: 'close', width: 72, align: 'right' },
+  { title: '未卖变动', key: 'missed_move_pct', width: 86, align: 'right',
+    render: r => r.missed_move_pct == null ? '—' : h('span', { style: { color: r.missed_move_pct > 0 ? 'var(--c-error)' : 'var(--c-info)' } }, pct(r.missed_move_pct)) },
+]
 
 const levelLabel = { critical:'严重', warn:'注意', ok:'优势', info:'信息' }
 
@@ -553,14 +627,32 @@ const batchCols = [
 ]
 
 // ── 生命周期 ──
-function setPeriod(v){ period.value = v; loadReview() }
+function setPeriod(v){
+  period.value = v
+  loadReview()
+  if (tab.value === 'execution') loadExecution()
+}
+async function loadExecution(){
+  if (execLoading.value) return
+  execLoading.value = true
+  try{
+    const r = await axios.get(API + '/api/portfolio/trades/execution-quality', {
+      params: { days: execDays.value }, timeout: 120000,
+    })
+    execution.value = r.data
+  }catch(e){
+    message.error(e.response?.data?.detail || e.message || '执行质量加载失败')
+  }finally{ execLoading.value = false }
+}
 function onTab(v){
   if (v === 'review') nextTick(renderChart)
   if (v === 'rules') { loadGate(); loadBatches() }
+  if (v === 'execution') loadExecution()
 }
 async function loadAll(){
   await Promise.all([loadReview(), loadGate(), loadBatches()])
   if (tab.value === 'trades' && !tradeRows.value.length) loadTrades()
+  if (tab.value === 'execution') loadExecution()
 }
 function onImported(res){
   showImport.value = false
@@ -610,6 +702,11 @@ onUnmounted(() => { window.removeEventListener('resize', resizeChart); disposeCh
 @media (max-width: 900px) { .tr-grid { grid-template-columns: 1fr; } }
 .tr-panel { background: var(--c-card-bg); border:1px solid var(--c-border); border-radius: var(--radius); padding:10px 12px; min-width:0; }
 .tr-panel-title { display:flex; align-items:baseline; gap:6px; font-size:13px; font-weight:600; margin-bottom:8px; flex-wrap:wrap; }
+.tr-exec-sum { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
+.tr-exec-card { background:var(--c-card-bg); border:1px solid var(--c-border); border-radius:var(--radius-sm); padding:8px 10px; }
+.tr-exec-card span { display:block; font-size:var(--text-meta); color:var(--c-text-dim); }
+.tr-exec-card b { display:block; margin-top:2px; font-size:14px; font-variant-numeric:tabular-nums; }
+.tr-exec-card i { display:block; margin-top:1px; font-size:var(--text-meta); color:var(--c-text-faint); font-style:normal; }
 
 /* 纪律分 */
 .tr-score-panel { border-left:3px solid var(--c-accent); }

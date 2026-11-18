@@ -19,6 +19,7 @@ from app.trade_review import (
     save_discipline,
     today_gate,
 )
+from app.execution_quality import report as execution_report
 from app.trade_slip import (
     TradeParseError,
     apply_positions,
@@ -232,6 +233,17 @@ def intraday_guard_delete(action_id: int, user: str = Depends(optional_auth)):
         return {"ok": True, "state": state}
     except ValueError as e:
         raise HTTPException(404, str(e))
+    finally:
+        db.close()
+
+
+@router.get("/portfolio/trades/execution-quality")
+def execution_quality(days: int = Query(30, ge=1, le=180),
+                      user: str = Depends(optional_auth)):
+    """卖出执行质量 + 提醒执行率/等待成本。"""
+    db = get_sync_db()
+    try:
+        return execution_report(db, days)
     finally:
         db.close()
 
