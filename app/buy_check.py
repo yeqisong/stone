@@ -687,10 +687,10 @@ def _recent_sold_codes(db, st: dict, days: int = 5) -> set[str]:
     try:
         rows = db.execute(text("""
             SELECT DISTINCT stock_code FROM trade_slip
-            WHERE side='sell' AND trade_date >= :cut
+            WHERE LOWER(side)='sell' AND trade_date >= :cut
             UNION
             SELECT DISTINCT stock_code FROM trade_intraday
-            WHERE side='sell' AND trade_date >= :cut
+            WHERE LOWER(side)='sell' AND trade_date >= :cut
               AND COALESCE(reconciled, false)=false
         """), {"cut": cutoff}).fetchall()
         codes |= {r[0] for r in rows if r[0]}
