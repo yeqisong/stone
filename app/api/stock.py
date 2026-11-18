@@ -1144,9 +1144,11 @@ def get_intraday_radar():
         """)).fetchall()
         # 与护栏/教练同一口径：portfolio + 今日临时成交（手工卖出/回补）
         # 只读 portfolio 会把今天已卖出的票继续当成持仓，继续发止损信号。
+        equity = 0.0
         try:
             from app.trade_intraday import state as intraday_state
             _st = intraday_state(db)
+            equity = float(_st.get("equity") or 0)
             positions = {
                 p["stock_code"]: {"qty": int(p["quantity"] or 0),
                                   "cost": float(p["cost_price"] or 0)}
@@ -1216,11 +1218,13 @@ def get_intraday_radar():
     from app.intraday_signal import holding_signal
     price_map = {it['code']: it['price'] for it in items}
     total_mv = sum((p['qty'] or 0) * (price_map.get(c) or 0) for c, p in positions.items())
+    # 单票占比与 max_single_weight 同口径：分母用账户权益（含现金），不是持仓市值
+    weight_base = equity or total_mv
     for it in items:
         p = positions.get(it['code'])
         it['is_holding'] = bool(p)
         if p:
-            w = (p['qty'] * it['price'] / total_mv) if total_mv else 0.0
+            w = (p['qty'] * it['price'] / weight_base) if weight_base else 0.0
             it['qty'] = p['qty']
             it['cost'] = p['cost']
             it['weight'] = round(w, 4)

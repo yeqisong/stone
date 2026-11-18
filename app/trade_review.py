@@ -1097,7 +1097,8 @@ def _manual_today(db, day: _date) -> list[dict]:
     try:
         rows = db.execute(text("""
             SELECT id, trade_date, trade_time, stock_code, stock_name, side,
-                   quantity, price, amount, stop_price, reason, source
+                   quantity, price, amount, commission, stamp_tax, transfer_fee,
+                   extra_fee, stop_price, reason, source
             FROM trade_intraday
             WHERE trade_date=:d AND COALESCE(reconciled, false)=false
             ORDER BY trade_time, id
@@ -1107,7 +1108,8 @@ def _manual_today(db, day: _date) -> list[dict]:
     out = []
     for r in rows:
         d = dict(r)
-        for k in ("quantity", "price", "amount", "stop_price"):
+        for k in ("quantity", "price", "amount", "commission", "stamp_tax",
+                  "transfer_fee", "extra_fee", "stop_price"):
             d[k] = float(d[k]) if d[k] is not None else None
         out.append(d)
     return out
@@ -1200,14 +1202,28 @@ def today_gate(db, today: Optional[_date] = None) -> dict:
     mv = {p["stock_code"]: (p["quantity"] * (last_px.get(p["stock_code"]) or p.get("cost_price") or 0))
           for p in positions}
     total = sum(mv.values())
-    if total > 0:
+    # 单票上限是「占账户」，分母必须加现金；用占持仓会把 42% 显示成 50%
+    snap_cash = db.execute(text(
+        "SELECT cash FROM trade_cash_snapshot WHERE trade_date=:d"
+    ), {"d": today}).scalar()
+    if snap_cash is not None:
+        cash = float(snap_cash)
+    else:
+        cash = float((preview.get("summary") or {}).get("cash") or 0.0)
+        for r in manual_today:
+            fees = sum(float(r.get(k) or 0) for k in
+                       ("commission", "stamp_tax", "transfer_fee", "extra_fee"))
+            amt = float(r.get("amount") or 0)
+            cash += (amt - fees) if r["side"] == "sell" else -(amt + fees)
+    equity = total + cash
+    if total > 0 and equity > 0:
         top_code = max(mv, key=mv.get)
-        w = mv[top_code] / total
+        w = mv[top_code] / equity
         if w > cfg["max_single_weight"]:
             name = next((p["stock_name"] for p in positions if p["stock_code"] == top_code), top_code)
             violations.append({
                 "rule": "max_single_weight", "level": "warn",
-                "message": f"当前单票集中：{name} 占 {w*100:.0f}%（上限 {cfg['max_single_weight']*100:.0f}%）",
+                "message": f"当前单票集中：{name} 占账户 {w*100:.0f}%（上限 {cfg['max_single_weight']*100:.0f}%）",
             })
     if len(positions) > cfg["max_positions"]:
         violations.append({

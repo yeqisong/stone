@@ -528,7 +528,8 @@ def _risk_gate(db, code: str, entry: float, stop: float, target: float,
         projected = risk.get("projected") or {}
         summary = (f"最多 {max_qty} 股；买完仓位 {_pct(projected.get('position_ratio'))}、"
                    f"单票 {_pct(projected.get('single_weight'))}、"
-                   f"止损亏 ¥{_f(projected.get('risk_amount')):,.0f}")
+                   f"止损亏 ¥{_f(projected.get('risk_amount')):,.0f}；"
+                   f"T+1：今天买，今天不能止损")
         reason = summary
     else:
         first = blocked[0]["message"] if blocked else (risk.get("advice") or "风险预算不足")
@@ -578,7 +579,8 @@ def check(db, code: str, entry: Optional[float] = None,
     first_fail = next((g for g in gates if not g.get("pass")), None)
     if allowed:
         advice = (f"四道闸门通过：可以买，最多 {risk['details'].get('max_qty', 0)} 股。"
-                  f"参考买点 {use_entry:.2f} / 止损 {use_stop:.2f} / 目标 {use_target:.2f}。")
+                  f"参考买点 {use_entry:.2f} / 止损 {use_stop:.2f} / 目标 {use_target:.2f}。"
+                  f"注意 T+1：今天买入，今天不能卖出，止损最早明天执行。")
     else:
         advice = f"先别买：{first_fail.get('reason') if first_fail else '闸门未通过'}。"
 

@@ -10,7 +10,7 @@
 两个开关独立：enabled（提醒）/ collect_minute（采集）；都关掉才完全休眠。
 
 规则（每条 code+rule 有冷却，默认 30 分钟；跨进程重启靠 risk_alerts.created_at 兜底）：
-- it_stop / it_take   持仓成本止损/止盈（portfolio.cost_price，盘中实时价）
+- it_stop / it_take   持仓成本止损/止盈（实时持仓：交割单 + 今日手工成交，盘中实时价）
 - it_limit_up/down    逼近涨停/跌停（默认距限价 0.5% 内，只在状态切换时报）
 - it_surge / it_drop  N 分钟急涨/急跌（默认 5 分钟 2%）
 - it_high / it_low    日内新高/新低（首轮只建基线不报）
@@ -121,7 +121,7 @@ CRITICAL = {'it_stop', 'it_limit_down', 'it_drop'}
 
 _CTX_TTL_S = 60
 _ctx = {'ts': 0.0, 'rules': dict(DEFAULT_CONFIG), 'pool': [], 'costs': {},
-        'prev_levels': {}, 'trade_day': True}
+        'cash': 0.0, 'prev_levels': {}, 'trade_day': True}
 _trade_day_cache = {'day': None, 'ok': True}
 _prev_cache = {'day': None, 'key': None, 'levels': {}}
 _state: dict = {}          # code -> 日内状态（高低/量比/限价/采样 + VWAP/OR/昨高昨低侧别）
@@ -217,12 +217,28 @@ def _load_pool(db) -> list:
     return [{'code': r[0], 'name': r[1] or r[0], 'type': r[2] or 'stock'} for r in rows]
 
 
+def invalidate_context():
+    """手工成交/现金修正后，让 watcher 下一轮立即重载持仓。"""
+    _ctx['ts'] = 0.0
+
+
+def _load_live(db) -> tuple[dict, float]:
+    # 与护栏/教练/雷达同一口径：交割单 + 今日未对账手工成交。
+    # 直接读 portfolio 会在手工卖出后继续按旧持仓发止损提醒。
+    from app.trade_intraday import live_positions
+    snap = live_positions(db)
+    costs = {
+        p["stock_code"]: {
+            "name": p["stock_name"], "cost": p["cost_price"],
+            "qty": int(p["quantity"]),
+        }
+        for p in snap["positions"] if p["quantity"] > 0 and p["cost_price"] > 0
+    }
+    return costs, float(snap.get("cash") or 0.0)
+
+
 def _load_costs(db) -> dict:
-    rows = db.execute(text(
-        "SELECT stock_code, stock_name, cost_price, quantity FROM portfolio "
-        "WHERE is_active = true AND quantity > 0 AND cost_price > 0"
-    )).fetchall()
-    return {r[0]: {'name': r[1], 'cost': float(r[2]), 'qty': int(r[3] or 0)} for r in rows}
+    return _load_live(db)[0]
 
 
 def _load_prev_levels(db, codes: list, day) -> dict:
@@ -265,11 +281,13 @@ def _load_context() -> dict:
     db = get_sync_db()
     try:
         pool = _load_pool(db)
+        costs, cash = _load_live(db)
         _ctx.update(
             ts=now,
             rules=get_intraday_rules(db),
             pool=pool,
-            costs=_load_costs(db),
+            costs=costs,
+            cash=cash,
             prev_levels=_load_prev_levels(db, [p['code'] for p in pool], _bj_now().date()),
             trade_day=_is_trade_day(db, _bj_now().date()),
         )
@@ -410,7 +428,8 @@ def _update_or_state(st: dict, q: dict, price: float, rules: dict, now: datetime
 
 
 def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
-                  now: datetime, prev_levels: dict | None = None) -> list:
+                  now: datetime, prev_levels: dict | None = None,
+                  cash: float = 0.0) -> list:
     """纯规则评估：返回候选告警（未落库、未查冷却）。同一只票一次最多一条。
 
     state 会被就地更新（日内高低基线、量比状态、急涨急跌采样、
@@ -432,11 +451,12 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
     or_pct = max(0.0, _num(rules.get('or_break_min_pct'), 0.1))
     prev_pct = max(0.0, _num(rules.get('prev_level_min_pct'), 0.1))
     prev_levels = prev_levels or {}
-    # 持仓市值总额（不含现金）：用于单票占比，触发“超配反弹减仓”
+    # 单票占比用账户权益（持仓 + 现金），与 max_single_weight 同口径
     total_mv = sum(
         _num((p or {}).get('qty'), 0.0) * _num((quotes.get(c) or {}).get('price'), 0.0)
         for c, p in costs.items()
     )
+    equity = total_mv + max(0.0, _num(cash, 0.0))
     out = []
 
     for code, q in quotes.items():
@@ -484,13 +504,13 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
             continue
 
         qty = _num(pos.get('qty'), 0.0)
-        if cost and qty > 0 and total_mv > 0:
-            weight = qty * price / total_mv
+        if cost and qty > 0 and equity > 0:
+            weight = qty * price / equity
             day_chg = _num(q.get('change_pct'), 0.0)
             if weight >= reduce_weight and day_chg >= reduce_pct:
                 out.append(_cand(code, name, 'it_reduce_bounce',
                                  f'现价 {_fmt(price)}，日内 +{day_chg:.2f}%，'
-                                 f'单票 {weight * 100:.1f}% 超配；反弹减仓，不补'))
+                                 f'单票 {weight * 100:.1f}% 占账户超配；反弹减仓，不补'))
                 continue
 
         if cost_chg is not None and stop_pct > 0 and cost_chg <= -stop_pct / 100:
@@ -837,7 +857,7 @@ def _tick(now: datetime, rules: dict | None = None) -> int:
     if not rules.get('enabled'):
         return 0
     candidates = evaluate_tick(quotes, _state, ctx['costs'], rules, now,
-                               ctx.get('prev_levels'))
+                               ctx.get('prev_levels'), cash=ctx.get('cash', 0.0))
     return _persist(candidates, rules, now)
 
 

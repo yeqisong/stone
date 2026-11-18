@@ -73,6 +73,15 @@ class DisciplineBody(BaseModel):
     risk_per_trade: Optional[float] = None
 
 
+def _invalidate_watch():
+    """记录/删除/现金修正后，让盘中 watcher 下一轮立即重载持仓（best effort）。"""
+    try:
+        from app.intraday_watch import invalidate_context
+        invalidate_context()
+    except Exception:
+        pass
+
+
 def _do_import(data: bytes, filename: str, do_apply: bool) -> dict:
     db = get_sync_db()
     try:
@@ -189,7 +198,9 @@ def intraday_guard_record(body: TradeCheckBody, user: str = Depends(optional_aut
     """记录今天已发生的操作；即使检查会拦截也照实入库，并返回违规提示。"""
     db = get_sync_db()
     try:
-        return intraday_record(db, body.model_dump())
+        result = intraday_record(db, body.model_dump())
+        _invalidate_watch()
+        return result
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -205,7 +216,9 @@ def intraday_guard_cash(body: CashBody, user: str = Depends(optional_auth)):
     """修正券商当前可用资金（出入金/未记录交易导致的偏差）。"""
     db = get_sync_db()
     try:
-        return {"ok": True, "state": intraday_set_cash(db, body.cash)}
+        state = intraday_set_cash(db, body.cash)
+        _invalidate_watch()
+        return {"ok": True, "state": state}
     finally:
         db.close()
 
@@ -214,7 +227,9 @@ def intraday_guard_cash(body: CashBody, user: str = Depends(optional_auth)):
 def intraday_guard_delete(action_id: int, user: str = Depends(optional_auth)):
     db = get_sync_db()
     try:
-        return {"ok": True, "state": intraday_delete(db, action_id)}
+        state = intraday_delete(db, action_id)
+        _invalidate_watch()
+        return {"ok": True, "state": state}
     except ValueError as e:
         raise HTTPException(404, str(e))
     finally:

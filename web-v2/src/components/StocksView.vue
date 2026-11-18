@@ -31,7 +31,7 @@
           成本 ¥{{ Number(s.cost||0).toFixed(2) }} ·
           <b :style="{color:(s.vs_cost_pct||0)>=0?'var(--c-up)':'var(--c-down)'}">{{ radarPct((s.vs_cost_pct||0)*100) }}</b>
         </span>
-        <span class="rs-weight">仓位 {{ ((s.weight||0)*100).toFixed(1) }}%</span>
+        <span class="rs-weight" title="单票市值 / 账户权益">单票 {{ ((s.weight||0)*100).toFixed(1) }}%</span>
         <span class="rs-tag" :style="{background: signalMeta(s.signal.action).color}">{{ signalMeta(s.signal.action).label }}</span>
         <span class="rs-reason" :title="s.signal.reason">{{ s.signal.reason }}</span>
       </div>

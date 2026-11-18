@@ -75,9 +75,11 @@
         <span v-for="n in result.setup.notes" :key="n">· {{ n }}</span>
       </div>
 
-      <div v-if="blockViolations.length" class="bc-violations">
-        <div v-for="v in blockViolations" :key="v.rule + v.message" class="bc-violation">
-          <span class="bc-v-tag">拦截</span>{{ v.message }}
+      <div v-if="riskNotices.length" class="bc-violations">
+        <div v-for="v in riskNotices" :key="v.rule + v.message" class="bc-violation">
+          <span class="bc-v-tag" :class="v.level === 'block' ? 'bc-v-block' : 'bc-v-warn'">
+            {{ v.level === 'block' ? '拦截' : '提醒' }}
+          </span>{{ v.message }}
         </div>
       </div>
     </div>
@@ -112,7 +114,8 @@ const fmt = v => v == null || v === '' ? '—' : '¥' + Number(v).toFixed(2)
 const pct = (v, d = 1) => v == null ? '—' : (Number(v) * 100).toFixed(d) + '%'
 const money = v => v == null ? '—' : (v < 0 ? '-¥' : '¥') + Number(Math.abs(v)).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 const gateClass = g => g.pass ? 'g-ok' : (g.level === 'skip' ? 'g-skip' : 'g-fail')
-const blockViolations = computed(() => (result.value?.risk?.violations || []).filter(v => v.level === 'block'))
+const riskNotices = computed(() => (result.value?.risk?.violations || [])
+  .filter(v => v.level === 'block' || v.rule === 't_plus_1'))
 
 function reset(){
   form.code = ''; form.entry = null; form.stop = null; form.target = null; form.qty = null
@@ -216,6 +219,7 @@ function useSuggestion(){
 .bc-violations { display:flex; flex-direction:column; gap:4px; margin-top:10px; }
 .bc-violation { font-size: var(--text-meta); line-height:1.6; color: var(--c-text-dim); }
 .bc-v-tag { display:inline-block; margin-right:6px; padding:0 4px; border-radius:3px; font-size:10px; color:#fff; background: var(--c-error); }
+.bc-v-tag.bc-v-warn { background: var(--c-warning); }
 .bc-error { margin-top:10px; font-size:13px; color: var(--c-error); }
 @media (max-width: 640px) {
   .bc-row3 { grid-template-columns: 1fr; }

@@ -43,7 +43,7 @@
       <div class="tg-m">
         <span>最大单票</span>
         <b :style="{ color: (st.top_weight || 0) > (st.rules?.max_single_weight || 0.2) ? 'var(--c-error)' : 'var(--c-text)' }">{{ pct(st.top_weight) }}</b>
-        <i>{{ st.top_position?.stock_name || '—' }} · 上限 {{ pct(st.rules?.max_single_weight, 0) }}</i>
+        <i>{{ st.top_position?.stock_name || '—' }} · 占账户 · 上限 {{ pct(st.rules?.max_single_weight, 0) }}</i>
       </div>
       <div class="tg-m">
         <span>账户总资产</span>
@@ -157,7 +157,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { NButton, NSpin, NModal, NCard, NInputNumber, NSpace, useMessage } from 'naive-ui'
 import axios from 'axios'
 
-const emit = defineEmits(['import'])
+const emit = defineEmits(['import', 'recorded'])
 const API = window.location.origin
 const message = useMessage()
 
@@ -226,6 +226,7 @@ function toggleCollapsed(){
 function openCheck(side){ checkSide.value = side; showCheck.value = true }
 function onRecorded(s){
   st.value = s
+  emit('recorded', s)
   setTimeout(load, 800)
 }
 function openCash(){
@@ -237,6 +238,7 @@ async function saveCash(){
   try{
     const r = await axios.put(API + '/api/portfolio/trades/intraday/cash', { cash: Number(cashValue.value || 0) })
     st.value = r.data.state
+    emit('recorded', r.data.state)
     showCash.value = false
     message.success('现金已修正')
   }catch(e){ message.error(e.response?.data?.detail || '保存失败') }
@@ -247,6 +249,7 @@ async function remove(id){
   try{
     const r = await axios.delete(API + '/api/portfolio/trades/intraday/' + id)
     st.value = r.data.state
+    emit('recorded', r.data.state)
     message.success('已删除')
   }catch(e){ message.error(e.response?.data?.detail || '删除失败') }
 }

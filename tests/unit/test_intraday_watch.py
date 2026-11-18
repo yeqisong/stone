@@ -84,7 +84,7 @@ class TestRules:
                                _rules(), NOW)
         assert len(out) == 1
         assert out[0]['kind'] == 'it_reduce_bounce'
-        assert '单票 100.0% 超配' in out[0]['body']
+        assert '单票 100.0% 占账户超配' in out[0]['body']
 
     def test_no_reduce_bounce_when_small_position(self):
         # 同样 +3%，但只有 10% 仓位 → 不触发减仓提示
@@ -276,6 +276,7 @@ class TestOrBreak:
                                              avg_price=None)},
                                state, {}, _rules(rapid_move_pct=10), self.T2)
         assert [c for c in out if c['kind'].startswith('it_or')] == []
+
 
     def test_late_start_has_no_or_levels(self):
         state = {}
@@ -533,3 +534,48 @@ class TestPersist:
                     _rules(ai_event_enabled=True,
                            ai_event_kinds=['it_or_up']), NOW)
         assert [x['kind'] for x in got] == ['it_or_up']
+
+
+class TestLiveCosts:
+    def test_load_costs_uses_live_positions(self, monkeypatch):
+        # 手工卖出后，watcher 不能再按 portfolio 表的旧持仓算
+        import app.trade_intraday as ti
+        monkeypatch.setattr(ti, "live_positions", lambda db: {"positions": [
+            {"stock_code": "002463", "stock_name": "沪电股份",
+             "quantity": 500, "cost_price": 81.8471},
+            {"stock_code": "603986", "stock_name": "兆易创新",
+             "quantity": 0, "cost_price": 340.534},
+        ]})
+        costs = iw._load_costs(None)
+        assert set(costs) == {"002463"}
+        assert costs["002463"]["qty"] == 500
+        assert costs["002463"]["cost"] == 81.8471
+
+    def test_load_live_returns_cash_for_account_weight(self, monkeypatch):
+        import app.trade_intraday as ti
+        monkeypatch.setattr(ti, "live_positions", lambda db: {
+            "positions": [{"stock_code": "002463", "stock_name": "沪电股份",
+                           "quantity": 500, "cost_price": 81.8471}],
+            "cash": 25959.32,
+        })
+        costs, cash = iw._load_live(None)
+        assert cash == 25959.32
+        assert set(costs) == {"002463"}
+
+
+class TestAccountWeight:
+    def test_reduce_bounce_uses_account_equity(self):
+        qa = _q('600519', price=103.0)
+        qb = _q('000001', price=100.0)
+        costs = {
+            '600519': {'name': 'A', 'cost': 100.0, 'qty': 200},
+            '000001': {'name': 'B', 'cost': 100.0, 'qty': 800},
+        }
+        # 持仓内 A 占 20.6%，但账户还有 10 万现金 → 占账户 10.3%，不该减
+        out = iw.evaluate_tick({'600519': qa, '000001': qb}, {}, costs,
+                               _rules(), NOW, cash=100000.0)
+        assert [c['kind'] for c in out if c['kind'] == 'it_reduce_bounce'] == []
+        # 现金为 0 时，占持仓 20.6% 才会触发
+        out2 = iw.evaluate_tick({'600519': qa, '000001': qb}, {}, costs,
+                                _rules(), NOW, cash=0.0)
+        assert any(c['kind'] == 'it_reduce_bounce' for c in out2)

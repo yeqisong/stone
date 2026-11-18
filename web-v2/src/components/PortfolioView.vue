@@ -25,7 +25,7 @@
   <template v-if="activeTab==='pos'">
     <StatStrip v-if="data.count" :items="statItems" />
     <!-- 实时仓位护栏：当前仓位/现金/今日开仓额度 + 交易前检查 -->
-    <TradeGuard @import="showTradeImport=true" />
+    <TradeGuard @import="showTradeImport=true" @recorded="onTradeRecorded" />
     <div v-if="riskHeat?.positions" class="risk-heat"
       :class="riskHeat.label === '高' ? 'rh-high' : riskHeat.label === '中' ? 'rh-mid' : 'rh-low'">
       <div class="rh-head">
@@ -51,6 +51,9 @@
       <b>今日纪律</b>
       <span class="tg-sum">{{ tradeGate.summary }}</span>
       <span v-for="v in tradeGate.violations" :key="v.rule + v.message" class="tg-item">{{ v.message }}</span>
+      <span v-if="tradeGate.today_buys || tradeGate.today_sells" class="tg-manual-note">
+        今日手工成交已计入纪律统计；持仓表待导入交割单后同步
+      </span>
       <n-button size="tiny" quaternary style="margin-left:auto" @click="openTradeReview('rules')">处理</n-button>
     </div>
 
@@ -209,6 +212,7 @@ async function loadAccountSummary(){
   catch(e){ accountSummary.value = null }
 }
 function onTradeImported(res){ showTradeImport.value = false; if(res?.synced) load(); loadRiskHeat(); loadTradeGate(); loadAccountSummary() }
+function onTradeRecorded(){ loadTradeGate(); loadAccountSummary() }
 
 async function launchDesktopWatch(){
   if(launchingDesktop.value) return
@@ -464,6 +468,7 @@ async function confirmDelete(){
 .tg-sum { color: var(--c-text); }
 .tg-item { padding:1px 6px; border-radius:3px; color: var(--c-warning); border:1px solid color-mix(in srgb, var(--c-warning) 35%, transparent); }
 .tg-bad .tg-item { color: var(--c-error); border-color: color-mix(in srgb, var(--c-error) 35%, transparent); }
+.tg-manual-note { color: var(--c-text-faint); font-size: var(--text-meta); }
 
 /* 持仓页内容已超过一屏（统计条 + 实时护栏 + 风险 + 表格）：整页滚动，别再裁掉表格 */
 .portfolio-page { overflow-y: auto; overflow-x: hidden; }

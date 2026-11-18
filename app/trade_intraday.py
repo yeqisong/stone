@@ -369,9 +369,9 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
                        "rule": "目标仓位 ≤70%"})
     if top_w > max_single and top_p:
         active.append({"level": "critical" if top_w > 0.35 else "warn",
-                       "title": f"最大单票 {top_p.get('stock_name')} {_pct(top_w)} 超上限 {_pct(max_single)}",
-                       "action": f"只减不加；优先把 {top_p.get('stock_name')} 降到 20% 以下",
-                       "rule": "单票 ≤20%；超过只减不加"})
+                       "title": f"最大单票 {top_p.get('stock_name')} 占账户 {_pct(top_w)}，超上限 {_pct(max_single)}",
+                       "action": f"只减不加；优先把 {top_p.get('stock_name')} 降到 {_pct(max_single, 0)} 以下",
+                       "rule": "单票市值/账户 ≤20%；超过只减不加"})
     if int(st.get("consecutive_loss_days") or 0) >= 2:
         active.append({"level": "critical",
                        "title": f"连续亏损 {st['consecutive_loss_days']} 天",
@@ -399,13 +399,21 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
                        "action": "先把今天成交记一笔或导入交割单，否则仓位数据是旧的",
                        "rule": "数据不完整时不做交易决定"})
 
-    need = max(0.0, mv - target * equity)
+    # 减仓总额取「仓位目标」和「单票上限」中更严格的那个。
+    # 只按 70% 算会出现：减了 1/3 仓位到 70%，但最大单票仍占账户 28%，还在违规。
+    need_pos = max(0.0, mv - target * equity)
+    top_mv = _f(top_p.get("market_value"))
+    need_single = max(0.0, top_mv - max_single * equity) if top_p and equity > 0 else 0.0
+    need = max(need_pos, need_single)
+    single_binding = need_single > need_pos + 1e-9
+    top_name = top_p.get("stock_name") or "最大单票"
     tranches = []
     if need > 0:
         each = round(need / 3, 2)
+        first_hint = ("开盘 15 分钟不操作；优先压最大单票" if single_binding
+                      else "开盘 15 分钟不操作；优先减流出最久的板块")
         tranches = [
-            {"amount": each, "when": "10:00-10:30",
-             "hint": "开盘 15 分钟不操作；优先减流出最久的板块"},
+            {"amount": each, "when": "10:00-10:30", "hint": first_hint},
             {"amount": each, "when": "14:00-14:30",
              "hint": "若大盘/板块资金流转正，暂停这一份"},
             {"amount": each, "when": "条件单",
@@ -413,11 +421,15 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
         ]
     if need > 0:
         prio = []
-        if top_w > max_single and top_p:
-            prio.append(f"{top_p.get('stock_name')}（单票 {_pct(top_w)}）")
+        if top_w > max_single and top_p and not single_binding:
+            prio.append(f"{top_name}（占账户 {_pct(top_w)}）")
         if sector_bad:
             prio.append(f"{worst_sector['name']}（{worst_sector['industry']} 连续流出）")
-        nxt = f"今天只做一件事：10:00 后先减 1/3（约 {_money(need/3)}）到 70% 方向"
+        if single_binding:
+            nxt = (f"今天只做一件事：先减 1/3（约 {_money(need/3)}），"
+                   f"优先把 {top_name} 的单票压到 {_pct(max_single, 0)} 以下")
+        else:
+            nxt = f"今天只做一件事：先减 1/3（约 {_money(need/3)}）到 {_pct(target, 0)} 方向"
         if prio:
             nxt += "，优先减 " + "、".join(prio[:2])
         nxt += "；不补任何亏损仓。"
@@ -436,9 +448,14 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict]) -> dict:
             "sectors": sectors}
 
 
-def _build_state(db, cash_override: Optional[float] = None) -> dict:
+def live_snapshot(db, cash_override: Optional[float] = None) -> dict:
+    """实时持仓/现金快照（行情无关）：交割单 + 今日未对账手工成交。
+
+    这是交易链路的实时持仓唯一口径：护栏、教练、雷达、盘中 watcher 都必须用它，
+    不能再直接读 portfolio 表——否则手工卖出后，旧持仓还会继续触发止损提醒。
+    （持仓页的财务报表仍以交割单为准，P0-3 会给它加“待导入”提示。）
+    """
     today = _today()
-    now = _now()
     base = build_positions(db)
     slip_end = _slip_end(db)
     rules = get_discipline(db)
@@ -463,6 +480,47 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
     manual = _manual_rows(db, slip_end)
     for r in manual:
         cash = _apply_manual(pos, cash, r, apply_cash=not use_snapshot)
+
+    return {
+        "positions": pos, "cash": cash, "cash_source": cash_source,
+        "slip_end": slip_end, "rules": rules, "today": today,
+    }
+
+
+def live_positions(db, cash_override: Optional[float] = None) -> dict:
+    """实时持仓的展示口径（不含行情）：供 watcher/雷达/临时持仓提示复用。"""
+    live = live_snapshot(db, cash_override)
+    out = []
+    for code, p in live["positions"].items():
+        qty = p["qty"]
+        if qty <= 0.5:
+            continue
+        out.append({
+            "stock_code": code,
+            "stock_name": p["name"],
+            "quantity": int(qty) if abs(qty - round(qty)) < 1e-6 else round(qty, 2),
+            "cost_price": round(p["cost"], 4),
+            "cost_estimated": bool(p.get("estimated")),
+        })
+    out.sort(key=lambda x: -(x["quantity"] * x["cost_price"]))
+    return {
+        "positions": out,
+        "cash": round(live["cash"], 2),
+        "trade_date": live["today"].isoformat(),
+        "slip_end": live["slip_end"].isoformat() if live["slip_end"] else None,
+        "cash_source": live["cash_source"],
+    }
+
+
+def _build_state(db, cash_override: Optional[float] = None) -> dict:
+    now = _now()
+    live = live_snapshot(db, cash_override)
+    today = live["today"]
+    pos = live["positions"]
+    slip_end = live["slip_end"]
+    rules = live["rules"]
+    cash = live["cash"]
+    cash_source = live["cash_source"]
 
     codes = list(pos.keys())
     qmap, quote_ok = _quotes(codes)
@@ -495,7 +553,8 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
     position_ratio = mv / equity if equity > 0 else 0.0
     cash_ratio = cash / equity if equity > 0 else 0.0
     top = positions[0] if positions else None
-    top_weight = (top["market_value"] / mv) if top and mv > 0 else 0.0
+    # 与 max_single_weight 同口径：单票市值 / 账户权益（现金+持仓），不是占持仓
+    top_weight = (top["market_value"] / equity) if top and equity > 0 else 0.0
 
     # 今日操作 / 额度
     today_actions = _today_actions(db, slip_end, today)
@@ -550,7 +609,7 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
         if level == "ok":
             level = "warn"
         violations.append({"rule": "max_single_weight", "level": "warn",
-                           "message": f"最大单票 {top['stock_name']} 占 {_pct(top_weight)}（上限 {_pct(max_single_w)}），只减不加"})
+                           "message": f"最大单票 {top['stock_name']} 占账户 {_pct(top_weight)}（上限 {_pct(max_single_w)}），只减不加"})
 
     allow_new_buy = (level != "critical" and position_ratio < target
                      and remaining_new_buys > 0 and daily_buy_budget > 0
@@ -576,7 +635,7 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
         advice = (f"可开仓：今日还剩 {remaining_new_buys} 笔，最多再买 {_money(max_buy_amount)}；"
                   f"买完仓位不超过 {_pct(target)}。")
         if top and top_weight > max_single_w:
-            advice += f" 最大单票 {top['stock_name']} 占 {_pct(top_weight)} 超上限，只减不加。"
+            advice += f" 最大单票 {top['stock_name']} 占账户 {_pct(top_weight)} 超上限，只减不加。"
 
     state = {
         "asof": now.strftime("%H:%M:%S"),
@@ -727,6 +786,8 @@ def check(db, body: dict) -> dict:
             add("stop_loss", "block", "买入必须填写止损价（建议 -8%）")
         elif stop >= price:
             add("stop_loss", "block", "止损价必须低于买入价")
+        add("t_plus_1", "warn",
+            "T+1：今天买入，今天不能卖出；如果跌破止损，最早明天才能执行")
         max_qty = _max_buy_qty(st, existing, price, stop)
         amount = price * qty
         fees = _estimate_fees("buy", amount)
@@ -790,7 +851,8 @@ def check(db, body: dict) -> dict:
         else:
             advice = (f"可以买，最多 {max_qty} 股；买完仓位 {_pct(new_position_ratio)}、"
                       f"现金 {_pct(new_cash_ratio)}、单票 {_pct(single_weight)}；"
-                      f"止损亏 {_money(risk_amount)}（账户 {_pct(risk_pct)}）。")
+                      f"止损亏 {_money(risk_amount)}（账户 {_pct(risk_pct)}）。"
+                      f"注意 T+1：今天买入，今天不能卖出，止损最早明天执行。")
         projected = {
             "position_ratio": round(new_position_ratio, 6),
             "cash_ratio": round(new_cash_ratio, 6),

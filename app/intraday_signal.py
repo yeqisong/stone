@@ -24,7 +24,7 @@ def holding_signal(
     max_single: float = 0.20,
     stop_loss: float = -0.08,
 ) -> dict:
-    """返回 {action, level, reason}。price/cost 不复权，weight 为持仓市值占比。"""
+    """返回 {action, level, reason}。price/cost 不复权，weight 为单票市值/账户权益。"""
     price = float(price or 0)
     chg = float(chg_pct or 0)
     weight = float(weight or 0)
@@ -33,7 +33,7 @@ def holding_signal(
     if cost and weight >= max_single and chg >= 2.0:
         return {
             "action": "reduce", "level": "warn",
-            "reason": f"日内 {chg:+.2f}%，单票 {weight*100:.1f}% 超配；反弹减仓，不补",
+            "reason": f"日内 {chg:+.2f}%，单票 {weight*100:.1f}% 占账户超配；反弹减仓，不补",
         }
     if vs_cost is not None and vs_cost <= stop_loss:
         return {
@@ -43,7 +43,7 @@ def holding_signal(
     if weight >= max_single and chg > 0:
         return {
             "action": "trim", "level": "warn",
-            "reason": f"单票 {weight*100:.1f}% 超配；逢强减仓到 20% 以下",
+            "reason": f"单票 {weight*100:.1f}% 占账户超配；逢强减仓到 20% 以下",
         }
     if chg >= 2.0 and vwap_dev is not None and vwap_dev < 0:
         return {
