@@ -186,13 +186,14 @@
               <n-input-number v-model:value="createForm.ensemble_seeds" :min="1" :max="5" size="small" style="width:64px" />
             </div>
           </div>
-          <n-divider style="margin:4px 0">ML 买入阈值</n-divider>
+          <n-divider style="margin:4px 0">ML 买卖阈值</n-divider>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size: var(--text-meta)">
             <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">模式</span>
               <n-select v-model:value="createForm.signal_threshold_mode" size="small" style="flex:1"
                 :options="[{label:'分位数 top N%（自适应）',value:'quantile'},{label:'绝对收益率阈值',value:'absolute'}]" />
             </div>
             <div v-if="createForm.signal_threshold_mode==='quantile'" style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">买入top</span><n-input-number v-model:value="createForm.buy_top_pct" :min="0.001" :max="0.50" :step="0.01" :format="v => (v*100).toFixed(0)+'%'" :parse="v => parseFloat(v)/100" style="flex:1" size="small" /></div>
+            <div v-if="createForm.signal_threshold_mode==='quantile'" style="display:flex;align-items:center;gap:6px" title="持仓股当日预测截面分位低于该值时生成卖出信号（仅持仓，不扫描全市场）"><span style="color:var(--c-text-dim);min-width:55px">卖出分位</span><n-input-number v-model:value="createForm.sell_threshold" :min="0.05" :max="0.50" :step="0.05" :format="v => (v*100).toFixed(0)+'%'" :parse="v => parseFloat(v)/100" style="flex:1" size="small" /></div>
             <div v-else style="display:flex;align-items:center;gap:6px"><span style="color:var(--c-text-dim);min-width:55px">绝对阈值</span><n-input-number v-model:value="createForm.ml_confidence_threshold" :min="0" :max="0.2" :step="0.001" :format="v => (v*100).toFixed(2)+'%'" :parse="v => parseFloat(v)/100" style="flex:1" size="small" /></div>
           </div>
           <n-divider style="margin:4px 0">六层交易策略</n-divider>
@@ -359,7 +360,7 @@ const createForm = reactive({
   // 训练协议（v3.9.2 反过拟合默认开）：purged CV 折外选超参（val 退出选择）+ 多种子集成
   selection_cv: true, cv_folds: 4, ensemble_seeds: 3,
   // ML 买入阈值：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
-  signal_threshold_mode: 'quantile', buy_top_pct: 0.05, ml_confidence_threshold: 0.02,
+  signal_threshold_mode: 'quantile', buy_top_pct: 0.05, sell_threshold: 0.40, ml_confidence_threshold: 0.02,
   // 六层策略配置默认值（策略扫描时搜索最优）
   trading_rules: {
     execution: { price_type: 'next_day_open', delay_days: 1, volume_limit: 0.10 },
@@ -445,6 +446,7 @@ function startEditConfig() {
   const sigCfg = cfg.signal || {}
   createForm.signal_threshold_mode = sigCfg.threshold_mode || 'quantile'
   createForm.buy_top_pct = sigCfg.buy_top_pct ?? 0.05
+  createForm.sell_threshold = sigCfg.sell_threshold ?? 0.40
   createForm.ml_confidence_threshold = sigCfg.ml_confidence_threshold ?? 0.02
   // v3.5：旧模型 config 无此二键 → 回退旧口径，保证编辑保存不改变语义
   createForm.label_mode = cfg.label_mode || 'absolute'
@@ -482,6 +484,7 @@ async function doSaveConfig() {
       signal: {
         threshold_mode: createForm.signal_threshold_mode,
         buy_top_pct: createForm.buy_top_pct,
+        sell_threshold: createForm.sell_threshold,
         ml_confidence_threshold: createForm.ml_confidence_threshold,
       },
     })
@@ -516,6 +519,7 @@ async function doCreate() {
       signal_timeout_days: createForm.signal_timeout_days,
       signal_threshold_mode: createForm.signal_threshold_mode,
       buy_top_pct: createForm.buy_top_pct,
+      sell_threshold: createForm.sell_threshold,
       ml_confidence_threshold: createForm.ml_confidence_threshold,
       label_mode: createForm.label_mode,
       label_transform: createForm.label_transform,

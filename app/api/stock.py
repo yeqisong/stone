@@ -88,7 +88,9 @@ def get_stock_detail(code: str, type: str = Query(None, description="证券类�
             factor = fac.get((code, str(latest_signal_date)[:10]))
             seen = set()
             for r in result.fetchall():
-                key = r.strategy_name
+                # 同策略同日可能同时有买入/卖出（如 model_signal 的买入 top2% 与持仓退出），
+                # 去重键必须带 direction，否则排序里 combined_signal=true 的买入会挤掉卖出。
+                key = (r.strategy_name, r.direction)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -387,6 +389,10 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
         elif model_version != 'all':
             version_filter = " AND model_version = :mv"
             vparams = {"mv": model_version}
+        # 本统计只评估买入信号：卖出信号的 actual_return 是信号后跌幅，
+        # 按买入胜率口径计入会反向扭曲模型效果
+        dir_filter = " AND direction='buy'"
+        sh_dir_filter = " AND sh.direction='buy'"
 
         # 总览
         overview = db.execute(text(f"""
@@ -399,7 +405,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
                    AVG(forward_10d_return) as avg_f10d,
                    AVG(forward_20d_return) as avg_f20d
             FROM signal_history
-            WHERE strategy_name='model_signal' AND signal_date >= {min_date}{version_filter}
+            WHERE strategy_name='model_signal'{dir_filter} AND signal_date >= {min_date}{version_filter}
         """), {**{"days": days}, **vparams}).fetchone()
 
         total = overview.total or 0
@@ -412,7 +418,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
         float_rows = db.execute(text(f"""
             WITH codes AS (
                 SELECT DISTINCT stock_code FROM signal_history
-                WHERE strategy_name='model_signal' AND status IS DISTINCT FROM 'closed'
+                WHERE strategy_name='model_signal'{dir_filter} AND status IS DISTINCT FROM 'closed'
                   AND signal_date >= {min_date}{version_filter}),
             lp AS (
                 SELECT DISTINCT ON (q.stock_code) q.stock_code, q.close_hfq AS last_px
@@ -422,7 +428,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
                    AVG(lp.last_px / NULLIF(sh.price, 0) - 1) AS avg_float,
                    COUNT(*) AS n_open
             FROM signal_history sh JOIN lp ON lp.stock_code = sh.stock_code
-            WHERE sh.strategy_name='model_signal' AND sh.status IS DISTINCT FROM 'closed'
+            WHERE sh.strategy_name='model_signal'{sh_dir_filter} AND sh.status IS DISTINCT FROM 'closed'
               AND sh.signal_date >= {min_date}{version_filter}
             GROUP BY sh.signal_date ORDER BY sh.signal_date
         """), {**{"days": days}, **vparams}).fetchall()
@@ -434,7 +440,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
         fud = db.execute(text(f"""
             WITH codes AS (
                 SELECT DISTINCT stock_code FROM signal_history
-                WHERE strategy_name='model_signal' AND status IS DISTINCT FROM 'closed'
+                WHERE strategy_name='model_signal'{dir_filter} AND status IS DISTINCT FROM 'closed'
                   AND signal_date >= {min_date}{version_filter}),
             lp AS (
                 SELECT DISTINCT ON (q.stock_code) q.stock_code, q.close_hfq AS last_px
@@ -443,7 +449,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
             SELECT COUNT(*) FILTER (WHERE lp.last_px > sh.price),
                    COUNT(*) FILTER (WHERE lp.last_px < sh.price)
             FROM signal_history sh JOIN lp ON lp.stock_code = sh.stock_code
-            WHERE sh.strategy_name='model_signal' AND sh.status IS DISTINCT FROM 'closed'
+            WHERE sh.strategy_name='model_signal'{sh_dir_filter} AND sh.status IS DISTINCT FROM 'closed'
               AND sh.signal_date >= {min_date}{version_filter}
         """), {**{"days": days}, **vparams}).fetchone()
 
@@ -454,7 +460,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
                    COUNT(*) FILTER (WHERE status='closed' AND actual_return > 0) * 1.0 /
                      NULLIF(COUNT(*) FILTER (WHERE status='closed'), 0) as win_rate
             FROM signal_history
-            WHERE strategy_name='model_signal' AND signal_date >= {min_date}{version_filter}
+            WHERE strategy_name='model_signal'{dir_filter} AND signal_date >= {min_date}{version_filter}
             GROUP BY signal_date ORDER BY signal_date
         """), {**{"days": days}, **vparams}).fetchall()
         daily_trend = [{"date": str(r[0]), "signals": r[1],
@@ -465,7 +471,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
         dist = db.execute(text(f"""
             SELECT width_bucket(actual_return, -0.15, 0.15, 10) as bucket, COUNT(*)
             FROM signal_history
-            WHERE strategy_name='model_signal' AND status='closed'
+            WHERE strategy_name='model_signal'{dir_filter} AND status='closed'
               AND actual_return IS NOT NULL AND signal_date >= {min_date}{version_filter}
             GROUP BY bucket ORDER BY bucket
         """), {**{"days": days}, **vparams}).fetchall()
@@ -486,7 +492,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
             FROM signal_history sh
             LEFT JOIN stock_master sm ON sm.stock_code = sh.stock_code AND sm.stock_type = 'stock'
-            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}{version_filter}
+            WHERE sh.strategy_name='model_signal'{sh_dir_filter} AND sh.signal_date >= {min_date}{version_filter}
             GROUP BY sm.industry_l2 HAVING COUNT(*) >= 5
             ORDER BY signals DESC LIMIT 15
         """), {**{"days": days}, **vparams}).fetchall()
@@ -504,7 +510,7 @@ def get_signal_stats(days: int = Query(90, ge=30, le=365),
                      NULLIF(COUNT(*) FILTER (WHERE sh.status='closed'), 0) as win_rate,
                    AVG(sh.actual_return) FILTER (WHERE sh.status='closed') as avg_ret
             FROM signal_history sh
-            WHERE sh.strategy_name='model_signal' AND sh.signal_date >= {min_date}{version_filter}
+            WHERE sh.strategy_name='model_signal'{sh_dir_filter} AND sh.signal_date >= {min_date}{version_filter}
             GROUP BY sh.stock_code, sh.stock_name HAVING COUNT(*) >= 3
             ORDER BY signals DESC LIMIT 20
         """), {**{"days": days}, **vparams}).fetchall()

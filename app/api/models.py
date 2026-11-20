@@ -73,6 +73,7 @@ class CreateModel(BaseModel):
     max_positions: int = 5
     # 信号配置
     buy_threshold: float = 0.6
+    # quantile 模式：持仓股当日预测截面分位低于该值 → 生成卖出信号（仅持仓）
     sell_threshold: float = 0.4
     # ML 买入阈值模式：quantile=当日预测分布 top N%（默认，自适应模型能力）；absolute=绝对预测收益率
     signal_threshold_mode: str = "quantile"

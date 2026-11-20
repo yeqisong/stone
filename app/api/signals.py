@@ -83,7 +83,8 @@ def get_buy_signals(
             })
 
         result = db.execute(text(
-            "SELECT COUNT(DISTINCT stock_code) FROM signal_history WHERE signal_date = :d AND combined_signal = true"
+            "SELECT COUNT(DISTINCT stock_code) FROM signal_history "
+            "WHERE signal_date = :d AND direction = 'buy' AND combined_signal = true"
         ), {"d": signal_date})
         total = result.scalar() or 0
 
