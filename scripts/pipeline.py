@@ -935,6 +935,61 @@ def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
                 'turnover_curve': turnover_curve} if return_curve else {})}
 
 
+def _feature_coverage(df, feature_names, min_cov: float = 0.5) -> list[str]:
+    """返回覆盖不足的特征摘要（空列表=通过）。
+
+    feature_compute 逐特征 DELETE→COPY，重算期间目标日会出现整列缺失；
+    模型信号若照常预测，等于拿残缺输入生成一版错误信号。
+    """
+    thin = []
+    for fn in feature_names:
+        cov = float(df[fn].notna().mean()) if fn in df.columns else 0.0
+        if cov < min_cov:
+            thin.append(f'{fn}:{cov:.0%}')
+    return thin
+
+
+def _sell_strength(rank_pct: float, sell_thr: float) -> int:
+    """持仓卖出强度：截面分位越低越强（3/2/1）。"""
+    # 用比值分档并消除浮点边界误差（0.3 / 0.4 在 float 下是 0.7499999…）
+    ratio = round(rank_pct / sell_thr, 9) if sell_thr > 0 else 1.0
+    if ratio < 0.5:
+        return 3
+    if ratio < 0.75:
+        return 2
+    return 1
+
+
+def _model_feature_names(model, cfg: dict) -> list[str]:
+    """取模型训练特征：兼容单模型 / SeedEnsemble / numpy 旧模型。
+
+    优先级：模型 feature_names_in_ → 集成成员 feature_names_in_ →
+    booster.feature_names → config.feature_names。
+    """
+    def _names_of(obj) -> list[str]:
+        arr = getattr(obj, 'feature_names_in_', None)
+        if arr is None:
+            return []
+        try:
+            return [str(x) for x in arr]
+        except TypeError:
+            return []
+
+    names = _names_of(model)
+    if not names:
+        members = getattr(model, 'models', None) or []
+        if members:
+            names = _names_of(members[0])
+    if not names and hasattr(model, 'get_booster'):
+        try:
+            names = [str(x) for x in (model.get_booster().feature_names or [])]
+        except Exception:
+            names = []
+    if names:
+        return names
+    return [str(x) for x in ((cfg or {}).get('feature_names') or [])]
+
+
 def predict_for_version(db, version: str, df, val_start: str, val_end: str, horizon=10):
     """加载 xgb_{horizon}d 模型并对验证区间逐行预测（归因/扫描/信号共用的唯一预测入口）。
 
@@ -971,9 +1026,9 @@ def predict_for_version(db, version: str, df, val_start: str, val_end: str, hori
             with open(model_path, 'rb') as f:
                 models.append((h, _pkl.load(f)))
         # 特征对齐基于首个模型（多周期模型共享训练特征集）
-        mf = list(getattr(models[0][1], 'feature_names_in_', []))
+        mf = _model_feature_names(models[0][1], _cfg)
         if not mf:
-            return None, '模型缺少 feature_names_in_，请重新训练'
+            return None, '模型缺少 feature_names_in_ 且 config.feature_names 为空'
         # 特征对齐：模型含训练时派生的特征，宽表没有则现场派生（与 dag_task_model_train 一致）
         if 'bias_5_20' in mf and 'bias_5_20' not in val_df.columns \
                 and 'ma_5' in val_df.columns and 'ma_20' in val_df.columns:
@@ -1723,17 +1778,25 @@ def dag_task_model_signal(trade_date=None, **kw):
         if df_today.empty:
             write_node_log(log_id=log_id, status='success', rows=0, detail='今日无特征数据')
             db.close(); return 0
+        # 特征完整性闸门：feature_compute 正在重算时会逐特征 DELETE→COPY，目标日特征
+        # 会短暂缺列/缺值；此时预测等于用残缺输入，必须先拒绝而不是生成一版错误信号。
+        _thin = _feature_coverage(df_today, feature_names)
+        if _thin:
+            write_node_log(log_id=log_id, status='failed', rows=0,
+                           detail=f'特征覆盖不足，未生成信号（可能正在重算）: {", ".join(_thin[:5])}')
+            db.close(); return 0
 
-        # 空仓闸门（regime）：风险期不开新买入。config.regime.enabled 显式开启才生效，
-        # 旧模型（v11.0 等无此键）信号行为不变；闸门放行日（连续第 3 天）正常产生信号
+        # 空仓闸门（regime）：风险期不开新买入，但**不能连卖出信号一起掐掉**——
+        # 风险期恰恰最需要提示持仓退出。config.regime.enabled 显式开启才生效，
+        # 旧模型（v11.0 等无此键）信号行为不变；闸门放行日（连续第 3 天）正常产生买入。
         _regime = model_cfg_obj.get('regime') or {}
+        _regime_gated = False
         if _regime.get('enabled'):
-            _gated = compute_regime_gates(db, [today_str], _regime)
-            if today_str in _gated:
-                write_node_log(log_id=log_id, status='success', rows=0,
-                               detail=f'空仓信号日：指数<{_regime.get("ma_window", 20)}日线风险期，不开新仓（连续第 '
-                                      f'{_regime.get("max_skip_days", 2)}+1 天放行）')
-                db.close(); return 0
+            _regime_gated = today_str in compute_regime_gates(db, [today_str], _regime)
+            if _regime_gated:
+                write_node_log(log_id=log_id, status='running',
+                               detail=f'空仓信号日：指数<{_regime.get("ma_window", 20)}日线风险期，'
+                                      f'不开新仓；仅生成持仓卖出信号')
 
         # 派生特征与训练端保持一致（bias_5_20/vol_ratio_3d/idx_ret_20d）：
         # 训练模型 feature_names_in_ 含这些列，信号侧缺列会导致 ML 预测逐股回退规则模式
@@ -1802,12 +1865,9 @@ def dag_task_model_signal(trade_date=None, **kw):
             d['close'] = float(r.get('close', 0)) if pd.notna(r.get('close', 0)) else 0
             rows.append(type('Row', (), d)())
 
-        # 先删旧信号再插新
-        db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
-
         # 评分信号生成（ML 预测优先，规则评分兜底）
         buy_count = 0
-        ml_fallback = 0
+        sell_count = 0
         limit_skipped = 0  # 涨停拦截的买入信号数
 
         def _rule_score(row):
@@ -1841,6 +1901,24 @@ def dag_task_model_signal(trade_date=None, **kw):
                    "p20": round(p20, 4) if p20 is not None else None, "score": score,
                    "conf": round(rank, 3) if rank is not None else None})
 
+        def _insert_sell(row, strength, reason, rank=None):
+            p5 = pred_by_h.get('5d', {}).get(row.stock_code)
+            p10 = pred_by_h.get('10d', {}).get(row.stock_code)
+            p20 = pred_by_h.get('20d', {}).get(row.stock_code)
+            score = round((p5 + p10 + p20) / 3.0, 4) if None not in (p5, p10, p20) else None
+            db.execute(text("""
+                INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference,
+                    predict_5d_return, predict_10d_return, predict_20d_return, predict_score,
+                    ml_confidence, suggested_action, source_strategies)
+                VALUES (:d,:c,:n,'sell',:s,:p,'model_signal',:r,true,:v,:sn,:pref,
+                    :p5,:p10,:p20,:score,:conf,'sell','["model_signal"]')
+            """), {"d": td, "c": row.stock_code, "n": row.stock_name, "s": strength, "p": row.close,
+                   "r": reason, "v": ver, "sn": model_snapshot, "pref": pref_mode,
+                   "p5": round(p5, 4) if p5 is not None else None,
+                   "p10": round(p10, 4) if p10 is not None else None,
+                   "p20": round(p20, 4) if p20 is not None else None, "score": score,
+                   "conf": round(1 - rank, 3) if rank is not None else None})
+
         if use_predict and xgb_models:
             # M2：预测统一走 predict_for_version（特征派生/标准化/模型加载共享唯一入口，消除内联漂移）
             # 分周期各调一次：均值做截面排序（predict_score），同时落库 predict_{5,10,20}d_return
@@ -1850,7 +1928,6 @@ def dag_task_model_signal(trade_date=None, **kw):
             _p20, _e20 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=20)
             preds_map = {}      # stock_code -> 预测收益率均值（排序依据）
             pred_by_h = {}      # 周期 -> {stock_code: 预测值}
-            fallback_rows = []  # 预测失败（特征缺失/模型异常）→ 回退规则评分
             if _p5 is not None and _p10 is not None and _p20 is not None:
                 for h, p in (('5d', _p5), ('10d', _p10), ('20d', _p20)):
                     pred_by_h[h] = {df_today.loc[i, 'stock_code']: float(v) for i, v in p.items()}
@@ -1858,13 +1935,24 @@ def dag_task_model_signal(trade_date=None, **kw):
                              for c, v5 in pred_by_h['5d'].items()
                              if c in pred_by_h['10d'] and c in pred_by_h['20d']}
             else:
-                logger.warning(f"[model_signal] 统一预测入口失败: {_e5 or _e10 or _e20}，整体回退规则模式")
-                fallback_rows = rows
+                # 模型存在但预测失败时，绝不能回退“规则评分买全市场”——
+                # 曾导致 v20.0 一天写入 5,217 条买入信号，详情页满屏买入三角。
+                err = _e5 or _e10 or _e20
+                logger.error(f"[model_signal] {ver} 统一预测入口失败: {err}；不生成信号")
+                write_node_log(log_id=log_id, status='failed',
+                               detail=f'ML 预测失败，未生成信号: {str(err)[:150]}')
+                db.close()
+                return 0
 
             # 阈值：quantile=当日预测 top N%（精确截断，模型无区分度时比例依然固定）；absolute=绝对预测收益率
             if preds_map:
                 codes = np.array(list(preds_map.keys()))
                 vals = np.array(list(preds_map.values()))
+                # 截面分位（0-1，pct rank）。买卖共用同一口径：quantile 模式下
+                # sell_threshold 也按分位解释，否则模型预测值压缩在 0.45~0.50 时
+                # 绝对阈值 0.4 几乎永不触发（持仓跌到最差 8% 也不卖）。
+                rank_map = dict(zip(codes.tolist(),
+                                    pd.Series(vals).rank(method='average', pct=True).tolist()))
                 if ml_mode == 'quantile':
                     # top-K 截断而非分位值比较：预测值离散/并列时 `>= thr` 会放大买入比例（实测 5%→34%）
                     k = max(int(len(vals) * min(max(buy_top_pct, 0.001), 1.0)), 1)
@@ -1872,71 +1960,96 @@ def dag_task_model_signal(trade_date=None, **kw):
                     buy_codes = set(codes[order])
                     thr = float(vals[order[-1]])
                 else:
-                    top_pct = None
                     buy_codes = set(codes[vals >= float(ml_threshold)])
                     thr = float(ml_threshold)
                 logger.info(f"[model_signal] 买入阈值({ml_mode})={thr:.4f} 预测分布: p50={np.median(vals):.4f} max={vals.max():.4f}")
 
+                # 预测成功后替换旧信号：失败时保留上一次结果，避免空窗
+                db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
+
+                if not _regime_gated:
+                    for r in rows:
+                        if r.stock_code not in buy_codes:
+                            continue
+                        if r.stock_code in limit_up_set:
+                            limit_skipped += 1
+                            continue
+                        p = preds_map[r.stock_code]
+                        rank = rank_map[r.stock_code]
+                        # 强度：分位映射 0-3（与规则评分同量纲），SMALLINT 取整
+                        strength = min(max(round(rank * 3), 0), 3)
+                        _lt = (model_cfg_obj.get('label_transform') or 'none')
+                        if _lt == 'top20':
+                            reason = (f'入前20%概率{p*100:.0f}%(top{buy_top_pct*100:.0f}%档)'
+                                      if ml_mode == 'quantile' else f'入前20%概率{p*100:.0f}%(≥阈值{thr*100:.2f}%)')
+                        elif _lt == 'rank':
+                            # p 是模型预测的 rank 目标值（常压缩在 0.5 附近），不是当日截面分位；
+                            # 展示截面分位才不会出现「top2% 买入却写 ML分位 52%」的歧义。
+                            reason = (f'截面分位{rank*100:.1f}%(模型值{p*100:.1f}%, top{buy_top_pct*100:.0f}%档)'
+                                      if ml_mode == 'quantile' else f'截面分位{rank*100:.1f}%(模型值{p*100:.1f}%≥阈值{thr*100:.2f}%)')
+                        else:
+                            reason = (f'ML预测{p*100:.2f}%(top{buy_top_pct*100:.0f}%档)'
+                                      if ml_mode == 'quantile' else f'ML预测{p*100:.2f}%(≥阈值{thr*100:.2f}%)')
+                        _insert_buy(r, strength, reason, rank=rank)
+                        buy_count += 1
+
+                # 持仓卖出：模型截面分位跌破 sell_threshold（quantile 口径）。
+                # 只对真实持仓生成，避免全市场出现卖出三角；ETF 无股票模型预测则跳过。
+                _lt = (model_cfg_obj.get('label_transform') or 'none')
+                _sig = (model_cfg_obj.get('signal') or {})
+                sell_thr = (float(_sig.get('sell_threshold') if _sig.get('sell_threshold') is not None else 0.4)
+                            if _lt in ('rank', 'top20') else None)
+                if sell_thr is not None:
+                    held = {r[0] for r in db.execute(text(
+                        "SELECT stock_code FROM portfolio WHERE is_active=true AND quantity>0"
+                    )).fetchall()}
+                    for code in held:
+                        p = preds_map.get(code)
+                        rank_pct = rank_map.get(code)
+                        if p is None or rank_pct is None:
+                            continue
+                        # quantile：按当日截面分位；absolute：按预测值本身
+                        trigger = (rank_pct < sell_thr) if ml_mode == 'quantile' else (p < sell_thr)
+                        if not trigger:
+                            continue
+                        row = next((r for r in rows if r.stock_code == code), None)
+                        if not row or not row.close:
+                            continue
+                        strength = _sell_strength(rank_pct, sell_thr)
+                        _insert_sell(row, strength,
+                                     f'模型分位{rank_pct*100:.1f}% < 卖出阈值{sell_thr*100:.0f}%；持仓退出',
+                                     rank=rank_pct)
+                        sell_count += 1
+
+        else:
+            # 规则评分：风险期同样只保留卖出能力（规则模式无模型分，不产生卖出）
+            db.execute(text("DELETE FROM signal_history WHERE signal_date=:d AND strategy_name='model_signal' AND model_version=:v"), {"d": td, "v": ver})
+            if not _regime_gated:
                 for r in rows:
-                    if r.stock_code not in buy_codes:
-                        continue
                     if r.stock_code in limit_up_set:
                         limit_skipped += 1
                         continue
-                    p = preds_map[r.stock_code]
-                    # 当日分布分位（并列均分：严格小于 + 一半并列），0-1
-                    rank = float((vals < p).mean() + 0.5 * (vals == p).mean())
-                    # 强度：分位映射 0-3（与规则评分同量纲），SMALLINT 取整
-                    strength = min(max(round(rank * 3), 0), 3)
-                    _lt = (model_cfg_obj.get('label_transform') or 'none')
-                    if _lt == 'top20':
-                        reason = (f'入前20%概率{p*100:.0f}%(top{buy_top_pct*100:.0f}%档)'
-                                  if ml_mode == 'quantile' else f'入前20%概率{p*100:.0f}%(≥阈值{thr*100:.2f}%)')
-                    elif _lt == 'rank':
-                        reason = (f'ML分位{p*100:.1f}%(top{buy_top_pct*100:.0f}%档)'
-                                  if ml_mode == 'quantile' else f'ML分位{p*100:.1f}%(≥阈值{thr*100:.2f}%)')
-                    else:
-                        reason = (f'ML预测{p*100:.2f}%(top{buy_top_pct*100:.0f}%档)'
-                                  if ml_mode == 'quantile' else f'ML预测{p*100:.2f}%(≥阈值{thr*100:.2f}%)')
-                    _insert_buy(r, strength, reason, rank=rank)
-                    buy_count += 1
-
-            # 预测失败回退规则评分
-            for r in fallback_rows:
-                if r.stock_code in limit_up_set:
-                    limit_skipped += 1
-                    continue
-                score, reasons = _rule_score(r)
-                if score >= t['buy_score_min']:
-                    _insert_buy(r, score, ';'.join(reasons) or '规则评分')
-                    buy_count += 1
-        else:
-            # 规则评分
-            for r in rows:
-                if r.stock_code in limit_up_set:
-                    limit_skipped += 1
-                    continue
-                if not r.close or r.close == 0:
-                    continue
-                score, reasons = _rule_score(r)
-                if score >= t['buy_score_min']:
-                    _insert_buy(r, score, ';'.join(reasons))
-                    buy_count += 1
+                    if not r.close or r.close == 0:
+                        continue
+                    score, reasons = _rule_score(r)
+                    if score >= t['buy_score_min']:
+                        _insert_buy(r, score, ';'.join(reasons))
+                        buy_count += 1
 
         db.commit()
-        if ml_fallback:
-            logger.warning(f"[model_signal] ML 预测不可用（{len(fallback_rows)} 只股票回退规则模式）")
         mode_tag = 'ML' if (use_predict and xgb_models) else '规则'
         limit_desc = f' 涨停拦截{limit_skipped}' if limit_skipped else ''
-        write_node_log(log_id=log_id, status='success', rows=buy_count,
-                       detail=f'{mode_tag}模式 {buy_count} 买入 {len(rows)} 扫描{limit_desc}')
+        gate_desc = '（空仓闸门：仅卖出）' if _regime_gated else ''
+        write_node_log(log_id=log_id, status='success', rows=buy_count + sell_count,
+                       detail=f'{mode_tag}模式{gate_desc} {buy_count} 买入 / {sell_count} 卖出 '
+                              f'{len(rows)} 扫描{limit_desc}')
         db.close()
         # 影子运行：信号落库后纸面组合自动步进（幂等；失败不影响信号本身）
         try:
             dag_task_paper_portfolio(trade_date=td)
         except Exception as _pe:
             logger.warning(f"[paper] 影子运行失败（不影响信号）: {_pe}")
-        return buy_count
+        return buy_count + sell_count
     except Exception as e:
         write_node_log(log_id=log_id, status='failed', detail=str(e)[:200])
         raise
@@ -2303,11 +2416,12 @@ def dag_task_model_health(trade_date=None, **kw):
                            {"r": round(actual_ret, 4) if actual_ret else None, "c": reason, "id": sig.id})
 
         # 3. 5 维度评估（按版本过滤）
-        total = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND model_version=:v"), {"v": ver}).scalar() or 0
-        closed = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND status='closed' AND model_version=:v"), {"v": ver}).scalar() or 0
-        wins = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND actual_return > 0 AND model_version=:v"), {"v": ver}).scalar() or 0
+        # 评估口径只看买入信号：卖出信号的「收益」是信号后跌幅，计入胜率会反向扭曲模型健康
+        total = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND direction='buy' AND model_version=:v"), {"v": ver}).scalar() or 0
+        closed = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND direction='buy' AND status='closed' AND model_version=:v"), {"v": ver}).scalar() or 0
+        wins = db.execute(text("SELECT COUNT(*) FROM signal_history WHERE strategy_name='model_signal' AND direction='buy' AND actual_return > 0 AND model_version=:v"), {"v": ver}).scalar() or 0
         win_rate = wins / max(closed, 1)
-        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND forward_5d_return IS NOT NULL AND model_version=:v"), {"v": ver}).scalar()  # 无到期样本保持 None
+        avg_f5 = db.execute(text("SELECT AVG(forward_5d_return) FROM signal_history WHERE strategy_name='model_signal' AND direction='buy' AND forward_5d_return IS NOT NULL AND model_version=:v"), {"v": ver}).scalar()  # 无到期样本保持 None
 
         health = 'HEALTHY'
         # closed=0 时胜率无意义（未有任何信号到期定性，0/1=0% 会误报 CRITICAL），
