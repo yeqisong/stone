@@ -36,6 +36,8 @@
         :title="g.added_at ? '加入于 ' + g.added_at : ''"
         @close="confirmRemoveGroup(g)">{{ g.name }}</n-tag>
       <n-button size="tiny" dashed @click="openAddGroup"><AppIcon name="plus" :size="12" />  分组</n-button>
+      <n-button size="tiny" text class="dt-sort-btn" title="调整下方图表顺序（对当前用户全部个股生效）"
+        @click="openChartOrder"><AppIcon name="arrow-up-down" :size="13" /> 排序</n-button>
     </div>
 
     <!-- Summary Cards - unified stat-row style（第 5 格 = 最新策略信号，完整理由在 tooltip） -->
@@ -43,8 +45,8 @@
 
     <!-- Left-Right Layout -->
     <div style="display:flex;gap:12px;flex-wrap:wrap">
-      <div style="flex:1;min-width:320px">
-        <div style="margin-bottom:12px">
+      <div class="detail-chart-stack" style="flex:1;min-width:320px;display:flex;flex-direction:column">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('mink') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <AppIcon name="clock" :size="13" />  分钟K线
             <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 分钟线 30s</span>
@@ -215,52 +217,52 @@
           </div>
         </div>
         <!-- 盘中相对强弱：与分时同周期、同窗口，起点=1 -->
-        <div v-if="benchMink.length && minkDayBars.length > 1" style="margin-bottom:12px">
+        <div v-if="benchMink.length && minkDayBars.length > 1" :style="{ marginBottom:'12px', order: chartOrderIndex('bench_mink') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  盘中相对强弱 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">个股 vs 沪深300（当日起点=0%，超额=百分点）</span></h4>
           <div :id="'c13'" style="width:100%;height:110px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('kline') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('ma') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  均线 (MA5/10/20/30/60/120/180)</h4>
           <div :id="'c6'" style="width:100%;height:180px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('volume') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="bar-chart-2" :size="13" />  成交量</h4>
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('macd') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="zap" :size="13" />  MACD</h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('rsi') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="activity" :size="13" />  RSI</h4>
           <div :id="'c4'" style="width:100%;height:160px"></div>
         </div>
-        <div v-if="benchData.length" style="margin-bottom:12px">
+        <div v-if="benchData.length" :style="{ marginBottom:'12px', order: chartOrderIndex('relative') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="sliders" :size="13" />  相对强弱 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">个股 vs 沪深300（窗口起点=1）</span></h4>
           <div :id="'c8'" style="width:100%;height:160px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('turnover') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="refresh" :size="13" />  换手率 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">%（含分位线）</span></h4>
           <div :id="'c9'" style="width:100%;height:140px"></div>
         </div>
-        <div v-if="marginData.length > 2" style="margin-bottom:12px">
+        <div v-if="marginData.length > 2" :style="{ marginBottom:'12px', order: chartOrderIndex('margin') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="arrow-left-right" :size="13" />  两融余额 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">融资 / 合计（亿元）</span></h4>
           <div :id="'c10'" style="width:100%;height:140px"></div>
         </div>
         <!-- 带右侧 Y 轴的图统一殿后（PE分位%/资金流累计/ATR%），避免中段双轴观感错乱 -->
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('pe') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="percent" :size="13" />  PE历史分位 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{peRange}}</span></h4>
           <div :id="'c5'" style="width:100%;height:160px"></div>
         </div>
-        <div v-if="mfData.length" style="margin-bottom:12px">
+        <div v-if="mfData.length" :style="{ marginBottom:'12px', order: chartOrderIndex('moneyflow') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="dollar-sign" :size="13" />  资金流 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">主力净流入(超大+大单, 万元) / 累计</span></h4>
           <div :id="'c7'" style="width:100%;height:160px"></div>
         </div>
-        <div style="margin-bottom:12px">
+        <div :style="{ marginBottom:'12px', order: chartOrderIndex('atr') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="maximize" :size="13" />  ATR <span style="font-size: var(--text-meta);color:var(--c-text-dim)">14日真实波幅 / 占价比</span></h4>
           <div :id="'c11'" style="width:100%;height:140px"></div>
         </div>
@@ -713,6 +715,36 @@
     </n-card>
   </n-modal>
 
+  <!-- 图表排序：拖动或上下移动，顺序按用户保存到 localStorage，全部个股共用 -->
+  <n-modal v-model:show="showChartOrder">
+    <n-card style="width:440px;max-width:92vw" title="图表排序" role="dialog" aria-modal="true">
+      <div class="chart-order-hint">拖动行或点 ↑↓ 调整；保存后对当前用户全部个股生效。</div>
+      <div class="chart-order-list">
+        <div v-for="(sid, idx) in chartOrderDraft" :key="sid" class="chart-order-row"
+          :class="{ dragging: chartDragIdx === idx }" draggable="true"
+          @dragstart="startChartDrag(idx)" @dragend="endChartDrag"
+          @dragover.prevent @drop="dropChartOrder(idx)">
+          <span class="chart-order-grip" title="拖动排序"><AppIcon name="list" :size="13" /></span>
+          <span class="chart-order-no">{{ idx + 1 }}</span>
+          <span class="chart-order-label">{{ chartSectionLabel(sid) }}</span>
+          <button type="button" class="chart-order-move" :disabled="idx === 0"
+            title="上移" @click="moveChartOrder(idx, -1)">↑</button>
+          <button type="button" class="chart-order-move" :disabled="idx === chartOrderDraft.length - 1"
+            title="下移" @click="moveChartOrder(idx, 1)">↓</button>
+        </div>
+      </div>
+      <template #footer>
+        <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+          <n-button size="small" quaternary @click="resetChartOrder">恢复默认</n-button>
+          <n-space>
+            <n-button size="small" @click="showChartOrder = false">取消</n-button>
+            <n-button size="small" type="primary" @click="saveChartOrder">保存</n-button>
+          </n-space>
+        </div>
+      </template>
+    </n-card>
+  </n-modal>
+
   <!-- 新卡片用法教学 -->
   <n-drawer v-model:show="showHelp" placement="right" :width="isNarrow ? '94%' : 460">
     <n-drawer-content closable>
@@ -930,6 +962,84 @@ const stockGroups = ref({ groups: [], in_portfolio: false })
 const allGroups = ref([])          // 加组弹窗里的全量分组
 const pickedGroups = ref([])       // 弹窗勾选
 const showAddGroup = ref(false), newGroupName = ref(''), addingGroup = ref(false), savingGroups = ref(false)
+
+// ── 图表顺序（按用户持久化到 localStorage，对全部个股共用）──
+const CHART_SECTIONS = [
+  { id: 'mink',       label: '分钟K线 / 实时盘面' },
+  { id: 'bench_mink', label: '盘中相对强弱' },
+  { id: 'kline',      label: 'K线图' },
+  { id: 'ma',         label: '均线 MA5/10/20/30/60/120/180' },
+  { id: 'volume',     label: '成交量' },
+  { id: 'macd',       label: 'MACD' },
+  { id: 'rsi',        label: 'RSI' },
+  { id: 'relative',   label: '相对强弱（日线）' },
+  { id: 'turnover',   label: '换手率' },
+  { id: 'margin',     label: '两融余额' },
+  { id: 'pe',         label: 'PE 历史分位' },
+  { id: 'moneyflow',  label: '资金流' },
+  { id: 'atr',        label: 'ATR' },
+]
+const CHART_SECTION_LABEL = Object.fromEntries(CHART_SECTIONS.map(x => [x.id, x.label]))
+const DEFAULT_CHART_ORDER = CHART_SECTIONS.map(x => x.id)
+const chartOrder = ref([...DEFAULT_CHART_ORDER])
+const chartOrderDraft = ref([])
+const chartDragIdx = ref(null)
+const showChartOrder = ref(false)
+
+function _chartOrderKey(){
+  return 'detail_chart_order:' + (authStore.username || 'default')
+}
+function loadChartOrder(){
+  let kept = []
+  try{
+    const raw = JSON.parse(localStorage.getItem(_chartOrderKey()) || 'null')
+    if(Array.isArray(raw)){
+      for(const id of raw){
+        if(DEFAULT_CHART_ORDER.includes(id) && !kept.includes(id)) kept.push(id)
+      }
+    }
+  }catch(e){ /* 本地存储损坏 → 回默认顺序 */ }
+  chartOrder.value = [...kept, ...DEFAULT_CHART_ORDER.filter(id => !kept.includes(id))]
+}
+function chartSectionLabel(id){ return CHART_SECTION_LABEL[id] || id }
+function chartOrderIndex(id){
+  const i = chartOrder.value.indexOf(id)
+  return i < 0 ? DEFAULT_CHART_ORDER.length : i
+}
+function openChartOrder(){
+  chartOrderDraft.value = [...chartOrder.value]
+  chartDragIdx.value = null
+  showChartOrder.value = true
+}
+function moveChartOrder(idx, delta){
+  const to = idx + delta
+  const arr = [...chartOrderDraft.value]
+  if(to < 0 || to >= arr.length) return
+  const [moved] = arr.splice(idx, 1)
+  arr.splice(to, 0, moved)
+  chartOrderDraft.value = arr
+}
+function startChartDrag(idx){ chartDragIdx.value = idx }
+function endChartDrag(){ chartDragIdx.value = null }
+function dropChartOrder(targetIdx){
+  const from = chartDragIdx.value
+  if(from == null || from === targetIdx) return
+  const arr = [...chartOrderDraft.value]
+  const [moved] = arr.splice(from, 1)
+  arr.splice(targetIdx, 0, moved)
+  chartOrderDraft.value = arr
+  chartDragIdx.value = null
+}
+function resetChartOrder(){ chartOrderDraft.value = [...DEFAULT_CHART_ORDER] }
+function saveChartOrder(){
+  chartOrder.value = [...chartOrderDraft.value]
+  try{ localStorage.setItem(_chartOrderKey(), JSON.stringify(chartOrder.value)) }catch(e){}
+  showChartOrder.value = false
+  message.success('图表顺序已保存（全部个股生效）')
+  nextTick(() => { try{ resizeAll() }catch(e){} })
+}
+loadChartOrder()
+watch(() => authStore.username, loadChartOrder)
 
 async function loadStockGroups(c = code.value, seq = loadSeq){
   if(!c) return
@@ -4424,4 +4534,26 @@ watch(()=>props.code, v=>{
   }
   .fs-side { display: none; }
 }
+
+/* 图表排序 */
+.detail-chart-stack > * { flex-shrink: 0; }
+.dt-sort-btn { margin-left: auto; color: var(--c-text-dim); }
+.dt-sort-btn:hover { color: var(--c-text); }
+.chart-order-hint { font-size: var(--text-meta); color: var(--c-text-dim); margin-bottom: 8px; }
+.chart-order-list { display: flex; flex-direction: column; gap: 4px; max-height: 52vh; overflow-y: auto; padding-right: 2px; }
+.chart-order-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-card-bg); cursor: grab;
+}
+.chart-order-row.dragging { opacity: .55; border-color: var(--c-primary, #2080f0); }
+.chart-order-grip { color: var(--c-text-faint); display: flex; align-items: center; }
+.chart-order-no { width: 20px; text-align: right; font-variant-numeric: tabular-nums; font-size: var(--text-meta); color: var(--c-text-faint); }
+.chart-order-label { flex: 1; font-size: 13px; color: var(--c-text); }
+.chart-order-move {
+  width: 24px; height: 22px; border: 1px solid var(--c-border); border-radius: 4px;
+  background: transparent; color: var(--c-text-dim); cursor: pointer; line-height: 1;
+}
+.chart-order-move:hover:not(:disabled) { color: var(--c-text); border-color: var(--c-text-dim); }
+.chart-order-move:disabled { opacity: .3; cursor: default; }
 </style>
