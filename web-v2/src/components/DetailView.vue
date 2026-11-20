@@ -224,6 +224,36 @@
         <div :style="{ marginBottom:'12px', order: chartOrderIndex('kline') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="candlestick" :size="13" />  K线图 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">{{dateRange}}</span></h4>
           <div :id="'c1'" style="width:100%;height:340px"></div>
+          <div v-if="klineAnalysis" class="kline-ai-card">
+            <div class="kline-ai-head">
+              <span class="kline-ai-title"><AppIcon name="zap" :size="12" /> K线提示</span>
+              <n-checkbox v-model:checked="showAutoLines" size="small" title="自动画支撑/压力横线与60日趋势线">自动画线</n-checkbox>
+              <n-checkbox v-model:checked="showKlinePatterns" size="small" title="在K线上标记锤子/吞没/星线/缺口/突破等形态">形态标记</n-checkbox>
+              <span v-if="klineTrendText" class="kline-ai-trend" :class="klineTrendTone">{{ klineTrendText }}</span>
+              <n-button size="tiny" text class="kline-ai-more" @click="showKlineTipDetail = !showKlineTipDetail">
+                {{ showKlineTipDetail ? '收起' : '明细' }}
+              </n-button>
+            </div>
+            <div class="kline-ai-chips">
+              <span v-for="h in klineHints.slice(0, 4)" :key="h.key" class="kline-ai-chip" :class="h.tone"
+                :title="h.text + '：' + h.detail">{{ h.text }}</span>
+              <span v-if="!klineHints.length" class="kline-ai-empty">暂无明确提示</span>
+            </div>
+            <div v-if="showKlineTipDetail" class="kline-ai-detail">
+              <div v-for="h in klineHints" :key="'d-' + h.key" class="kline-ai-row" :class="h.tone">
+                <b>{{ h.text }}</b><span>{{ h.detail }}</span>
+              </div>
+              <div v-if="klinePatterns.length" class="kline-ai-patterns">
+                <div class="kline-ai-sub">近期形态（最新在前）</div>
+                <div v-for="p in klinePatterns.slice(0, 10)" :key="p.date + p.code + p.idx"
+                  class="kline-ai-prow" :class="p.direction">
+                  <span class="kline-ai-date">{{ p.date.slice(5) }}</span>
+                  <span class="kline-ai-name">{{ p.name }}</span>
+                  <span class="kline-ai-act">{{ p.action }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <div :style="{ marginBottom:'12px', order: chartOrderIndex('ma') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  均线 (MA5/10/20/30/60/120/180)</h4>
@@ -909,6 +939,7 @@ import { useThemeStore } from '../stores/theme'
 import { useViewport } from '../utils/viewport'
 import { addWsListener } from '../utils/ws'
 import { chartColors as T } from '../utils/chart'
+import { analyzeKline } from '../utils/klineSignals'
 import StatStrip from './StatStrip.vue'
 
 const props = defineProps({ code: String })
@@ -1110,6 +1141,55 @@ function switchPeriod(v) { period.value = v; reloadChart() }
 function switchRange(d) { range.value = d; reloadChart() }
 let lastKline = null
 const dailyBars = ref([])        // 日线序列（多周期评分用）
+
+// ── K 线自动分析：支撑/压力 + 趋势线 + 形态 + 操作提示 ──
+const klineAnalysis = ref(null)
+const showAutoLines = ref(true)
+const showKlinePatterns = ref(true)
+const showKlineTipDetail = ref(false)
+const klinePatterns = computed(() => klineAnalysis.value?.patterns || [])
+const klineHints = computed(() => klineAnalysis.value?.hints || [])
+const klineTrendText = computed(() => {
+  const t = klineAnalysis.value?.trend
+  if (!t) return ''
+  const arrow = t.slopePct >= 0.03 ? '↑' : (t.slopePct <= -0.03 ? '↓' : '→')
+  return `趋势 ${arrow} ${Math.abs(t.slopePct).toFixed(2)}%/日 · R² ${t.r2.toFixed(2)}${t.r2 < 0.15 ? '（弱）' : ''}`
+})
+const klineTrendTone = computed(() => {
+  const t = klineAnalysis.value?.trend
+  if (!t) return 'flat'
+  if (t.r2 < 0.15) return 'flat'
+  return t.slopePct >= 0 ? 'up' : 'down'
+})
+function _klineTipKey(){ return 'detail_kline_tips:' + (authStore.username || 'default') }
+function loadKlineTipPrefs(){
+  try{
+    const raw = JSON.parse(localStorage.getItem(_klineTipKey()) || 'null')
+    if(raw && typeof raw === 'object'){
+      showAutoLines.value = raw.lines !== false
+      showKlinePatterns.value = raw.patterns !== false
+      showKlineTipDetail.value = !!raw.detail
+    }
+  }catch(e){ /* 本地存储损坏 → 默认开启 */ }
+}
+function saveKlineTipPrefs(){
+  try{
+    localStorage.setItem(_klineTipKey(), JSON.stringify({
+      lines: showAutoLines.value,
+      patterns: showKlinePatterns.value,
+      detail: showKlineTipDetail.value,
+    }))
+  }catch(e){}
+}
+function refreshKlineOverlays(){
+  if(!lastKline?.kline?.length) return
+  try{ applyKlineLayers(lastKline, document.getElementById('c1')?._echart) }
+  catch(e){ console.warn('[kline] 图层刷新失败:', e) }
+}
+loadKlineTipPrefs()
+watch([showAutoLines, showKlinePatterns, showKlineTipDetail], saveKlineTipPrefs)
+watch([showAutoLines, showKlinePatterns], refreshKlineOverlays)
+watch(() => authStore.username, () => { loadKlineTipPrefs(); refreshKlineOverlays() })
 const mtfBars = ref({ m5: [], m15: [], m60: [] })
 let mtfCode = ''
 let mtfAt = 0
@@ -1373,6 +1453,7 @@ async function load(){
   loadError.value = ''
   detail.value = null
   lastKline = null
+  klineAnalysis.value = null
   dailyBars.value = []
   mtfBars.value = { m5: [], m15: [], m60: [] }
   mtfCode = ''; mtfAt = 0
@@ -1510,6 +1591,73 @@ const dzSlider = () => ({
 // 轴标签，无右轴的图留白——对齐优先于零留白）
 const GRID_STD = { left:64, right:48, bottom:34 }
 
+// K 线自动层：支撑/压力横线 + 回归趋势线 + 形态标记。
+// 独立 series 叠加，不碰 K 线/BOLL 主 series；开关切换时按 id 合并更新。
+function applyKlineLayers(kd, chart){
+  const bars = kd?.kline || []
+  if(bars.length < 10){ klineAnalysis.value = null; return }
+  let analysis
+  try{
+    analysis = analyzeKline(bars)
+  }catch(e){
+    // 自动分析是增强层，异常不能拖垮 K 线主图
+    console.warn('[kline] 自动分析失败:', e)
+    klineAnalysis.value = null
+    return
+  }
+  klineAnalysis.value = analysis
+  if(!chart) return
+  const dates = bars.map(d=>d.trade_date)
+  const lineData = []
+  if(showAutoLines.value){
+    const levelLine = (l, isRes) => {
+      const color = isRes ? T.up : T.down
+      const tag = isRes ? '压力' : '支撑'
+      return {
+        yAxis: l.price,
+        label: { formatter: `${tag} ${l.price.toFixed(2)}${l.touches > 1 ? ` · ${l.touches}次` : ''}`,
+                 position: 'insideEndTop', fontSize: 10, color },
+        lineStyle: { color, type: 'dashed', width: 1, opacity: 0.8 },
+      }
+    }
+    for(const l of analysis.levels.supports) lineData.push(levelLine(l, false))
+    for(const l of analysis.levels.resistances) lineData.push(levelLine(l, true))
+    const tr = analysis.trend
+    if(tr && tr.r2 >= 0.15){
+      const color = tr.slopePct >= 0 ? T.up : T.down
+      lineData.push({
+        coord: [[dates[tr.startIdx], tr.startPrice], [dates[tr.endIdx], tr.endPrice]],
+        label: { formatter: `趋势 ${tr.slopePct >= 0 ? '+' : ''}${tr.slopePct.toFixed(2)}%/日`,
+                 position: 'end', fontSize: 10, color },
+        lineStyle: { color, type: 'dotted', width: 1.2, opacity: 0.9 },
+      })
+    }
+  }
+  const markers = showKlinePatterns.value
+    ? analysis.patterns.filter(p => p.idx >= bars.length - 80).slice(0, 8).map(p => {
+        const b = bars[p.idx]
+        const color = p.direction === 'bull' ? T.up : (p.direction === 'bear' ? T.down : T.warn)
+        return {
+          value: [p.idx, p.direction === 'bull' ? b.low * 0.99 : b.high * 1.01],
+          itemStyle: { color },
+          label: { show: true, formatter: p.short, position: p.direction === 'bull' ? 'bottom' : 'top',
+                   color, fontSize: 10, distance: 3 },
+        }
+      })
+    : []
+  chart.setOption({ series: [
+    { id: 'auto_line_layer', name: '自动画线', type: 'line',
+      // 给一个不可见锚点：markLine 挂在有数据的 series 上最稳，且不参与视觉
+      data: bars.length ? [[dates[bars.length - 1], bars[bars.length - 1].close]] : [],
+      symbol: 'none', silent: true, animation: false, tooltip: { show: false },
+      lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 },
+      markLine: { silent: true, symbol: 'none', animation: false, data: lineData } },
+    { id: 'pattern_layer', name: 'K线形态', type: 'scatter', data: markers,
+      symbol: 'circle', symbolSize: 7, z: 7, tooltip: { show: false },
+      emphasis: { scale: 1.4 } },
+  ]})
+}
+
 function drawCharts(kd){
   if(!kd?.kline?.length){ dateRange.value = ''; return }
   const dates = kd.kline.map(d=>d.trade_date)
@@ -1577,6 +1725,12 @@ function drawCharts(kd){
         + (s.f10d!=null ? ` <span style="font-size: var(--text-meta)">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
     }
     if(t) extra += `<br/><span style="color:${T.warn}">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
+    const pats = (klineAnalysis.value?.patterns || []).filter(p => p.idx === idx)
+    if(pats.length){
+      const p = pats[0]
+      const col = p.direction === 'bull' ? T.up : (p.direction === 'bear' ? T.down : T.warn)
+      extra += `<br/><span style="color:${col}">✦ ${p.name} · ${p.action}</span>`
+    }
     return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>
       开: ${o[0].toFixed(2)}  收: <span style="color:${color}">${o[1].toFixed(2)}</span> (${chg}%)<br/>
       高: ${o[3].toFixed(2)}  低: ${o[2].toFixed(2)}  量: ${(vols[idx]/1e6).toFixed(1)}M<br/>
@@ -1597,6 +1751,7 @@ function drawCharts(kd){
       {name:'下轨',type:'line',data:blo,lineStyle:{color:T.warn,width:2},symbol:'none',smooth:true}
     ]
   })
+  applyKlineLayers(kd, c1)
   // 成交量分位线（P20/P50/P80）：基于**当前显示窗口**计算——回答"今天的天量/
   // 地量在这段行情里处于什么位置"。窗口随 dataZoom（滑块/滚轮/五图联动）变化
   // 时重算；分位用线性插值（对齐 numpy.percentile），零量日（停牌）剔除。
@@ -4556,4 +4711,44 @@ watch(()=>props.code, v=>{
 }
 .chart-order-move:hover:not(:disabled) { color: var(--c-text); border-color: var(--c-text-dim); }
 .chart-order-move:disabled { opacity: .3; cursor: default; }
+
+/* K线自动分析提示 */
+.kline-ai-card {
+  margin-top: 6px; padding: 8px 10px;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-card-bg);
+}
+.kline-ai-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: var(--text-meta); }
+.kline-ai-title { display: flex; align-items: center; gap: 4px; font-weight: 600; color: var(--c-text-dim); }
+.kline-ai-trend { font-size: var(--text-meta); color: var(--c-text-faint); }
+.kline-ai-trend.up { color: var(--c-up); }
+.kline-ai-trend.down { color: var(--c-down); }
+.kline-ai-more { margin-left: auto; }
+.kline-ai-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.kline-ai-chip {
+  font-size: var(--text-meta); padding: 2px 7px; border-radius: 999px;
+  border: 1px solid var(--c-border); color: var(--c-text-dim); cursor: default;
+}
+.kline-ai-chip.positive { color: var(--c-up); border-color: var(--c-up); }
+.kline-ai-chip.warn { color: var(--c-warn); border-color: var(--c-warn); }
+.kline-ai-chip.danger { color: var(--c-down); border-color: var(--c-down); }
+.kline-ai-empty { font-size: var(--text-meta); color: var(--c-text-faint); }
+.kline-ai-detail {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-border);
+  display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto;
+}
+.kline-ai-row { display: flex; gap: 8px; font-size: var(--text-meta); line-height: 1.45; }
+.kline-ai-row b { flex: 0 0 auto; color: var(--c-text); }
+.kline-ai-row span { color: var(--c-text-dim); }
+.kline-ai-row.positive b { color: var(--c-up); }
+.kline-ai-row.warn b { color: var(--c-warn); }
+.kline-ai-row.danger b { color: var(--c-down); }
+.kline-ai-patterns { margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--c-border); }
+.kline-ai-sub { font-size: var(--text-meta); color: var(--c-text-faint); margin-bottom: 4px; }
+.kline-ai-prow { display: flex; gap: 8px; font-size: var(--text-meta); line-height: 1.5; }
+.kline-ai-date { width: 40px; flex: 0 0 auto; color: var(--c-text-faint); }
+.kline-ai-name { width: 82px; flex: 0 0 auto; color: var(--c-text); }
+.kline-ai-prow.bull .kline-ai-name { color: var(--c-up); }
+.kline-ai-prow.bear .kline-ai-name { color: var(--c-down); }
+.kline-ai-act { color: var(--c-text-dim); }
 </style>
