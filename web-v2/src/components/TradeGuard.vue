@@ -9,7 +9,7 @@
       仓位 {{ pct(st.position_ratio) }} · 现金 {{ pct(st.cash_ratio) }} · 今日开仓 {{ st.daily_buy_count }}/{{ st.max_new_buys_per_day }} · 还能买 {{ money(st.max_buy_amount) }}
     </span>
     <n-button size="tiny" quaternary class="tg-toggle" @click="toggleCollapsed">
-      {{ collapsed ? '展开' : '收起' }}<span class="tg-caret">{{ collapsed ? '▾' : '▴' }}</span>
+      {{ collapsed ? '展开明细' : '收起明细' }}<span class="tg-caret">{{ collapsed ? '▾' : '▴' }}</span>
     </n-button>
   </div>
 
@@ -69,13 +69,13 @@
     <div class="tg-advice" :class="[st.level, { 'tg-advice-mini': collapsed }]">{{ st.advice }}</div>
 
     <!-- 今日教练：基于交易画像 + 当前仓位 + 持仓板块资金流 -->
-    <div v-if="st.coach && !collapsed" class="tg-coach">
+    <div v-if="st.coach" class="tg-coach">
       <div class="tg-coach-head">
         <b>今日教练</b>
         <span class="tg-coach-next">{{ st.coach.next }}</span>
         <span class="tg-coach-toggle" @click="coachOpen = !coachOpen">{{ coachOpen ? '收起计划' : '看计划' }}</span>
       </div>
-      <div v-if="st.coach.profile?.length" class="tg-coach-tags">
+      <div v-if="coachOpen && st.coach.profile?.length" class="tg-coach-tags">
         <span v-for="p in st.coach.profile" :key="p.key" class="tg-coach-tag" :title="p.evidence">{{ p.label }}</span>
       </div>
       <div v-if="st.coach.plan" class="tg-plan-progress">
@@ -104,7 +104,7 @@
       {{ journalHint }}
     </div>
 
-    <div v-if="!collapsed" class="tg-actions">
+    <div class="tg-actions">
       <n-button size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
       <n-button size="small" @click="openCheck('buy')">记录今日操作</n-button>
       <n-button size="small" quaternary @click="showReduction = true">减仓清单</n-button>
@@ -203,9 +203,9 @@ const message = useMessage()
 
 const st = ref(null)
 const loading = ref(false), error = ref('')
-const _storedCollapsed = localStorage.getItem('trade_guard_collapsed')
-const collapsed = ref(_storedCollapsed === '1'
-  || (_storedCollapsed === null && window.innerWidth < 1280))
+// 默认只看教练/建议 + 操作；仓位明细、进度条、今日记录收进“展开明细”
+const _storedDetails = localStorage.getItem('trade_guard_details_collapsed')
+const collapsed = ref(_storedDetails === null ? true : _storedDetails === '1')
 const coachOpen = ref(false)
 const showCheck = ref(false), checkSide = ref('buy')
 const showReduction = ref(false)
@@ -285,7 +285,7 @@ async function load(){
 
 function toggleCollapsed(){
   collapsed.value = !collapsed.value
-  localStorage.setItem('trade_guard_collapsed', collapsed.value ? '1' : '0')
+  localStorage.setItem('trade_guard_details_collapsed', collapsed.value ? '1' : '0')
 }
 function openCheck(side){ checkSide.value = side; showCheck.value = true }
 function onRecorded(s){
@@ -402,7 +402,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tg-coach-risk i { display: block; color: var(--c-text-faint); font-style: normal; }
 .tg-coach-risk.lv-critical b { color: var(--c-error); }
 .tg-coach-risk.lv-warn b { color: var(--c-warning); }
-.tg-coach-tranches { margin-top: 5px; }
+.tg-coach-tranches { margin-top: 5px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+@media (max-width: 900px) { .tg-coach-tranches { grid-template-columns: 1fr; } }
 .tg-coach-tranche { display: flex; gap: 8px; align-items: baseline; font-size: var(--text-meta); line-height: 1.7; }
 .tg-t-when { width: 78px; color: var(--c-text-dim); flex-shrink: 0; }
 .tg-coach-tranche b { width: 68px; text-align: right; flex-shrink: 0; }
@@ -415,6 +416,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tg-plan-progress b { color: var(--c-text); }
 .tg-plan-done { margin-left: 6px; color: var(--c-info); font-weight: 600; }
 .tg-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
+@media (max-width: 640px) {
+  /* 操作按钮单行横滑，避免 6 个按钮换 3 行把持仓挤出首屏 */
+  .tg-actions { flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }
+  .tg-actions > * { flex-shrink:0; }
+}
 .tg-today { margin-top:10px; border-top:1px dashed var(--c-border); padding-top:7px; }
 .tg-today-head { display:flex; align-items:baseline; gap:8px; font-size:12px; font-weight:600; margin-bottom:4px; }
 .tg-today-head span { font-size: var(--text-meta); color: var(--c-text-faint); font-weight:400; }

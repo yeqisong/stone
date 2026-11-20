@@ -25,6 +25,8 @@
   <template v-if="activeTab==='pos'">
     <StatStrip v-if="data.count" :items="statItems" />
     <MarketSentiment />
+    <!-- 教练/建议是重点内容：全宽展示，不塞进窄侧栏 -->
+    <TradeGuard @import="showTradeImport=true" @recorded="onTradeRecorded" />
 
     <div class="portfolio-body">
       <div class="portfolio-main">
@@ -67,8 +69,6 @@
       </div>
 
       <aside class="portfolio-side">
-        <!-- 实时仓位护栏：当前仓位/现金/今日开仓额度 + 交易前检查 -->
-        <TradeGuard @import="showTradeImport=true" @recorded="onTradeRecorded" />
         <div v-if="riskHeat?.positions" class="risk-heat"
           :class="riskHeat.label === '高' ? 'rh-high' : riskHeat.label === '中' ? 'rh-mid' : 'rh-low'">
           <div class="rh-head">
@@ -490,7 +490,7 @@ async function confirmDelete(){
 
 /* 桌面：持仓表在左、辅助面板在右；辅助功能不再把表格顶到屏幕外 */
 .portfolio-body {
-  display: grid; grid-template-columns: minmax(0, 1fr) 420px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px;
   gap: 12px; align-items: start;
 }
 .portfolio-main { min-width: 0; display: flex; flex-direction: column; }
