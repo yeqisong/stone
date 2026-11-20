@@ -216,6 +216,34 @@ class TestRules:
         assert out == []
 
 
+class TestActionAdvice:
+    def test_vwap_up_overweight_holding(self):
+        a = iw._advice_for('it_vwap_up', {'qty': 500, 'cost': 81.85},
+                           81.23, 0.24, 0.20)
+        assert '减仓' in a and '不追' in a
+
+    def test_vwap_up_nonholding(self):
+        a = iw._advice_for('it_vwap_up', {}, 81.23, 0.0, 0.20)
+        assert '观察' in a and '不追' in a
+
+    def test_vwap_down_holding(self):
+        a = iw._advice_for('it_vwap_down', {'qty': 500, 'cost': 81.85},
+                           80.0, 0.24, 0.20)
+        assert '减仓' in a
+
+    def test_alert_body_includes_action(self):
+        state = {}
+        iw.evaluate_tick({'600519': _q(price=99.5, avg_price=100.0)},
+                         state, {}, _rules(), NOW)
+        out = iw.evaluate_tick(
+            {'600519': _q(price=100.2, avg_price=100.0)}, state,
+            {'600519': {'name': '测试股', 'cost': 100.0, 'qty': 100}},
+            _rules(), NOW)
+        assert [c['kind'] for c in out] == ['it_vwap_up']
+        assert '减仓' in out[0]['body']
+        assert '不追' in out[0]['body']
+
+
 class TestVwapBreak:
     def test_up_break_after_baseline(self):
         state = {}

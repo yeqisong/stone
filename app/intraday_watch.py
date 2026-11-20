@@ -433,6 +433,49 @@ def _update_or_state(st: dict, q: dict, price: float, rules: dict, now: datetime
         st['or_unavailable'] = True
 
 
+def _advice_for(kind: str, pos: dict, price: float, weight: float,
+                max_single: float = 0.20) -> str:
+    """把“事实型”提醒翻译成动作建议：持有/减仓/不追/不接。"""
+    held = bool(pos and _num(pos.get('qty'), 0) > 0)
+    cost = _num(pos.get('cost'), 0) if held else 0.0
+    vs_cost = (price / cost - 1) if held and cost else None
+    over = held and weight >= max_single
+    if kind in ('it_stop', 'it_reduce_bounce'):
+        return ''          # body 本身已是动作/分层指令
+    if kind == 'it_take':
+        return '止盈/减仓，不追高'
+    if kind == 'it_vwap_up':
+        if not held:
+            return '观察：只算短线转强，等回踩不破/结构确认再看买点，不追'
+        if over:
+            return '持仓超配：反弹到 VWAP 上方是减仓机会，先减 1/3，不追'
+        if vs_cost is not None and vs_cost < -0.08:
+            return '持仓浮亏：站上 VWAP 只是反弹，减仓，不补'
+        return '持仓：站上 VWAP 可持有；跌破 VWAP 再减'
+    if kind == 'it_vwap_down':
+        return ('持仓：跌破 VWAP 短线转弱，减仓/止损，不补' if held
+                else '观察：不接飞刀，等止跌信号')
+    if kind == 'it_surge':
+        if over:
+            return '持仓超配：冲高减仓，不追'
+        return '持仓：冲高不追，跌破 VWAP 减' if held else '观察：不追高，等回踩确认'
+    if kind == 'it_drop':
+        return '持仓：跌破关键位先减，不补' if held else '观察：不接飞刀，等止跌'
+    if kind in ('it_high', 'it_prev_high', 'it_or_up'):
+        if over:
+            return '持仓超配：冲高减仓，不追'
+        return '持仓：突破可持有；跌回区间/VWAP 减' if held else '观察：突破只算转强，等回踩确认，不追'
+    if kind in ('it_low', 'it_prev_low', 'it_or_down'):
+        return '持仓：破位减仓/止损，不补' if held else '观察：不接，等止跌'
+    if kind == 'it_limit_up':
+        return '持仓：涨停不追；开板/回落减' if held else '观察：不追板'
+    if kind == 'it_limit_down':
+        return '持仓：跌停风险，次日处理，不补' if held else '观察：不接'
+    if kind == 'it_vol':
+        return '持仓：量比异动看方向，跌破 VWAP 减' if held else '观察：量比异动不追，等方向'
+    return ''
+
+
 def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
                   now: datetime, prev_levels: dict | None = None,
                   cash: float = 0.0, sentiment: dict | None = None) -> list:
@@ -659,6 +702,18 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
             elif vr < vol_th - 0.2:
                 st['vol_hot'] = False
 
+    # 事实型提醒统一补一句“该干什么”，而不是只报“上穿 VWAP/创新高”
+    for c in out:
+        code = c['stock_code']
+        q = quotes.get(code) or {}
+        pos = costs.get(code) or {}
+        price = _num(q.get('price'), 0.0)
+        qty = _num(pos.get('qty'), 0.0)
+        weight = (qty * price / equity) if equity > 0 else 0.0
+        adv = _advice_for(c['kind'], pos, price, weight, reduce_weight)
+        if adv:
+            c['body'] = c['body'].rstrip('。；; ') + '；' + adv
+        c['advice'] = adv
     return out
 
 
