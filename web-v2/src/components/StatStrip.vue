@@ -88,7 +88,7 @@ onUnmounted(() => { rafs.forEach(id => cancelAnimationFrame(id)); timers.forEach
 
 <style scoped>
 .stat-strip { display: flex; gap: 16px; justify-content: center; padding: 8px 0 12px; flex-wrap: wrap; }
-.stat-item { text-align: center; min-width: 62px; }
+.stat-item { text-align: center; min-width: 62px; flex-shrink: 0; }
 .stat-label { font-size: var(--text-meta); color: var(--c-text-dim); white-space: nowrap; }
 .stat-value { font-size: 20px; font-weight: 600; line-height: 1.25; }
 .stat-sub {
@@ -96,9 +96,14 @@ onUnmounted(() => { rafs.forEach(id => cancelAnimationFrame(id)); timers.forEach
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 @media (max-width: 768px) {
-  .stat-strip { gap: 10px; padding: 6px 0 10px; }
-  .stat-item { min-width: 56px; }
+  /* 5 张卡片排 3 列，两行内看完；不再因为 flex-shrink 被压成一条线 */
+  .stat-strip {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 6px; padding: 6px 0 8px; justify-content: stretch;
+  }
+  .stat-item { min-width: 0; text-align: center; }
   .stat-label { font-size: var(--text-meta); }
-  .stat-value { font-size: 18px; }
+  .stat-value { font-size: 16px; white-space: nowrap; }
+  .stat-sub { white-space: normal; line-height: 1.35; max-height: 2.7em; overflow: hidden; }
 }
 </style>

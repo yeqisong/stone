@@ -66,10 +66,10 @@
       </div>
     </template>
 
-    <div class="tg-advice" :class="st.level">{{ st.advice }}</div>
+    <div class="tg-advice" :class="[st.level, { 'tg-advice-mini': collapsed }]">{{ st.advice }}</div>
 
     <!-- 今日教练：基于交易画像 + 当前仓位 + 持仓板块资金流 -->
-    <div v-if="st.coach" class="tg-coach">
+    <div v-if="st.coach && !collapsed" class="tg-coach">
       <div class="tg-coach-head">
         <b>今日教练</b>
         <span class="tg-coach-next">{{ st.coach.next }}</span>
@@ -104,7 +104,7 @@
       {{ journalHint }}
     </div>
 
-    <div class="tg-actions">
+    <div v-if="!collapsed" class="tg-actions">
       <n-button size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
       <n-button size="small" @click="openCheck('buy')">记录今日操作</n-button>
       <n-button size="small" quaternary @click="showReduction = true">减仓清单</n-button>
@@ -203,7 +203,9 @@ const message = useMessage()
 
 const st = ref(null)
 const loading = ref(false), error = ref('')
-const collapsed = ref(localStorage.getItem('trade_guard_collapsed') === '1')
+const _storedCollapsed = localStorage.getItem('trade_guard_collapsed')
+const collapsed = ref(_storedCollapsed === '1'
+  || (_storedCollapsed === null && window.innerWidth < 1280))
 const coachOpen = ref(false)
 const showCheck = ref(false), checkSide = ref('buy')
 const showReduction = ref(false)
@@ -377,6 +379,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   background: var(--c-card-bg-hover); border-left:2px solid var(--c-down); }
 .tg-advice.tg-warn { border-left-color: var(--c-warning); color: var(--c-warning); }
 .tg-advice.tg-critical { border-left-color: var(--c-error); color: var(--c-error); }
+.tg-advice-mini { margin-top:5px; padding:4px 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tg-coach {
   margin-top: 9px; padding: 8px 9px; border: 1px solid var(--c-border);
   border-left: 3px solid var(--c-accent); border-radius: var(--radius-sm);

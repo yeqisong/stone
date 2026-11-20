@@ -8,7 +8,7 @@
         {{ g.name }}<span v-if="g.count" style="font-size: var(--text-meta);opacity:0.75"> {{ g.count }}</span>
       </n-button>
     </n-button-group>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+    <div class="pf-actions">
       <n-button size="tiny" quaternary @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
       <n-button size="tiny" :disabled="!canFloatWatch()"
         :title="canFloatWatch() ? 'Chrome 置顶悬浮窗，浏览器最小化也保留' : '需要 Chrome/Edge 116+（Document Picture-in-Picture）'"
@@ -25,40 +25,10 @@
   <template v-if="activeTab==='pos'">
     <StatStrip v-if="data.count" :items="statItems" />
     <MarketSentiment />
-    <!-- 实时仓位护栏：当前仓位/现金/今日开仓额度 + 交易前检查 -->
-    <TradeGuard @import="showTradeImport=true" @recorded="onTradeRecorded" />
-    <div v-if="riskHeat?.positions" class="risk-heat"
-      :class="riskHeat.label === '高' ? 'rh-high' : riskHeat.label === '中' ? 'rh-mid' : 'rh-low'">
-      <div class="rh-head">
-        <b>组合风险 {{ riskHeat.score }}</b>
-        <span class="rh-label">{{ riskHeat.label }}</span>
-        <span class="rh-asof">{{ riskHeat.asof }} · 30s 刷新</span>
-      </div>
-      <div class="rh-metrics">
-        <span>最大单票 <b>{{ riskHeat.top_position.name }} {{ (riskHeat.top_position.weight*100).toFixed(0) }}%</b></span>
-        <span>最大行业 <b>{{ riskHeat.top_industry.name }} {{ (riskHeat.top_industry.weight*100).toFixed(0) }}%</b></span>
-        <span>浮盈 <b :style="{color: riskHeat.pnl >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ riskHeat.pnl >= 0 ? '+' : '' }}{{ fmt(riskHeat.pnl) }} / {{ riskHeat.pnl_pct != null ? (riskHeat.pnl_pct*100).toFixed(1)+'%' : '—' }}</b></span>
-        <span>今日提醒 <b>{{ riskHeat.alerts_today }}</b><template v-if="riskHeat.critical_today">（critical {{ riskHeat.critical_today }}）</template></span>
-      </div>
-      <div class="rh-flags">
-        <span v-for="f in riskHeat.flags" :key="f">{{ f }}</span>
-        <span v-if="!riskHeat.flags.length" class="rh-ok">结构正常</span>
-      </div>
-    </div>
 
-    <!-- 今日纪律闸门：有越界才显示，避免常驻噪音 -->
-    <div v-if="tradeGate && tradeGate.violations && tradeGate.violations.length"
-      class="trade-gate" :class="tradeGate.allow_new_buy ? 'tg-warn' : 'tg-bad'">
-      <b>今日纪律</b>
-      <span class="tg-sum">{{ tradeGate.summary }}</span>
-      <span v-for="v in tradeGate.violations" :key="v.rule + v.message" class="tg-item">{{ v.message }}</span>
-      <span v-if="tradeGate.today_buys || tradeGate.today_sells" class="tg-manual-note">
-        今日手工成交已计入纪律统计；持仓表待导入交割单后同步
-      </span>
-      <n-button size="tiny" quaternary style="margin-left:auto" @click="openTradeReview('rules')">处理</n-button>
-    </div>
-
-    <n-spin v-if="loading" style="padding:40px" />
+    <div class="portfolio-body">
+      <div class="portfolio-main">
+        <n-spin v-if="loading" style="padding:40px" />
     <template v-else>
       <div v-if="data.positions&&data.positions.length" style="display:flex;flex-direction:column">
         <div v-if="isNarrow" class="pos-cards">
@@ -93,7 +63,44 @@
         <n-data-table v-else :columns="columns" :data="data.positions" size="small" :row-props="rowProps" scroll-x="1060" />
       </div>
       <n-empty v-else description="暂无持仓" style="flex:1" />
-    </template>
+        </template>
+      </div>
+
+      <aside class="portfolio-side">
+        <!-- 实时仓位护栏：当前仓位/现金/今日开仓额度 + 交易前检查 -->
+        <TradeGuard @import="showTradeImport=true" @recorded="onTradeRecorded" />
+        <div v-if="riskHeat?.positions" class="risk-heat"
+          :class="riskHeat.label === '高' ? 'rh-high' : riskHeat.label === '中' ? 'rh-mid' : 'rh-low'">
+          <div class="rh-head">
+            <b>组合风险 {{ riskHeat.score }}</b>
+            <span class="rh-label">{{ riskHeat.label }}</span>
+            <span class="rh-asof">{{ riskHeat.asof }} · 30s 刷新</span>
+          </div>
+          <div class="rh-metrics">
+            <span>最大单票 <b>{{ riskHeat.top_position.name }} {{ (riskHeat.top_position.weight*100).toFixed(0) }}%</b></span>
+            <span>最大行业 <b>{{ riskHeat.top_industry.name }} {{ (riskHeat.top_industry.weight*100).toFixed(0) }}%</b></span>
+            <span>浮盈 <b :style="{color: riskHeat.pnl >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ riskHeat.pnl >= 0 ? '+' : '' }}{{ fmt(riskHeat.pnl) }} / {{ riskHeat.pnl_pct != null ? (riskHeat.pnl_pct*100).toFixed(1)+'%' : '—' }}</b></span>
+            <span>今日提醒 <b>{{ riskHeat.alerts_today }}</b><template v-if="riskHeat.critical_today">（critical {{ riskHeat.critical_today }}）</template></span>
+          </div>
+          <div class="rh-flags">
+            <span v-for="f in riskHeat.flags" :key="f">{{ f }}</span>
+            <span v-if="!riskHeat.flags.length" class="rh-ok">结构正常</span>
+          </div>
+        </div>
+
+        <!-- 今日纪律闸门：有越界才显示，避免常驻噪音 -->
+        <div v-if="tradeGate && tradeGate.violations && tradeGate.violations.length"
+          class="trade-gate" :class="tradeGate.allow_new_buy ? 'tg-warn' : 'tg-bad'">
+          <b>今日纪律</b>
+          <span class="tg-sum">{{ tradeGate.summary }}</span>
+          <span v-for="v in tradeGate.violations" :key="v.rule + v.message" class="tg-item">{{ v.message }}</span>
+          <span v-if="tradeGate.today_buys || tradeGate.today_sells" class="tg-manual-note">
+            今日手工成交已计入纪律统计；持仓表待导入交割单后同步
+          </span>
+          <n-button size="tiny" quaternary style="margin-left:auto" @click="openTradeReview('rules')">处理</n-button>
+        </div>
+      </aside>
+    </div>
   </template>
 
   <!-- 自选 / 动态分组 tab：列字段同个股列表 -->
@@ -474,4 +481,30 @@ async function confirmDelete(){
 
 /* 持仓页内容已超过一屏（统计条 + 实时护栏 + 风险 + 表格）：整页滚动，别再裁掉表格 */
 .portfolio-page { overflow-y: auto; overflow-x: hidden; }
+.pf-actions { margin-left:auto; display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end; max-width:100%; }
+@media (max-width: 768px) {
+  .pf-actions { width:100%; margin-left:0; justify-content:flex-start; }
+}
+/* page-fill 是 flex column；辅助卡片/表格不能被压缩，否则指标条会被挤成 2px */
+.portfolio-page > * { flex-shrink: 0; }
+
+/* 桌面：持仓表在左、辅助面板在右；辅助功能不再把表格顶到屏幕外 */
+.portfolio-body {
+  display: grid; grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 12px; align-items: start;
+}
+.portfolio-main { min-width: 0; display: flex; flex-direction: column; }
+.portfolio-side { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+@media (max-width: 1279px) {
+  .portfolio-body { display: flex; flex-direction: column; align-items: stretch; }
+  .portfolio-main, .portfolio-side { width: 100%; }
+  .portfolio-side { gap: 8px; }
+}
+@media (min-width: 1280px) {
+  /* 指标卡吸顶：滚动表格时仍能看到总市值/累计盈亏 */
+  .portfolio-page > :deep(.stat-strip) {
+    position: sticky; top: 0; z-index: 6;
+    background: var(--c-bg); border-bottom: 1px solid var(--c-border);
+  }
+}
 </style>
