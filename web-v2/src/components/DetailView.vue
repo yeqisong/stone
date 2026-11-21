@@ -1,6 +1,6 @@
 <template>
 <div>
-  <n-space align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
+  <n-space class="detail-toolbar" align="center" :wrap="false" style="margin-bottom:8px;overflow-x:auto;scrollbar-width:none">
     <n-button size="tiny" @click="$emit('back')"><AppIcon name="arrow-left" :size="13" /> 返回</n-button>
     <StockSuggestInput v-model:value="inputCode" size="tiny" width="170px" @select="onPickStock" @enter="onQuery" />
     <n-button class="cta" type="primary" size="tiny" @click="onQuery">查询</n-button>
@@ -1703,9 +1703,9 @@ function drawCharts(kd){
   const gl = {lineStyle:{color:T.line}}
 
   dateRange.value = dates[0]+' ~ '+dates[dates.length-1]
-  // 默认显示最近 1 年（约 250 交易日；不足则全显示）
   const totalDays = dates.length
-  const SHOW = totalDays <= 250 ? 0 : ((totalDays - 250) / totalDays * 100).toFixed(1)
+  // 所选区间即显示区间：1年/2年/全部都应完整展示，不能在加载全部后又默认只显示最近 250 根
+  const SHOW = 0
   const dz = [
     // 滚轮缩放时间窗（普通滚轮=以鼠标为中心缩放，Shift+滚轮=平移）；
     // 五图同组（echarts.connect），任一图滚轮缩放全组同步
@@ -1906,7 +1906,7 @@ function drawAuxCharts(kd){
   const reindex = (arr, key) => { const m=new Map(arr.map(x=>[x.date,x[key]])); return dates.map(d=>m.has(d)?m.get(d):null) }
   const gl = {lineStyle:{color:T.line}}
   const totalDays = dates.length
-  const SHOW = totalDays<=250?0:((totalDays-250)/totalDays*100).toFixed(1)
+  const SHOW = 0   // 与主图一致：所选区间完整显示
   const dz = [
     {type:'inside', xAxisIndex:0, zoomOnMouseWheel:true, moveOnMouseWheel:'shift'},
     {type:'slider', xAxisIndex:0, start:SHOW, end:100, ...dzSlider()}
@@ -4825,6 +4825,19 @@ watch(()=>props.code, v=>{
     overflow-y: auto;
   }
   .fs-side { display: none; }
+}
+
+/* 详情页顶部工具条：周期/区间切换跟随滚动吸顶（主导航下方） */
+.detail-toolbar {
+  position: sticky; top: -18px; z-index: 30;
+  margin: -18px -24px 8px; padding: 18px 24px 6px;
+  background: var(--c-bg);
+  box-shadow: 0 1px 0 var(--c-border-light);
+}
+@media (max-width: 768px) {
+  .detail-toolbar {
+    top: -10px; margin: -10px -14px 8px; padding: 10px 14px 6px;
+  }
 }
 
 /* 图表排序 */
