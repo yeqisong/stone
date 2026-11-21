@@ -387,3 +387,114 @@ def watch_candidates(items, limit=8):
     focus.sort(key=lambda x: (_f(x.get('score')) or 0) * -1)
     risk.sort(key=lambda x: (len(x.get('risk_flags') or []), -(_f(x.get('score')) or 0)), reverse=True)
     return {'focus': focus[:limit], 'risk': risk[:limit]}
+
+
+# ── 正股 × 转债联动（纯统计口径，供详情页抽屉） ──
+
+def daily_returns(prices):
+    """逐日收益率序列；首项 None，价格无效/非正为 None。"""
+    out = [None]
+    for i in range(1, len(prices)):
+        prev = _f(prices[i - 1])
+        cur = _f(prices[i])
+        if not prev or prev <= 0 or cur is None or cur <= 0:
+            out.append(None)
+        else:
+            out.append(cur / prev - 1)
+    return out
+
+
+def period_return(prices, days):
+    """近 days 个交易日收益率：last / prices[-days-1] - 1。"""
+    prices = [_f(x) for x in (prices or [])]
+    if len(prices) <= days:
+        return None
+    last = prices[-1]
+    base = prices[-days - 1]
+    if not last or last <= 0 or not base or base <= 0:
+        return None
+    return last / base - 1
+
+
+def _corr_pairs(xs, ys):
+    pairs = [(x, y) for x, y in zip(xs, ys)
+             if x is not None and y is not None]
+    return pairs
+
+
+def pearson_corr(xs, ys):
+    """皮尔逊相关系数；样本 <3 或方差为 0 返回 None。"""
+    pairs = _corr_pairs(xs, ys)
+    if len(pairs) < 3:
+        return None
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    mx = sum(xs) / len(xs)
+    my = sum(ys) / len(ys)
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    vx = sum((x - mx) ** 2 for x in xs)
+    vy = sum((y - my) ** 2 for y in ys)
+    if vx <= 1e-16 or vy <= 1e-16:
+        return None
+    return cov / (vx ** 0.5 * vy ** 0.5)
+
+
+def beta(xs, ys):
+    """转债收益对正股收益的斜率（正股为 x，转债为 y）。"""
+    pairs = _corr_pairs(xs, ys)
+    if len(pairs) < 3:
+        return None
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    mx = sum(xs) / len(xs)
+    my = sum(ys) / len(ys)
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    vx = sum((x - mx) ** 2 for x in xs)
+    if vx <= 0:
+        return None
+    return cov / vx
+
+
+def rolling_corr(xs, ys, window=20):
+    """滚动相关系数；前 window-1 项为 None。"""
+    if window < 3:
+        return [None] * len(xs)
+    out = [None] * len(xs)
+    for i in range(window - 1, len(xs)):
+        corr = pearson_corr(xs[i - window + 1:i + 1], ys[i - window + 1:i + 1])
+        out[i] = corr
+    return out
+
+
+def linkage_metrics(stock_returns, cb_returns):
+    """正股/转债收益序列的联动统计。"""
+    corr = pearson_corr(stock_returns, cb_returns)
+    r20 = pearson_corr(stock_returns[-20:], cb_returns[-20:])
+    r60 = pearson_corr(stock_returns[-60:], cb_returns[-60:])
+    return {
+        'corr_full': corr,
+        'corr_20': r20,
+        'corr_60': r60,
+        'beta': beta(stock_returns, cb_returns),
+    }
+
+
+def linkage_label(corr=None, excess20=None):
+    """把统计翻译成一句规则化解读（不是投资建议）。"""
+    if corr is None:
+        return '样本不足，暂无法判断联动强度'
+    c = corr
+    if c >= 0.6:
+        base = '强联动：转债通常跟随正股；优先看正股方向'
+    elif c >= 0.3:
+        base = '中等联动：正股有影响，但溢价/规模也会扰动'
+    elif c > -0.3:
+        base = '弱联动：转债更多由溢价、资金与条款主导'
+    else:
+        base = '明显背离：不要用正股简单线性外推转债'
+    if excess20 is not None:
+        if excess20 >= 0.02:
+            return base + '；近 20 日转债明显跑赢正股，注意溢价扩张'
+        if excess20 <= -0.02:
+            return base + '；近 20 日转债明显跑输正股，注意溢价压缩/情绪偏弱'
+    return base

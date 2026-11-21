@@ -236,6 +236,7 @@
 | `GET /api/cb/list` | 列表（kw/page/page_size/sort/order/strategy/only_active） | 🔒 |
 | `GET /api/cb/coach` | 辅导侧栏（市场概况 + 规则建议 + focus/risk 监控池） | 🔒 |
 | `GET /api/stock/{code}/convertible-bonds` | 正股关联转债（个股详情卡片） | 🔒 |
+| `GET /api/stock/{code}/cb-linkage` | 正股 × 转债联动分析（对齐日线、相关/滚动相关/β/区间收益） | 🔒 |
 | `GET /api/cb/{bond_code}` | 债券详情 + 近 N 日价格/转股价值/溢价 | 🔒 |
 | `GET /api/cb/{bond_code}/daily` | 债券历史行情/指标 | 🔒 |
 
