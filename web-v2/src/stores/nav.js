@@ -19,6 +19,7 @@ export const useNavStore = defineStore('nav', () => {
   const agentSeed = ref(null)   // 跨页面带入问答页的预填问题 { text, at }
   const tradeReviewTab = ref('review')  // 交易复盘二级页的初始 tab
   const bondCode = ref('')               // 可转债详情码（/bond/:code）
+  const midx = ref('000001.SH')          // 大盘页选中指数（ts_code 带后缀，/k?idx=）
 
   // URL hash 路由
   function parseHash() {
@@ -38,6 +39,7 @@ export const useNavStore = defineStore('nav', () => {
     if (hash.startsWith('/dag-logs/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'q'; return }
     if (hash.startsWith('/dag-flow-view/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'r'; return }
     if (hash.startsWith('/market/')) { marketDate.value = hash.split('/')[2] || ''; tab.value = 'm'; return }
+    if (path === '/k') { midx.value = q('idx') || '000001.SH'; tab.value = 'k'; return }
     if (hash.startsWith('/stock-fund/')) { stockFundType.value = hash.split('/')[2] || 'stock'; tab.value = 'u'; return }
     if (path === '/trade-review') { tradeReviewTab.value = q('tab') || 'review'; tab.value = 't'; return }
     if (path.startsWith('/models')) {
@@ -54,7 +56,7 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b','/k':'k'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
   }
@@ -79,6 +81,11 @@ export const useNavStore = defineStore('nav', () => {
         break
       }
       case 'c': target = '/bond/' + (bondCode.value || ''); break
+      case 'k': {
+        // 大盘页：默认指数不带参数，其余带 ?idx=（选中态在 URL 里可分享）
+        target = '/k' + (midx.value && midx.value !== '000001.SH' ? '?idx=' + midx.value : '')
+        break
+      }
       case 'l': {
         // 保留列表页 URL 上已有的查询参数（cat/kw/page/sf/sd，StocksView 维护）——
         // history.back() 回到列表时 popstate 已把地址还原成带参 URL，此时 syncHash
@@ -206,6 +213,7 @@ export const useNavStore = defineStore('nav', () => {
   watch(dcode, () => { if (tab.value === 'd') syncHash() })
   watch(fid, () => { if (tab.value === 'v') syncHash() })
   watch(bondCode, () => { if (tab.value === 'c') syncHash() })
+  watch(midx, () => { if (tab.value === 'k') syncHash() })
 
   watch(flowId, () => { if (tab.value === 'g' || tab.value === 'q' || tab.value === 'r') syncHash() })
 
@@ -213,5 +221,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, bondCode, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showBondDetail, backFromBondDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, bondCode, midx, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showBondDetail, backFromBondDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
 })
