@@ -1613,24 +1613,32 @@ function applyKlineLayers(kd, chart){
     const levelLine = (l, isRes) => {
       const color = isRes ? T.up : T.down
       const tag = isRes ? '压力' : '支撑'
-      return {
-        yAxis: l.price,
-        label: { formatter: `${tag} ${l.price.toFixed(2)}${l.touches > 1 ? ` · ${l.touches}次` : ''}`,
-                 position: 'insideEndTop', fontSize: 10, color },
-        lineStyle: { color, type: 'dashed', width: 1, opacity: 0.8 },
-      }
+      // markLine 一条线必须是 [起点, 终点, 线样式] 三元素数组；
+      // 直接给 {coord:...} 对象会被 ECharts 判为 Invalid markLine data。
+      return [
+        { coord: [dates[0], l.price] },
+        { coord: [dates[dates.length - 1], l.price] },
+        {
+          label: { formatter: `${tag} ${l.price.toFixed(2)}${l.touches > 1 ? ` · ${l.touches}次` : ''}`,
+                   position: 'insideStartTop', fontSize: 10, color },
+          lineStyle: { color, type: 'dashed', width: 1, opacity: 0.8 },
+        },
+      ]
     }
     for(const l of analysis.levels.supports) lineData.push(levelLine(l, false))
     for(const l of analysis.levels.resistances) lineData.push(levelLine(l, true))
     const tr = analysis.trend
     if(tr && tr.r2 >= 0.15){
       const color = tr.slopePct >= 0 ? T.up : T.down
-      lineData.push({
-        coord: [[dates[tr.startIdx], tr.startPrice], [dates[tr.endIdx], tr.endPrice]],
-        label: { formatter: `趋势 ${tr.slopePct >= 0 ? '+' : ''}${tr.slopePct.toFixed(2)}%/日`,
-                 position: 'end', fontSize: 10, color },
-        lineStyle: { color, type: 'dotted', width: 1.2, opacity: 0.9 },
-      })
+      lineData.push([
+        { coord: [dates[tr.startIdx], tr.startPrice] },
+        { coord: [dates[tr.endIdx], tr.endPrice] },
+        {
+          // 斜率/R² 在下方提示卡展示；线上只留短标签，避免右端被裁切
+          label: { formatter: '趋势线', position: 'start', align: 'left', fontSize: 10, color },
+          lineStyle: { color, type: 'dotted', width: 1.2, opacity: 0.9 },
+        },
+      ])
     }
   }
   const markers = showKlinePatterns.value
@@ -1639,23 +1647,32 @@ function applyKlineLayers(kd, chart){
         const color = p.direction === 'bull' ? T.up : (p.direction === 'bear' ? T.down : T.warn)
         return {
           value: [p.idx, p.direction === 'bull' ? b.low * 0.99 : b.high * 1.01],
+          symbolSize: p.score >= 4 ? 7 : 5,
           itemStyle: { color },
-          label: { show: true, formatter: p.short, position: p.direction === 'bull' ? 'bottom' : 'top',
+          // 弱形态（长影线/十字星）只留点，不显示文字，避免最近 K 线附近标签重叠
+          label: { show: p.score >= 4, formatter: p.short,
+                   position: p.direction === 'bull' ? 'bottom' : 'top',
+                   align: p.idx >= bars.length - 5 ? 'right' : 'center',
                    color, fontSize: 10, distance: 3 },
         }
       })
     : []
-  chart.setOption({ series: [
-    { id: 'auto_line_layer', name: '自动画线', type: 'line',
-      // 给一个不可见锚点：markLine 挂在有数据的 series 上最稳，且不参与视觉
-      data: bars.length ? [[dates[bars.length - 1], bars[bars.length - 1].close]] : [],
-      symbol: 'none', silent: true, animation: false, tooltip: { show: false },
-      lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 },
-      markLine: { silent: true, symbol: 'none', animation: false, data: lineData } },
-    { id: 'pattern_layer', name: 'K线形态', type: 'scatter', data: markers,
-      symbol: 'circle', symbolSize: 7, z: 7, tooltip: { show: false },
-      emphasis: { scale: 1.4 } },
-  ]})
+  try{
+    chart.setOption({ series: [
+      { id: 'auto_line_layer', name: '自动画线', type: 'line',
+        // 给一个不可见锚点：markLine 挂在有数据的 series 上最稳，且不参与视觉
+        data: bars.length ? [[dates[bars.length - 1], bars[bars.length - 1].close]] : [],
+        symbol: 'none', silent: true, animation: false, tooltip: { show: false },
+        lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 },
+        markLine: { silent: true, symbol: 'none', animation: false, data: lineData } },
+      { id: 'pattern_layer', name: 'K线形态', type: 'scatter', data: markers,
+        symbol: 'circle', symbolSize: 7, z: 7, tooltip: { show: false },
+        emphasis: { scale: 1.4 } },
+    ]})
+  }catch(e){
+    // 增强层失败不能阻断 drawCharts 后续的成交量/MACD/RSI 等主图
+    console.warn('[kline] 自动图层渲染失败:', e)
+  }
 }
 
 function drawCharts(kd){
@@ -1751,7 +1768,8 @@ function drawCharts(kd){
       {name:'下轨',type:'line',data:blo,lineStyle:{color:T.warn,width:2},symbol:'none',smooth:true}
     ]
   })
-  applyKlineLayers(kd, c1)
+  try{ applyKlineLayers(kd, c1) }
+  catch(e){ console.warn('[kline] 自动层初始化失败，主图继续:', e) }
   // 成交量分位线（P20/P50/P80）：基于**当前显示窗口**计算——回答"今天的天量/
   // 地量在这段行情里处于什么位置"。窗口随 dataZoom（滑块/滚轮/五图联动）变化
   // 时重算；分位用线性插值（对齐 numpy.percentile），零量日（停牌）剔除。
