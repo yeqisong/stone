@@ -49,23 +49,30 @@
         <div :style="{ marginBottom:'12px', order: chartOrderIndex('mink') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <AppIcon name="clock" :size="13" />  分钟K线
-            <span style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 分钟线 30s</span>
-            <n-button-group size="tiny">
+            <span v-if="minkCollapsed" style="font-size: var(--text-meta);color:var(--c-text-faint)">已折叠</span>
+            <span v-if="!minkCollapsed" style="font-size: var(--text-meta);color:var(--c-text-dim)">腾讯实时 / 不复权 / 分钟线 30s</span>
+            <n-button-group v-if="!minkCollapsed" size="tiny">
               <n-button v-for="p in MINK_PERIODS" :key="p.v" size="tiny" :type="minkPeriod===p.v?'primary':'default'" @click="minkPeriod=p.v">{{ p.t }}</n-button>
             </n-button-group>
             <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
-              <n-button size="tiny" text :loading="quoteLoading" title="立即刷新实时快照" @click="loadQuote">刷新</n-button>
-              <span class="mink-refresh" :class="{on: quote?.is_realtime}"
-                :title="quote?.is_realtime ? '实时报价：盘中每 5 秒自动刷新' : '实时报价：非交易时段每 30 秒自动刷新'">
-                {{ quote ? (quote.is_realtime ? '盘中 5s' : '非交易 30s') : '—' }}
-              </span>
-              <span class="mink-status" :class="minkStatusClass" :title="minkLastBarTitle">{{ minkStatus }}</span>
-              <n-button size="tiny" :type="minkPaused?'primary':'default'" @click="toggleMinkPause">{{ minkPaused ? '继续' : '暂停' }}</n-button>
+              <template v-if="!minkCollapsed">
+                <n-button size="tiny" text :loading="quoteLoading" title="立即刷新实时快照" @click="loadQuote">刷新</n-button>
+                <span class="mink-refresh" :class="{on: quote?.is_realtime}"
+                  :title="quote?.is_realtime ? '实时报价：盘中每 5 秒自动刷新' : '实时报价：非交易时段每 30 秒自动刷新'">
+                  {{ quote ? (quote.is_realtime ? '盘中 5s' : '非交易 30s') : '—' }}
+                </span>
+                <span class="mink-status" :class="minkStatusClass" :title="minkLastBarTitle">{{ minkStatus }}</span>
+                <n-button size="tiny" :type="minkPaused?'primary':'default'" @click="toggleMinkPause">{{ minkPaused ? '继续' : '暂停' }}</n-button>
+              </template>
               <n-button size="tiny" @click="openFs" title="多栏分时全屏对比（Alt+F）">全屏</n-button>
+              <n-button size="tiny" @click="toggleMinkCollapsed"
+                :title="minkCollapsed ? '展开分钟K线与盘中相对强弱' : '折叠分钟K线与盘中相对强弱'">
+                {{ minkCollapsed ? '展开' : '折叠' }}
+              </n-button>
             </span>
           </h4>
           <!-- 分时辅助层：价位/VWAP带/开盘区间/事件/量分布 -->
-          <div class="mink-toolbar">
+          <div v-if="!minkCollapsed" class="mink-toolbar">
             <n-button-group size="tiny">
               <n-button size="tiny" :type="minkType==='candle'?'primary':'default'"
                 title="蜡烛图" @click="minkType='candle'; drawMink()">K线</n-button>
@@ -101,7 +108,7 @@
             <span class="mink-p3" title="分钟级模型需 P3 数据达标（20 个完整交易日 + 1 万根 bar）后训练；进度见状态页「分钟数据」">P3 模型 · 待数据</span>
           </div>
           <!-- 实时报价条：盘中 5s / 非交易时段 30s；失败时回退到最近日线收盘并给出重试 -->
-          <div ref="quoteBarEl" class="quote-bar" :class="{ 'quote-off': !quote }">
+          <div v-if="!minkCollapsed" ref="quoteBarEl" class="quote-bar" :class="{ 'quote-off': !quote }">
             <div class="quote-quote">
               <div class="quote-kicker">
                 <span>现价</span>
@@ -162,7 +169,7 @@
             <div v-else class="quote-hint">正在获取实时报价…</div>
           </div>
           <!-- AI 盘面解读：只解读数据，不预测涨跌；结果 90s 服务端缓存 -->
-          <div v-if="aiLoading || aiInsight || aiError" ref="aiCardEl" class="ai-card">
+          <div v-if="!minkCollapsed && (aiLoading || aiInsight || aiError)" ref="aiCardEl" class="ai-card">
             <div class="ai-head">
               <span class="ai-badge">AI 盘面解读</span>
               <span class="ai-note">非预测 · 非投资建议</span>
@@ -201,7 +208,7 @@
               </div>
             </template>
           </div>
-          <div class="mink-chart-wrap">
+          <div v-if="!minkCollapsed" class="mink-chart-wrap">
             <div :id="'c0'" class="mink-main-chart"></div>
             <!-- 放在图表 DOM 之后 = 成交量滑轨下方，避免盖住 dataZoom 滑块 -->
             <div class="mink-chart-foot">
@@ -210,14 +217,14 @@
               </label>
             </div>
           </div>
-          <div v-if="minkLevelChips.length" class="mink-levels">
+          <div v-if="!minkCollapsed && minkLevelChips.length" class="mink-levels">
             <span v-for="l in minkLevelChips" :key="l.name + l.value">
               <i :style="{background:l.color}"></i>{{ l.name }} <b>{{ l.value.toFixed(2) }}</b>
             </span>
           </div>
         </div>
         <!-- 盘中相对强弱：与分时同周期、同窗口，起点=1 -->
-        <div v-if="benchMink.length && minkDayBars.length > 1" :style="{ marginBottom:'12px', order: chartOrderIndex('bench_mink') }">
+        <div v-if="!minkCollapsed && benchMink.length && minkDayBars.length > 1" :style="{ marginBottom:'12px', order: chartOrderIndex('bench_mink') }">
           <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="trending-up" :size="13" />  盘中相对强弱 <span style="font-size: var(--text-meta);color:var(--c-text-dim)">个股 vs 沪深300（当日起点=0%，超额=百分点）</span></h4>
           <div :id="'c13'" style="width:100%;height:110px"></div>
         </div>
@@ -2631,6 +2638,8 @@ function playbookScroll(el, delay = 280){
 
 function onPlaybookAction(action){
   if (action === 'alerts') { playbookScroll(alertsPanelEl.value, 260); return }
+  // 分钟区折叠时，AI/价位/risk 动作先展开，否则目标 DOM 不存在
+  if (['ai','levels','risk'].includes(action) && minkCollapsed.value) toggleMinkCollapsed()
   if (action === 'ai') {
     if (!aiInsight.value && !aiLoading.value) loadAiInsight()
     nextTick(() => playbookScroll(aiCardEl.value, 280))
@@ -2642,7 +2651,7 @@ function onPlaybookAction(action){
     setTimeout(() => document.getElementById('c0')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 340)
     return
   }
-  if (action === 'risk') { playbookScroll(quoteBarEl.value, 260); return }
+  if (action === 'risk') { nextTick(() => playbookScroll(quoteBarEl.value, 260)); return }
   if (action === 'ask') askAi()
 }
 
@@ -2735,6 +2744,37 @@ async function loadIntradayAlerts(c = code.value){
 // ── 分钟K线（腾讯实时，design/06 外延）：默认 m5，30s 轮询刷新 ──
 const MINK_PERIODS = [{v:'m1',t:'1分'},{v:'m5',t:'5分'},{v:'m15',t:'15分'},{v:'m30',t:'30分'},{v:'m60',t:'60分'}]
 const minkPeriod = ref('m5')
+// 分钟K线+盘中相对强弱折叠：8:30-15:30（北京时间）进入默认展开，其余时间默认折叠
+function _bjMinutesNow(){
+  try{
+    const s = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).format(new Date())
+    const [h, m] = s.split(':').map(Number)
+    return h * 60 + m
+  }catch(e){
+    const d = new Date()
+    return d.getHours() * 60 + d.getMinutes()
+  }
+}
+const _bjNow = _bjMinutesNow()
+const minkCollapsed = ref(!(_bjNow >= 8 * 60 + 30 && _bjNow <= 15 * 60 + 30))
+function toggleMinkCollapsed(){
+  minkCollapsed.value = !minkCollapsed.value
+  if(minkCollapsed.value){
+    // v-if 会移除图表容器，先 dispose 防止 ECharts 实例泄漏
+    for(const id of ['c0','c13']){
+      const el = document.getElementById(id)
+      if(el?._echart){ el._echart.dispose(); el._echart = null }
+    }
+  }else{
+    nextTick(() => {
+      drawMink()
+      drawRsChart()
+      resizeAll()
+    })
+  }
+}
 const minkBars = ref([])
 const minkPaused = ref(false)
 const minkError = ref(false)
@@ -3092,6 +3132,7 @@ async function loadBenchMink(c = code.value, period = minkPeriod.value, minkReq 
 }
 
 function drawRsChart(){
+  if (minkCollapsed.value) return
   const el = document.getElementById('c13')
   if (!el) return
   const bars = minkBars.value
@@ -3975,6 +4016,7 @@ async function loadMink(c = code.value){
 }
 
 function drawMink(){
+  if(minkCollapsed.value) return
   const bars = minkBars.value
   if(!bars.length){
     const el = document.getElementById('c0')
