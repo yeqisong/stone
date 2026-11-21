@@ -242,6 +242,21 @@
 
 ---
 
+## 18. 大盘/市场详情 market（api/market.py，v3.12 新增）
+
+只读聚合既有 DAG 落库表，模块级 TTL 缓存 + 在途去重；设计细节见 [11-大盘详情页设计.md](11-大盘详情页设计.md)。
+
+| 方法+路径 | 功能 | 认证 |
+|---|---|---|
+| `GET /api/market/overview` | 市场总览（情绪 + 7 指数行情/估值/分位 + 资金/两融/宏观快照） | 🔒 |
+| `GET /api/market/valuation/{ts_code}` | 单指数 PE/PB/换手时序 + 窗口 30/70 分位（days≤10000） | 🔒 |
+| `GET /api/market/moneyflow` | 全市场逐日资金流合计 + 累计线（2010 起，days≤4600） | 🔒 |
+| `GET /api/market/breadth` | 市场宽度：涨/跌/平家数 + 涨跌停近似 ±9.8%（days≤1200） | 🔒 |
+| `GET /api/market/margin` | 全市场逐日两融余额合计（2014 起，days≤4000） | 🔒 |
+| `GET /api/market/macro` | 宏观指标全历史时序（cpi/ppi/m0/m1/m2/shibor_on/gdp） | 🔒 |
+
+---
+
 ## 附：错误码约定
 
 - `400` 参数校验失败（Pydantic / 业务白名单）
