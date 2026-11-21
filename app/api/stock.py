@@ -256,7 +256,7 @@ def get_stock_history(
 
 @router.get("/stock/{code}/kline")
 def get_stock_kline(
-    code: str, days: int = Query(120, ge=30, le=7000),
+    code: str, days: int = Query(120, ge=30, le=10000),
     adjust: str = Query("none", description="复权: none=不复权, qfq=前复权, hfq=后复权"),
     period: str = Query("day", description="周期: day=日, week=周, month=月（指标按聚合后序列计算）"),
     type: str = Query(None, description="证券类型: stock/index/etf"),

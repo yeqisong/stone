@@ -179,7 +179,7 @@ def get_market_overview():
 # ── 2. 单指数估值时序 ──
 
 @router.get("/market/valuation/{ts_code}")
-def get_market_valuation(ts_code: str, days: int = Query(3000, ge=30, le=6000)):
+def get_market_valuation(ts_code: str, days: int = Query(3000, ge=30, le=10000)):
     """单指数 PE/PB/换手率时序 + 全历史 30/70 分位（画分位线用）。"""
     if ts_code not in MAIN_INDEXES:
         raise HTTPException(status_code=404, detail=f"不支持的指数 {ts_code}")
@@ -240,7 +240,7 @@ def get_market_valuation(ts_code: str, days: int = Query(3000, ge=30, le=6000)):
 # ── 3. 全市场每日资金流聚合 ──
 
 @router.get("/market/moneyflow")
-def get_market_moneyflow(days: int = Query(1000, ge=30, le=4500)):
+def get_market_moneyflow(days: int = Query(1000, ge=30, le=4600)):
     """全市场逐日资金流合计。tushare moneyflow 单位为万元，×1e4 统一为元
     （口径对齐 app/sector_flow.py；注意 /api/stock/{c}/moneyflow 返回的是原始万元）。"""
     def _load():

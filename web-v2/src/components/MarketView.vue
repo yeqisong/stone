@@ -172,7 +172,7 @@ const RANGES = [
   { label: '1月', days: 21 }, { label: '3月', days: 63 }, { label: '6月', days: 126 },
   { label: '1年', days: 250 }, { label: '3年', days: 750 }, { label: '5年', days: 1250 },
   { label: '8年', days: 2000 }, { label: '10年', days: 2500 }, { label: '15年', days: 3750 },
-  { label: '20年', days: 5000 }, { label: '全部', days: 6000 },
+  { label: '20年', days: 5000 }, { label: '全部', days: 10000 },
 ]
 
 const midx = computed(() => nav.midx || '000001.SH')
