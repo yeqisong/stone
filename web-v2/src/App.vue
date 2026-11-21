@@ -36,6 +36,10 @@
             <button type="button" class="header-icon-btn theme-btn" :title="'当前' + theme.modeHint + '，点击切换'" aria-label="切换主题" @click="theme.toggle">
               <AppIcon :name="theme.modeLabel" :size="16" />
             </button>
+            <a class="header-icon-btn" href="https://github.com/yeqisong/stone" target="_blank" rel="noopener noreferrer"
+              title="项目源码（GitHub）" aria-label="在新窗口打开 GitHub 项目源码">
+              <AppIcon name="github" :size="16" />
+            </a>
             <n-dropdown trigger="click" :options="userOptions" @select="handleUserMenu">
               <span class="user-chip" title="账户"><AppIcon name="user" :size="14" /><span class="user-name">{{ auth.username || 'admin' }}</span></span>
             </n-dropdown>
@@ -462,7 +466,7 @@ if (!showLogin.value) {
 .header-date { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
 .market-status { font-size: 12px; color: var(--c-text-dim); white-space: nowrap; }
 .app-header-right { display: flex; align-items: center; gap: 6px; }
-.header-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--c-text-dim); cursor: pointer; }
+.header-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--c-text-dim); cursor: pointer; text-decoration: none; }
 .header-icon-btn:hover { background: var(--c-card-bg-hover); color: var(--c-text); }
 .user-chip { height: 32px; padding: 0 10px; font-size: 12px; color: var(--c-text); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 4px; background: var(--c-bg-header); }
 .user-chip:hover { background: var(--c-card-bg-hover); }
