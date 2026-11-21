@@ -17,7 +17,7 @@
         @click="launchDesktopWatch"><AppIcon name="maximize" :size="13" />  桌面浮窗</n-button>
       <n-button size="tiny" @click="openTradeReview('review')" title="交割单明细与交易复盘"><AppIcon name="activity" :size="13" />  交易复盘</n-button>
       <n-button size="tiny" @click="showTradeImport=true" title="导入券商交割单，自动去重并按股份余额更新持仓"><AppIcon name="upload" :size="13" />  导入交割单</n-button>
-      <n-button size="small" type="primary" @click="startAdd">+ 新增持仓</n-button>
+      <n-button class="cta" size="tiny" type="primary" @click="startAdd"><AppIcon name="plus" :size="13" />  新增持仓</n-button>
     </div>
   </div>
 
@@ -376,10 +376,10 @@ const columns = [
   }},
   // 固定窄列 + 溢出 tooltip：原 minWidth 弹性列会吃光剩余宽度（空备注也占满），挤得盈亏列裁字
   { title:'备注', key:'notes', width:120, fixed:'right', ellipsis:{tooltip:true}, render(r){return h('span',{style:{fontSize:'11px',color:'var(--c-text-dim)'}},r.notes||'')} },
-  { title:'操作', width:140, fixed:'right', render(row){return h('span',[
+  { title:'操作', width:140, fixed:'right', render(row){return h('span',{style:{display:'inline-flex',gap:'4px'}},[
     h(NButton,{size:'tiny',onClick:()=>showHistory(row.stock_code)},{default:()=>'详情'}),
     h(NButton,{size:'tiny',onClick:()=>startEdit(row)},{default:()=>'编辑'}),
-    h(NButton,{size:'tiny',type:'error',quaternary:true,style:{marginLeft:'4px'},onClick:()=>askDelete(row.stock_code)},{default:()=>'删除'})
+    h(NButton,{size:'tiny',type:'error',quaternary:true,onClick:()=>askDelete(row.stock_code)},{default:()=>'删除'})
   ])}}
 ]
 function rowProps(row){return {style:'cursor:pointer',onClick:(e)=>{
