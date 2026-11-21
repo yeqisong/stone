@@ -930,3 +930,120 @@ class TuShareAdapter(DataSourceAdapter):
         except Exception as e:
             logger.warning(f"[tushare] index_weight {index_code} 失败: {e}")
             return []
+
+    # ── 可转债（cb_basic/cb_daily/cb_share；独立域）──
+
+    @staticmethod
+    def _norm_date(v):
+        """tushare YYYYMMDD → YYYY-MM-DD；空值/异常返回 None。"""
+        if v is None:
+            return None
+        s = str(v)[:10].replace('-', '')
+        if len(s) != 8 or not s.isdigit():
+            return None
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+
+    def fetch_cb_basic(self) -> list:
+        """可转债基础信息全量（单次调用，约 1000+ 行）。"""
+        try:
+            self.quota.consume()
+            df = self._pro.cb_basic()
+            rows = self._rows(df, {
+                "ts_code": "ts_code", "bond_full_name": "bond_full_name",
+                "bond_short_name": "bond_short_name", "exchange": "exchange",
+                "stk_code": "stk_code", "stk_short_name": "stk_short_name",
+                "maturity": "maturity", "par": "par", "issue_size": "issue_size",
+                "remain_size": "remain_size", "value_date": "value_date",
+                "maturity_date": "maturity_date", "coupon_rate": "coupon_rate",
+                "list_date": "list_date", "delist_date": "delist_date",
+                "conv_start_date": "conv_start_date", "conv_end_date": "conv_end_date",
+                "conv_stop_date": "conv_stop_date", "first_conv_price": "first_conv_price",
+                "conv_price": "conv_price", "rate_clause": "rate_clause"})
+            clean = []
+            for r in rows:
+                code = (r.get("ts_code") or '').split('.')[0].zfill(6)
+                if len(code) != 6:
+                    continue
+                r["bond_code"] = code
+                # stk_code 同样是 tushare 代码；表列 VARCHAR(6)，需截 6 位
+                r["stk_code"] = (r.get("stk_code") or '').split('.')[0].zfill(6)[:6]
+                for k in ("list_date", "delist_date", "maturity_date", "conv_start_date",
+                          "conv_end_date", "conv_stop_date", "value_date"):
+                    r[k] = self._norm_date(r.get(k))
+                clean.append(r)
+            return clean
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] cb_basic 失败: {e}")
+            return []
+
+    def fetch_cb_daily(self, trade_date: str) -> list:
+        """可转债日行情（按交易日全市场一次调用）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.cb_daily(trade_date=td)
+            rows = self._rows(df, {
+                "ts_code": "ts_code", "trade_date": "trade_date", "pre_close": "pre_close",
+                "open": "open", "high": "high", "low": "low", "close": "close",
+                "change": "change", "pct_chg": "pct_chg", "vol": "vol", "amount": "amount"})
+            clean = []
+            for r in rows:
+                code = (r.get("ts_code") or '').split('.')[0].zfill(6)
+                if len(code) != 6:
+                    continue
+                r["bond_code"] = code
+                r["trade_date"] = self._norm_date(r.get("trade_date")) or td
+                clean.append(r)
+            return clean
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] cb_daily {td} 失败: {e}")
+            return []
+
+    def fetch_cb_share(self, trade_date: str) -> list:
+        """可转债转股/余额快照（取不早于 trade_date 的最新快照，每债一行）。"""
+        td = trade_date.replace('-', '')[:8]
+        try:
+            self.quota.consume()
+            df = self._pro.cb_share(trade_date=td)
+            rows = self._rows(df, {
+                "ts_code": "ts_code", "end_date": "end_date", "publish_date": "publish_date",
+                "issue_size": "issue_size", "convert_price_initial": "convert_price_initial",
+                "convert_price": "convert_price", "convert_ratio": "convert_ratio",
+                "acc_convert_ratio": "acc_convert_ratio", "remain_size": "remain_size",
+                "total_shares": "total_shares"})
+            if not rows:
+                # 接口未按 trade_date 过滤时回退全量，再取最新快照（额外 1 次调用）
+                try:
+                    self.quota.consume()
+                    df = self._pro.cb_share(limit=5000)
+                    rows = self._rows(df, {
+                        "ts_code": "ts_code", "end_date": "end_date", "publish_date": "publish_date",
+                        "issue_size": "issue_size", "convert_price_initial": "convert_price_initial",
+                        "convert_price": "convert_price", "convert_ratio": "convert_ratio",
+                        "acc_convert_ratio": "acc_convert_ratio", "remain_size": "remain_size",
+                        "total_shares": "total_shares"})
+                except Exception:
+                    rows = []
+            latest = {}
+            for r in rows:
+                code = (r.get("ts_code") or '').split('.')[0].zfill(6)
+                if len(code) != 6:
+                    continue
+                r["bond_code"] = code
+                dates = [d for d in (str(r.get("end_date") or '').replace('-', ''),
+                                     str(r.get("publish_date") or '').replace('-', '')) if d.isdigit()]
+                r["asof_date"] = self._norm_date(max(dates)) if dates else None
+                if r["asof_date"] and r["asof_date"].replace('-', '') > td:
+                    continue   # 只取不晚于目标日的快照
+                if code not in latest or (r["asof_date"] or '') > (latest[code]["asof_date"] or ''):
+                    latest[code] = r
+            return list(latest.values())
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] cb_share {td} 失败: {e}")
+            return []

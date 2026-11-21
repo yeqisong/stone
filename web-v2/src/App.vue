@@ -64,6 +64,8 @@
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='l'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StocksView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='b'" style="flex:1;min-height:0;display:flex;flex-direction:column"><BondView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='c'"><BondDetailView :code="nav.bondCode" @back="nav.backFromBondDetail" /></div>
           <div v-if="nav.tab==='n'" style="flex:1;min-height:0;display:flex;flex-direction:column"><NewsView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='u'" style="flex:1;min-height:0;display:flex;flex-direction:column"><StockFundView @back="nav.tab = 'x'" @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='d'"><DetailView :code="nav.dcode" @back="nav.backFromDetail" /></div>
@@ -202,6 +204,8 @@ import StocksView from './components/StocksView.vue'
 import StockFundView from './components/StockFundView.vue'
 import NewsView from './components/NewsView.vue'
 import AgentView from './components/AgentView.vue'
+import BondView from './components/BondView.vue'
+import BondDetailView from './components/BondDetailView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
 
@@ -244,6 +248,7 @@ const primaryTabs = [
   { key: 'm', label: '选股' },
   { key: 's', label: '信号' },
   { key: 'l', label: '个股', icon: 'filter' },
+  { key: 'b', label: '可转债', icon: 'bond' },
   { key: 'n', label: '资讯', icon: 'n' },
   { key: 'i', label: '问答', icon: 'compass' },
   { key: 'x', label: '状态' },
@@ -360,6 +365,7 @@ const pageMeta = computed(() => ({
   m: { title: '选股', sub: '全市场市值分布' },
   s: { title: '信号', sub: '模型信号与模拟交易' },
   l: { title: '个股', sub: '全市场个股列表' },
+  b: { title: '可转债', sub: '价格、溢价、双低与策略池' },
   n: { title: '资讯', sub: '快讯、公告与研报' },
   i: { title: '问答', sub: '站内数据问答' },
   x: { title: '状态', sub: '数据与系统状态' },
@@ -377,6 +383,8 @@ const titleMap = {
   m: '选股 - 市值 - K道',
   s: '买点信号 - K道',
   l: '个股列表 - K道',
+  b: '可转债 - K道',
+  c: '可转债详情 - K道',
   n: '新闻资讯 - K道',
   d: '个股详情 - K道',
   x: '数据状态 - K道',
@@ -391,6 +399,8 @@ const titleMap = {
 watch(() => nav.tab, (t) => {
   if (t === 'd') {
     document.title = (nav.dcode ? nav.dcode + ' - ' : '') + '个股详情 - K道'
+  } else if (t === 'c') {
+    document.title = (nav.bondCode ? nav.bondCode + ' - ' : '') + '可转债详情 - K道'
   } else {
     document.title = titleMap[t] || 'K道'
   }

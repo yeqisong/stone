@@ -4897,6 +4897,31 @@ def dag_task_moneyflow(trade_date=None, **kw):
         raise
 
 
+def dag_task_cb_daily(trade_date=None, **kw):
+    """DAG 节点：可转债数据（cb_basic + cb_daily + cb_share 最新快照）。"""
+    from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('cb_daily')
+    write_node_log(log_id=log_id, status='running', detail='可转债采集中')
+    def _run():
+        from crawler.cb import sync_basic, sync_daily, sync_share
+        basic = sync_basic()
+        daily = sync_daily(trade_date=td)
+        share = sync_share(trade_date=td)
+        return {'rows': basic + daily + share,
+                '_detail': f'基础 {basic} / 行情 {daily} / 转股快照 {share}'}
+    try:
+        r = _with_hb(log_id, rid, _run)
+        rows = r.get('rows', 0)
+        detail = r.get('_detail', f'完成 {rows} 行')
+        if '行情 0' in detail:
+            detail += '（0 行：非交易日/当日未发布）'
+        write_node_log(log_id=log_id, status='success', rows=rows, detail=detail)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:180])
+        raise
+
+
 def dag_task_xueqiu_sentiment(trade_date=None, **kw):
     """DAG 节点：雪球帖子 LLM 情绪打分（独立流程，建议 02:00 触发）。
 
@@ -5223,6 +5248,12 @@ def _ext_index_weight(source, db, td):
         total += batch_upsert_index_weight(db, source.fetch_index_weight(idx, start, td))
     return total
 
+
+def _ext_cb_daily(source, db, td):
+    """可转债日行情（cb_daily 按交易日全市场一次调用）。"""
+    from crawler.cb import sync_daily
+    return sync_daily(source=source, db=db, trade_date=td)
+
 def _ext_fina_code(source, db, code):
     """单票全历史财务指标（fina_indicator(ts_code) 一次调用返回全部报告期）。"""
     from crawler.writers import batch_upsert_fina_indicator
@@ -5253,6 +5284,7 @@ _EXT_COLLECTORS = {
     'forecast':        (_ext_forecast,        "SELECT 1 FROM stock_forecast WHERE ann_date=:d LIMIT 1"),
     'express':         (_ext_express,         "SELECT 1 FROM stock_express WHERE ann_date=:d LIMIT 1"),
     'index_weight':    (_ext_index_weight,    None),
+    'cb_daily':        (_ext_cb_daily,        "SELECT 1 FROM cb_daily WHERE trade_date=:d LIMIT 1"),
 }
 # 代码轮换型采集器（按股票代码而非日期回补：fina_indicator 单票一次调用返回全部报告期）
 _EXT_CODE_COLLECTORS = {
@@ -5597,6 +5629,7 @@ NODE_FN_MAP = {
     'rolling_retrain':    dag_task_rolling_retrain,
     'margin_daily':       dag_task_margin_daily,
     'macro_daily':        dag_task_macro_daily,
+    'cb_daily':           dag_task_cb_daily,
     'index':              dag_task_index,
     'etf':                dag_task_etf,
     'fund':               dag_task_fund,

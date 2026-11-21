@@ -17,6 +17,7 @@ from app.api.agent import router as agent_router
 from app.api.treemap import router as treemap_router
 from app.api.signals import router as signals_router
 from app.api.stock import router as stock_router
+from app.api.cb import router as cb_router
 from app.api.status import router as status_router
 from app.api.risk import router as risk_router
 from app.api.stocks import router as stocks_router
@@ -186,6 +187,7 @@ app.include_router(agent_router)  # /api/agent 已含前缀
 app.include_router(treemap_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
 app.include_router(stock_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(cb_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(status_router, prefix="/api")
 app.include_router(risk_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(stocks_router, prefix="/api")

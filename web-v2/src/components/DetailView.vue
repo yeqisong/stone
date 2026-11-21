@@ -494,6 +494,31 @@
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
 
+        <!-- 可转债：正股关联的转债（点击进入独立转债详情） -->
+        <div v-if="bondInfo && bondInfo.length" class="side-panel">
+          <h4 class="side-title"><AppIcon name="bond" :size="13" />  可转债</h4>
+          <div class="bond-cards">
+            <a v-for="b in bondInfo" :key="b.bond_code" class="bond-card"
+               :href="'#/bond/' + b.bond_code" :title="`进入 ${b.bond_name} 详情`"
+               @click.prevent="_nav.showBondDetail(b.bond_code)">
+              <div class="bc-head">
+                <span class="bc-name">{{ b.bond_name }}</span>
+                <span class="bc-code">{{ b.bond_code }}</span>
+              </div>
+              <div class="bc-row">
+                <span>价 <b>{{ b.price != null ? b.price.toFixed(3) : '—' }}</b></span>
+                <span :style="{color:(b.pct_chg||0)>=0?'var(--c-up)':'var(--c-down)'}">{{ b.pct_chg!=null?(b.pct_chg>=0?'+':'')+b.pct_chg.toFixed(2)+'%':'—' }}</span>
+                <span>溢价 <b>{{ b.premium_rate!=null?(b.premium_rate*100).toFixed(1)+'%':'—' }}</b></span>
+              </div>
+              <div class="bc-row">
+                <span>双低 <b>{{ b.double_low!=null?b.double_low.toFixed(1):'—' }}</b></span>
+                <span>余 {{ b.remaining_size!=null?(b.remaining_size/1e8).toFixed(1)+'亿':'—' }}</span>
+                <span class="bc-score">{{ b.score }} {{ b.label }}</span>
+              </div>
+            </a>
+          </div>
+        </div>
+
         <!-- 行情概览 -->
         <div class="side-panel">
           <h4 class="side-title"><AppIcon name="bar-chart-2" :size="13" />  行情概览</h4>
@@ -1349,6 +1374,7 @@ const chipData = ref(null)   // 筹码分布（现价口径）
 const sigData = ref([])      // 模型信号史（含前瞻收益）
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
+const bondInfo = ref(null)   // 关联可转债（cb_basic + 最新行情/溢价/双低）
 // 右侧栏「雪球讨论 / 相关资讯」做成一个卡片两个 tab；只有一个有数据时自动切到有数据的那页
 const sentiTab = ref('xq')
 const sentiTabTouched = ref(false)   // 用户手动切过 tab 后，不再被数据到达自动改回
@@ -1512,6 +1538,7 @@ async function load(){
   sentiTab.value = 'xq'
   sentiTabTouched.value = false
   mfData.value = []; mfCum.value = []
+  bondInfo.value = null
   benchData.value = []
   marginData.value = []
   toplistData.value = []
@@ -1582,6 +1609,10 @@ async function load(){
     axios.get(API+'/api/stock/'+c+'/chip').then(r=>{ if(seq === loadSeq) chipData.value = r.data }),
     axios.get(API+'/api/stock/'+c+'/signals?days=1095').then(r=>{ if(seq === loadSeq) sigData.value = r.data.data||[] }),
     axios.get(API+'/api/risk/signal-stats?days=30').then(r=>{ if(seq === loadSeq) signalScore.value = r.data }),
+    axios.get(API+'/api/stock/'+c+'/convertible-bonds').then(r=>{
+      if(seq !== loadSeq) return
+      bondInfo.value = (r.data.items || []).filter(x => x.price != null)
+    }).catch(()=>{ if(seq === loadSeq) bondInfo.value = null }),
   ])
   if(seq !== loadSeq) return
   computeSigStats()
@@ -4431,6 +4462,20 @@ watch(()=>props.code, v=>{
 .sector-row b { color: var(--c-text); font-variant-numeric: tabular-nums; margin-left: 2px; }
 .sector-sub { margin-top: 4px; font-size: var(--text-meta); color: var(--c-text-faint); }
 .sector-peers { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-dim); }
+/* 个股详情可转债卡片 */
+.bond-cards { display: flex; flex-direction: column; gap: 6px; }
+.bond-card {
+  display: block; padding: 6px 8px; border-radius: 4px;
+  background: var(--c-card-bg-hover); border: 1px solid var(--c-border-light);
+  text-decoration: none; color: inherit; cursor: pointer;
+}
+.bond-card:hover { border-color: var(--c-accent); background: var(--c-card-bg); }
+.bc-head { display: flex; justify-content: space-between; gap: 6px; font-size: var(--text-meta); }
+.bc-name { color: var(--c-text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-code { color: var(--c-text-faint); }
+.bc-row { display: flex; justify-content: space-between; gap: 6px; font-size: var(--text-meta); color: var(--c-text-dim); margin-top: 2px; }
+.bc-row b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.bc-score { color: var(--c-accent); }
 .sector-peer {
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
   margin: 0 -4px; padding: 2px 4px; border-radius: 4px;
