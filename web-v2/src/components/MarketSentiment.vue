@@ -1,6 +1,14 @@
 <template>
-<div v-if="s" class="ms-bar" :class="'ms-' + s.level" :title="s.reasons?.join('；')">
-  <span class="ms-main">市场情绪 <b>{{ s.label }}</b> {{ s.score }}/100</span>
+<div v-if="s" class="ms-bar" :class="'ms-' + s.level" :title="tip">
+  <span class="ms-main">市场情绪 {{ s.score }}/100 · <b>{{ s.label }}</b></span>
+  <span class="ms-gauge-wrap" aria-hidden="true">
+    <span class="ms-cap">恐慌</span>
+    <span class="ms-gauge" :title="gaugeTip">
+      <i class="seg seg-panic"></i><i class="seg seg-weak"></i><i class="seg seg-neutral"></i><i class="seg seg-strong"></i>
+      <i class="pin" :style="{ left: pinLeft }"></i>
+    </span>
+    <span class="ms-cap">强势</span>
+  </span>
   <span v-if="s.breadth?.total">涨 <b class="up">{{ s.breadth.up }}</b> / 跌 <b class="down">{{ s.breadth.down }}</b></span>
   <span v-if="s.breadth?.median != null">中位 {{ signed(s.breadth.median) }}%</span>
   <span>涨停 {{ s.breadth?.limit_up ?? '—' }} / 跌停 {{ s.breadth?.limit_down ?? '—' }}</span>
@@ -19,6 +27,16 @@ const s = ref(null)
 let timer = null
 const signed = v => v == null ? '—' : ((Number(v) >= 0 ? '+' : '') + Number(v).toFixed(2))
 const indices = computed(() => (s.value?.indices || []).filter(i => ['000001', '399006'].includes(i.code)))
+const pinLeft = computed(() => {
+  const v = Number(s.value?.score)
+  return (Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0) + '%'
+})
+const tip = computed(() => {
+  if (!s.value) return ''
+  const reasons = (s.value.reasons || []).join('；')
+  return `0=极度恐慌，100=极度亢奋（数值越小越恐慌）${reasons ? '；' + reasons : ''}`
+})
+const gaugeTip = '恐慌 0–25 ｜ 偏弱 25–45 ｜ 中性 45–70 ｜ 偏强 70–100'
 
 async function load(){
   try{
@@ -40,6 +58,20 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 }
 .ms-main { color: var(--c-text); font-weight:600; }
 .ms-main b { font-weight:700; }
+.ms-gauge-wrap { display:inline-flex; align-items:center; gap:4px; }
+.ms-cap { font-size:10px; color: var(--c-text-faint); white-space:nowrap; }
+.ms-gauge { position:relative; display:inline-flex; width:88px; height:6px; }
+.ms-gauge .seg { box-sizing:border-box; height:100%; }
+.ms-gauge .seg + .seg { border-left:1px solid var(--c-card-bg); }
+.ms-gauge .seg-panic { width:25%; background: var(--c-down); border-radius:3px 0 0 3px; }
+.ms-gauge .seg-weak { width:20%; background: var(--c-warning); }
+.ms-gauge .seg-neutral { width:25%; background: var(--c-text-faint); }
+.ms-gauge .seg-strong { width:30%; background: var(--c-up); border-radius:0 3px 3px 0; }
+.ms-gauge .pin {
+  position:absolute; top:-2px; width:2px; height:10px; background: var(--c-text);
+  border-radius:1px; box-shadow:0 0 0 1px var(--c-card-bg); transform:translateX(-1px);
+  pointer-events:none;
+}
 .ms-bar b.up { color: var(--c-up); }
 .ms-bar b.down { color: var(--c-down); }
 .ms-advice { color: var(--c-text); }
