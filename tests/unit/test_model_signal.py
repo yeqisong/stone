@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from scripts.pipeline import _feature_coverage, _model_feature_names, _sell_strength
+from scripts.pipeline import _feature_coverage, _model_feature_names, _sell_strength, _sell_triggered
 
 
 class _SingleModel:
@@ -83,6 +83,21 @@ class TestFeatureCoverage(unittest.TestCase):
     def test_threshold_boundary(self):
         df = pd.DataFrame({"f1": [1.0, 2.0, None, None]})  # 50% 恰好不低于阈值
         self.assertEqual(_feature_coverage(df, ["f1"]), [])
+
+
+class TestSellTrigger(unittest.TestCase):
+    def test_exact_threshold_does_not_trigger(self):
+        """分位恰好=40% 不应产生「40.00% < 40%」的矛盾信号。"""
+        self.assertFalse(_sell_triggered(0.4, 0.5, 0.4, True))
+        self.assertFalse(_sell_triggered(0.4 - 1e-10, 0.5, 0.4, True))
+
+    def test_below_threshold_triggers(self):
+        self.assertTrue(_sell_triggered(0.3999, 0.5, 0.4, True))
+        self.assertTrue(_sell_triggered(0.25, 0.5, 0.4, True))
+
+    def test_absolute_mode(self):
+        self.assertTrue(_sell_triggered(0.9, 0.39, 0.4, False))
+        self.assertFalse(_sell_triggered(0.1, 0.4, 0.4, False))
 
 
 class TestSellStrength(unittest.TestCase):

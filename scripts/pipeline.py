@@ -949,6 +949,20 @@ def _feature_coverage(df, feature_names, min_cov: float = 0.5) -> list[str]:
     return thin
 
 
+def _sell_triggered(rank_pct, pred, sell_thr: float, quantile_mode: bool = True) -> bool:
+    """持仓是否触发卖出。
+
+    quantile 模式按截面分位比较，并留 1e-9 边界余量：分位恰好等于阈值时
+    不触发，避免出现「模型分位40.00% < 卖出阈值40%」的自相矛盾信号。
+    absolute 模式按预测值本身比较。
+    """
+    if rank_pct is None:
+        return False
+    if quantile_mode:
+        return rank_pct < sell_thr - 1e-9
+    return pred is not None and pred < sell_thr
+
+
 def _sell_strength(rank_pct: float, sell_thr: float) -> int:
     """持仓卖出强度：截面分位越低越强（3/2/1）。"""
     # 用比值分档并消除浮点边界误差（0.3 / 0.4 在 float 下是 0.7499999…）
@@ -2009,15 +2023,14 @@ def dag_task_model_signal(trade_date=None, **kw):
                         if p is None or rank_pct is None:
                             continue
                         # quantile：按当日截面分位；absolute：按预测值本身
-                        trigger = (rank_pct < sell_thr) if ml_mode == 'quantile' else (p < sell_thr)
-                        if not trigger:
+                        if not _sell_triggered(rank_pct, p, sell_thr, ml_mode == 'quantile'):
                             continue
                         row = next((r for r in rows if r.stock_code == code), None)
                         if not row or not row.close:
                             continue
                         strength = _sell_strength(rank_pct, sell_thr)
                         _insert_sell(row, strength,
-                                     f'模型分位{rank_pct*100:.1f}% < 卖出阈值{sell_thr*100:.0f}%；持仓退出',
+                                     f'模型分位{rank_pct*100:.2f}% < 卖出阈值{sell_thr*100:.0f}%；持仓退出',
                                      rank=rank_pct)
                         sell_count += 1
 
