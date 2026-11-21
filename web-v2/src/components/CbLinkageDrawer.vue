@@ -191,10 +191,15 @@ function drawCharts() {
 
 async function load() {
   if (!props.stockCode) return
+  const reqCode = props.stockCode
   loading.value = true
+  // 换股/重开时先清旧数据并销毁旧实例，避免 v-if 重建 DOM 后
+  // 仍向已脱离文档的 canvas setOption，导致图表空白。
+  data.value = null
+  destroyCharts()
   try {
-    const r = await axios.get(`${API}/api/stock/${props.stockCode}/cb-linkage`, { params: { days: 500 } })
-    if (!alive || props.stockCode !== props.stockCode) return
+    const r = await axios.get(`${API}/api/stock/${reqCode}/cb-linkage`, { params: { days: 500 } })
+    if (!alive || reqCode !== props.stockCode) return
     data.value = r.data
     const codes = (r.data.bonds || []).map(x => x.bond_code)
     if (props.defaultBondCode && codes.includes(props.defaultBondCode)) {
@@ -219,9 +224,13 @@ watch(() => props.show, v => {
   } else {
     destroyCharts()
   }
-})
+}, { immediate: true })
 watch(() => props.stockCode, v => { if (props.show) load() })
-watch(() => props.defaultBondCode, v => { if (props.show && v && data.value) selectedCode.value = v })
+watch(() => props.defaultBondCode, v => {
+  if (props.show && v && (data.value?.bonds || []).some(b => b.bond_code === v)) {
+    selectedCode.value = v
+  }
+})
 watch(selectedCode, () => nextTick(drawCharts))
 watch(chartView, () => nextTick(drawCharts))
 

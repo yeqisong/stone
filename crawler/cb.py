@@ -109,7 +109,7 @@ def sync_range(start_date, end_date=None, source=None, db=None,
                 halted = True
                 break
             exists = db.execute(text(
-                "SELECT 1 FROM cb_daily WHERE trade_date=:d LIMIT 1"), {"d": td}).fetchone()
+                "SELECT 1 FROM cb_daily WHERE trade_date=:d AND close > 0 LIMIT 1"), {"d": td}).fetchone()
             if exists:
                 skipped += 1
                 continue

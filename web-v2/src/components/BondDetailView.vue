@@ -177,6 +177,8 @@ async function load() {
   loading.value = true
   notFound.value = false
   item.value = null
+  // v-if 会移除图表容器：先销毁旧实例，否则换债后用旧 canvas setOption 图表空白
+  if (chart) { chart.dispose(); chart = null }
   try {
     const r = await axios.get(API + '/api/cb/' + c)
     if (!alive || props.code !== c) return

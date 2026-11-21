@@ -961,12 +961,17 @@ class TuShareAdapter(DataSourceAdapter):
                 "conv_price": "conv_price", "rate_clause": "rate_clause"})
             clean = []
             for r in rows:
-                code = (r.get("ts_code") or '').split('.')[0].zfill(6)
+                raw = (r.get("ts_code") or '').split('.')[0]
+                if not raw:
+                    continue
+                code = raw.zfill(6)
                 if len(code) != 6:
                     continue
                 r["bond_code"] = code
-                # stk_code 同样是 tushare 代码；表列 VARCHAR(6)，需截 6 位
-                r["stk_code"] = (r.get("stk_code") or '').split('.')[0].zfill(6)[:6]
+                # stk_code 同样是 tushare 代码；表列 VARCHAR(6)，需截 6 位。
+                # 旧债/异常行可能没有正股代码，保持 NULL，不能 zfill 成 000000。
+                raw_stk = (r.get("stk_code") or '').split('.')[0]
+                r["stk_code"] = raw_stk.zfill(6)[:6] if raw_stk else None
                 for k in ("list_date", "delist_date", "maturity_date", "conv_start_date",
                           "conv_end_date", "conv_stop_date", "value_date"):
                     r[k] = self._norm_date(r.get(k))
@@ -990,11 +995,19 @@ class TuShareAdapter(DataSourceAdapter):
                 "change": "change", "pct_chg": "pct_chg", "vol": "vol", "amount": "amount"})
             clean = []
             for r in rows:
-                code = (r.get("ts_code") or '').split('.')[0].zfill(6)
+                raw = (r.get("ts_code") or '').split('.')[0]
+                if not raw:
+                    continue
+                code = raw.zfill(6)
                 if len(code) != 6:
                     continue
+                close = r.get("close")
+                # 停牌日 tushare 可能返回 close=0；零价既画不出日 K，也会污染收益/分位，
+                # 按系统统一口径丢弃（需要报价时由 API 回退 pre_close）。
+                if close is None or float(close) <= 0:
+                    continue
                 r["bond_code"] = code
-                r["trade_date"] = self._norm_date(r.get("trade_date")) or td
+                r["trade_date"] = self._norm_date(r.get("trade_date")) or f"{td[:4]}-{td[4:6]}-{td[6:]}"
                 clean.append(r)
             return clean
         except QuotaExhausted:
@@ -1030,7 +1043,10 @@ class TuShareAdapter(DataSourceAdapter):
                     rows = []
             latest = {}
             for r in rows:
-                code = (r.get("ts_code") or '').split('.')[0].zfill(6)
+                raw = (r.get("ts_code") or '').split('.')[0]
+                if not raw:
+                    continue
+                code = raw.zfill(6)
                 if len(code) != 6:
                     continue
                 r["bond_code"] = code
