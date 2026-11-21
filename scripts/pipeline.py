@@ -4780,6 +4780,80 @@ def dag_task_macro_daily(trade_date=None, **kw):
         raise
 
 
+def dag_task_sentiment_daily(trade_date=None, **kw):
+    """DAG 节点：市场情绪分日度落库（独立流程 15:30 触发，恐慌指数趋势用）。
+
+    序列主分统一三成分口径（宽度 40 / 中位数 20 / 涨跌停 20 + VWAP 项按
+    _verdict 缺省 10 分）——与历史回补（backfill_sentiment_daily.py 从
+    daily_quote 重算 2000 起）完全可比；实时四成分分（含 VWAP，15:30 时点
+    treemap 快照 + 腾讯指数）另存 score_rt 供参考，两列口径差异见 design/11。
+    当日无 treemap 快照（周末/节假日）则跳过。幂等 upsert。
+    """
+    from datetime import date as _date
+    td = str(trade_date or _date.today())[:10]
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('sentiment_daily')
+    write_node_log(log_id=log_id, status='running', detail='落库当日市场情绪分…',
+                   trade_date=td, node_name='sentiment_daily', run_id=rid)
+
+    def _run():
+        from sqlalchemy import text as _t7
+        from app.db.connection import get_sync_db
+        from app.market_sentiment import _tree_breadth, _verdict, get as _ms_get
+
+        db = get_sync_db()
+        try:
+            breadth = _tree_breadth(db)
+            if not breadth or breadth.get('date') != td:
+                return {'rows': 0, 'note': (f"当日无 treemap 快照"
+                         f"（快照日 {(breadth or {}).get('date') or '无'}），跳过")}
+            # 序列主分：三成分口径（above=0/index=0 → VWAP 项按 _verdict 缺省 10 分）
+            level, score, _ = _verdict(breadth.get('up_ratio'), breadth.get('median'),
+                                       breadth.get('limit_up', 0), breadth.get('limit_down', 0),
+                                       0, 0)
+            # 实时四成分分（含 VWAP）作参考列；指数快照失败则两列留空
+            try:
+                rt = _ms_get(db)
+                idxs = rt.get('indices') or []
+                score_rt = rt.get('score')
+                vwap_ratio = round(sum(1 for x in idxs if x.get('above_vwap')) / len(idxs), 4) if idxs else None
+            except Exception:
+                score_rt, vwap_ratio = None, None
+            db.execute(_t7("""
+                INSERT INTO market_sentiment_daily
+                    (trade_date, score, level, up_ratio, median, limit_up, limit_down,
+                     up, down, flat, total, score_rt, vwap_ratio)
+                VALUES (:d, :s, :lv, :ur, :md, :lu, :ld, :u, :dn, :fl, :tt, :sr, :vr)
+                ON CONFLICT (trade_date) DO UPDATE SET
+                    score=EXCLUDED.score, level=EXCLUDED.level, up_ratio=EXCLUDED.up_ratio,
+                    median=EXCLUDED.median, limit_up=EXCLUDED.limit_up,
+                    limit_down=EXCLUDED.limit_down, up=EXCLUDED.up, down=EXCLUDED.down,
+                    flat=EXCLUDED.flat, total=EXCLUDED.total, score_rt=EXCLUDED.score_rt,
+                    vwap_ratio=EXCLUDED.vwap_ratio
+            """), {'d': td, 's': score, 'lv': level,
+                   'ur': breadth.get('up_ratio'), 'md': breadth.get('median'),
+                   'lu': breadth.get('limit_up', 0), 'ld': breadth.get('limit_down', 0),
+                   'u': breadth.get('up', 0), 'dn': breadth.get('down', 0),
+                   'fl': breadth.get('flat', 0), 'tt': breadth.get('total', 0),
+                   'sr': score_rt, 'vr': vwap_ratio})
+            db.commit()
+            return {'rows': 1, 'score': score, 'level': level}
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='sentiment_daily')
+        note = (f"情绪分 {r.get('score')}（{r.get('level')}）" if r.get('rows')
+                else r.get('note', '跳过'))
+        write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0), detail=note,
+                       trade_date=td, node_name='sentiment_daily', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200],
+                       trade_date=td, node_name='sentiment_daily', run_id=rid)
+        raise
+
+
 def dag_task_margin_daily(trade_date=None, **kw):
     """DAG 节点：两融余额采集 + 历史对齐补数（独立流程专用，建议 18:00 触发）。
 
@@ -5641,6 +5715,7 @@ NODE_FN_MAP = {
     'rolling_retrain':    dag_task_rolling_retrain,
     'margin_daily':       dag_task_margin_daily,
     'macro_daily':        dag_task_macro_daily,
+    'sentiment_daily':    dag_task_sentiment_daily,
     'cb_daily':           dag_task_cb_daily,
     'index':              dag_task_index,
     'etf':                dag_task_etf,

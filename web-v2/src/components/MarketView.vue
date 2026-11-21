@@ -70,6 +70,15 @@
         </div>
         <div id="mv-breadth" class="mv-chart"></div>
       </div>
+      <div v-if="sentiData.length" class="mv-panel">
+        <div class="mv-h">
+          <span><AppIcon name="activity" :size="13" /> 市场恐慌指数趋势（自建情绪分，2000 起）</span>
+          <span v-if="lastSenti" class="mv-pct">
+            最新 <b :class="sentiCls(lastSenti.score)">{{ lastSenti.score }}</b>（{{ sentiLabel(lastSenti.level) }}，{{ lastSenti.date }}）
+          </span>
+        </div>
+        <div id="mv-senti" class="mv-chart"></div>
+      </div>
       <div v-if="mfData.length" class="mv-panel">
         <div class="mv-h">
           <span><AppIcon name="download" :size="13" /> 全市场主力资金流（2010 起）</span>
@@ -184,6 +193,7 @@ const rangeDays = ref(250)
 const klineData = ref([])
 const valData = ref(null)
 const breadthData = ref([])
+const sentiData = ref([])
 const mfData = ref([])
 const marginData = ref([])
 const sectorData = ref({})
@@ -213,6 +223,9 @@ const valPct = computed(() => {
   }
 })
 const lastBreadth = computed(() => breadthData.value[breadthData.value.length - 1] || null)
+const lastSenti = computed(() => sentiData.value[sentiData.value.length - 1] || null)
+const sentiLabel = lv => ({ panic: '恐慌', weak: '偏弱', neutral: '中性', strong: '偏强' }[lv] || lv || '—')
+const sentiCls = sc => (sc == null ? '' : (sc < 25 ? 'down' : (sc >= 70 ? 'up' : '')))
 const lastMf = computed(() => mfData.value[mfData.value.length - 1] || null)
 const lastMargin = computed(() => marginData.value[marginData.value.length - 1] || null)
 
@@ -486,6 +499,34 @@ function drawMarketCharts() {
       }),
     })
   }
+  // 恐慌指数趋势：情绪分折线按档位着色（visualMap 按值分段，单值数据 dimension=0）
+  if (sentiData.value.length) {
+    const s = sentiData.value
+    const dates = s.map(x => x.date)
+    const scores = s.map(x => x.score)
+    make('mv-senti', {
+      tooltip: { trigger: 'axis', formatter: p => {
+        const i = p[0]?.dataIndex
+        if (i == null || !s[i]) return ''
+        const x = s[i]
+        return `<div style="font-size:12px"><b>${x.date}</b> ${sentiLabel(x.level)} <b>${x.score}</b> 分` +
+          (x.score_rt != null ? `<span style="color:${T.faint}">（实时口径 ${x.score_rt}）</span>` : '') + `<br/>` +
+          `涨 ${x.up} / 跌 ${x.down} · 涨停 ${x.limit_up} / 跌停 ${x.limit_down} · 中位 ${x.median == null ? '—' : x.median + '%'}</div>`
+      } },
+      grid: GRID_STD,
+      xAxis: xOpt(dates),
+      yAxis: { min: 0, max: 100, splitLine: gl2 },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
+      visualMap: { show: false, dimension: 0, pieces: [
+        { lt: 25, color: T.down }, { gte: 25, lt: 45, color: T.warn },
+        { gte: 45, lt: 70, color: T.series[3] }, { gte: 70, color: T.up } ] },
+      series: [{ name: '情绪分', type: 'line', data: scores, symbol: 'none', lineStyle: { width: 1.4 },
+        markLine: { silent: true, symbol: 'none', data: [
+          { yAxis: 25, label: { formatter: '恐慌线 25', fontSize: 10, color: T.faint }, lineStyle: { color: T.down, type: 'dashed', width: 1 } },
+          { yAxis: 45, label: { formatter: '偏弱线 45', fontSize: 10, color: T.faint }, lineStyle: { color: T.warn, type: 'dashed', width: 1 } },
+          { yAxis: 70, label: { formatter: '强势线 70', fontSize: 10, color: T.faint }, lineStyle: { color: T.up, type: 'dashed', width: 1 } } ] } }],
+    })
+  }
 }
 
 function redrawAll() {
@@ -512,15 +553,17 @@ async function loadIdxCharts(seq) {
 }
 
 async function loadMarketCharts(seq) {
-  // 全市场角度：宽度/资金流/两融/行业流（不随指数切换变化）
-  const [rb, rm, rg, rs] = await Promise.allSettled([
+  // 全市场角度：宽度/情绪趋势/资金流/两融/行业流（不随指数切换变化）
+  const [rb, rm, rg, rs, rv] = await Promise.allSettled([
     axios.get(`${API}/api/market/breadth?days=500`),
     axios.get(`${API}/api/market/moneyflow?days=4500`),
-    axios.get(`${API}/api/market/margin?days=3200`),
+    axios.get(`${API}/api/market/margin?days=4000`),
     axios.get(`${API}/api/sector_flow_history?days=60`),
+    axios.get(`${API}/api/market/sentiment-history?days=3000`),
   ])
   if (seq !== loadSeq) return
   breadthData.value = rb.status === 'fulfilled' ? (rb.value.data.data || []) : []
+  sentiData.value = rv.status === 'fulfilled' ? (rv.value.data.data || []) : []
   mfData.value = rm.status === 'fulfilled' ? (rm.value.data.data || []) : []
   marginData.value = rg.status === 'fulfilled' ? (rg.value.data.data || []) : []
   sectorData.value = rs.status === 'fulfilled' ? rs.value.data : {}

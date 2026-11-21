@@ -1086,6 +1086,32 @@ CREATE TABLE IF NOT EXISTS index_valuation (
 CREATE INDEX IF NOT EXISTS idx_index_val_date ON index_valuation (trade_date DESC);
 """
 
+# ── 市场情绪日度（恐慌指数趋势，v3.13）——历史从 daily_quote 重算，当日由
+#    sentiment_daily DAG 节点收盘后落库。序列主分统一三成分口径（宽度40/中位数20/
+#    涨跌停20 + VWAP 项按 _verdict 缺省 10 分），与实时四成分分(score_rt)区分，
+#    保证历史回补段与增量段可比（design/11 §口径决策）。──
+
+CREATE_MARKET_SENTIMENT_DAILY = """
+CREATE TABLE IF NOT EXISTS market_sentiment_daily (
+    trade_date   DATE NOT NULL,          -- 交易日
+    score        FLOAT NOT NULL,         -- 序列主分 0-100（三成分口径，历史与增量可比）
+    level        VARCHAR(12) NOT NULL,   -- panic/weak/neutral/strong（复用 _verdict 判定）
+    up_ratio     FLOAT,                  -- 上涨占比 0-1
+    median       FLOAT,                  -- 全市场中位数涨跌幅 %
+    limit_up     INT,
+    limit_down   INT,
+    up           INT,
+    down         INT,
+    flat         INT,
+    total        INT,                    -- 参与统计的股票数
+    score_rt     FLOAT,                  -- 实时四成分分（含 VWAP；仅当日节点落库有值）
+    vwap_ratio   FLOAT,                  -- 指数站上 VWAP 占比（同上，历史为 NULL）
+    extra        JSONB,                  -- 预留成分明细
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date)
+);
+"""
+
 # ── 可转债（tushare cb_basic/cb_daily/cb_share；独立域，不进 daily_quote/stock_master）──
 
 CREATE_CB_BASIC = """
@@ -1646,6 +1672,7 @@ ALL_TABLES = [
     ("agent", CREATE_AGENT),
     ("macro_indicator", CREATE_MACRO_INDICATOR),
     ("index_valuation", CREATE_INDEX_VALUATION),
+    ("market_sentiment_daily", CREATE_MARKET_SENTIMENT_DAILY),
 ]
 
 
@@ -2016,6 +2043,31 @@ def init_db(sync_session) -> None:
                      '{"deps": ["cron"], "position": {"x": 20, "y": 120}, '
                      '"node_name": "xueqiu_sentiment"}]',
                 'e': '[{"source": "cron", "target": "xueqiu_sentiment"}]',
+            })
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
+
+        # 迁移：市场情绪日度（v3.13，恐慌指数趋势）——收盘后落库当日情绪分，
+        # 历史（2000 起）由 scripts/backfill_sentiment_daily.py 从 daily_quote 重算。
+        # 序列统一三成分口径（VWAP 项缺省 10 分），score_rt 只在当日节点落库有值。
+        try:
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('sentiment_daily', '', '📉 市场情绪日度', 98)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='📉 市场情绪日度', sort_order=98
+            """))
+            # 独立定时流程（15:30 收盘后）：等 treemap 快照落定，避开 17:00 主流程
+            sync_session.execute(text("""
+                INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+                SELECT '市场情绪日度', '收盘后落库当日市场情绪分（恐慌指数趋势，幂等）',
+                       :n, :e, '30 15 * * *', 'published', false
+                WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='市场情绪日度')
+            """), {
+                'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
+                     '{"deps": ["cron"], "position": {"x": 20, "y": 120}, '
+                     '"node_name": "sentiment_daily"}]',
+                'e': '[{"source": "cron", "target": "sentiment_daily"}]',
             })
             sync_session.commit()
         except Exception:

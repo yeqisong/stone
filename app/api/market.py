@@ -417,3 +417,31 @@ def get_market_macro():
             db.close()
 
     return _cached(("macro",), 600, _load)
+
+
+# ── 7. 市场情绪分日度序列（恐慌指数趋势，v3.13）──
+
+@router.get("/market/sentiment-history")
+def get_market_sentiment_history(days: int = Query(1000, ge=30, le=6500)):
+    """情绪分日度序列（三成分口径 2000 起，design/11 §口径决策）。
+    score=序列主分（历史与增量可比）；score_rt=当日实时四成分参考分（仅节点落库日有值）。"""
+    def _load():
+        db = get_sync_db()
+        try:
+            rows = db.execute(text("""
+                SELECT trade_date, score, level, up_ratio, median, limit_up, limit_down,
+                       up, down, flat, total, score_rt, vwap_ratio
+                FROM market_sentiment_daily ORDER BY trade_date DESC LIMIT :d
+            """), {"d": days}).fetchall()
+            data = [{
+                "date": str(r.trade_date), "score": _num(r.score, 1), "level": r.level,
+                "up_ratio": _num(r.up_ratio, 4), "median": _num(r.median, 2),
+                "limit_up": int(r.limit_up or 0), "limit_down": int(r.limit_down or 0),
+                "up": int(r.up or 0), "down": int(r.down or 0), "total": int(r.total or 0),
+                "score_rt": _num(r.score_rt, 1), "vwap_ratio": _num(r.vwap_ratio, 4),
+            } for r in reversed(rows)]
+            return {"data": data}
+        finally:
+            db.close()
+
+    return _cached(("sentiment-history", days), 300, _load)

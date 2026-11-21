@@ -121,3 +121,18 @@ async def test_market_macro(client):
         assert {"date", "value"} <= set(rows[0].keys())
         dates = [r["date"] for r in rows]
         assert dates == sorted(dates)
+
+
+@pytest.mark.asyncio
+async def test_market_sentiment_history(client):
+    """情绪分日度序列（恐慌指数趋势，2000 起历史回补）。"""
+    response = await client.get("/api/market/sentiment-history?days=100", headers=AUTH)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert isinstance(data, list) and data
+    row = data[-1]
+    assert {"date", "score", "level", "up_ratio", "limit_up", "limit_down"} <= set(row.keys())
+    assert 0 <= row["score"] <= 100
+    assert row["level"] in ("panic", "weak", "neutral", "strong")
+    dates = [r["date"] for r in data]
+    assert dates == sorted(dates)
