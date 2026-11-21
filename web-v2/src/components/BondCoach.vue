@@ -3,7 +3,6 @@
   <div class="cb-coach-edge" role="button" tabindex="0" aria-label="打开可转债辅导侧栏"
     title="可转债辅导：投资要领 / 建议 / 监控池"
     @click="open" @keydown.enter.prevent="open" @keydown.space.prevent="open">
-    <span class="cc-rail"></span>
     <div class="cc-tab">
       <span class="cc-tab-icon"><AppIcon name="compass" :size="14" /></span>
       <span class="cc-tab-label">转债辅导<span v-if="focusCount" class="cc-tab-count">{{ focusCount }}</span></span>
@@ -227,16 +226,14 @@ function premText(v) {
 <style>
 .cb-coach-edge {
   position: fixed; right: 0; top: 128px; z-index: 900;
-  display: flex; align-items: center; gap: 0; cursor: pointer;
-}
-.cb-coach-edge .cc-rail {
-  width: 3px; height: 42px; background: var(--c-accent);
-  border-radius: 2px 0 0 2px;
+  cursor: pointer;
 }
 .cb-coach-edge .cc-tab {
-  display: flex; align-items: center; gap: 4px;
-  padding: 8px 8px; border: 1px solid var(--c-border);
-  border-right: 0; border-radius: 6px 0 0 6px;
+  display: flex; align-items: center; gap: 5px;
+  padding: 8px 9px 8px 8px;
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-accent);
+  border-right: 0; border-radius: 8px 0 0 8px;
   background: var(--c-bg-header); color: var(--c-text-dim);
   font-size: var(--text-meta); box-shadow: -2px 0 8px var(--c-shadow-color);
 }
