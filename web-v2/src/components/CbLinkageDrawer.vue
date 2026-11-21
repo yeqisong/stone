@@ -1,12 +1,13 @@
 <template>
-  <n-drawer v-model:show="visible" placement="right" :width="isNarrow ? '96%' : 620">
+  <n-drawer v-model:show="visible" placement="right" :width="isNarrow ? '96%' : '60vw'">
     <n-drawer-content closable>
       <template #header>
         <div class="cl-head">
           <div>
             <div class="cl-title">正股 × 转债联动</div>
             <div class="cl-sub">
-              {{ stockName || stockCode }} · {{ data?.date_range?.[0] || '—' }} ~ {{ data?.date_range?.[1] || '—' }} · {{ data?.bonds?.length || 0 }} 只
+              {{ stockName || stockCode }} · {{ data?.date_range?.[0] || '—' }} ~ {{ data?.date_range?.[1] || '—' }} ·
+              {{ data?.days || 0 }} 个交易日 · {{ data?.bonds?.length || 0 }} 只 · 打开时实时计算
             </div>
           </div>
         </div>
@@ -18,7 +19,9 @@
         <template v-else>
           <div class="cl-controls">
             <n-select v-model:value="selectedCode" size="small" :options="bondOptions" style="flex:1" />
-            <n-select v-model:value="chartView" size="small" style="width:130px"
+            <n-select v-model:value="rangeDays" size="small" style="width:112px"
+              :options="[{label:'近1年',value:250},{label:'近2年',value:500},{label:'近4年',value:1000},{label:'全部',value:5000}]" />
+            <n-select v-model:value="chartView" size="small" style="width:112px"
               :options="[{label:'联动走势',value:'trend'},{label:'滚动相关',value:'corr'},{label:'收益散点',value:'scatter'}]" />
           </div>
 
@@ -27,7 +30,10 @@
               <span>联动解读</span>
               <span class="cl-note">转股价按当前值近似历史溢价</span>
             </div>
-            <div class="cl-interpret">{{ selectedBond?.label }}</div>
+            <div class="cl-interpret">
+              {{ selectedBond?.label }}
+              <span class="cl-note"> · 样本 {{ m?.days || 0 }} 日（{{ m?.start_date || '—' }} ~ {{ m?.end_date || '—' }}）</span>
+            </div>
             <div class="cl-metrics">
               <div><span>全样本相关</span><b>{{ fmtNum(m?.corr_full) }}</b></div>
               <div><span>20日相关</span><b>{{ fmtNum(m?.corr_20) }}</b></div>
@@ -91,6 +97,7 @@ const loading = ref(false)
 const data = ref(null)
 const selectedCode = ref('')
 const chartView = ref('trend')
+const rangeDays = ref(500)
 const trendEl = ref(null)
 const corrEl = ref(null)
 const scatterEl = ref(null)
@@ -192,17 +199,21 @@ function drawCharts() {
 async function load() {
   if (!props.stockCode) return
   const reqCode = props.stockCode
+  const prevCode = selectedCode.value
   loading.value = true
   // 换股/重开时先清旧数据并销毁旧实例，避免 v-if 重建 DOM 后
   // 仍向已脱离文档的 canvas setOption，导致图表空白。
   data.value = null
   destroyCharts()
   try {
-    const r = await axios.get(`${API}/api/stock/${reqCode}/cb-linkage`, { params: { days: 500 } })
+    const r = await axios.get(`${API}/api/stock/${reqCode}/cb-linkage`, { params: { days: rangeDays.value } })
     if (!alive || reqCode !== props.stockCode) return
     data.value = r.data
     const codes = (r.data.bonds || []).map(x => x.bond_code)
-    if (props.defaultBondCode && codes.includes(props.defaultBondCode)) {
+    // 切换时间范围时保留当前选中的债；换股/重开才回落到入口指定的债
+    if (prevCode && codes.includes(prevCode)) {
+      selectedCode.value = prevCode
+    } else if (props.defaultBondCode && codes.includes(props.defaultBondCode)) {
       selectedCode.value = props.defaultBondCode
     } else {
       selectedCode.value = codes[0] || ''
@@ -233,6 +244,7 @@ watch(() => props.defaultBondCode, v => {
 })
 watch(selectedCode, () => nextTick(drawCharts))
 watch(chartView, () => nextTick(drawCharts))
+watch(rangeDays, () => { if (props.show) load() })
 
 onUnmounted(() => {
   alive = false

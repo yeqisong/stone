@@ -1,8 +1,10 @@
 """可转债 API：列表/策略/详情/历史 + 正股关联。
 
 数据域独立（cb_basic/cb_daily/cb_share），不进 daily_quote/stock_master。
-列表在 Python 内计算转股溢价/双低/评分（约 500 只规模），无需物化表。
+指标先全量计算一次写入 cb_metrics（JSONB 物化表），列表/概览/辅导/详情直接读表。
 """
+import json
+import threading
 from collections import defaultdict
 from datetime import date, timedelta
 
@@ -11,6 +13,7 @@ from sqlalchemy import text
 
 from app.cb_analytics import (
     STRATEGY_LABELS,
+    bond_ytm,
     build_strategy_pools,
     conversion_value,
     daily_returns,
@@ -49,6 +52,26 @@ def _f(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _conv_price_steps(db, bond_code):
+    """转股价公告阶梯：[(asof_date, convert_price), ...] 升序。"""
+    rows = db.execute(text("""
+        SELECT asof_date, convert_price FROM cb_share
+        WHERE bond_code=:c AND convert_price > 0
+        ORDER BY asof_date
+    """), {"c": bond_code}).fetchall()
+    return [(_d(r[0]), _f(r[1])) for r in rows]
+
+
+def _conv_price_on(steps, day, fallback):
+    px = fallback
+    for d, v in steps:
+        if d <= day:
+            px = v
+        else:
+            break
+    return px
 
 
 def _hist_close_map(rows):
@@ -125,9 +148,11 @@ def _load_bundle(db, bond_codes=None):
     quotes = {r[0]: dict(r._mapping) for r in quote_rows}
 
     share_rows = db.execute(text("""
-        SELECT bond_code, asof_date, issue_size, convert_price_initial, convert_price,
-               convert_ratio, acc_convert_ratio, remain_size, total_shares
+        SELECT DISTINCT ON (bond_code) bond_code, asof_date, issue_size,
+               convert_price_initial, convert_price, convert_ratio, acc_convert_ratio,
+               remain_size, total_shares
         FROM cb_share WHERE bond_code = ANY(:c)
+        ORDER BY bond_code, asof_date DESC
     """), {"c": codes}).fetchall()
     shares = {r[0]: dict(r._mapping) for r in share_rows}
 
@@ -175,7 +200,10 @@ def _build_item(bundle, bond_code):
     prem = premium_rate(price, cv)
     dl = double_low(price, prem)
     remain = _f(s.get('remain_size')) or _f(b.get('remain_size'))
-    pbv = pure_bond_value(_f(b.get('coupon_rate')), _f(b.get('maturity')))
+    days_m = days_until(b.get('maturity_date'))
+    # 纯债价值必须按「剩余期限」折现；用债券总期限会严重低估临近到期债的债底
+    rem_years = days_m / 365.25 if days_m and days_m > 0 else None
+    pbv = pure_bond_value(_f(b.get('coupon_rate')), rem_years or _f(b.get('maturity')))
     pbd = pure_bond_premium(price, pbv)
     item = {
         'bond_code': bond_code,
@@ -192,6 +220,9 @@ def _build_item(bundle, bond_code):
         'vol': _f(q.get('vol')),
         'amount_wan': _f(q.get('amount')),
         'conv_price': conv_price,
+        'convert_ratio': _f(s.get('convert_ratio')),
+        'acc_convert_ratio': _f(s.get('acc_convert_ratio')),
+        'total_shares': _f(s.get('total_shares')),
         'conv_value': cv,
         'premium_rate': prem,
         'double_low': dl,
@@ -208,7 +239,7 @@ def _build_item(bundle, bond_code):
         'conv_stop_date': _d(b.get('conv_stop_date')),
         'coupon_rate': _f(b.get('coupon_rate')),
         'maturity_years': _f(b.get('maturity')),
-        'days_to_maturity': days_until(b.get('maturity_date')),
+        'days_to_maturity': days_m,
         'days_to_conv_stop': days_until(b.get('conv_stop_date')),
         'days_to_delist': days_until(b.get('delist_date')),
         'stock_close': stock_close,
@@ -273,18 +304,142 @@ def _filter_kw(items, kw):
                                              'stock_code', 'stock_name'))]
 
 
+# ── 指标物化表 cb_metrics ─────────────────────────────────────────────
+# 列表/概览/辅导/个股卡片/详情都读这张表；cb_daily 或 cb_basic 更新后自动重建。
+# 约 1200 只 × 1 行，重建一次约 1-2 秒，远低于每次请求全量重算。
+
+_metrics_refresh_lock = threading.Lock()
+
+
+def _metrics_stale(db):
+    """cb_metrics 为空，或落后于 cb_daily / cb_basic 时视为过期。"""
+    row = db.execute(text("""
+        SELECT (SELECT COUNT(*) FROM cb_metrics),
+               (SELECT MAX(asof_date) FROM cb_metrics),
+               (SELECT MAX(updated_at) FROM cb_metrics),
+               (SELECT MAX(trade_date) FROM cb_daily),
+               (SELECT MAX(updated_at) FROM cb_basic),
+               (SELECT MAX(updated_at) FROM cb_share
+                WHERE asof_date > COALESCE((SELECT MAX(asof_date) FROM cb_metrics),
+                                           DATE '1900-01-01'))
+    """)).fetchone()
+    if not row or not row[0]:
+        return True
+    _, m_asof, m_upd, d_asof, b_upd, s_new_upd = row
+    if d_asof and (not m_asof or m_asof < d_asof):
+        return True
+    if b_upd and (not m_upd or m_upd < b_upd):
+        return True
+    # 只关心「比物化表更新日期还新」的转股公告；历史回补不会反复触发重建
+    if s_new_upd and (not m_upd or m_upd < s_new_upd):
+        return True
+    return False
+
+
+def refresh_cb_metrics(db=None, force=False):
+    """全量重建可转债指标物化表（幂等；DAG cb_daily 之后与过期时调用）。"""
+    own_db = db is None
+    db = db or get_sync_db()
+    try:
+        with _metrics_refresh_lock:
+            # 跨进程互斥（多 worker 时线程锁不够）；拿到锁后重新判过期
+            db.execute(text("SELECT pg_advisory_xact_lock(20261121)"))
+            if not force and not _metrics_stale(db):
+                db.commit()
+                return {'count': 0, 'asof': None, 'skipped': True}
+            items, bundle = _load_items(db, only_active=False)
+            asof = bundle.get('asof')
+            payloads = [
+                {'c': it['bond_code'], 'a': asof,
+                 'p': json.dumps(it, ensure_ascii=False, default=str)}
+                for it in items
+            ]
+            # 单事务 DELETE+INSERT：读请求在提交前仍看到旧快照，不会读到空表
+            db.execute(text("DELETE FROM cb_metrics"))
+            if payloads:
+                db.execute(text("""
+                    INSERT INTO cb_metrics (bond_code, asof_date, payload, updated_at)
+                    VALUES (:c, :a, CAST(:p AS JSONB), CURRENT_TIMESTAMP)
+                """), payloads)
+            db.commit()
+            return {'count': len(payloads), 'asof': asof, 'skipped': False}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if own_db:
+            db.close()
+
+
+def _cached_items(db, only_active=True):
+    """从物化表读取指标项；过期则重建后读取。返回 (items, asof)。"""
+    if _metrics_stale(db):
+        refresh_cb_metrics(db)
+    rows = db.execute(text("""
+        SELECT payload, asof_date FROM cb_metrics ORDER BY bond_code
+    """)).fetchall()
+    items = []
+    asof = None
+    for r in rows:
+        p = r[0]
+        if isinstance(p, str):
+            try:
+                p = json.loads(p)
+            except (TypeError, ValueError):
+                continue
+        if isinstance(p, dict):
+            items.append(p)
+            if asof is None and r[1] is not None:
+                asof = _d(r[1])
+    if only_active:
+        items = [x for x in items if _active(x)]
+    return items, asof
+
+
+def _load_payload(row):
+    p = row[0] if row else None
+    if isinstance(p, str):
+        try:
+            p = json.loads(p)
+        except (TypeError, ValueError):
+            return None
+    return p if isinstance(p, dict) else None
+
+
+def _cached_one(db, bond_code):
+    if _metrics_stale(db):
+        refresh_cb_metrics(db)
+    row = db.execute(text("""
+        SELECT payload, asof_date FROM cb_metrics WHERE bond_code=:c
+    """), {"c": bond_code}).fetchone()
+    if not row:
+        return None, None
+    return _load_payload(row), _d(row[1])
+
+
+def _cached_by_stock(db, stock_code):
+    if _metrics_stale(db):
+        refresh_cb_metrics(db)
+    rows = db.execute(text("""
+        SELECT payload FROM cb_metrics WHERE payload->>'stock_code'=:c
+        ORDER BY bond_code
+    """), {"c": stock_code}).fetchall()
+    return [x for x in (_load_payload(r) for r in rows) if x]
+
+
 @router.get("/cb/overview")
 def cb_overview():
     db = get_sync_db()
     try:
-        items, bundle = _load_items(db, only_active=True)
+        items, asof = _cached_items(db, only_active=True)
+        total = db.execute(text("SELECT COUNT(*) FROM cb_basic")).scalar() or 0
         prices = [x['price'] for x in items if x.get('price')]
         prem = [x['premium_rate'] for x in items if x.get('premium_rate') is not None]
         pools = build_strategy_pools(items)
         return {
             'ok': True,
-            'asof': bundle.get('asof'),
-            'total': len(bundle['basics']),
+            'asof': asof,
+            'total': total,
             'active': len(items),
             'median_price': sorted(prices)[len(prices)//2] if prices else None,
             'median_premium_pct': (sorted(prem)[len(prem)//2] * 100 if prem else None),
@@ -308,7 +463,7 @@ def cb_list(
 ):
     db = get_sync_db()
     try:
-        items, bundle = _load_items(db, only_active=only_active)
+        items, asof = _cached_items(db, only_active=only_active)
         items = _filter_kw(items, kw)
         if strategy and strategy in STRATEGY_LABELS:
             items = [x for x in items if strategy in x.get('strategies', [])]
@@ -317,7 +472,7 @@ def cb_list(
         total = len(items)
         start = (page - 1) * page_size
         return {
-            'asof': bundle.get('asof'),
+            'asof': asof,
             'total': total, 'page': page, 'page_size': page_size,
             'items': items[start:start + page_size],
         }
@@ -330,7 +485,7 @@ def cb_coach():
     """规则化辅导侧栏：市场概况 + 投资要领建议 + 监控池（可关注/风险）。"""
     db = get_sync_db()
     try:
-        items, bundle = _load_items(db, only_active=True)
+        items, asof = _cached_items(db, only_active=True)
         pools = build_strategy_pools(items)
         watch = watch_candidates(items, limit=6)
         prices = [x['price'] for x in items if x.get('price')]
@@ -348,7 +503,7 @@ def cb_coach():
 
         return {
             'ok': True,
-            'asof': bundle.get('asof'),
+            'asof': asof,
             'active': len(items),
             'median_price': (sorted(prices)[len(prices)//2] if prices else None),
             'median_premium_pct': med_prem * 100 if med_prem is not None else None,
@@ -365,15 +520,14 @@ def cb_coach():
 def stock_convertible_bonds(code: str):
     db = get_sync_db()
     try:
-        # 绝大多数个股没有转债：先查代码列表；有债也只加载这几只，
-        # 避免为每只股票都跑全量 _load_items（约 1s，详情页每次打开都被拖慢）
-        codes = [r[0] for r in db.execute(text(
-            "SELECT bond_code FROM cb_basic WHERE stk_code=:c"), {"c": code}).fetchall()]
-        if not codes:
+        # 绝大多数个股没有转债：先用索引查代码；有债再从物化表按 JSONB 过滤
+        has_bond = db.execute(text(
+            "SELECT 1 FROM cb_basic WHERE stk_code=:c LIMIT 1"), {"c": code}).fetchone()
+        if not has_bond:
             return {'ok': True, 'items': []}
-        items, _ = _load_items(db, only_active=True, bond_codes=codes)
-        rows = [x for x in items if x.get('price') is not None]
-        return {'ok': True, 'items': rows}
+        items = [x for x in _cached_by_stock(db, code)
+                 if x.get('price') is not None and _active(x)]
+        return {'ok': True, 'items': items}
     finally:
         db.close()
 
@@ -382,8 +536,7 @@ def stock_convertible_bonds(code: str):
 def cb_detail(bond_code: str, days: int = Query(250, ge=30, le=1000)):
     db = get_sync_db()
     try:
-        items, bundle = _load_items(db, only_active=False, bond_codes=[bond_code])
-        item = next((x for x in items if x['bond_code'] == bond_code), None)
+        item, asof = _cached_one(db, bond_code)
         if not item:
             raise HTTPException(404, f'未找到可转债 {bond_code}')
         hist_rows = db.execute(text("""
@@ -398,18 +551,20 @@ def cb_detail(bond_code: str, days: int = Query(250, ge=30, le=1000)):
                 WHERE stock_code=:c AND close > 0 ORDER BY trade_date DESC LIMIT :d
             """), {"c": item['stock_code'], "d": days}).fetchall()
             stock_close_by_date = {_d(r[0]): _f(r[1]) for r in reversed(sm_rows)}
+        cp_steps = _conv_price_steps(db, bond_code)
         history = []
         for r in hist:
             d = _d(r[0])
             sc = stock_close_by_date.get(d)
-            cv = conversion_value(item.get('conv_price'), sc)
+            cp = _conv_price_on(cp_steps, d, item.get('conv_price'))
+            cv = conversion_value(cp, sc)
             prem = premium_rate(_f(r[1]), cv)
             history.append({
                 'date': d, 'price': _f(r[1]), 'stock_close': sc,
                 'conv_value': cv, 'premium_rate': prem,
             })
         item['history'] = history
-        return {'ok': True, 'asof': bundle.get('asof'), 'item': item}
+        return {'ok': True, 'asof': asof, 'item': item}
     finally:
         db.close()
 
@@ -434,20 +589,25 @@ def cb_daily_history(bond_code: str, days: int = Query(250, ge=30, le=1000)):
         """), {"c": item_row[1], "d": days}).fetchall()
         stock_close_by_date = {_d(r[0]): _f(r[1]) for r in reversed(stock_rows)}
         conv_price = _f(item_row[2])
-        return {'ok': True, 'data': [
-            {
-                'date': _d(r[0]), 'price': _f(r[1]),
-                'stock_close': stock_close_by_date.get(_d(r[0])),
-                'conv_value': conversion_value(conv_price, stock_close_by_date.get(_d(r[0]))),
-                'premium_rate': premium_rate(_f(r[1]),
-                                             conversion_value(conv_price, stock_close_by_date.get(_d(r[0])))),
-            } for r in hist_rows]}
+        cp_steps = _conv_price_steps(db, bond_code)
+        out = []
+        for r in hist_rows:
+            day = _d(r[0])
+            sc = stock_close_by_date.get(day)
+            cv = conversion_value(_conv_price_on(cp_steps, day, conv_price), sc)
+            out.append({
+                'date': day, 'price': _f(r[1]),
+                'stock_close': sc,
+                'conv_value': cv,
+                'premium_rate': premium_rate(_f(r[1]), cv),
+            })
+        return {'ok': True, 'data': out}
     finally:
         db.close()
 
 
 @router.get("/stock/{code}/cb-linkage")
-def stock_cb_linkage(code: str, days: int = Query(500, ge=60, le=1000)):
+def stock_cb_linkage(code: str, days: int = Query(500, ge=60, le=5000)):
     """正股 × 关联转债联动分析：对齐日线、收益率、相关系数/滚动相关/溢价。"""
     db = get_sync_db()
     try:
@@ -574,5 +734,186 @@ def stock_cb_linkage(code: str, days: int = Query(500, ge=60, le=1000)):
             'date_range': [dates[0], dates[-1]] if dates else [None, None],
             'bonds': bonds,
         }
+    finally:
+        db.close()
+
+def _ret_stats(vals):
+    """收益率样本统计：中位数/均值/胜率/分位。"""
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+
+    def q(p):
+        return s[min(n - 1, max(0, int(round(p * (n - 1)))))]
+
+    return {
+        'samples': n,
+        'median': q(0.5),
+        'mean': sum(s) / n,
+        'win_rate': sum(1 for v in s if v > 0) / n,
+        'p25': q(0.25),
+        'p75': q(0.75),
+        'min': s[0],
+        'max': s[-1],
+    }
+
+
+@router.get("/cb/{bond_code}/expected-return")
+def cb_expected_return(bond_code: str, lookback: int = Query(1500, ge=120, le=5000)):
+    """买入预期收益测算（规则近似，不构成投资建议）。
+
+    - 债性底：纯债价值 vs 现价 → 下行保护与债底修复年化
+    - 强赎情景：正股涨到转股价×130% 时，转债按 130 元收敛 → 上行空间
+    - 正股 ±10%/±20% 情景：转股价值联动，假设溢价率不变且不低于纯债价值
+    - 历史实证：该债历史任一时点买入，持有 20/60/120 个交易日的前瞻收益分布，
+      并给出与当前价格/溢价相近的子样本（相似估值环境）
+    """
+    db = get_sync_db()
+    try:
+        item, _ = _cached_one(db, bond_code)
+        if not item:
+            raise HTTPException(404, f'未找到可转债 {bond_code}')
+        price = _f(item.get('price'))
+        conv_price = _f(item.get('conv_price'))
+        stock_close = _f(item.get('stock_close'))
+        cv = _f(item.get('conv_value'))
+        prem = _f(item.get('premium_rate'))
+        pbv = _f(item.get('pure_bond_value'))
+        days = item.get('days_to_maturity')
+        if not price or price <= 0 or not conv_price or not stock_close:
+            raise HTTPException(422, f'{bond_code} 缺少现价/转股价/正股行情，无法测算')
+        years = (days / 365.25) if days and days > 0 else _f(item.get('maturity_years'))
+
+        floor_ret = (pbv / price - 1) if pbv else None
+        ytm = bond_ytm(price, _f(item.get('coupon_rate')), years)
+        carry = None
+        if pbv and years and years > 0:
+            carry = (pbv / price) ** (1 / years) - 1
+        force_stock = conv_price * 1.3
+        stock_gain_to_force = force_stock / stock_close - 1
+        upside_force = 130 / price - 1
+        cushion = (1 - cv / price) if cv else None
+
+        scenarios = []
+        for m in (-0.2, -0.1, 0.1, 0.2):
+            new_cv = conversion_value(conv_price, stock_close * (1 + m))
+            est = new_cv * (1 + (prem or 0))
+            if pbv:
+                est = max(est, pbv)
+            scenarios.append({
+                'stock_move': m,
+                'stock_price': stock_close * (1 + m),
+                'conv_value': new_cv,
+                'est_price': est,
+                'return': est / price - 1,
+            })
+
+        # 历史前瞻收益：按当前转股价近似（更早日期用当时公告的转股价），
+        # cb_share 的 asof_date 是公告日，用它做阶梯函数。
+        cb_rows = db.execute(text("""
+            SELECT trade_date, close FROM cb_daily
+            WHERE bond_code=:c AND close > 0
+            ORDER BY trade_date DESC LIMIT :n
+        """), {"c": bond_code, "n": lookback}).fetchall()
+        cb_hist = [( _d(r[0]), _f(r[1]) ) for r in reversed(cb_rows)]
+        stock_by_date = {}
+        if item.get('stock_code'):
+            stock_rows = db.execute(text("""
+                SELECT trade_date, close FROM daily_quote
+                WHERE stock_code=:c AND close > 0
+                ORDER BY trade_date DESC LIMIT :n
+            """), {"c": item['stock_code'], "n": lookback}).fetchall()
+            stock_by_date = {_d(r[0]): _f(r[1]) for r in reversed(stock_rows)}
+        cp_steps = _conv_price_steps(db, bond_code)
+        entries = []
+        for day, cp in cb_hist:
+            sc = stock_by_date.get(day)
+            cpx = _conv_price_on(cp_steps, day, conv_price)
+            prem_i = premium_rate(cp, conversion_value(cpx, sc)) if sc else None
+            entries.append((day, cp, prem_i))
+
+        windows = {}
+        for h in (20, 60, 120):
+            all_vals, sim_vals = [], []
+            for i in range(len(cb_hist) - h):
+                day, cp, prem_i = entries[i]
+                fut = cb_hist[i + h][1]
+                if not cp or not fut:
+                    continue
+                ret = fut / cp - 1
+                all_vals.append(ret)
+                if prem is not None and prem_i is not None:
+                    if (abs(cp / price - 1) <= 0.15 and abs(prem_i - prem) <= 0.15):
+                        sim_vals.append(ret)
+            windows[str(h)] = {
+                'all': _ret_stats(all_vals),
+                'similar': _ret_stats(sim_vals),
+            }
+
+        return {
+            'ok': True,
+            'bond_code': bond_code,
+            'asof': item.get('trade_date'),
+            'price': price,
+            'conv_price': conv_price,
+            'stock_close': stock_close,
+            'conv_value': cv,
+            'premium_rate': prem,
+            'pure_bond_value': pbv,
+            'remaining_years': years,
+            'floor_return': floor_ret,
+            'floor_carry_annual': carry,
+            'ytm_approx': ytm,
+            'premium_cushion': cushion,
+            'force_stock_price': force_stock,
+            'stock_gain_to_force': stock_gain_to_force,
+            'cb_price_at_force': 130.0,
+            'upside_to_force': upside_force,
+            'risk_reward': (upside_force / abs(floor_ret)
+                            if floor_ret and floor_ret < 0 and upside_force > 0 else None),
+            'scenarios': scenarios,
+            'history': {
+                'lookback_rows': len(cb_hist),
+                'start_date': cb_hist[0][0] if cb_hist else None,
+                'end_date': cb_hist[-1][0] if cb_hist else None,
+                'windows': windows,
+            },
+            'notes': [
+                '转股价值 = 100 ÷ 转股价 × 正股现价；溢价率 = 转债价 ÷ 转股价值 − 1。',
+                '纯债价值 = 票面利息与面值按 3.5% 折现的债底（近似，不含信用风险）。',
+                '强赎情景按正股达到转股价×130%、转债向 130 元收敛估算；实际强赎公告与溢价波动会影响结果。',
+                '正股情景假设溢价率不变、且转债价不低于纯债价值，仅用于理解涨跌弹性。',
+                '历史收益为该债历史上任一时点买入并持有 N 个交易日的收益分布（重叠样本）；'
+                '相似样本 = 当前价格 ±15% 且溢价率 ±15 个百分点内的历史时点。',
+                '以上为规则测算，不构成投资建议。',
+            ],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/cb/{bond_code}/share-history")
+def cb_share_history(bond_code: str, days: int = Query(1000, ge=30, le=5000)):
+    """转股比例 / 剩余规模历史（cb_share 按日历史）。"""
+    db = get_sync_db()
+    try:
+        rows = db.execute(text("""
+            SELECT asof_date, convert_price, convert_ratio, acc_convert_ratio, remain_size
+            FROM cb_share WHERE bond_code=:c
+            ORDER BY asof_date DESC LIMIT :d
+        """), {"c": bond_code, "d": days}).fetchall()
+        if not rows:
+            raise HTTPException(404, f'未找到可转债 {bond_code} 的转股历史')
+        data = [
+            {
+                'date': _d(r[0]),
+                'convert_price': _f(r[1]),
+                'convert_ratio': _f(r[2]),
+                'acc_convert_ratio': _f(r[3]),
+                'remain_size': _f(r[4]),
+            } for r in reversed(rows)
+        ]
+        return {'ok': True, 'data': data}
     finally:
         db.close()

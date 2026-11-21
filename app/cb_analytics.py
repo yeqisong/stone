@@ -94,6 +94,39 @@ def pure_bond_value(coupon_rate=None, maturity=None, discount_rate=DISCOUNT_RATE
     return pv
 
 
+def bond_ytm(price, coupon_rate=None, years=None, par=100.0):
+    """持有到期年化收益率（近似：单一年利率、年度付息、到期还本）。
+
+    剩余期限不足一年时，最后一次付息与本金按实际剩余年数折现。
+    返回 None 表示价格/期限无效或无解。
+    """
+    price = _f(price)
+    coupon = _f(coupon_rate)
+    years = _f(years)
+    if not price or price <= 0 or not years or years <= 0:
+        return None
+    coupon_cash = (coupon or 0.0) / 100.0 * par
+    full = int(years)
+    frac = years - full
+
+    def pv(y):
+        total = sum(coupon_cash / (1.0 + y) ** t for t in range(1, full + 1))
+        # 到期日：本金 + 不足一整年的应计票息
+        total += (par + coupon_cash * frac) / (1.0 + y) ** years
+        return total
+
+    lo, hi = -0.9999, 1.0
+    if pv(lo) < price or pv(hi) > price:
+        return None
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        if pv(mid) > price:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
 def pure_bond_premium(cb_close, bond_value):
     cb_close = _f(cb_close)
     bond_value = _f(bond_value)

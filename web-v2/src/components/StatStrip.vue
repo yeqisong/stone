@@ -1,10 +1,11 @@
 <template>
-  <div class="stat-strip">
-    <div v-for="it in items" :key="it.label" class="stat-item" :title="it.title || ''">
+  <div class="stat-strip" :class="{ 'has-slot-item': items.some(it => it.slot) }">
+    <div v-for="it in items" :key="it.label" class="stat-item" :class="{ 'has-slot': it.slot }" :title="it.title || ''">
       <div class="stat-label">{{ it.label }}</div>
       <div class="stat-value" :style="{ color: it.color || 'var(--c-text)' }">{{ texts[it.label] ?? it.value }}</div>
-      <!-- 可选副行：策略信号等富卡片用；数值卡片不传就不渲染 -->
-      <div v-if="it.sub" class="stat-sub">{{ it.sub }}</div>
+      <!-- 可选副行：slot 用于个股卡片里的可交互转债摘要；普通副行仍走 sub -->
+      <div v-if="it.slot" class="stat-sub stat-sub-slot"><slot :name="it.slot" /></div>
+      <div v-else-if="it.sub" class="stat-sub">{{ it.sub }}</div>
     </div>
   </div>
 </template>
@@ -89,12 +90,14 @@ onUnmounted(() => { rafs.forEach(id => cancelAnimationFrame(id)); timers.forEach
 <style scoped>
 .stat-strip { display: flex; gap: 16px; justify-content: center; padding: 8px 0 12px; flex-wrap: wrap; }
 .stat-item { text-align: center; min-width: 62px; flex-shrink: 0; }
+.stat-item.has-slot { min-width: 168px; }
 .stat-label { font-size: var(--text-meta); color: var(--c-text-dim); white-space: nowrap; }
 .stat-value { font-size: 20px; font-weight: 600; line-height: 1.25; }
 .stat-sub {
   margin-top: 2px; font-size: var(--text-meta); color: var(--c-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.stat-sub-slot { overflow: visible; white-space: normal; }
 @media (max-width: 768px) {
   /* 5 张卡片排 3 列，两行内看完；不再因为 flex-shrink 被压成一条线 */
   .stat-strip {
@@ -102,6 +105,7 @@ onUnmounted(() => { rafs.forEach(id => cancelAnimationFrame(id)); timers.forEach
     gap: 8px 6px; padding: 6px 0 8px; justify-content: stretch;
   }
   .stat-item { min-width: 0; text-align: center; }
+  .stat-item.has-slot { grid-column: 1 / -1; }
   .stat-label { font-size: var(--text-meta); }
   .stat-value { font-size: 16px; white-space: nowrap; }
   .stat-sub { white-space: normal; line-height: 1.35; max-height: 2.7em; overflow: hidden; }

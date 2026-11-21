@@ -41,7 +41,36 @@
     </div>
 
     <!-- Summary Cards - unified stat-row style（第 5 格 = 最新策略信号，完整理由在 tooltip） -->
-    <StatStrip :items="summaryItems" />
+    <StatStrip :items="summaryItems">
+      <template #cb-mini>
+        <div v-if="currentBond" class="cb-mini">
+          <div class="cb-mini-line">
+            <button type="button" class="cb-mini-name" :disabled="(bondInfo || []).length < 2"
+              :title="(bondInfo || []).length > 1 ? '切换关联转债' : currentBond.bond_name"
+              @click.stop="bondMenuOpen = !bondMenuOpen">
+              <span>{{ currentBond.bond_name }}</span>
+              <span v-if="(bondInfo || []).length > 1" class="cb-mini-caret">▾</span>
+            </button>
+            <span class="cb-mini-price">{{ currentBond.price != null ? currentBond.price.toFixed(2) : '—' }}</span>
+            <span class="cb-mini-chg" :style="{ color: (currentBond.pct_chg || 0) >= 0 ? 'var(--c-up)' : 'var(--c-down)' }">
+              {{ currentBond.pct_chg != null ? (currentBond.pct_chg >= 0 ? '+' : '') + currentBond.pct_chg.toFixed(2) + '%' : '—' }}
+            </span>
+            <button type="button" class="cb-mini-link" title="正股 × 转债联动分析"
+              @click.stop="openCbLinkage(currentBond)">
+              <AppIcon name="activity" :size="11" />
+            </button>
+          </div>
+          <div v-if="bondMenuOpen && (bondInfo || []).length > 1" class="cb-mini-menu">
+            <button v-for="b in bondInfo" :key="b.bond_code" type="button"
+              class="cb-mini-option" :class="{ active: b.bond_code === currentBond.bond_code }"
+              @click.stop="selectedBondCode = b.bond_code; bondMenuOpen = false">
+              <span>{{ b.bond_name }}</span>
+              <span class="cb-mini-opt-code">{{ b.bond_code }}</span>
+            </button>
+          </div>
+        </div>
+      </template>
+    </StatStrip>
 
     <!-- Left-Right Layout -->
     <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -1358,7 +1387,7 @@ const summaryItems = computed(() => {
   const chgPct = (q?.price != null && q.price > 0 ? q.change_pct : null) ?? priceChg.value
   const color = chgPct == null ? undefined : (chgPct >= 0 ? UP_COLOR : DOWN_COLOR)
   return [
-    { label: d.stock_code, value: d.stock_name },
+    { label: d.stock_code, value: d.stock_name, slot: 'cb-mini' },
     { label: '最新价', value: '¥' + (price || 0).toFixed(2) + (chgPct != null ? '  ' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%' : ''), color },
     { label: '数据日期', value: q?.trade_date || d.latest_trade_date },
     { label: '历史信号', value: hcnt.value },
@@ -1391,6 +1420,19 @@ const sigData = ref([])      // 模型信号史（含前瞻收益）
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
 const bondInfo = ref(null)   // 关联可转债（cb_basic + 最新行情/溢价/双低）
+const selectedBondCode = ref('')
+const bondMenuOpen = ref(false)
+const currentBond = computed(() => {
+  const list = bondInfo.value || []
+  return list.find(x => x.bond_code === selectedBondCode.value) || list[0] || null
+})
+watch(bondInfo, list => {
+  const rows = list || []
+  if (!rows.some(x => x.bond_code === selectedBondCode.value)) {
+    selectedBondCode.value = rows[0]?.bond_code || ''
+  }
+  bondMenuOpen.value = false
+})
 const cbLinkageShow = ref(false)
 const cbLinkageBond = ref('')
 function openCbLinkage(b) {
@@ -4505,6 +4547,39 @@ watch(()=>props.code, v=>{
 .bc-row { display: flex; justify-content: space-between; gap: 6px; font-size: var(--text-meta); color: var(--c-text-dim); margin-top: 2px; }
 .bc-row b { color: var(--c-text); font-variant-numeric: tabular-nums; }
 .bc-score { color: var(--c-accent); }
+
+/* 个股卡片第一格的转债摘要：名称/价格/涨跌/联动入口 */
+.cb-mini { position: relative; display: inline-flex; flex-direction: column; align-items: stretch; gap: 1px; max-width: 210px; }
+.cb-mini-line { display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+.cb-mini-name {
+  max-width: 82px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 0; padding: 0; background: transparent; color: var(--c-text-dim);
+  font-size: var(--text-meta); cursor: pointer;
+}
+.cb-mini-name:disabled { cursor: default; }
+.cb-mini-name:hover:not(:disabled) { color: var(--c-text); text-decoration: underline; text-decoration-color: var(--c-border); text-underline-offset: 2px; }
+.cb-mini-caret { font-size: 9px; color: var(--c-text-faint); margin-left: 1px; }
+.cb-mini-price { font-size: var(--text-meta); color: var(--c-text); font-variant-numeric: tabular-nums; }
+.cb-mini-chg { font-size: var(--text-meta); font-variant-numeric: tabular-nums; }
+.cb-mini-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; padding: 0; border: 1px solid var(--c-border);
+  border-radius: 50%; background: transparent; color: var(--c-text-faint); cursor: pointer;
+}
+.cb-mini-link:hover { color: var(--c-accent); border-color: var(--c-accent); background: var(--c-card-bg-hover); }
+.cb-mini-menu {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  z-index: 40; margin-top: 3px; min-width: 160px; padding: 4px;
+  background: var(--c-card-bg); border: 1px solid var(--c-border);
+  border-radius: var(--radius); box-shadow: 0 6px 18px var(--c-shadow-color);
+}
+.cb-mini-option {
+  display: flex; justify-content: space-between; gap: 8px; width: 100%;
+  padding: 4px 6px; border: 0; border-radius: 4px; background: transparent;
+  color: var(--c-text-dim); font-size: var(--text-meta); text-align: left; cursor: pointer;
+}
+.cb-mini-option:hover, .cb-mini-option.active { background: var(--c-card-bg-hover); color: var(--c-text); }
+.cb-mini-opt-code { color: var(--c-text-faint); }
 .sector-peer {
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
   margin: 0 -4px; padding: 2px 4px; border-radius: 4px;
