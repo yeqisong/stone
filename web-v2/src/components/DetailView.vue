@@ -316,7 +316,7 @@
           </div>
           <div v-if="intradayAlerts.length > 1" ref="alertsScrollTrackEl" class="ia-scrollbar"
             @pointerdown="onAlertsTrackDown">
-            <div class="ia-scrollbar-thumb" :style="alertsThumbStyle"
+            <div ref="alertsThumbEl" class="ia-scrollbar-thumb"
               @pointerdown.stop="onAlertsThumbDown"
               @pointermove="onAlertsThumbMove"
               @pointerup="onAlertsThumbUp"
@@ -2480,14 +2480,7 @@ const aiCardEl = ref(null)
 const alertsPanelEl = ref(null)
 const alertsStripEl = ref(null)
 const alertsScrollTrackEl = ref(null)
-const alertsScrollState = ref({ left: 0, max: 0, client: 0, width: 0 })
-const alertsThumbStyle = computed(() => {
-  const s = alertsScrollState.value
-  if(!s.width || s.width <= s.client + 1) return { display: 'none' }
-  const widthPct = Math.max(14, (s.client / s.width) * 100)
-  const leftPct = s.max > 0 ? (s.left / s.max) * (100 - widthPct) : 0
-  return { width: widthPct.toFixed(2) + '%', left: leftPct.toFixed(2) + '%' }
-})
+const alertsThumbEl = ref(null)
 
 // 盘中提醒横向卡片：新提醒在最左；新提醒到达时自动回到最左
 function scrollAlertsToLatest(smooth = true){
@@ -2497,29 +2490,48 @@ function scrollAlertsToLatest(smooth = true){
     el.scrollTo({ left: 0, behavior: smooth ? 'smooth' : 'auto' })
   })
 }
-// 鼠标/触摸板横向滚动；到两端时把滚动交还页面，避免滚动陷阱
+// 仅接管鼠标纵向滚轮；触摸板横向/Shift+滚轮交给浏览器原生惯性滚动，避免抢事件导致卡顿
 function onAlertsWheel(e){
   const el = e.currentTarget
   if(!el || el.scrollWidth <= el.clientWidth + 2) return
-  const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  if(e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
+  const unit = e.deltaMode === 1 ? 16 : 1   // Firefox 行模式
+  const dx = e.deltaY * unit
   if(!dx) return
-  const atStart = el.scrollLeft <= 0 && dx < 0
-  const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 && dx > 0
-  if(atStart || atEnd) return
+  const max = Math.max(0, el.scrollWidth - el.clientWidth)
+  const next = Math.max(0, Math.min(max, el.scrollLeft + dx))
+  if(next === el.scrollLeft) return     // 到两端交还页面滚动
   e.preventDefault()
-  el.scrollLeft += dx
+  el.scrollLeft = next
 }
 function updateAlertsScrollMetrics(){
+  // 直接改 DOM，不走 Vue reactive：详情页模板很大，滚动时每帧 setState
+  // 会触发整页 render/diff，是横向滚动卡顿的主因之一。
   const el = alertsStripEl.value
-  if(!el) return
-  alertsScrollState.value = {
-    left: el.scrollLeft,
-    max: Math.max(0, el.scrollWidth - el.clientWidth),
-    client: el.clientWidth,
-    width: el.scrollWidth,
+  const thumb = alertsThumbEl.value
+  const track = alertsScrollTrackEl.value
+  if(!el || !thumb) return
+  if(el.scrollWidth <= el.clientWidth + 1){
+    thumb.style.display = 'none'
+    if(track) track.style.display = 'none'
+    return
   }
+  const max = Math.max(0, el.scrollWidth - el.clientWidth)
+  const widthPct = Math.max(14, (el.clientWidth / el.scrollWidth) * 100)
+  const leftPct = max > 0 ? (el.scrollLeft / max) * (100 - widthPct) : 0
+  thumb.style.display = 'block'
+  if(track) track.style.display = 'block'
+  thumb.style.width = widthPct.toFixed(2) + '%'
+  thumb.style.transform = `translateX(${((leftPct / widthPct) * 100).toFixed(2)}%)`
 }
-function onAlertsScroll(){ updateAlertsScrollMetrics() }
+let alertsScrollRaf = 0
+function onAlertsScroll(){
+  if(alertsScrollRaf) return
+  alertsScrollRaf = requestAnimationFrame(() => {
+    alertsScrollRaf = 0
+    updateAlertsScrollMetrics()
+  })
+}
 let alertsDrag = null
 function onAlertsThumbDown(e){
   const el = alertsStripEl.value
@@ -2557,7 +2569,10 @@ function onAlertsTrackDown(e){
 }
 watch(intradayAlerts, () => nextTick(updateAlertsScrollMetrics))
 onMounted(() => window.addEventListener('resize', updateAlertsScrollMetrics))
-onBeforeUnmount(() => window.removeEventListener('resize', updateAlertsScrollMetrics))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateAlertsScrollMetrics)
+  if(alertsScrollRaf) cancelAnimationFrame(alertsScrollRaf)
+})
 const aiEvent = ref(false)      // true = 当前卡片由事件监听自动触发
 let aiReqSeq = 0
 let aiWsUnwatch = null
@@ -4602,9 +4617,9 @@ watch(()=>props.code, v=>{
 .ia-strip {
   display: flex; gap: 8px; align-items: stretch;
   overflow-x: auto; overflow-y: hidden;
-  scroll-snap-type: x proximity;
   scrollbar-width: none;
   overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .ia-strip::-webkit-scrollbar { display: none; }
 /* 自绘滚动轴：始终可见，可点轨道/拖动滑块 */
@@ -4613,9 +4628,10 @@ watch(()=>props.code, v=>{
   border-radius: 999px; background: var(--c-border-light); cursor: pointer;
 }
 .ia-scrollbar-thumb {
-  position: absolute; top: 0; bottom: 0; min-width: 18px;
+  position: absolute; left: 0; top: 0; bottom: 0; min-width: 18px;
   border-radius: 999px; background: var(--c-border);
   cursor: grab; transition: background .15s;
+  will-change: transform, width;
 }
 .ia-scrollbar-thumb:hover { background: var(--c-text-faint); }
 .ia-scrollbar-thumb:active { cursor: grabbing; background: var(--c-text-dim); }
@@ -4623,7 +4639,6 @@ watch(()=>props.code, v=>{
   flex: 0 0 82%; min-height: 88px; box-sizing: border-box;
   padding: 6px 8px; border-radius: 4px;
   background: var(--c-card-bg-hover); border: 1px solid var(--c-border-light);
-  scroll-snap-align: start;
 }
 .ia-head { display: flex; align-items: center; gap: 5px; font-size: var(--text-meta); }
 .ia-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
