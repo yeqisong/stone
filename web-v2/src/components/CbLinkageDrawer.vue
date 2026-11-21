@@ -28,7 +28,7 @@
           <div class="cl-panel">
             <div class="cl-panel-head">
               <span>联动解读</span>
-              <span class="cl-note">转股价按当前值近似历史溢价</span>
+              <span class="cl-note">历史溢价按转股价公告阶梯计算</span>
             </div>
             <div class="cl-interpret">
               {{ selectedBond?.label }}
