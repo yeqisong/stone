@@ -53,11 +53,14 @@
       <div ref="scatterEl" class="bond-scatter"></div>
     </div>
   </template>
+
+  <BondCoach />
 </div>
 </template>
 
 <script setup>
 import ListPagination from './ListPagination.vue'
+import BondCoach from './BondCoach.vue'
 import { ref, computed, h, onMounted, onUnmounted, nextTick } from 'vue'
 import { useNavStore } from '../stores/nav'
 import { NButton, NButtonGroup, NInput, NSelect, NDataTable, NEmpty, NSpace, useMessage } from 'naive-ui'

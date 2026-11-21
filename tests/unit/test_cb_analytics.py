@@ -15,6 +15,8 @@ from app.cb_analytics import (
     stock_to_force_pct,
     strategy_keys,
     turnover_pct,
+    watch_candidates,
+    watch_triggers,
     build_strategy_pools,
 )
 from crawler.adapters.tushare_adapter import TuShareAdapter
@@ -96,6 +98,37 @@ class TestCBScore(unittest.TestCase):
         pools = build_strategy_pools([self._base_item(), self._base_item(price=180, premium_rate=0.9)])
         self.assertGreaterEqual(len(pools['low_premium']), 1)
         self.assertGreaterEqual(len(pools['risk']), 1)
+
+
+class TestCBWatch(unittest.TestCase):
+    def _base_item(self, **over):
+        item = {
+            'bond_code': '113052', 'bond_name': '兴业转债',
+            'price': 110, 'premium_rate': 0.1, 'double_low': 120,
+            'remaining_size': 5e8, 'pure_bond_premium': 0.05,
+            'turnover_pct': 1.0, 'stock_close': 12, 'stock_ma20': 11, 'stock_ma60': 10,
+            'days_to_maturity': 1000, 'days_to_conv_stop': 1000, 'days_to_delist': None,
+        }
+        item.update(over)
+        item['strategies'] = strategy_keys(item)
+        item.update(score_bond(item))
+        return item
+
+    def test_watch_triggers_include_premium_and_momentum(self):
+        self.assertTrue(any('溢价升破' in x for x in watch_triggers(self._base_item())))
+        t = watch_triggers(self._base_item(stock_close=10, stock_ma20=11))
+        self.assertTrue(any('MA20' in x for x in t))
+
+    def test_watch_candidates_focus_and_risk(self):
+        good = self._base_item()
+        bad = self._base_item(bond_code='111012', price=180, premium_rate=0.9,
+                              double_low=260, remaining_size=1e7,
+                              stock_close=10, stock_ma20=11, stock_ma60=12,
+                              days_to_maturity=60)
+        r = watch_candidates([good, bad], limit=8)
+        self.assertEqual([x['bond_code'] for x in r['focus']], ['113052'])
+        self.assertTrue(any(x['bond_code'] == '111012' for x in r['risk']))
+        self.assertTrue(all(x.get('watch_triggers') is not None for x in r['focus'] + r['risk']))
 
 
 class TestCBAdapterMapping(unittest.TestCase):

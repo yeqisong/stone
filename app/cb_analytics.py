@@ -327,3 +327,63 @@ def build_strategy_pools(items):
     for k in pools:
         pools[k].sort(key=lambda x: (_f(x.get('score')) or 0) * -1)
     return pools
+
+
+def watch_triggers(item):
+    """单只债的监控触发条件（规则化，不是买卖指令）。"""
+    price = _f(item.get('price'))
+    premium = _f(item.get('premium_rate'))
+    dl = _f(item.get('double_low'))
+    pure_prem = _f(item.get('pure_bond_premium'))
+    stock_close = _f(item.get('stock_close'))
+    ma20 = _f(item.get('stock_ma20'))
+    remain = _f(item.get('remaining_size'))
+    dm = item.get('days_to_maturity')
+    tof = item.get('stock_to_force_pct')
+    flags = item.get('risk_flags') or []
+
+    t = []
+    if premium is not None and premium <= 0.20:
+        t.append('溢价升破 30% 退出观察')
+    if dl is not None and dl <= 145:
+        t.append('双低升破 160 观察债性')
+    if price is not None and price <= 130:
+        t.append('价格涨过 150 或跌破 105 重估')
+    if stock_close and ma20 and stock_close < ma20:
+        t.append('正股跌破 MA20 降级观察')
+    if pure_prem is not None and pure_prem <= 0.20:
+        t.append('纯债溢价升破 25% 观察债底')
+    if tof is not None and tof >= 0:
+        t.append('正股已站上强赎线，留意强赎公告')
+    if dm is not None and dm <= 365:
+        t.append('临近到期，时间价值衰减')
+    if remain is not None and remain < 0.5e8:
+        t.append('剩余规模过小，流动性差')
+    if flags:
+        t.append('已有风险标记，只复盘不介入')
+    return t[:4]
+
+
+def watch_candidates(items, limit=8):
+    """规则化监控池：focus=可关注 / risk=风险观察。
+
+    - focus：进入策略池且评分 ≥55 的标的，按 score 降序。
+    - risk：带风险标记或评分 <40 的标的，按风险优先复盘。
+    """
+    focus = []
+    risk = []
+    for item in items:
+        score = _f(item.get('score'))
+        if score is None:
+            continue
+        keys = item.get('strategies') or strategy_keys(item)
+        flags = item.get('risk_flags') or []
+        triggers = watch_triggers(item)
+        if score >= 55 and any(k in ('low_premium', 'double_low', 'small_elastic', 'defensive')
+                               for k in keys):
+            focus.append({**item, 'watch_type': 'focus', 'watch_triggers': triggers})
+        if flags or score < 40:
+            risk.append({**item, 'watch_type': 'risk', 'watch_triggers': triggers})
+    focus.sort(key=lambda x: (_f(x.get('score')) or 0) * -1)
+    risk.sort(key=lambda x: (len(x.get('risk_flags') or []), -(_f(x.get('score')) or 0)), reverse=True)
+    return {'focus': focus[:limit], 'risk': risk[:limit]}
