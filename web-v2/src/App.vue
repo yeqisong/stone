@@ -64,6 +64,7 @@
             <span>{{ pageMeta.sub }}</span>
           </div>
           <div v-if="nav.tab==='p'" style="flex:1;min-height:0;display:flex;flex-direction:column"><PortfolioView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='k'" style="flex:1;min-height:0;display:flex;flex-direction:column"><MarketView /></div>
           <div v-if="nav.tab==='t'" style="flex:1;min-height:0;display:flex;flex-direction:column"><TradeReview :page="true" :initial-tab="nav.tradeReviewTab" @back="nav.backFromTradeReview()" /></div>
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
@@ -209,6 +210,7 @@ import StockFundView from './components/StockFundView.vue'
 import NewsView from './components/NewsView.vue'
 import AgentView from './components/AgentView.vue'
 import BondView from './components/BondView.vue'
+import MarketView from './components/MarketView.vue'
 import BondDetailView from './components/BondDetailView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
@@ -249,6 +251,7 @@ const marketStatus = computed(() => {
 
 const primaryTabs = [
   { key: 'p', label: '持仓' },
+  { key: 'k', label: '大盘', icon: 'activity' },
   { key: 'm', label: '选股' },
   { key: 's', label: '信号' },
   { key: 'l', label: '个股', icon: 'filter' },
@@ -365,6 +368,7 @@ watch(showLogin, (v) => {
 
 const pageMeta = computed(() => ({
   p: { title: '持仓', sub: '账户与持仓' },
+  k: { title: '大盘', sub: '指数走势、估值与全市场资金' },
   t: { title: '交易复盘', sub: '交割单、行为画像与纪律闸门' },
   m: { title: '选股', sub: '全市场市值分布' },
   s: { title: '信号', sub: '模型信号与模拟交易' },
@@ -383,6 +387,7 @@ const pageMeta = computed(() => ({
 
 const titleMap = {
   p: '持仓 - K道',
+  k: '大盘 - K道',
   t: '交易复盘 - K道',
   m: '选股 - 市值 - K道',
   s: '买点信号 - K道',
