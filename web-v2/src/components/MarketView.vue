@@ -247,7 +247,7 @@ function switchIdx(ts) {
 }
 function switchRange(d) {
   rangeDays.value = d
-  loadIdxCharts(loadSeq)  // 只有指数相关图需要重取
+  loadIdxCharts(++loadSeq)  // 递增序号使上一个在途请求失效（连点区间防竞态）
 }
 
 // ── ECharts 约定（对齐 Detail.vue）：实例复用 / 低调滑块 / 统一 grid ──

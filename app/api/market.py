@@ -6,6 +6,7 @@ stock_margin_detail / macro_indicator / index_daily_quote / daily_quote），
 统一走模块级 TTL 缓存。
 """
 import math
+import threading
 import time
 
 from fastapi import APIRouter, HTTPException, Query
@@ -25,8 +26,12 @@ INDEX_NAMES = {
 }
 BARE = {c: c.split('.')[0] for c in MAIN_INDEXES}
 
-# ── 模块级 TTL 缓存（对齐 stock.py 手写缓存模式）──
+# ── 模块级 TTL 缓存（对齐 stock.py 手写缓存模式）+ 在途去重 ──
+# 本模块冷查询 3~9s（百万行级聚合），无去重时并发 miss 会重复计算；
+# 用 Event 让并发请求等首个计算者，30s 超时兜底自己算（防死等）。
 _cache: dict = {}
+_inflight: dict = {}
+_inflight_lock = threading.Lock()
 
 
 def _cached(key: tuple, ttl: int, fn):
@@ -34,11 +39,30 @@ def _cached(key: tuple, ttl: int, fn):
     hit = _cache.get(key)
     if hit and now - hit[0] < ttl:
         return hit[1]
-    val = fn()
-    _cache[key] = (now, val)
-    if len(_cache) > 200:
-        _cache.clear()
-    return val
+
+    with _inflight_lock:
+        ev = _inflight.get(key)
+        owner = ev is None
+        if owner:
+            ev = threading.Event()
+            _inflight[key] = ev
+    if not owner:
+        ev.wait(timeout=30)
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        return fn()  # 计算者迟迟没写完（异常）→ 兜底自己算
+
+    try:
+        val = fn()
+        _cache[key] = (time.time(), val)
+        if len(_cache) > 200:
+            _cache.clear()
+        return val
+    finally:
+        with _inflight_lock:
+            _inflight.pop(key, None)
+        ev.set()
 
 
 def _num(v, nd=None):
@@ -56,6 +80,22 @@ def _num(v, nd=None):
 
 def _expanding(stmt: str, name: str):
     return text(stmt).bindparams(bindparam(name, expanding=True))
+
+
+# 最近 N 个 distinct 交易日：`SELECT DISTINCT trade_date ... LIMIT n` 在千万行表上
+# 是全索引扫描 + 去重（实测 5s+），递归 CTE 沿索引跳跃取值（skip-scan）毫秒级。
+# 末支取不到更早日期返回 NULL 行，外层 WHERE 过滤并令递归终止。
+_RECENT_DATES = """
+WITH RECURSIVE dd AS (
+    (SELECT {col} AS trade_date FROM {table} ORDER BY {col} DESC LIMIT 1)
+    UNION ALL
+    SELECT (SELECT {col} FROM {table} WHERE {col} < dd.trade_date
+            ORDER BY {col} DESC LIMIT 1)
+    FROM dd WHERE dd.trade_date IS NOT NULL
+)
+SELECT trade_date FROM dd WHERE trade_date IS NOT NULL
+ORDER BY trade_date DESC LIMIT :n
+"""
 
 
 # ── 1. 全市场总览 ──
@@ -131,10 +171,10 @@ def get_market_overview():
                            -COALESCE(sell_elg_amt,0)-COALESCE(sell_lg_amt,0)) * 1e4 AS net_main,
                        SUM(COALESCE(net_mf_amt,0)) * 1e4 AS net_total
                 FROM stock_moneyflow
-                WHERE trade_date IN (SELECT DISTINCT trade_date FROM stock_moneyflow
-                                     ORDER BY trade_date DESC LIMIT 2)
+                WHERE trade_date IN ({recent_dates})
                 GROUP BY trade_date ORDER BY trade_date DESC
-            """)).fetchall()
+            """.format(recent_dates=_RECENT_DATES.format(col='trade_date', table='stock_moneyflow'))),
+                {"n": 2}).fetchall()
             mfl = None
             if mf:
                 t = mf[0]
@@ -150,10 +190,10 @@ def get_market_overview():
             mg = db.execute(text("""
                 SELECT trade_date, SUM(fin_amount) AS fin, SUM(total_amount) AS total
                 FROM stock_margin_detail
-                WHERE trade_date IN (SELECT DISTINCT trade_date FROM stock_margin_detail
-                                     ORDER BY trade_date DESC LIMIT 1)
+                WHERE trade_date IN ({recent_dates})
                 GROUP BY trade_date
-            """)).fetchone()
+            """.format(recent_dates=_RECENT_DATES.format(col='trade_date', table='stock_margin_detail'))),
+                {"n": 1}).fetchone()
             margin = {
                 "date": str(mg.trade_date),
                 "fin_amount": _num(mg.fin),
@@ -257,10 +297,10 @@ def get_market_moneyflow(days: int = Query(1000, ge=30, le=4600)):
                            +COALESCE(sell_md_amt,0)+COALESCE(sell_sm_amt,0)) * 1e4 AS sell_all,
                        COUNT(*) AS stocks
                 FROM stock_moneyflow
-                WHERE trade_date IN (SELECT DISTINCT trade_date FROM stock_moneyflow
-                                     ORDER BY trade_date DESC LIMIT :d)
+                WHERE trade_date IN ({recent_dates})
                 GROUP BY trade_date ORDER BY trade_date
-            """), {"d": days}).fetchall()
+            """.format(recent_dates=_RECENT_DATES.format(col='trade_date', table='stock_moneyflow'))),
+                {"n": days}).fetchall()
             data = [{
                 "date": str(r.trade_date),
                 "net_main": _num(r.net_main),
@@ -293,8 +333,7 @@ def get_market_breadth(days: int = Query(250, ge=30, le=1200)):
         try:
             rows = db.execute(text("""
                 WITH dd AS (
-                    SELECT DISTINCT trade_date FROM daily_quote
-                    ORDER BY trade_date DESC LIMIT :lim
+                    {recent_dates}
                 ),
                 q AS (
                     SELECT d.trade_date, d.stock_code, d.close_hfq,
@@ -312,7 +351,8 @@ def get_market_breadth(days: int = Query(250, ge=30, le=1200)):
                     COUNT(*) FILTER (WHERE close_hfq / prev - 1 <= -0.098) AS limit_down
                 FROM q WHERE prev IS NOT NULL AND prev > 0
                 GROUP BY trade_date ORDER BY trade_date
-            """), {"lim": days + 1}).fetchall()
+            """.format(recent_dates=_RECENT_DATES.format(col='trade_date', table='daily_quote'))),
+                {"n": days + 1}).fetchall()
             data = [{
                 "date": str(r.trade_date),
                 "up": int(r.up), "down": int(r.down), "flat": int(r.flat),
@@ -328,7 +368,7 @@ def get_market_breadth(days: int = Query(250, ge=30, le=1200)):
 # ── 5. 全市场两融余额 ──
 
 @router.get("/market/margin")
-def get_market_margin(days: int = Query(1000, ge=30, le=3200)):
+def get_market_margin(days: int = Query(1000, ge=30, le=4000)):
     """全市场逐日两融余额合计（fin_amount=rzye，单位元；数据 2014-01 起）。"""
     def _load():
         db = get_sync_db()
@@ -339,10 +379,10 @@ def get_market_margin(days: int = Query(1000, ge=30, le=3200)):
                        SUM(sec_amount) AS sec,
                        SUM(total_amount) AS total
                 FROM stock_margin_detail
-                WHERE trade_date IN (SELECT DISTINCT trade_date FROM stock_margin_detail
-                                     ORDER BY trade_date DESC LIMIT :d)
+                WHERE trade_date IN ({recent_dates})
                 GROUP BY trade_date ORDER BY trade_date
-            """), {"d": days}).fetchall()
+            """.format(recent_dates=_RECENT_DATES.format(col='trade_date', table='stock_margin_detail'))),
+                {"n": days}).fetchall()
             data = [{
                 "date": str(r.trade_date),
                 "fin": _num(r.fin), "sec": _num(r.sec), "total": _num(r.total),
