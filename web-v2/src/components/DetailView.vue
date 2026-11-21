@@ -302,18 +302,27 @@
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px" class="detail-sidebar">
         <!-- 盘中提醒：后端 watcher 写 risk_alerts，30s 轮询；Chrome 通知走 WS 实时推送 -->
         <div ref="alertsPanelEl" class="side-panel">
-          <h4 class="side-title"><AppIcon name="bell" :size="13" />  <span class="st-name">盘中提醒</span> <span class="st-note">近 8 条 / 实时推送</span></h4>
-          <div v-if="intradayAlerts.length" class="ia-list">
+          <h4 class="side-title"><AppIcon name="bell" :size="13" />  <span class="st-name">盘中提醒</span> <span class="st-note">近 8 条 · 左右滑动</span></h4>
+          <div v-if="intradayAlerts.length" ref="alertsStripEl" class="ia-strip"
+            @wheel="onAlertsWheel" @scroll="onAlertsScroll">
             <div v-for="a in intradayAlerts" :key="a.id" class="ia-item">
               <div class="ia-head">
                 <span :class="['ia-dot', a.level === 'critical' ? 'crit' : 'warn']"></span>
                 <span class="ia-title">{{ a.title }}</span>
                 <span class="ia-time">{{ (a.created_at || '').slice(11, 16) }}</span>
               </div>
-              <div class="ia-body">{{ a.body }}</div>
+              <div class="ia-body" :title="a.body">{{ a.body }}</div>
             </div>
           </div>
-          <n-empty v-else description="暂无盘中提醒" style="padding:6px" />
+          <div v-if="intradayAlerts.length > 1" ref="alertsScrollTrackEl" class="ia-scrollbar"
+            @pointerdown="onAlertsTrackDown">
+            <div class="ia-scrollbar-thumb" :style="alertsThumbStyle"
+              @pointerdown.stop="onAlertsThumbDown"
+              @pointermove="onAlertsThumbMove"
+              @pointerup="onAlertsThumbUp"
+              @pointercancel="onAlertsThumbUp"></div>
+          </div>
+          <n-empty v-if="!intradayAlerts.length" description="暂无盘中提醒" style="padding:6px" />
         </div>
 
         <!-- 仓位 / R：先定止损，再定手数 -->
@@ -2469,6 +2478,86 @@ const aiError = ref('')
 const quoteBarEl = ref(null)
 const aiCardEl = ref(null)
 const alertsPanelEl = ref(null)
+const alertsStripEl = ref(null)
+const alertsScrollTrackEl = ref(null)
+const alertsScrollState = ref({ left: 0, max: 0, client: 0, width: 0 })
+const alertsThumbStyle = computed(() => {
+  const s = alertsScrollState.value
+  if(!s.width || s.width <= s.client + 1) return { display: 'none' }
+  const widthPct = Math.max(14, (s.client / s.width) * 100)
+  const leftPct = s.max > 0 ? (s.left / s.max) * (100 - widthPct) : 0
+  return { width: widthPct.toFixed(2) + '%', left: leftPct.toFixed(2) + '%' }
+})
+
+// 盘中提醒横向卡片：新提醒在最左；新提醒到达时自动回到最左
+function scrollAlertsToLatest(smooth = true){
+  nextTick(() => {
+    const el = alertsStripEl.value
+    if(!el || el.scrollLeft <= 0) return
+    el.scrollTo({ left: 0, behavior: smooth ? 'smooth' : 'auto' })
+  })
+}
+// 鼠标/触摸板横向滚动；到两端时把滚动交还页面，避免滚动陷阱
+function onAlertsWheel(e){
+  const el = e.currentTarget
+  if(!el || el.scrollWidth <= el.clientWidth + 2) return
+  const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  if(!dx) return
+  const atStart = el.scrollLeft <= 0 && dx < 0
+  const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 && dx > 0
+  if(atStart || atEnd) return
+  e.preventDefault()
+  el.scrollLeft += dx
+}
+function updateAlertsScrollMetrics(){
+  const el = alertsStripEl.value
+  if(!el) return
+  alertsScrollState.value = {
+    left: el.scrollLeft,
+    max: Math.max(0, el.scrollWidth - el.clientWidth),
+    client: el.clientWidth,
+    width: el.scrollWidth,
+  }
+}
+function onAlertsScroll(){ updateAlertsScrollMetrics() }
+let alertsDrag = null
+function onAlertsThumbDown(e){
+  const el = alertsStripEl.value
+  const track = alertsScrollTrackEl.value
+  if(!el || !track) return
+  const thumb = e.currentTarget
+  const thumbW = thumb.getBoundingClientRect().width
+  alertsDrag = {
+    startX: e.clientX,
+    startLeft: el.scrollLeft,
+    max: Math.max(1, el.scrollWidth - el.clientWidth),
+    range: Math.max(1, track.clientWidth - thumbW),
+  }
+  try{ thumb.setPointerCapture(e.pointerId) }catch(err){}
+}
+function onAlertsThumbMove(e){
+  if(!alertsDrag) return
+  const el = alertsStripEl.value
+  if(!el) return
+  const delta = e.clientX - alertsDrag.startX
+  el.scrollLeft = alertsDrag.startLeft + (delta / alertsDrag.range) * alertsDrag.max
+}
+function onAlertsThumbUp(e){
+  if(!alertsDrag) return
+  alertsDrag = null
+  try{ e.currentTarget.releasePointerCapture(e.pointerId) }catch(err){}
+}
+function onAlertsTrackDown(e){
+  if(e.target !== e.currentTarget) return
+  const el = alertsStripEl.value
+  if(!el) return
+  const rect = e.currentTarget.getBoundingClientRect()
+  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / Math.max(1, rect.width)))
+  el.scrollTo({ left: ratio * Math.max(0, el.scrollWidth - el.clientWidth), behavior: 'smooth' })
+}
+watch(intradayAlerts, () => nextTick(updateAlertsScrollMetrics))
+onMounted(() => window.addEventListener('resize', updateAlertsScrollMetrics))
+onBeforeUnmount(() => window.removeEventListener('resize', updateAlertsScrollMetrics))
 const aiEvent = ref(false)      // true = 当前卡片由事件监听自动触发
 let aiReqSeq = 0
 let aiWsUnwatch = null
@@ -2482,11 +2571,13 @@ function onWsAiEvent(data){
     const incoming = (data.alerts || []).filter(a =>
       a.stock_code === code.value && String(a.kind || '').startsWith('it'))
     if (incoming.length) {
+      const prevMax = intradayAlerts.value.reduce((m, a) => Math.max(m, a.id || 0), 0)
       const seen = new Set()
       intradayAlerts.value = [...incoming, ...intradayAlerts.value]
         .filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true })
         .sort((a, b) => b.id - a.id)
         .slice(0, 8)
+      if (incoming.some(a => (a.id || 0) > prevMax)) scrollAlertsToLatest()
     }
     return
   }
@@ -2607,14 +2698,18 @@ async function loadIntradayAlerts(c = code.value){
   try{
     const r = await axios.get(API+'/api/risk/alerts?code='+c+'&intraday=true&limit=8')
     if(c === code.value){
+      const prevMax = intradayAlerts.value.reduce((m, a) => Math.max(m, a.id || 0), 0)
       const rows = r.data || []
       const maxId = rows.reduce((m, a) => Math.max(m, a.id || 0), 0)
       // 轮询快照可能早于 WS 推送：保留比快照更新的 WS 行，避免新提醒被旧响应覆盖
       const newer = intradayAlerts.value.filter(a => (a.id || 0) > maxId)
       const seen = new Set()
-      intradayAlerts.value = [...rows, ...newer]
+      const next = [...rows, ...newer]
         .filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true })
         .sort((a, b) => b.id - a.id).slice(0, 8)
+      const nextMax = next.reduce((m, a) => Math.max(m, a.id || 0), 0)
+      intradayAlerts.value = next
+      if(nextMax > prevMax) scrollAlertsToLatest()
     }
   }catch(e){ /* best-effort：提醒接口失败不影响行情 */ }
 }
@@ -4503,11 +4598,32 @@ watch(()=>props.code, v=>{
   .quote-bar { gap: 6px 12px; }
 }
 
-/* 盘中提醒列表（侧栏）：critical 红点 / warn 琥珀点 */
-.ia-list { display: flex; flex-direction: column; gap: 6px; }
+/* 盘中提醒：横向卡片，露 1.2 张，滚动条在下方 */
+.ia-strip {
+  display: flex; gap: 8px; align-items: stretch;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.ia-strip::-webkit-scrollbar { display: none; }
+/* 自绘滚动轴：始终可见，可点轨道/拖动滑块 */
+.ia-scrollbar {
+  position: relative; height: 6px; margin-top: 6px;
+  border-radius: 999px; background: var(--c-border-light); cursor: pointer;
+}
+.ia-scrollbar-thumb {
+  position: absolute; top: 0; bottom: 0; min-width: 18px;
+  border-radius: 999px; background: var(--c-border);
+  cursor: grab; transition: background .15s;
+}
+.ia-scrollbar-thumb:hover { background: var(--c-text-faint); }
+.ia-scrollbar-thumb:active { cursor: grabbing; background: var(--c-text-dim); }
 .ia-item {
+  flex: 0 0 82%; min-height: 88px; box-sizing: border-box;
   padding: 6px 8px; border-radius: 4px;
   background: var(--c-card-bg-hover); border: 1px solid var(--c-border-light);
+  scroll-snap-align: start;
 }
 .ia-head { display: flex; align-items: center; gap: 5px; font-size: var(--text-meta); }
 .ia-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
@@ -4518,7 +4634,10 @@ watch(()=>props.code, v=>{
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ia-time { color: var(--c-text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
-.ia-body { margin-top: 2px; font-size: var(--text-meta); line-height: 1.5; color: var(--c-text-dim); }
+.ia-body {
+  margin-top: 2px; font-size: var(--text-meta); line-height: 1.5; color: var(--c-text-dim);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
 
 /* 分钟图状态（暂停/延迟/更新时间） */
 .mink-refresh {
