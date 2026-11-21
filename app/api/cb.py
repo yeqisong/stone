@@ -24,6 +24,7 @@ from app.cb_analytics import (
     stock_to_force_pct,
     strategy_keys,
     turnover_pct,
+    watch_candidates,
 )
 from app.db.connection import get_sync_db
 
@@ -305,6 +306,42 @@ def cb_list(
             'asof': bundle.get('asof'),
             'total': total, 'page': page, 'page_size': page_size,
             'items': items[start:start + page_size],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/cb/coach")
+def cb_coach():
+    """规则化辅导侧栏：市场概况 + 投资要领建议 + 监控池（可关注/风险）。"""
+    db = get_sync_db()
+    try:
+        items, bundle = _load_items(db, only_active=True)
+        pools = build_strategy_pools(items)
+        watch = watch_candidates(items, limit=6)
+        prices = [x['price'] for x in items if x.get('price')]
+        prem = [x['premium_rate'] for x in items if x.get('premium_rate') is not None]
+        med_prem = (sorted(prem)[len(prem)//2] if prem else None)
+
+        if med_prem is None:
+            suggestion = '暂无足够数据，先运行可转债采集或补历史。'
+        elif med_prem >= 0.6:
+            suggestion = '整体溢价偏高，偏防守；优先看双低/债性池，进攻债必须要求正股强度。'
+        elif med_prem >= 0.4:
+            suggestion = '溢价中性；进攻债看低溢价+正股动量，防守债看双低/纯债保护。'
+        else:
+            suggestion = '整体溢价偏低，进攻机会更多；仍要避开高价位与临近强赎/到期标的。'
+
+        return {
+            'ok': True,
+            'asof': bundle.get('asof'),
+            'active': len(items),
+            'median_price': (sorted(prices)[len(prices)//2] if prices else None),
+            'median_premium_pct': med_prem * 100 if med_prem is not None else None,
+            'strategy_counts': {k: len(v) for k, v in pools.items()},
+            'suggestion': suggestion,
+            'focus': watch['focus'],
+            'risk': watch['risk'],
         }
     finally:
         db.close()
