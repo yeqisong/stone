@@ -619,6 +619,14 @@ def stock_cb_linkage(code: str, days: int = Query(500, ge=60, le=5000)):
         if not basics:
             raise HTTPException(404, f'未找到 {code} 关联的可转债')
         bond_codes = [r[0] for r in basics]
+        cp_rows = db.execute(text("""
+            SELECT bond_code, asof_date, convert_price FROM cb_share
+            WHERE bond_code = ANY(:c) AND convert_price > 0
+            ORDER BY bond_code, asof_date
+        """), {"c": bond_codes}).fetchall()
+        cp_steps = defaultdict(list)
+        for r in cp_rows:
+            cp_steps[r[0]].append((_d(r[1]), _f(r[2])))
 
         stock_name_row = db.execute(text("""
             SELECT stock_name FROM stock_master
@@ -666,7 +674,10 @@ def stock_cb_linkage(code: str, days: int = Query(500, ge=60, le=5000)):
             cp = [p[2] for p in pairs]
             sr = daily_returns(sp)
             cr = daily_returns(cp)
-            cv = [conversion_value(conv_price, x) for x in sp]
+            # 历史溢价按公告转股价阶梯计算；缺失公告回退当前转股价
+            steps = cp_steps.get(bc, [])
+            cv = [conversion_value(_conv_price_on(steps, d[i], conv_price), sp[i])
+                  for i in range(len(d))]
             prem = [premium_rate(cp[i], cv[i]) for i in range(len(cp))]
             s0, c0 = sp[0], cp[0]
             stock_idx = [x / s0 * 100 if s0 else None for x in sp]
