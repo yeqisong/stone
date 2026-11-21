@@ -477,14 +477,12 @@ function drawMarketCharts() {
       ],
     })
   }
-  // 行业主力资金流累计（Top 8）
+  // 行业主力资金流累计（Top 8）：服务端预计算 cumulative（与 dates 对齐的
+  // 逐日累计数组）与 sum20（近 20 日累计），直接取用，勿按 data dict 取数
   const sd = sectorData.value
   if (sd.dates && sd.dates.length && sd.sectors && sd.sectors.length) {
     const dates = sd.dates
-    const totals = sd.sectors.map(s => ({
-      s,
-      total: dates.reduce((acc, dt) => acc + (s.data[dt]?.main || 0), 0),
-    })).sort((a, b2) => b2.total - a.total).slice(0, 8)
+    const totals = [...sd.sectors].sort((a, b2) => (b2.sum20 || 0) - (a.sum20 || 0)).slice(0, 8)
     make('mv-sector', {
       tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : fmtYi(v) },
       legend: { top: 0, type: 'scroll', itemWidth: 12, itemHeight: 6, textStyle: { fontSize: 10, color: T.dim }, pageTextStyle: { color: T.dim } },
@@ -492,11 +490,11 @@ function drawMarketCharts() {
       xAxis: xOpt(dates),
       yAxis: { type: 'value', axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYi(v) }, splitLine: gl2 },
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
-      series: totals.map((t, i) => {
-        let cum = 0
-        const data = dates.map(dt => { cum += (t.s.data[dt]?.main || 0); return +(cum / 1e8).toFixed(1) })
-        return { name: t.s.name, type: 'line', data, symbol: 'none', lineStyle: { color: T.series[i % T.series.length], width: 1.2 } }
-      }),
+      series: totals.map((t, i) => ({
+        name: t.name || t.id, type: 'line',
+        data: (t.cumulative || []).map(v => v == null ? null : +(v / 1e8).toFixed(1)),
+        symbol: 'none', lineStyle: { color: T.series[i % T.series.length], width: 1.2 },
+      })),
     })
   }
   // 恐慌指数趋势：情绪分折线按档位着色（visualMap 按值分段，单值数据 dimension=0）
