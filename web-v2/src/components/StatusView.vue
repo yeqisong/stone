@@ -414,6 +414,7 @@ function calTitle(d) {
 
 function goStockFundList(dt) {
   if (dt.label === '特征因子') { nav.tab = 'e'; return }
+  if (dt.label === '可转债') { nav.tab = 'b'; return }
   const typeMap = {'上交所A股':'stock','深交所A股':'stock','北交所':'stock','指数日K线':'index','ETF日K线':'etf'}
   const t = typeMap[dt.label]
   if (t) { nav.stockFundType = t; nav.tab = 'u' }

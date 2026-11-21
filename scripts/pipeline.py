@@ -199,6 +199,9 @@ def generate_stats(*args, **kwargs):
          ("SELECT MIN(report_date)::text FROM stock_fundamentals_history", "SELECT MAX(report_date)::text FROM stock_fundamentals_history")),  # 历史口径（快照表无日期跨度，updated_at 最小值只是停更快照残留）
         ('交易信号', lambda: (q("SELECT COUNT(*) FROM signal_history"), q("SELECT COUNT(DISTINCT stock_code) FROM signal_history")),
          ("SELECT MIN(signal_date)::text FROM signal_history", "SELECT MAX(signal_date)::text FROM signal_history")),
+        ('可转债', lambda: (q("SELECT COUNT(*) FROM cb_daily"),
+                          q("SELECT COUNT(*) FROM cb_basic WHERE delist_date IS NULL OR delist_date >= CURRENT_DATE")),
+         ("SELECT MIN(trade_date)::text FROM cb_daily", "SELECT MAX(trade_date)::text FROM cb_daily")),
         ('交易日历', lambda: (q("SELECT COUNT(*) FROM trade_calendar"), None),
          ("SELECT MIN(cal_date)::text FROM trade_calendar", "SELECT MAX(cal_date)::text FROM trade_calendar")),
     ]
@@ -282,9 +285,14 @@ def generate_stats(*args, **kwargs):
         stats.append({'label': '特征因子', 'rows': -1})
     sig_buy = q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0
     sig_sell = q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0
+    cb_total = q("SELECT COUNT(*) FROM cb_basic") or 0
+    cb_share_rows = q("SELECT COUNT(*) FROM cb_share") or 0
     for s in stats:
         if s['label'] == '交易信号': s['detail'] = f'买{sig_buy} 卖{sig_sell}'
         if s['label'] in ('上交所A股', '深交所A股'): s['detail'] = '不含ETF'
+        if s['label'] == '可转债':
+            if cb_total > 0: s['detail'] = f'全量 {cb_total} 只'
+            if cb_share_rows > 0: s['sub'] = f'转股公告 {cb_share_rows:,} 条'
 
     # 写入 data_stats_cache（API 从此表读取，避免每次实时 COUNT）
     db.execute(text("INSERT INTO data_stats_cache (stats_json, computed_at) VALUES (:json, CURRENT_TIMESTAMP)"),
