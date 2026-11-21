@@ -749,3 +749,93 @@ def batch_upsert_news_stock(db, records):
         db.commit()
         saved += len(records[i:i + 1000])
     return saved
+
+
+# ── 可转债（cb_basic/cb_daily/cb_share）──
+
+def batch_upsert_cb_basic(db, records):
+    """可转债基础信息（cb_basic，PK bond_code）。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO cb_basic (bond_code, ts_code, exchange, bond_short_name, bond_full_name,
+            stk_code, stk_short_name, list_date, delist_date, maturity_date,
+            conv_start_date, conv_end_date, conv_stop_date,
+            first_conv_price, conv_price, issue_size, remain_size,
+            coupon_rate, maturity, par, value_date, rate_clause, updated_at)
+        VALUES (:bond_code, :ts_code, :exchange, :bond_short_name, :bond_full_name,
+            :stk_code, :stk_short_name, :list_date, :delist_date, :maturity_date,
+            :conv_start_date, :conv_end_date, :conv_stop_date,
+            :first_conv_price, :conv_price, :issue_size, :remain_size,
+            :coupon_rate, :maturity, :par, :value_date, :rate_clause, CURRENT_TIMESTAMP)
+        ON CONFLICT (bond_code) DO UPDATE SET
+            ts_code=EXCLUDED.ts_code, exchange=EXCLUDED.exchange,
+            bond_short_name=EXCLUDED.bond_short_name, bond_full_name=EXCLUDED.bond_full_name,
+            stk_code=EXCLUDED.stk_code, stk_short_name=EXCLUDED.stk_short_name,
+            list_date=EXCLUDED.list_date, delist_date=EXCLUDED.delist_date,
+            maturity_date=EXCLUDED.maturity_date, conv_start_date=EXCLUDED.conv_start_date,
+            conv_end_date=EXCLUDED.conv_end_date, conv_stop_date=EXCLUDED.conv_stop_date,
+            first_conv_price=EXCLUDED.first_conv_price, conv_price=EXCLUDED.conv_price,
+            issue_size=EXCLUDED.issue_size, remain_size=EXCLUDED.remain_size,
+            coupon_rate=EXCLUDED.coupon_rate, maturity=EXCLUDED.maturity,
+            par=EXCLUDED.par, value_date=EXCLUDED.value_date,
+            rate_clause=EXCLUDED.rate_clause, updated_at=CURRENT_TIMESTAMP
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved
+
+
+def batch_upsert_cb_daily(db, records):
+    """可转债日行情（cb_daily，PK trade_date+bond_code）。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO cb_daily (trade_date, bond_code, ts_code, pre_close, open, high, low,
+            close, change, pct_chg, vol, amount)
+        VALUES (:trade_date, :bond_code, :ts_code, :pre_close, :open, :high, :low,
+            :close, :change, :pct_chg, :vol, :amount)
+        ON CONFLICT (trade_date, bond_code) DO UPDATE SET
+            ts_code=EXCLUDED.ts_code, pre_close=EXCLUDED.pre_close, open=EXCLUDED.open,
+            high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close,
+            change=EXCLUDED.change, pct_chg=EXCLUDED.pct_chg,
+            vol=EXCLUDED.vol, amount=EXCLUDED.amount
+    """)
+    saved = 0
+    for i in range(0, len(records), 1000):
+        db.execute(sql, records[i:i + 1000])
+        db.commit()
+        saved += len(records[i:i + 1000])
+    return saved
+
+
+def batch_upsert_cb_share(db, records):
+    """可转债转股/余额最新快照（cb_share，PK bond_code）。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    sql = text("""
+        INSERT INTO cb_share (bond_code, asof_date, issue_size, convert_price_initial,
+            convert_price, convert_ratio, acc_convert_ratio, remain_size, total_shares,
+            updated_at)
+        VALUES (:bond_code, :asof_date, :issue_size, :convert_price_initial,
+            :convert_price, :convert_ratio, :acc_convert_ratio, :remain_size, :total_shares,
+            CURRENT_TIMESTAMP)
+        ON CONFLICT (bond_code) DO UPDATE SET
+            asof_date=EXCLUDED.asof_date, issue_size=EXCLUDED.issue_size,
+            convert_price_initial=EXCLUDED.convert_price_initial,
+            convert_price=EXCLUDED.convert_price, convert_ratio=EXCLUDED.convert_ratio,
+            acc_convert_ratio=EXCLUDED.acc_convert_ratio, remain_size=EXCLUDED.remain_size,
+            total_shares=EXCLUDED.total_shares, updated_at=CURRENT_TIMESTAMP
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved

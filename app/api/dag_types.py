@@ -40,6 +40,11 @@ NODE_SUB_STEPS = {
         {'name': '拉取ETF日K线', 'desc': '从 tushare/baostock 下载 ETF 行情'},
         {'name': '写入 daily_quote', 'desc': '批量写入 ETF 行情数据'},
     ],
+    'cb_daily': [
+        {'name': '基础信息', 'desc': 'tushare cb_basic 全量转债基础信息（1 次调用）'},
+        {'name': '日行情', 'desc': 'tushare cb_daily 按交易日全市场（1 次调用）'},
+        {'name': '转股快照', 'desc': 'tushare cb_share 最新转股比例/剩余规模（每债覆盖）'},
+    ],
     'fund': [
         {'name': '拉取 daily_basic', 'desc': 'tushare daily_basic 全市场5400只'},
         {'name': '写入 stock_fundamentals', 'desc': 'UPSERT 按 stock_code+trade_date 去重'},

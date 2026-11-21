@@ -228,6 +228,16 @@
 | `POST /api/dag/flows/{id}/execute` | 触发执行（后台+TaskManager） | 🔒 | `{trade_date?}`；429 同流程互斥 |
 | `GET /api/dag/logs` | 任务日志（内存+历史合并） | — | `limit=50(≤200), flow_id?` |
 
+## 17. 可转债 cb（api/cb.py）
+
+| 方法+路径 | 功能 | 认证 |
+|---|---|---|
+| `GET /api/cb/overview` | 概览（数据日期/总量/活跃/中位数/策略池计数与 Top） | 🔒 |
+| `GET /api/cb/list` | 列表（kw/page/page_size/sort/order/strategy/only_active） | 🔒 |
+| `GET /api/stock/{code}/convertible-bonds` | 正股关联转债（个股详情卡片） | 🔒 |
+| `GET /api/cb/{bond_code}` | 债券详情 + 近 N 日价格/转股价值/溢价 | 🔒 |
+| `GET /api/cb/{bond_code}/daily` | 债券历史行情/指标 | 🔒 |
+
 ---
 
 ## 附：错误码约定

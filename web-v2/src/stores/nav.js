@@ -18,6 +18,7 @@ export const useNavStore = defineStore('nav', () => {
   const bfLogPage = ref(1)
   const agentSeed = ref(null)   // 跨页面带入问答页的预填问题 { text, at }
   const tradeReviewTab = ref('review')  // 交易复盘二级页的初始 tab
+  const bondCode = ref('')               // 可转债详情码（/bond/:code）
 
   // URL hash 路由
   function parseHash() {
@@ -25,6 +26,7 @@ export const useNavStore = defineStore('nav', () => {
     const path = hash.includes('?') ? hash.split('?')[0] : hash
     const q = (k) => new URLSearchParams(hash.split('?')[1] || '').get(k) || ''
 
+    if (hash.startsWith('/bond/')) { bondCode.value = hash.split('/')[2] || ''; tab.value = 'c'; return }
     if (hash.startsWith('/detail/')) { dcode.value = hash.split('/')[2] || ''; tab.value = 'd'; return }
     if (hash.startsWith('/feature/')) { fid.value = parseInt(hash.split('/')[2]) || null; tab.value = 'v'; return }
     if (hash.startsWith('/dag-flows/')) {
@@ -52,7 +54,7 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
   }
@@ -69,6 +71,14 @@ export const useNavStore = defineStore('nav', () => {
         break
       }
       case 's': target = '/signals'; break
+      case 'b': {
+        // 可转债列表：保留查询参数（kw/tab/sf/sd，BondView 维护）
+        const cur = location.hash.slice(1)
+        const qm = cur.startsWith('/bonds') && cur.includes('?') ? cur.slice(cur.indexOf('?')) : ''
+        target = '/bonds' + qm
+        break
+      }
+      case 'c': target = '/bond/' + (bondCode.value || ''); break
       case 'l': {
         // 保留列表页 URL 上已有的查询参数（cat/kw/page/sf/sd，StocksView 维护）——
         // history.back() 回到列表时 popstate 已把地址还原成带参 URL，此时 syncHash
@@ -179,10 +189,23 @@ export const useNavStore = defineStore('nav', () => {
     tab.value = prevTab.value || 'e'
   }
 
+  /** 打开可转债详情（个股详情/转债列表均可入）。 */
+  function showBondDetail(code) {
+    prevTab.value = tab.value
+    bondCode.value = code
+    tab.value = 'c'
+  }
+
+  function backFromBondDetail() {
+    if (prevTab.value) { history.back(); return }
+    tab.value = 'b'
+  }
+
   // tab 变化时同步 URL + 离开 g 页清空 flowId
   watch(tab, (t) => { if (t !== 'g' && t !== 'q' && t !== 'r') flowId.value = null; syncHash() })
   watch(dcode, () => { if (tab.value === 'd') syncHash() })
   watch(fid, () => { if (tab.value === 'v') syncHash() })
+  watch(bondCode, () => { if (tab.value === 'c') syncHash() })
 
   watch(flowId, () => { if (tab.value === 'g' || tab.value === 'q' || tab.value === 'r') syncHash() })
 
@@ -190,5 +213,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, bondCode, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showBondDetail, backFromBondDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
 })

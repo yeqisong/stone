@@ -1086,6 +1086,77 @@ CREATE TABLE IF NOT EXISTS index_valuation (
 CREATE INDEX IF NOT EXISTS idx_index_val_date ON index_valuation (trade_date DESC);
 """
 
+# ── 可转债（tushare cb_basic/cb_daily/cb_share；独立域，不进 daily_quote/stock_master）──
+
+CREATE_CB_BASIC = """
+CREATE TABLE IF NOT EXISTS cb_basic (
+    bond_code       VARCHAR(6) NOT NULL,     -- 6 位转债代码（110xxx/113xxx/118xxx/123xxx/127xxx/128xxx）
+    ts_code         VARCHAR(16) UNIQUE,      -- tushare 代码（带 .SH/.SZ）
+    exchange        VARCHAR(8),              -- SH / SZ（来自 tushare，不自行推断）
+    bond_short_name VARCHAR(64),
+    bond_full_name  VARCHAR(255),
+    stk_code        VARCHAR(6),              -- 正股 6 位代码
+    stk_short_name  VARCHAR(64),
+    list_date       DATE,
+    delist_date     DATE,
+    maturity_date   DATE,
+    conv_start_date DATE,
+    conv_end_date   DATE,
+    conv_stop_date  DATE,                    -- 停止转股日（强赎/退市观察用）
+    first_conv_price NUMERIC(12,4),
+    conv_price      NUMERIC(12,4),           -- 当前转股价
+    issue_size      NUMERIC(18,2),           -- 发行规模（元）
+    remain_size     NUMERIC(18,2),           -- 剩余规模（元）
+    coupon_rate     NUMERIC(8,4),            -- 票面利率(%)（近似纯债价值用）
+    maturity        NUMERIC(6,2),            -- 期限（年）
+    par             NUMERIC(10,2),           -- 面值
+    value_date      DATE,
+    rate_clause     TEXT,                    -- 利率条款原文（票面利率阶梯）
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (bond_code)
+);
+CREATE INDEX IF NOT EXISTS idx_cb_basic_stk ON cb_basic (stk_code);
+CREATE INDEX IF NOT EXISTS idx_cb_basic_delist ON cb_basic (delist_date);
+"""
+
+CREATE_CB_DAILY = """
+CREATE TABLE IF NOT EXISTS cb_daily (
+    trade_date  DATE NOT NULL,
+    bond_code   VARCHAR(6) NOT NULL,
+    ts_code     VARCHAR(16),
+    pre_close   NUMERIC(12,4),
+    open        NUMERIC(12,4),
+    high        NUMERIC(12,4),
+    low         NUMERIC(12,4),
+    close       NUMERIC(12,4),
+    change      NUMERIC(12,4),
+    pct_chg     NUMERIC(9,4),
+    vol         NUMERIC(18,2),               -- 成交量（手）
+    amount      NUMERIC(18,2),               -- 成交金额（万元）
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, bond_code)
+);
+CREATE INDEX IF NOT EXISTS idx_cb_daily_bond_date ON cb_daily (bond_code, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_cb_daily_date ON cb_daily (trade_date);
+"""
+
+CREATE_CB_SHARE = """
+CREATE TABLE IF NOT EXISTS cb_share (
+    bond_code            VARCHAR(6) NOT NULL,   -- 每债最新转股/余额快照（不存历史趋势）
+    asof_date            DATE,                  -- end_date / publish_date 取最新
+    issue_size           NUMERIC(18,2),
+    convert_price_initial NUMERIC(12,4),
+    convert_price        NUMERIC(12,4),
+    convert_ratio        NUMERIC(10,4),         -- 当日转股比例(%)
+    acc_convert_ratio    NUMERIC(10,4),         -- 累计转股比例(%)
+    remain_size          NUMERIC(18,2),         -- 剩余规模（元）
+    total_shares         NUMERIC(20,4),
+    updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (bond_code)
+);
+CREATE INDEX IF NOT EXISTS idx_cb_share_date ON cb_share (asof_date);
+"""
+
 # ── AI 问答 Agent（会话 + 消息轨迹；沙箱工作区落 data/agent_ws/<session_id>/）──
 
 CREATE_AGENT = """
@@ -1545,6 +1616,9 @@ ALL_TABLES = [
     ("stock_hk_hold", CREATE_HK_HOLD),
     ("stock_margin_detail", CREATE_MARGIN_DETAIL),
     ("stock_holder_number", CREATE_HOLDER_NUMBER),
+    ("cb_basic", CREATE_CB_BASIC),
+    ("cb_daily", CREATE_CB_DAILY),
+    ("cb_share", CREATE_CB_SHARE),
     ("tushare_quota", CREATE_TUSHARE_QUOTA),
     ("xueqiu_status", CREATE_XUEQIU_STATUS),
     ("xueqiu_crawl_state", CREATE_XUEQIU_CRAWL_STATE),
@@ -1631,6 +1705,30 @@ def init_db(sync_session) -> None:
             "与指数每日估值（tushare）', :nodes, '[]', '5 23 * * *', 'published') "
             "ON CONFLICT (flow_name) DO NOTHING"
         ), {"nodes": _nodes})
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 播种：可转债数据流程（每日 18:40，独立于 A 股主流程；幂等；同名流程存在则跳过）
+    try:
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order)
+            VALUES ('cb_daily', '', '🧾 可转债采集', 59)
+            ON CONFLICT (node_name) DO UPDATE SET deps='', label='🧾 可转债采集', sort_order=59
+        """))
+        _cb_nodes = _json_seed.dumps([
+            {"node_name": "cron", "deps": [], "position": {"x": 20, "y": 20}},
+            {"node_name": "cb_daily", "deps": ["cron"], "position": {"x": 220, "y": 20}},
+        ], ensure_ascii=False)
+        sync_session.execute(text("""
+            INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+            SELECT '可转债数据', '每日 18:40 采集可转债基础信息/日行情/转股余额（tushare cb_basic/cb_daily/cb_share）',
+                   :n, :e, '40 18 * * *', 'published', true
+            WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='可转债数据')
+        """), {
+            'n': _cb_nodes,
+            'e': '[{"source": "cron", "target": "cb_daily"}]',
+        })
         sync_session.commit()
     except Exception:
         sync_session.rollback()
