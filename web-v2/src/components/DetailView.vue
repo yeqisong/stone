@@ -494,9 +494,15 @@
           <n-empty v-else-if="!loading" description="暂无基本面数据" style="padding:10px" />
         </div>
 
-        <!-- 可转债：正股关联的转债（点击进入独立转债详情） -->
+        <!-- 可转债：正股关联的转债（点击进入独立转债详情；右侧“联动”开联动分析抽屉） -->
         <div v-if="bondInfo && bondInfo.length" class="side-panel">
-          <h4 class="side-title"><AppIcon name="bond" :size="13" />  可转债</h4>
+          <h4 class="side-title"><AppIcon name="bond" :size="13" />  可转债
+            <span style="margin-left:auto;display:inline-flex;align-items:center">
+              <n-button size="tiny" text @click="openCbLinkage(bondInfo[0])">
+                <AppIcon name="activity" :size="12" />  联动分析
+              </n-button>
+            </span>
+          </h4>
           <div class="bond-cards">
             <a v-for="b in bondInfo" :key="b.bond_code" class="bond-card"
                :href="'#/bond/' + b.bond_code" :title="`进入 ${b.bond_name} 详情`"
@@ -504,6 +510,10 @@
               <div class="bc-head">
                 <span class="bc-name">{{ b.bond_name }}</span>
                 <span class="bc-code">{{ b.bond_code }}</span>
+                <button type="button" class="bc-link-btn" title="正股 × 转债联动分析"
+                  @click.stop.prevent="openCbLinkage(b)">
+                  <AppIcon name="activity" :size="11" /> 联动
+                </button>
               </div>
               <div class="bc-row">
                 <span>价 <b>{{ b.price != null ? b.price.toFixed(3) : '—' }}</b></span>
@@ -966,6 +976,11 @@
     <div ref="compareEl" style="width:100%;height:380px"></div>
     <div class="replay-hint">以当日起点=0% 归一化；最多 3 条线（含当前股）。</div>
   </n-modal>
+
+  <!-- 正股 × 转债联动分析 -->
+  <CbLinkageDrawer v-model:show="cbLinkageShow" :stock-code="code"
+    :stock-name="detail?.stock_name" :bonds="bondInfo || []"
+    :default-bond-code="cbLinkageBond" />
 </div>
 </template>
 
@@ -985,6 +1000,7 @@ import { addWsListener } from '../utils/ws'
 import { chartColors as T } from '../utils/chart'
 import { analyzeKline } from '../utils/klineSignals'
 import StatStrip from './StatStrip.vue'
+import CbLinkageDrawer from './CbLinkageDrawer.vue'
 
 const props = defineProps({ code: String })
 const { isNarrow } = useViewport()
@@ -1375,6 +1391,12 @@ const sigData = ref([])      // 模型信号史（含前瞻收益）
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
 const bondInfo = ref(null)   // 关联可转债（cb_basic + 最新行情/溢价/双低）
+const cbLinkageShow = ref(false)
+const cbLinkageBond = ref('')
+function openCbLinkage(b) {
+  cbLinkageBond.value = b?.bond_code || ''
+  cbLinkageShow.value = true
+}
 // 右侧栏「雪球讨论 / 相关资讯」做成一个卡片两个 tab；只有一个有数据时自动切到有数据的那页
 const sentiTab = ref('xq')
 const sentiTabTouched = ref(false)   // 用户手动切过 tab 后，不再被数据到达自动改回
@@ -4473,6 +4495,13 @@ watch(()=>props.code, v=>{
 .bc-head { display: flex; justify-content: space-between; gap: 6px; font-size: var(--text-meta); }
 .bc-name { color: var(--c-text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bc-code { color: var(--c-text-faint); }
+.bc-link-btn {
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+  padding: 1px 5px; border: 1px solid var(--c-border); border-radius: 999px;
+  background: transparent; color: var(--c-text-dim);
+  font-size: 10px; line-height: 1.4; cursor: pointer;
+}
+.bc-link-btn:hover { color: var(--c-text); border-color: var(--c-accent); background: var(--c-card-bg-hover); }
 .bc-row { display: flex; justify-content: space-between; gap: 6px; font-size: var(--text-meta); color: var(--c-text-dim); margin-top: 2px; }
 .bc-row b { color: var(--c-text); font-variant-numeric: tabular-nums; }
 .bc-score { color: var(--c-accent); }

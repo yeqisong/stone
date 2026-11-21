@@ -13,13 +13,18 @@ from app.cb_analytics import (
     STRATEGY_LABELS,
     build_strategy_pools,
     conversion_value,
+    daily_returns,
     days_until,
     double_low,
     forced_redemption_days,
+    linkage_label,
+    linkage_metrics,
+    period_return,
     premium_rate,
     price_percentile,
     pure_bond_premium,
     pure_bond_value,
+    rolling_corr,
     score_bond,
     stock_to_force_pct,
     strategy_keys,
@@ -422,5 +427,137 @@ def cb_daily_history(bond_code: str, days: int = Query(250, ge=30, le=1000)):
                 'premium_rate': premium_rate(_f(r[1]),
                                              conversion_value(conv_price, stock_close_by_date.get(_d(r[0])))),
             } for r in hist_rows]}
+    finally:
+        db.close()
+
+
+@router.get("/stock/{code}/cb-linkage")
+def stock_cb_linkage(code: str, days: int = Query(500, ge=60, le=1000)):
+    """正股 × 关联转债联动分析：对齐日线、收益率、相关系数/滚动相关/溢价。"""
+    db = get_sync_db()
+    try:
+        basics = db.execute(text("""
+            SELECT bond_code, ts_code, bond_short_name, conv_price,
+                   list_date, delist_date, maturity_date, issue_size, remain_size
+            FROM cb_basic WHERE stk_code=:c ORDER BY bond_code
+        """), {"c": code}).fetchall()
+        if not basics:
+            raise HTTPException(404, f'未找到 {code} 关联的可转债')
+        bond_codes = [r[0] for r in basics]
+
+        stock_name_row = db.execute(text("""
+            SELECT stock_name FROM stock_master
+            WHERE stock_code=:c ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END LIMIT 1
+        """), {"c": code}).fetchone()
+
+        cb_rows = db.execute(text("""
+            SELECT trade_date, bond_code, close FROM cb_daily
+            WHERE bond_code = ANY(:c) AND close > 0
+            ORDER BY trade_date DESC LIMIT :d
+        """), {"c": bond_codes, "d": min(days * len(bond_codes), 20000)}).fetchall()
+        stock_rows = db.execute(text("""
+            SELECT trade_date, close FROM daily_quote
+            WHERE stock_code=:c AND close > 0
+            ORDER BY trade_date DESC LIMIT :d
+        """), {"c": code, "d": days}).fetchall()
+
+        cb_by_date = {}
+        for r in reversed(cb_rows):
+            cb_by_date.setdefault(_d(r[0]), {})[r[1]] = _f(r[2])
+        stock_by_date = {_d(r[0]): _f(r[1]) for r in reversed(stock_rows)}
+        dates = sorted(set(cb_by_date) & set(stock_by_date))[-days:]
+
+        latest_rows = db.execute(text("""
+            SELECT DISTINCT ON (bond_code) bond_code, trade_date, close, pct_chg
+            FROM cb_daily WHERE bond_code = ANY(:c) AND close > 0
+            ORDER BY bond_code, trade_date DESC
+        """), {"c": bond_codes}).fetchall()
+        latest = {r[0]: {'price': _f(r[2]), 'pct_chg': _f(r[3])} for r in latest_rows}
+
+        bonds = []
+        for b in basics:
+            bc = b[0]
+            conv_price = _f(b[3])
+            if not dates:
+                continue
+            stock_prices = [stock_by_date[d] for d in dates]
+            cb_prices = [cb_by_date[d].get(bc) for d in dates]
+            pairs = [(d, sp, cp) for d, sp, cp in zip(dates, stock_prices, cb_prices)
+                     if sp and sp > 0 and cp and cp > 0]
+            if len(pairs) < 30:
+                continue
+            d = [p[0] for p in pairs]
+            sp = [p[1] for p in pairs]
+            cp = [p[2] for p in pairs]
+            sr = daily_returns(sp)
+            cr = daily_returns(cp)
+            cv = [conversion_value(conv_price, x) for x in sp]
+            prem = [premium_rate(cp[i], cv[i]) for i in range(len(cp))]
+            s0, c0 = sp[0], cp[0]
+            stock_idx = [x / s0 * 100 if s0 else None for x in sp]
+            cb_idx = [x / c0 * 100 if c0 else None for x in cp]
+            excess = [None if (sr[i] is None or cr[i] is None) else cr[i] - sr[i]
+                      for i in range(len(sr))]
+            metrics = linkage_metrics(sr, cr)
+            prem_vals = [x for x in prem if x is not None]
+            ret = {}
+            for n in (5, 20, 60):
+                sr_n = period_return(sp, n)
+                cr_n = period_return(cp, n)
+                ret[str(n)] = {
+                    'stock': sr_n, 'cb': cr_n,
+                    'excess': (cr_n - sr_n) if (sr_n is not None and cr_n is not None) else None,
+                }
+            bonds.append({
+                'bond_code': bc,
+                'bond_name': b[2],
+                'conv_price': conv_price,
+                'list_date': _d(b[4]),
+                'delist_date': _d(b[5]),
+                'maturity_date': _d(b[6]),
+                'issue_size': _f(b[7]),
+                'remain_size': _f(b[8]),
+                'latest': latest.get(bc, {}),
+                'metrics': {
+                    **metrics,
+                    'returns': ret,
+                    'premium': {
+                        'current': prem_vals[-1] if prem_vals else None,
+                        'median': (sorted(prem_vals)[len(prem_vals)//2] if prem_vals else None),
+                        'min': min(prem_vals) if prem_vals else None,
+                        'max': max(prem_vals) if prem_vals else None,
+                    },
+                    'days': len(d),
+                    'start_date': d[0],
+                    'end_date': d[-1],
+                },
+                'label': linkage_label(metrics.get('corr_full'),
+                                       ret['20']['excess'] if ret['20'] else None),
+                'series': {
+                    'dates': d,
+                    'stock_close': sp,
+                    'cb_close': cp,
+                    'stock_idx': stock_idx,
+                    'cb_idx': cb_idx,
+                    'stock_ret': sr,
+                    'cb_ret': cr,
+                    'excess_ret': excess,
+                    'conv_value': cv,
+                    'premium_rate': prem,
+                    'rolling_corr': rolling_corr(sr, cr, 20),
+                },
+            })
+        if not bonds:
+            raise HTTPException(404, f'{code} 关联转债的对齐样本不足')
+        bonds.sort(key=lambda x: (x['metrics']['corr_full'] is None,
+                                  -(x['metrics']['corr_full'] or -9)))
+        return {
+            'ok': True,
+            'stock_code': code,
+            'stock_name': stock_name_row[0] if stock_name_row else code,
+            'days': days,
+            'date_range': [dates[0], dates[-1]] if dates else [None, None],
+            'bonds': bonds,
+        }
     finally:
         db.close()

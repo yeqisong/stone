@@ -3,18 +3,25 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from app.cb_analytics import (
+    beta,
     conversion_value,
+    daily_returns,
     days_until,
     double_low,
     forced_redemption_days,
+    linkage_label,
+    linkage_metrics,
+    pearson_corr,
     premium_rate,
     price_percentile,
     pure_bond_premium,
     pure_bond_value,
+    rolling_corr,
     score_bond,
     stock_to_force_pct,
     strategy_keys,
     turnover_pct,
+    period_return,
     watch_candidates,
     watch_triggers,
     build_strategy_pools,
@@ -129,6 +136,46 @@ class TestCBWatch(unittest.TestCase):
         self.assertEqual([x['bond_code'] for x in r['focus']], ['113052'])
         self.assertTrue(any(x['bond_code'] == '111012' for x in r['risk']))
         self.assertTrue(all(x.get('watch_triggers') is not None for x in r['focus'] + r['risk']))
+
+
+class TestCBLinkage(unittest.TestCase):
+    def test_daily_returns(self):
+        r = daily_returns([100, 110, None, 99])
+        self.assertIsNone(r[0])
+        self.assertAlmostEqual(r[1], 0.1)
+        self.assertIsNone(r[2])
+        self.assertIsNone(r[3])
+        self.assertIsNone(daily_returns([100])[0])
+
+    def test_period_return(self):
+        self.assertAlmostEqual(period_return([100, 100, 110, 120], 3), 0.2)
+        self.assertIsNone(period_return([100, 110], 3))
+
+    def test_pearson_and_beta(self):
+        xs = [0.01, 0.02, -0.01, 0.03, 0.00]
+        ys = [0.02, 0.04, -0.02, 0.06, 0.00]
+        self.assertAlmostEqual(pearson_corr(xs, ys), 1.0)
+        self.assertAlmostEqual(beta(xs, ys), 2.0)
+        self.assertIsNone(pearson_corr([0.1], [0.1]))
+        self.assertIsNone(pearson_corr([0.1, 0.1, 0.1], [0.2, 0.2, 0.2]))
+
+    def test_rolling_corr(self):
+        xs = [0.01, 0.02, 0.03, 0.04, 0.05]
+        ys = [0.02, 0.04, 0.06, 0.08, 0.10]
+        r = rolling_corr(xs, ys, 3)
+        self.assertIsNone(r[0])
+        self.assertIsNone(r[1])
+        self.assertAlmostEqual(r[2], 1.0)
+        self.assertAlmostEqual(r[3], 1.0)
+
+    def test_linkage_metrics_and_label(self):
+        xs = [0.01, 0.02, -0.01, 0.03, 0.00]
+        ys = [0.02, 0.04, -0.02, 0.06, 0.00]
+        m = linkage_metrics(xs, ys)
+        self.assertAlmostEqual(m['corr_full'], 1.0)
+        self.assertAlmostEqual(m['beta'], 2.0)
+        self.assertIn('强联动', linkage_label(m['corr_full']))
+        self.assertIn('跑输', linkage_label(m['corr_full'], -0.03))
 
 
 class TestCBAdapterMapping(unittest.TestCase):
