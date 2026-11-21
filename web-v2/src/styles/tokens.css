@@ -275,6 +275,8 @@ h1, h2, h3 { text-wrap: balance; }
   border-radius: var(--radius);
   overflow: hidden;
 }
+/* 可交互副行（个股卡片转债切换菜单）需要溢出卡片显示下拉层 */
+.stat-strip.has-slot-item { overflow: visible; }
 .stat-strip .stat-item {
   text-align: left !important;
   min-width: 0 !important;

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from app.cb_analytics import (
     beta,
+    bond_ytm,
     conversion_value,
     daily_returns,
     days_until,
@@ -48,6 +49,19 @@ class TestCVMetrics(unittest.TestCase):
         self.assertLess(v, 100)
         self.assertIsNone(pure_bond_value(None, 6.0))
         self.assertIsNone(pure_bond_value(2.0, None))
+        # 剩余期限越短、越接近面值：债底必须按剩余期限折现，而非债券总期限
+        self.assertGreater(pure_bond_value(2.0, 1.0), pure_bond_value(2.0, 6.0))
+
+    def test_bond_ytm(self):
+        # 111 元买入、票息 2.3%、剩余 1.1 年 → 持有到期年化约 -7%
+        y = bond_ytm(111, 2.3, 1.1)
+        self.assertIsNotNone(y)
+        self.assertLess(y, 0)
+        self.assertGreater(y, -0.15)
+        # 平价买入近似票息
+        self.assertAlmostEqual(bond_ytm(100, 2.3, 1.1), 0.023, places=2)
+        self.assertIsNone(bond_ytm(None, 2.3, 1.1))
+        self.assertIsNone(bond_ytm(111, 2.3, 0))
 
     def test_turnover(self):
         # amount 万元 → 元；remain 元
@@ -230,20 +244,33 @@ class TestCBAdapterMapping(unittest.TestCase):
         rows = a.fetch_cb_daily('2026-11-20')
         self.assertEqual([r['bond_code'] for r in rows], ['127001'])
 
-    def test_fetch_cb_share_latest_only(self):
+    def test_fetch_cb_share_announcement_rows(self):
         a = self._adapter()
         import pandas as pd
         a._pro.cb_share.return_value = pd.DataFrame([
-            {'ts_code': '113052.SH', 'end_date': '20261119', 'convert_price': 20.3, 'remain_size': 1e9},
-            {'ts_code': '113052.SH', 'end_date': '20261120', 'convert_price': 20.3, 'remain_size': 9e8},
+            {'ts_code': '113052.SH', 'publish_date': '20261119', 'end_date': '20261118',
+             'convert_price': 20.3, 'remain_size': 1e9},
+            {'ts_code': '113052.SH', 'publish_date': '20261120', 'end_date': '20261119',
+             'convert_price': 20.3, 'remain_size': 9e8},
             {'ts_code': '127001.SZ', 'end_date': '20261120', 'convert_price': 8, 'remain_size': 1e8},
         ])
         rows = a.fetch_cb_share('2026-11-20')
-        codes = [r['bond_code'] for r in rows]
-        self.assertIn('113052', codes)
-        self.assertEqual(codes.count('113052'), 1)
-        row = next(r for r in rows if r['bond_code'] == '113052')
-        self.assertEqual(row['remain_size'], 9e8)
+        self.assertEqual([r['bond_code'] for r in rows], ['113052', '113052', '127001'])
+        # 快照日优先用公告日 publish_date；缺失时才回退 end_date
+        self.assertEqual(rows[0]['asof_date'], '2026-11-19')
+        self.assertEqual(rows[1]['asof_date'], '2026-11-20')
+        self.assertEqual(rows[2]['asof_date'], '2026-11-20')
+
+    def test_fetch_cb_share_history_infers_bond_exchange(self):
+        a = self._adapter()
+        import pandas as pd
+        a._pro.cb_share.return_value = pd.DataFrame([
+            {'ts_code': '113052.SH', 'publish_date': '20200101', 'convert_price': 20.3},
+            {'ts_code': '113052.SH', 'publish_date': '20210101', 'convert_price': 18.0},
+        ])
+        rows = a.fetch_cb_share_history('113052')
+        a._pro.cb_share.assert_called_with(ts_code='113052.SH')
+        self.assertEqual(len(rows), 2)
 
 
 if __name__ == '__main__':

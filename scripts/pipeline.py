@@ -4898,7 +4898,7 @@ def dag_task_moneyflow(trade_date=None, **kw):
 
 
 def dag_task_cb_daily(trade_date=None, **kw):
-    """DAG 节点：可转债数据（cb_basic + cb_daily + cb_share 最新快照）。"""
+    """DAG 节点：可转债数据（cb_basic + cb_daily + cb_share 当日转股公告）。"""
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('cb_daily')
     write_node_log(log_id=log_id, status='running', detail='可转债采集中')
@@ -4907,8 +4907,12 @@ def dag_task_cb_daily(trade_date=None, **kw):
         basic = sync_basic()
         daily = sync_daily(trade_date=td)
         share = sync_share(trade_date=td)
+        # 采集完成后重建指标物化表，列表/辅导/详情直接读表
+        from app.api.cb import refresh_cb_metrics
+        metrics = refresh_cb_metrics(force=True)
         return {'rows': basic + daily + share,
-                '_detail': f'基础 {basic} / 行情 {daily} / 转股快照 {share}'}
+                '_detail': (f'基础 {basic} / 行情 {daily} / 转股公告 {share} / '
+                            f'指标 {metrics.get("count", 0)}')}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)

@@ -1142,8 +1142,8 @@ CREATE INDEX IF NOT EXISTS idx_cb_daily_date ON cb_daily (trade_date);
 
 CREATE_CB_SHARE = """
 CREATE TABLE IF NOT EXISTS cb_share (
-    bond_code            VARCHAR(6) NOT NULL,   -- 每债最新转股/余额快照（不存历史趋势）
-    asof_date            DATE,                  -- end_date / publish_date 取最新
+    bond_code            VARCHAR(6) NOT NULL,
+    asof_date            DATE NOT NULL,          -- 快照日（end_date/publish_date）
     issue_size           NUMERIC(18,2),
     convert_price_initial NUMERIC(12,4),
     convert_price        NUMERIC(12,4),
@@ -1152,9 +1152,22 @@ CREATE TABLE IF NOT EXISTS cb_share (
     remain_size          NUMERIC(18,2),         -- 剩余规模（元）
     total_shares         NUMERIC(20,4),
     updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (bond_code)
+    PRIMARY KEY (bond_code, asof_date)
 );
 CREATE INDEX IF NOT EXISTS idx_cb_share_date ON cb_share (asof_date);
+CREATE INDEX IF NOT EXISTS idx_cb_share_bond_date ON cb_share (bond_code, asof_date DESC);
+"""
+
+# 可转债指标物化表：列表/概览/辅导/个股卡片/详情共用，避免每次请求全量重算
+CREATE_CB_METRICS = """
+CREATE TABLE IF NOT EXISTS cb_metrics (
+    bond_code   VARCHAR(6) NOT NULL,
+    asof_date   DATE,                        -- 指标对应的转债行情日
+    payload     JSONB NOT NULL,              -- 完整指标项（价格/溢价/评分/策略/风险标记等）
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (bond_code)
+);
+CREATE INDEX IF NOT EXISTS idx_cb_metrics_asof ON cb_metrics (asof_date);
 """
 
 # ── AI 问答 Agent（会话 + 消息轨迹；沙箱工作区落 data/agent_ws/<session_id>/）──
@@ -1619,6 +1632,7 @@ ALL_TABLES = [
     ("cb_basic", CREATE_CB_BASIC),
     ("cb_daily", CREATE_CB_DAILY),
     ("cb_share", CREATE_CB_SHARE),
+    ("cb_metrics", CREATE_CB_METRICS),
     ("tushare_quota", CREATE_TUSHARE_QUOTA),
     ("xueqiu_status", CREATE_XUEQIU_STATUS),
     ("xueqiu_crawl_state", CREATE_XUEQIU_CRAWL_STATE),
@@ -1708,6 +1722,30 @@ def init_db(sync_session) -> None:
         sync_session.commit()
     except Exception:
         sync_session.rollback()
+
+    # 迁移：cb_share 从「每债最新快照」升级为「按日历史」
+    # 旧表 PK=bond_code；新表 PK=(bond_code, asof_date)。旧行 asof_date 均非空，
+    # 迁移前先把异常空值补成当天，再替换主键（幂等）。
+    try:
+        pk = sync_session.execute(text("""
+            SELECT conname, pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid='cb_share'::regclass AND contype='p'
+        """)).fetchone()
+        if pk and pk[1] == 'PRIMARY KEY (bond_code)':
+            sync_session.execute(text(
+                "UPDATE cb_share SET asof_date=CURRENT_DATE WHERE asof_date IS NULL"))
+            sync_session.execute(text(f'ALTER TABLE cb_share DROP CONSTRAINT "{pk[0]}"'))
+            sync_session.execute(text(
+                "ALTER TABLE cb_share ALTER COLUMN asof_date SET NOT NULL"))
+            sync_session.execute(text(
+                "ALTER TABLE cb_share ADD PRIMARY KEY (bond_code, asof_date)"))
+            sync_session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_cb_share_bond_date ON cb_share (bond_code, asof_date DESC)"))
+            sync_session.commit()
+    except Exception as _e:
+        sync_session.rollback()
+        logger.warning(f"[schema] cb_share 历史化迁移失败: {str(_e)[:160]}")
 
     # 播种：可转债数据流程（每日 18:40，独立于 A 股主流程；幂等；同名流程存在则跳过）
     try:

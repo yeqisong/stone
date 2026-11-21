@@ -1016,50 +1016,55 @@ class TuShareAdapter(DataSourceAdapter):
             logger.warning(f"[tushare] cb_daily {td} 失败: {e}")
             return []
 
+    def _cb_share_rows(self, df) -> list:
+        rows = self._rows(df, {
+            "ts_code": "ts_code", "end_date": "end_date", "publish_date": "publish_date",
+            "issue_size": "issue_size", "convert_price_initial": "convert_price_initial",
+            "convert_price": "convert_price", "convert_ratio": "convert_ratio",
+            "acc_convert_ratio": "acc_convert_ratio", "remain_size": "remain_size",
+            "total_shares": "total_shares"})
+        out = []
+        for r in rows:
+            raw = (r.get("ts_code") or '').split('.')[0]
+            if not raw:
+                continue
+            code = raw.zfill(6)
+            if len(code) != 6:
+                continue
+            # 公告日=快照日；end_date 是统计截止日，可能早于公告日
+            asof = self._norm_date(r.get("publish_date")) or self._norm_date(r.get("end_date"))
+            if not asof:
+                continue
+            r["bond_code"] = code
+            r["asof_date"] = asof
+            out.append(r)
+        return out
+
     def fetch_cb_share(self, trade_date: str) -> list:
-        """可转债转股/余额快照（取不早于 trade_date 的最新快照，每债一行）。"""
+        """可转债转股/余额按公告日快照（ann_date=trade_date，1 次调用）。"""
         td = trade_date.replace('-', '')[:8]
         try:
             self.quota.consume()
-            df = self._pro.cb_share(trade_date=td)
-            rows = self._rows(df, {
-                "ts_code": "ts_code", "end_date": "end_date", "publish_date": "publish_date",
-                "issue_size": "issue_size", "convert_price_initial": "convert_price_initial",
-                "convert_price": "convert_price", "convert_ratio": "convert_ratio",
-                "acc_convert_ratio": "acc_convert_ratio", "remain_size": "remain_size",
-                "total_shares": "total_shares"})
-            if not rows:
-                # 接口未按 trade_date 过滤时回退全量，再取最新快照（额外 1 次调用）
-                try:
-                    self.quota.consume()
-                    df = self._pro.cb_share(limit=5000)
-                    rows = self._rows(df, {
-                        "ts_code": "ts_code", "end_date": "end_date", "publish_date": "publish_date",
-                        "issue_size": "issue_size", "convert_price_initial": "convert_price_initial",
-                        "convert_price": "convert_price", "convert_ratio": "convert_ratio",
-                        "acc_convert_ratio": "acc_convert_ratio", "remain_size": "remain_size",
-                        "total_shares": "total_shares"})
-                except Exception:
-                    rows = []
-            latest = {}
-            for r in rows:
-                raw = (r.get("ts_code") or '').split('.')[0]
-                if not raw:
-                    continue
-                code = raw.zfill(6)
-                if len(code) != 6:
-                    continue
-                r["bond_code"] = code
-                dates = [d for d in (str(r.get("end_date") or '').replace('-', ''),
-                                     str(r.get("publish_date") or '').replace('-', '')) if d.isdigit()]
-                r["asof_date"] = self._norm_date(max(dates)) if dates else None
-                if r["asof_date"] and r["asof_date"].replace('-', '') > td:
-                    continue   # 只取不晚于目标日的快照
-                if code not in latest or (r["asof_date"] or '') > (latest[code]["asof_date"] or ''):
-                    latest[code] = r
-            return list(latest.values())
+            df = self._pro.cb_share(ann_date=td)
+            return self._cb_share_rows(df)
         except QuotaExhausted:
             raise
         except Exception as e:
-            logger.warning(f"[tushare] cb_share {td} 失败: {e}")
+            logger.warning(f"[tushare] cb_share ann={td} 失败: {e}")
+            return []
+
+    def fetch_cb_share_history(self, ts_code: str) -> list:
+        """单债全部转股公告历史（用于一次性回补 cb_share 历史）。"""
+        try:
+            if '.' not in ts_code:
+                # 转债代码不能套用股票 _ts_code（113xxx 在沪市、123/127/128xxx 在深市）
+                suffix = 'SZ' if ts_code.startswith('12') else 'SH'
+                ts_code = f'{ts_code}.{suffix}'
+            self.quota.consume()
+            df = self._pro.cb_share(ts_code=ts_code)
+            return self._cb_share_rows(df)
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            logger.warning(f"[tushare] cb_share history {ts_code} 失败: {e}")
             return []

@@ -69,7 +69,7 @@ def sync_daily(source=None, db=None, trade_date=None):
 
 
 def sync_share(source=None, db=None, trade_date=None):
-    """拉取并落库最新转股/余额快照（每债覆盖更新）。"""
+    """拉取该公告日发布的转股/余额（同一债不同公告日各存一行）。"""
     td = str(trade_date or date.today())[:10]
     source = source or _source()
     own_db = db is None
@@ -84,10 +84,56 @@ def sync_share(source=None, db=None, trade_date=None):
             db.close()
 
 
+def sync_share_history(source=None, db=None, reserve=200, progress_cb=None):
+    """按转债逐只回补全部转股公告历史（cb_share 历史表）。
+
+    1181 只 × 1 次调用；每只返回全部公告（单次上限 2000 行）。
+    """
+    source = source or _source()
+    own_db = db is None
+    db = db or _conn()
+    from crawler.adapters.tushare_quota import TushareQuota, QuotaExhausted
+    quota = TushareQuota.get()
+    done = rows = 0
+    halted = False
+    halt_reason = ''
+    try:
+        codes = [r[0] for r in db.execute(text(
+            "SELECT ts_code FROM cb_basic WHERE ts_code IS NOT NULL ORDER BY ts_code"
+        )).fetchall()]
+        for i, ts_code in enumerate(codes):
+            if quota.remaining() <= reserve:
+                halt_reason = f'配额熔断（余 {quota.remaining()} ≤ 保留 {reserve}）'
+                halted = True
+                break
+            try:
+                data = source.fetch_cb_share_history(ts_code)
+                rows += batch_upsert_cb_share(db, data)
+                done += 1
+            except QuotaExhausted:
+                halt_reason = '配额耗尽'
+                halted = True
+                break
+            except Exception as e:
+                logger.warning(f"[cb] share history {ts_code} 失败: {e}")
+            if progress_cb and done and done % 25 == 0:
+                try:
+                    progress_cb(done, len(codes), ts_code, rows)
+                except Exception:
+                    pass
+        return {'done': done, 'rows': rows, 'total': len(codes),
+                'halted': halted, 'halt_reason': halt_reason}
+    finally:
+        if own_db:
+            db.close()
+
+
 def sync_range(start_date, end_date=None, source=None, db=None,
                reserve=200, max_days=None, progress_cb=None):
     """按交易日区间回补可转债日行情（断点续跑，配额熔断）。
 
+    转股比例/剩余规模历史由 sync_share_history 逐债回补（公告口径），
+    不再与逐日行情混在同一循环里。
     返回 {'done': 完成日期数, 'rows': 入库行数, 'skipped': 已存在日期数,
           'halted': bool, 'halt_reason': str}
     """
@@ -108,9 +154,9 @@ def sync_range(start_date, end_date=None, source=None, db=None,
                 halt_reason = f'单次上限 {max_days} 天'
                 halted = True
                 break
-            exists = db.execute(text(
-                "SELECT 1 FROM cb_daily WHERE trade_date=:d AND close > 0 LIMIT 1"), {"d": td}).fetchone()
-            if exists:
+            daily_exists = bool(db.execute(text(
+                "SELECT 1 FROM cb_daily WHERE trade_date=:d AND close > 0 LIMIT 1"), {"d": td}).fetchone())
+            if daily_exists:
                 skipped += 1
                 continue
             if quota.remaining() <= reserve:

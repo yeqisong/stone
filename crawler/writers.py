@@ -815,7 +815,7 @@ def batch_upsert_cb_daily(db, records):
 
 
 def batch_upsert_cb_share(db, records):
-    """可转债转股/余额最新快照（cb_share，PK bond_code）。"""
+    """可转债转股/余额按日历史（cb_share，PK bond_code+asof_date）。"""
     from sqlalchemy import text
     if not records:
         return 0
@@ -826,8 +826,8 @@ def batch_upsert_cb_share(db, records):
         VALUES (:bond_code, :asof_date, :issue_size, :convert_price_initial,
             :convert_price, :convert_ratio, :acc_convert_ratio, :remain_size, :total_shares,
             CURRENT_TIMESTAMP)
-        ON CONFLICT (bond_code) DO UPDATE SET
-            asof_date=EXCLUDED.asof_date, issue_size=EXCLUDED.issue_size,
+        ON CONFLICT (bond_code, asof_date) DO UPDATE SET
+            issue_size=EXCLUDED.issue_size,
             convert_price_initial=EXCLUDED.convert_price_initial,
             convert_price=EXCLUDED.convert_price, convert_ratio=EXCLUDED.convert_ratio,
             acc_convert_ratio=EXCLUDED.acc_convert_ratio, remain_size=EXCLUDED.remain_size,
