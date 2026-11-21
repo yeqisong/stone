@@ -420,9 +420,12 @@
             <span v-if="sectorRs.up_ratio != null">（{{ (sectorRs.up_ratio * 100).toFixed(0) }}%）</span>
           </div>
           <div v-if="sectorRs.peers?.length" class="sector-peers">
-            <span v-for="p in sectorRs.peers.slice(0, 4)" :key="p.code">
-              {{ p.name }} <b :style="{color: p.change_pct >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtPct2(p.change_pct) }}</b>
-            </span>
+            <a v-for="p in sectorRs.peers.slice(0, 4)" :key="p.code" class="sector-peer"
+              :href="'#/detail/' + p.code" :title="`查看 ${p.name} (${p.code}) 详情`"
+              @click.prevent="jump(p.code)">
+              <span class="sector-peer-name">{{ p.name }}</span>
+              <b :style="{color: p.change_pct >= 0 ? 'var(--c-up)' : 'var(--c-down)'}">{{ fmtPct2(p.change_pct) }}</b>
+            </a>
           </div>
         </div>
 
@@ -4386,8 +4389,18 @@ watch(()=>props.code, v=>{
 .sector-row b { color: var(--c-text); font-variant-numeric: tabular-nums; margin-left: 2px; }
 .sector-sub { margin-top: 4px; font-size: var(--text-meta); color: var(--c-text-faint); }
 .sector-peers { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-dim); }
-.sector-peers span { display: flex; justify-content: space-between; gap: 8px; }
-.sector-peers b { font-variant-numeric: tabular-nums; }
+.sector-peer {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  margin: 0 -4px; padding: 2px 4px; border-radius: 4px;
+  color: inherit; text-decoration: none; cursor: pointer;
+}
+.sector-peer:hover { background: var(--c-card-bg-hover); color: var(--c-text); }
+.sector-peer:focus-visible { outline: 1px solid var(--c-accent); outline-offset: 1px; }
+.sector-peer-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sector-peer:hover .sector-peer-name::after { content: ' ↗'; color: var(--c-accent); font-size: 11px; }
+.sector-peers b { font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .mtf-score { display: flex; align-items: baseline; gap: 8px; }
 .mtf-score b { font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
 .mtf-score span { font-size: var(--text-meta); font-weight: 600; }
