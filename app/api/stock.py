@@ -1,5 +1,6 @@
 """个股详情 API — 最新策略信号 + 历史信号分页 + K线(含全部指标)。"""
 import json
+import math
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -282,6 +283,10 @@ def get_stock_kline(
                 ORDER BY trade_date DESC LIMIT :days
             """), {"c": code, "days": days})
             rows = list(reversed(result.fetchall()))
+            # 早期指数只有收盘价，open/high/low 是 PostgreSQL NaN；JSON 不能序列化 NaN，
+            # 且日 K 没有 OHLC 也画不出来。过滤掉这些行（000300 从 2005-01 起有完整 OHLC）。
+            rows = [r for r in rows
+                    if all(math.isfinite(float(r[i])) for i in (1, 2, 3, 4))]
         else:
             # 个股/ETF：从 daily_quote 获取（支持复权），days 限制最近 N 个交易日
             # 列名来自白名单映射，安全；用两层 SQL 避免 f-string 注入风险。
