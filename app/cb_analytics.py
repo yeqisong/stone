@@ -374,13 +374,14 @@ def watch_candidates(items, limit=8):
     risk = []
     for item in items:
         score = _f(item.get('score'))
-        if score is None:
+        if score is None or _f(item.get('price')) is None:
             continue
         keys = item.get('strategies') or strategy_keys(item)
         flags = item.get('risk_flags') or []
         triggers = watch_triggers(item)
-        if score >= 55 and any(k in ('low_premium', 'double_low', 'small_elastic', 'defensive')
-                               for k in keys):
+        if (score >= 55 and not flags
+                and any(k in ('low_premium', 'double_low', 'small_elastic', 'defensive')
+                        for k in keys)):
             focus.append({**item, 'watch_type': 'focus', 'watch_triggers': triggers})
         if flags or score < 40:
             risk.append({**item, 'watch_type': 'risk', 'watch_triggers': triggers})

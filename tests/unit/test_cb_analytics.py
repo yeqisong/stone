@@ -200,6 +200,15 @@ class TestCBAdapterMapping(unittest.TestCase):
         self.assertEqual(rows[0]['stk_code'], '601166')
         self.assertEqual(rows[0]['list_date'], '2020-01-01')
 
+    def test_fetch_cb_basic_empty_stock_is_null(self):
+        a = self._adapter()
+        import pandas as pd
+        a._pro.cb_basic.return_value = pd.DataFrame([{
+            'ts_code': '121001.SZ', 'bond_short_name': '旧债', 'stk_code': '',
+        }])
+        rows = a.fetch_cb_basic()
+        self.assertIsNone(rows[0]['stk_code'])
+
     def test_fetch_cb_daily_normalizes(self):
         a = self._adapter()
         import pandas as pd
@@ -210,6 +219,16 @@ class TestCBAdapterMapping(unittest.TestCase):
         rows = a.fetch_cb_daily('2026-11-20')
         self.assertEqual(rows[0]['bond_code'], '113052')
         self.assertEqual(rows[0]['trade_date'], '2026-11-20')
+
+    def test_fetch_cb_daily_drops_zero_close(self):
+        a = self._adapter()
+        import pandas as pd
+        a._pro.cb_daily.return_value = pd.DataFrame([
+            {'ts_code': '113052.SH', 'trade_date': '20261120', 'close': 0, 'vol': 0, 'amount': 0},
+            {'ts_code': '127001.SZ', 'trade_date': '20261120', 'close': 120, 'vol': 10, 'amount': 1200},
+        ])
+        rows = a.fetch_cb_daily('2026-11-20')
+        self.assertEqual([r['bond_code'] for r in rows], ['127001'])
 
     def test_fetch_cb_share_latest_only(self):
         a = self._adapter()

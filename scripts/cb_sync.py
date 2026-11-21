@@ -1,7 +1,7 @@
 """可转债历史/增量同步 CLI。
 
 用法：
-    python -m scripts.cb_sync --start 2023-01-01 --end 2026-11-20
+    python -m scripts.cb_sync --start 2019-01-01 --end 2026-11-20
     python -m scripts.cb_sync --skip-basic --skip-share --max-days 60
 
 - 默认刷新 cb_basic（1 次调用）→ 回补区间缺失日行情 → 同步最新转股/余额快照。
@@ -16,7 +16,7 @@ from crawler.cb import sync_basic, sync_range, sync_share
 
 def main():
     ap = argparse.ArgumentParser(description='可转债数据同步')
-    ap.add_argument('--start', default='2023-01-01', help='回补起始日（默认 2023-01-01）')
+    ap.add_argument('--start', default='2019-01-01', help='回补起始日（默认 2019-01-01，Tushare cb_daily 最早可用）')
     ap.add_argument('--end', default=None, help='回补截止日（默认今天）')
     ap.add_argument('--skip-basic', action='store_true', help='跳过 cb_basic 刷新')
     ap.add_argument('--skip-share', action='store_true', help='跳过 cb_share 快照')

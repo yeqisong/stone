@@ -5284,7 +5284,7 @@ _EXT_COLLECTORS = {
     'forecast':        (_ext_forecast,        "SELECT 1 FROM stock_forecast WHERE ann_date=:d LIMIT 1"),
     'express':         (_ext_express,         "SELECT 1 FROM stock_express WHERE ann_date=:d LIMIT 1"),
     'index_weight':    (_ext_index_weight,    None),
-    'cb_daily':        (_ext_cb_daily,        "SELECT 1 FROM cb_daily WHERE trade_date=:d LIMIT 1"),
+    'cb_daily':        (_ext_cb_daily,        "SELECT 1 FROM cb_daily WHERE trade_date=:d AND close > 0 LIMIT 1"),
 }
 # 代码轮换型采集器（按股票代码而非日期回补：fina_indicator 单票一次调用返回全部报告期）
 _EXT_CODE_COLLECTORS = {

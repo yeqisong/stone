@@ -92,16 +92,25 @@ def _stock_metrics(rows, target_date=None):
     return out
 
 
-def _load_bundle(db):
-    """一次拉齐 cb_basic + 最新行情/转股快照/正股行情与价格分位历史。"""
-    basic_rows = db.execute(text("""
+def _load_bundle(db, bond_codes=None):
+    """一次拉齐 cb_basic + 最新行情/转股快照/正股行情与价格分位历史。
+
+    bond_codes 非空时只加载指定转债（个股详情卡片/单债详情避免全量扫描）。
+    """
+    sql = """
         SELECT bond_code, ts_code, exchange, bond_short_name, bond_full_name,
                stk_code, stk_short_name, list_date, delist_date, maturity_date,
                conv_start_date, conv_end_date, conv_stop_date,
                first_conv_price, conv_price, issue_size, remain_size,
                coupon_rate, maturity, par, value_date, rate_clause
-        FROM cb_basic ORDER BY bond_code
-    """)).fetchall()
+        FROM cb_basic
+    """
+    params = {}
+    if bond_codes:
+        sql += " WHERE bond_code = ANY(:bc)"
+        params["bc"] = list(bond_codes)
+    sql += " ORDER BY bond_code"
+    basic_rows = db.execute(text(sql), params).fetchall()
     basics = {r[0]: dict(r._mapping) for r in basic_rows}
     if not basics:
         return {'basics': {}, 'quotes': {}, 'shares': {}, 'stocks': {}, 'price_hist': {}, 'asof': None}
@@ -245,8 +254,8 @@ def _active(item):
     return (dd is None or dd >= date.today().isoformat()) and (remain is None or remain > 0)
 
 
-def _load_items(db, only_active=True):
-    bundle = _load_bundle(db)
+def _load_items(db, only_active=True, bond_codes=None):
+    bundle = _load_bundle(db, bond_codes=bond_codes)
     items = []
     for code in bundle['basics']:
         it = _build_item(bundle, code)
@@ -356,8 +365,14 @@ def cb_coach():
 def stock_convertible_bonds(code: str):
     db = get_sync_db()
     try:
-        items, _ = _load_items(db, only_active=False)
-        rows = [x for x in items if x.get('stock_code') == code]
+        # 绝大多数个股没有转债：先查代码列表；有债也只加载这几只，
+        # 避免为每只股票都跑全量 _load_items（约 1s，详情页每次打开都被拖慢）
+        codes = [r[0] for r in db.execute(text(
+            "SELECT bond_code FROM cb_basic WHERE stk_code=:c"), {"c": code}).fetchall()]
+        if not codes:
+            return {'ok': True, 'items': []}
+        items, _ = _load_items(db, only_active=True, bond_codes=codes)
+        rows = [x for x in items if x.get('price') is not None]
         return {'ok': True, 'items': rows}
     finally:
         db.close()
@@ -367,7 +382,7 @@ def stock_convertible_bonds(code: str):
 def cb_detail(bond_code: str, days: int = Query(250, ge=30, le=1000)):
     db = get_sync_db()
     try:
-        items, bundle = _load_items(db, only_active=False)
+        items, bundle = _load_items(db, only_active=False, bond_codes=[bond_code])
         item = next((x for x in items if x['bond_code'] == bond_code), None)
         if not item:
             raise HTTPException(404, f'未找到可转债 {bond_code}')

@@ -206,7 +206,7 @@ function switchView(t) {
   viewTab.value = t
   syncHash()
   if (t === 'strategy') loadPools()
-  if (t === 'analysis') nextTick(drawScatter)
+  if (t === 'analysis') load()
 }
 function toggleActive() {
   onlyActive.value = !onlyActive.value
@@ -226,8 +226,10 @@ async function load() {
   loading.value = true
   syncHash()
   try {
-    const q = { page: page.value, page_size: pageSize.value, sort: sortField.value,
-                order: order.value, only_active: onlyActive.value }
+    // 分析页需要全市场散点，不复用列表分页的 50 条
+    const analysis = viewTab.value === 'analysis'
+    const q = { page: analysis ? 1 : page.value, page_size: analysis ? 1000 : pageSize.value,
+                sort: sortField.value, order: order.value, only_active: onlyActive.value }
     if (kw.value) q.kw = kw.value
     if (strategy.value) q.strategy = strategy.value
     const r = await axios.get(API + '/api/cb/list', { params: q })
@@ -235,7 +237,7 @@ async function load() {
     rows.value = r.data.items || []
     total.value = r.data.total || 0
     asof.value = r.data.asof || ''
-    if (viewTab.value === 'analysis') nextTick(drawScatter)
+    if (analysis) nextTick(drawScatter)
   } catch (e) {
     message.error(e.response?.data?.detail || '可转债列表加载失败')
   } finally {
@@ -286,17 +288,23 @@ function drawScatter() {
   }, true)
 }
 
+function onPopState() {
+  if (nav.tab !== 'b') return
+  parseHash()
+  load()
+  if (viewTab.value === 'strategy') loadPools()
+}
 onMounted(async () => {
   parseHash()
   load()
   if (viewTab.value === 'strategy') loadPools()
   window.addEventListener('resize', drawScatter)
-  window.addEventListener('popstate', parseHash)
+  window.addEventListener('popstate', onPopState)
 })
 onUnmounted(() => {
   alive = false
   window.removeEventListener('resize', drawScatter)
-  window.removeEventListener('popstate', parseHash)
+  window.removeEventListener('popstate', onPopState)
   if (scatterChart) { scatterChart.dispose(); scatterChart = null }
 })
 </script>
