@@ -44,21 +44,21 @@ def _price_from_body(body: str) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
-def _load_sells(db, start: date) -> list[dict]:
+def _load_sells(db, user_id: int, start: date) -> list[dict]:
     try:
         rows = db.execute(text("""
             SELECT trade_date, trade_time, stock_code, stock_name,
                    quantity, price, amount, 'slip' AS src
             FROM trade_slip
-            WHERE LOWER(side)='sell' AND trade_date >= :s
+            WHERE user_id=:uid AND LOWER(side)='sell' AND trade_date >= :s
             UNION ALL
             SELECT trade_date, trade_time, stock_code, stock_name,
                    quantity, price, amount, 'manual' AS src
             FROM trade_intraday
-            WHERE LOWER(side)='sell' AND trade_date >= :s
+            WHERE user_id=:uid AND LOWER(side)='sell' AND trade_date >= :s
               AND COALESCE(reconciled, false)=false
             ORDER BY trade_date, trade_time
-        """), {"s": start}).mappings().fetchall()
+        """), {"uid": user_id, "s": start}).mappings().fetchall()
     except Exception:
         return []
     return [dict(r) for r in rows if _f(r.get("price")) > 0]
@@ -146,8 +146,8 @@ def _avg(vals) -> Optional[float]:
     return round(fmean(vals), 6) if vals else None
 
 
-def sell_quality(db, start: date, limit: int = 100) -> dict:
-    rows = _load_sells(db, start)
+def sell_quality(db, user_id: int, start: date, limit: int = 100) -> dict:
+    rows = _load_sells(db, user_id, start)
     cache: dict[tuple[str, date], list[dict]] = {}
     out = []
     for r in rows:
@@ -204,17 +204,18 @@ def sell_quality(db, start: date, limit: int = 100) -> dict:
     return {"rows": out[:limit], "summary": summary}
 
 
-def alert_execution(db, start: date, limit: int = 100) -> dict:
+def alert_execution(db, user_id: int, start: date, limit: int = 100) -> dict:
     try:
         alerts = db.execute(text("""
             SELECT id, trade_date, created_at, stock_code, kind, title, body, trigger_price
             FROM risk_alerts
-            WHERE trade_date >= :s AND kind IN ('it_stop', 'it_take', 'it_reduce_bounce')
+            WHERE user_id=:uid AND trade_date >= :s
+              AND kind IN ('it_stop', 'it_take', 'it_reduce_bounce')
             ORDER BY created_at DESC
-        """), {"s": start}).mappings().fetchall()
+        """), {"uid": user_id, "s": start}).mappings().fetchall()
     except Exception:
         alerts = []
-    sells = _load_sells(db, start)
+    sells = _load_sells(db, user_id, start)
     by_code: dict[tuple[str, date], list[dict]] = {}
     for s in sells:
         s["_dt"] = _parse_dt(s["trade_date"], s.get("trade_time"))
@@ -282,29 +283,29 @@ def alert_execution(db, start: date, limit: int = 100) -> dict:
     }
 
 
-def emotion_summary(db, start: date) -> list[dict]:
+def emotion_summary(db, user_id: int, start: date) -> list[dict]:
     try:
         rows = db.execute(text("""
             SELECT COALESCE(NULLIF(emotion, ''), '未标注') AS emotion,
                    side, COUNT(*) AS n, SUM(amount) AS amount
             FROM trade_intraday
-            WHERE trade_date >= :s
+            WHERE user_id=:uid AND trade_date >= :s
             GROUP BY 1, 2 ORDER BY n DESC
-        """), {"s": start}).fetchall()
+        """), {"uid": user_id, "s": start}).fetchall()
     except Exception:
         rows = []
     return [{"emotion": r[0], "side": r[1], "count": int(r[2] or 0),
              "amount": round(_f(r[3]), 2)} for r in rows]
 
 
-def report(db, days: int = 30) -> dict:
+def report(db, user_id: int, days: int = 30) -> dict:
     days = max(1, min(int(days or 30), 180))
     start = date.today() - timedelta(days=days)
-    sells = sell_quality(db, start)
-    alerts = alert_execution(db, start)
+    sells = sell_quality(db, user_id, start)
+    alerts = alert_execution(db, user_id, start)
     return {
         "ok": True, "days": days, "start": start.isoformat(),
         "sells": sells["rows"], "sell_summary": sells["summary"],
         "alerts": alerts["rows"], "alert_summary": alerts["summary"],
-        "emotions": emotion_summary(db, start),
+        "emotions": emotion_summary(db, user_id, start),
     }

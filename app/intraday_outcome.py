@@ -54,9 +54,9 @@ def _direction(kind: str) -> int:
 def _upsert(db, alert, entry, direction, rets, mfe, mae, hit, status, now):
     db.execute(text("""
         INSERT INTO intraday_signal_outcome
-        (alert_id, stock_code, kind, trade_date, alert_time, entry_price, direction,
+        (user_id, alert_id, stock_code, kind, trade_date, alert_time, entry_price, direction,
          ret_5m, ret_15m, ret_30m, ret_60m, mfe, mae, hit, status, evaluated_at)
-        VALUES (:a, :c, :k, :d, :t, :p, :dir,
+        VALUES (:uid, :a, :c, :k, :d, :t, :p, :dir,
                 :r5, :r15, :r30, :r60, :mfe, :mae, :hit, :s, :now)
         ON CONFLICT (alert_id) DO UPDATE SET
             entry_price=EXCLUDED.entry_price, direction=EXCLUDED.direction,
@@ -65,6 +65,7 @@ def _upsert(db, alert, entry, direction, rets, mfe, mae, hit, status, now):
             mfe=EXCLUDED.mfe, mae=EXCLUDED.mae, hit=EXCLUDED.hit,
             status=EXCLUDED.status, evaluated_at=EXCLUDED.evaluated_at
     """), {
+        'uid': getattr(alert, 'user_id', None),
         'a': alert.id, 'c': alert.stock_code, 'k': alert.kind,
         'd': alert.trade_date, 't': alert.created_at, 'p': entry, 'dir': direction,
         'r5': rets.get('ret_5m'), 'r15': rets.get('ret_15m'),
@@ -147,7 +148,7 @@ def evaluate_pending(limit: int = 200) -> dict:
     stats = {'done': 0, 'partial': 0, 'pending': 0, 'no_data': 0, 'error': 0}
     try:
         rows = db.execute(text("""
-            SELECT a.id, a.stock_code, a.kind, a.trade_date, a.created_at,
+            SELECT a.id, a.user_id, a.stock_code, a.kind, a.trade_date, a.created_at,
                    a.body, a.trigger_price, o.id, o.status
             FROM risk_alerts a
             LEFT JOIN intraday_signal_outcome o ON o.alert_id = a.id
@@ -159,8 +160,8 @@ def evaluate_pending(limit: int = 200) -> dict:
         """), {'cut': cutoff, 'n': limit}).fetchall()
         for r in rows:
             alert = SimpleNamespace(
-                id=r[0], stock_code=r[1], kind=r[2], trade_date=r[3],
-                created_at=r[4], body=r[5], trigger_price=r[6],
+                id=r[0], user_id=r[1], stock_code=r[2], kind=r[3], trade_date=r[4],
+                created_at=r[5], body=r[6], trigger_price=r[7],
             )
             try:
                 status = evaluate_one(db, alert, now)

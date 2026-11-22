@@ -7,23 +7,24 @@ from fastapi import APIRouter, Query, HTTPException, Depends
 from sqlalchemy import text
 
 from app.db.connection import get_sync_db
-from app.auth.auth import get_current_user
+from app.auth.auth import get_current_user, Principal
 from app.api.stocks import ORDER_SQL_MAP, VALID_ORDER_BY, VALID_ORDER_DIR
 
 router = APIRouter(tags=["watch"])
 
 
 @router.get("/watch/groups")
-def list_groups():
-    """全部分组（自选恒排最前，动态组按创建序），带组内个股数。"""
+def list_groups(principal: Principal = Depends(get_current_user)):
+    """当前用户全部分组（自选恒排最前，动态组按创建序），带组内个股数。"""
     db = get_sync_db()
     try:
         rows = db.execute(text("""
             SELECT g.id, g.group_name, g.is_default, g.sort_order,
                    (SELECT COUNT(*) FROM watch_group_items i WHERE i.group_id = g.id) AS cnt
             FROM watch_groups g
+            WHERE g.user_id=:uid
             ORDER BY g.is_default DESC, g.sort_order, g.id
-        """)).fetchall()
+        """), {"uid": principal.data_user_id}).fetchall()
         return {"groups": [
             {"id": r[0], "name": r[1], "is_default": r[2], "count": r[4]} for r in rows
         ]}
@@ -32,20 +33,22 @@ def list_groups():
 
 
 @router.post("/watch/groups")
-def create_group(body: dict, user: str = Depends(get_current_user)):
-    """新增分组。body: {"name": "xx组"}"""
+def create_group(body: dict, principal: Principal = Depends(get_current_user)):
+    """新增当前用户分组。body: {"name": "xx组"}"""
     name = (body.get("name") or "").strip()
     if not name or len(name) > 32:
         raise HTTPException(400, "分组名需 1~32 字符")
     if name == "自选" or name == "持仓":
         raise HTTPException(400, "该名称为保留名，请换一个")
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
         try:
             gid = db.execute(text(
-                "INSERT INTO watch_groups (group_name, is_default, sort_order) "
-                "VALUES (:n, false, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM watch_groups)) RETURNING id"
-            ), {"n": name}).scalar()
+                "INSERT INTO watch_groups (user_id, group_name, is_default, sort_order) "
+                "VALUES (:uid, :n, false, (SELECT COALESCE(MAX(sort_order), 0) + 1 "
+                "FROM watch_groups WHERE user_id=:uid)) RETURNING id"
+            ), {"uid": uid, "n": name}).scalar()
             db.commit()
             return {"ok": True, "id": gid, "name": name}
         except Exception as e:
@@ -58,17 +61,21 @@ def create_group(body: dict, user: str = Depends(get_current_user)):
 
 
 @router.delete("/watch/groups/{group_id}")
-def delete_group(group_id: int, user: str = Depends(get_current_user)):
-    """删除动态分组（自选组不可删），组内个股随 CASCADE 清除。"""
+def delete_group(group_id: int, principal: Principal = Depends(get_current_user)):
+    """删除当前用户动态分组（自选组不可删），组内个股随 CASCADE 清除。"""
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
         is_default = db.execute(text(
-            "SELECT is_default FROM watch_groups WHERE id=:g"), {"g": group_id}).scalar()
+            "SELECT is_default FROM watch_groups WHERE id=:g AND user_id=:uid"
+        ), {"g": group_id, "uid": uid}).scalar()
         if is_default is None:
             raise HTTPException(404, "分组不存在")
         if is_default:
             raise HTTPException(400, "自选组不可删除")
-        db.execute(text("DELETE FROM watch_groups WHERE id=:g"), {"g": group_id})
+        db.execute(text(
+            "DELETE FROM watch_groups WHERE id=:g AND user_id=:uid"
+        ), {"g": group_id, "uid": uid})
         db.commit()
         return {"ok": True}
     finally:
@@ -83,15 +90,18 @@ def list_group_stocks(
     keyword: str = Query(""),
     order_by: str = Query("trade_date"),
     order_dir: str = Query("desc"),
+    principal: Principal = Depends(get_current_user),
 ):
-    """组内个股列表 — 列字段与 /api/stocks 完全一致（代码/名称/交易所/最新价/涨跌幅/PE/行业/数据日期）。"""
+    """当前用户组内个股列表 — 列字段与 /api/stocks 完全一致。"""
     if order_by not in VALID_ORDER_BY:
         raise HTTPException(400, f"无效的 order_by: {order_by}")
     if order_dir not in VALID_ORDER_DIR:
         raise HTTPException(400, f"无效的 order_dir: {order_dir}")
     db = get_sync_db()
     try:
-        exists = db.execute(text("SELECT 1 FROM watch_groups WHERE id=:g"), {"g": group_id}).scalar()
+        exists = db.execute(text(
+            "SELECT 1 FROM watch_groups WHERE id=:g AND user_id=:uid"
+        ), {"g": group_id, "uid": principal.data_user_id}).scalar()
         if not exists:
             raise HTTPException(404, "分组不存在")
         offset = (page - 1) * page_size
@@ -151,8 +161,8 @@ def list_group_stocks(
 
 
 @router.put("/watch/stock-groups")
-def set_stock_groups(body: dict, user: str = Depends(get_current_user)):
-    """整体设置一个个股的分组归属（详情页加组弹窗保存）。
+def set_stock_groups(body: dict, principal: Principal = Depends(get_current_user)):
+    """整体设置一个个股在当前用户分组中的归属（详情页加组弹窗保存）。
 
     body: {"stock_code": "600000", "group_ids": [1, 3]} → 差量增删，未列出的组移除。
     """
@@ -162,23 +172,25 @@ def set_stock_groups(body: dict, user: str = Depends(get_current_user)):
         raise HTTPException(400, "缺少 stock_code")
     if not isinstance(gids, list) or any(not isinstance(g, int) for g in gids):
         raise HTTPException(400, "group_ids 需为整数数组")
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
-        # 组存在性校验（防写入悬空 id）
+        # 只允许操作当前用户的组
         if gids:
             n = db.execute(text(
-                "SELECT COUNT(*) FROM watch_groups WHERE id = ANY(:g)"), {"g": gids}).scalar()
+                "SELECT COUNT(*) FROM watch_groups WHERE user_id=:uid AND id = ANY(:g)"
+            ), {"uid": uid, "g": gids}).scalar()
             if n != len(set(gids)):
                 raise HTTPException(400, "存在无效分组")
         db.execute(text(
-            "DELETE FROM watch_group_items WHERE stock_code=:c AND group_id <> ALL(CAST(:g AS int[]))"),
-            {"c": code, "g": gids})
+            "DELETE FROM watch_group_items WHERE stock_code=:c "
+            "AND group_id IN (SELECT id FROM watch_groups WHERE user_id=:uid) "
+            "AND group_id <> ALL(CAST(:g AS int[]))"
+        ), {"c": code, "uid": uid, "g": gids})
         if gids:
-            # 加入价此刻落库（最新有效收盘，真实价）：加入后涨跌幅的基准不随当晚采集漂移
             jp = db.execute(text(
                 "SELECT close FROM daily_quote WHERE stock_code=:c AND close > 0 "
                 "ORDER BY trade_date DESC LIMIT 1"), {"c": code}).scalar()
-            # CAST 而非 ::int[] —— text() 会把 :g::int 解析成第二个绑定参数
             db.execute(text(
                 "INSERT INTO watch_group_items (group_id, stock_code, join_price) "
                 "SELECT g, :c, :jp FROM unnest(CAST(:g AS int[])) AS g "
@@ -191,19 +203,21 @@ def set_stock_groups(body: dict, user: str = Depends(get_current_user)):
 
 
 @router.get("/watch/stock-groups")
-def get_stock_groups(code: str):
-    """个股当前的分组状态（详情页标签行）：所属分组 + 是否持仓（portfolio 固有状态）。"""
+def get_stock_groups(code: str, principal: Principal = Depends(get_current_user)):
+    """当前用户个股分组状态（详情页标签行）：所属分组 + 是否持仓。"""
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
         rows = db.execute(text("""
             SELECT g.id, g.group_name, g.is_default, i.added_at
             FROM watch_group_items i JOIN watch_groups g ON g.id = i.group_id
-            WHERE i.stock_code = :c
+            WHERE g.user_id=:uid AND i.stock_code = :c
             ORDER BY g.is_default DESC, g.sort_order, g.id
-        """), {"c": code}).fetchall()
+        """), {"uid": uid, "c": code}).fetchall()
         in_portfolio = bool(db.execute(text(
-            "SELECT 1 FROM portfolio WHERE stock_code=:c AND is_active=true AND quantity > 0 LIMIT 1"
-        ), {"c": code}).scalar())
+            "SELECT 1 FROM portfolio WHERE user_id=:uid AND stock_code=:c "
+            "AND is_active=true AND quantity > 0 LIMIT 1"
+        ), {"uid": uid, "c": code}).scalar())
         return {"groups": [{"id": r[0], "name": r[1], "is_default": r[2],
                             "added_at": str(r[3])[:16] if r[3] else None} for r in rows],
                 "in_portfolio": in_portfolio}

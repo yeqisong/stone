@@ -28,10 +28,7 @@ DEFAULT_RULES = {
 }
 
 
-def get_risk_rules(db) -> dict:
-    row = db.execute(text(
-        "SELECT params, enabled FROM strategy_config WHERE strategy_name = :k ORDER BY id DESC LIMIT 1"
-    ), {"k": RULES_CONFIG_KEY}).fetchone()
+def _parse_rules(row) -> dict:
     rules = dict(DEFAULT_RULES)
     if row:
         try:
@@ -42,27 +39,71 @@ def get_risk_rules(db) -> dict:
     return rules
 
 
+def get_user_risk_rules(db, user_id: int) -> dict:
+    """个人实盘风控规则（user_config.risk_rules）。"""
+    row = db.execute(text(
+        "SELECT params, enabled FROM user_config WHERE user_id=:uid AND config_key=:k"
+    ), {"uid": user_id, "k": RULES_CONFIG_KEY}).fetchone()
+    return _parse_rules(row)
+
+
+def save_user_risk_rules(db, user_id: int, rules: dict, enabled: bool) -> dict:
+    merged = {**DEFAULT_RULES, **(rules or {}), 'enabled': bool(enabled)}
+    db.execute(text("""
+        INSERT INTO user_config (user_id, config_key, params, enabled, updated_at)
+        VALUES (:uid, :k, CAST(:p AS jsonb), :e, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, config_key) DO UPDATE SET
+            params=EXCLUDED.params, enabled=EXCLUDED.enabled,
+            updated_at=CURRENT_TIMESTAMP
+    """), {"uid": user_id, "k": RULES_CONFIG_KEY,
+           "p": json.dumps(merged), "e": bool(enabled)})
+    db.commit()
+    return merged
+
+
+def get_model_risk_rules(db) -> dict:
+    """模型纸面风控规则（strategy_config.model_risk_rules；兼容旧 risk_rules）。"""
+    row = db.execute(text(
+        "SELECT params, enabled FROM strategy_config WHERE strategy_name = 'model_risk_rules' "
+        "ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    if row is None:
+        row = db.execute(text(
+            "SELECT params, enabled FROM strategy_config WHERE strategy_name = :k "
+            "ORDER BY id DESC LIMIT 1"
+        ), {"k": RULES_CONFIG_KEY}).fetchone()
+    return _parse_rules(row)
+
+
+def get_risk_rules(db) -> dict:
+    """兼容旧调用：模型纸面风控规则。"""
+    return get_model_risk_rules(db)
+
+
 def save_risk_rules(db, rules: dict, enabled: bool):
+    """保存模型纸面风控规则（全局，系统任务/管理员使用）。"""
     rules = {**DEFAULT_RULES, **(rules or {}), 'enabled': bool(enabled)}
-    db.execute(text("DELETE FROM strategy_config WHERE strategy_name = :k"), {"k": RULES_CONFIG_KEY})
     db.execute(text(
-        "INSERT INTO strategy_config (strategy_name, enabled, params) VALUES (:k, :e, :p)"
-    ), {"k": RULES_CONFIG_KEY, "e": enabled, "p": json.dumps(rules)})
+        "INSERT INTO strategy_config (strategy_name, enabled, params) VALUES ('model_risk_rules', :e, :p) "
+        "ON CONFLICT (strategy_name) DO UPDATE SET enabled=EXCLUDED.enabled, params=EXCLUDED.params, "
+        "updated_at=CURRENT_TIMESTAMP"
+    ), {"e": enabled, "p": json.dumps(rules)})
     db.commit()
     return rules
 
 
-def _insert_alert(db, trade_date, kind, level, title, body) -> bool:
-    """同日同因去重；返回是否新插入。"""
+def _insert_alert(db, trade_date, kind, level, title, body, user_id: int | None = None) -> bool:
+    """同日同因去重（按 owner）；返回是否新插入。"""
     row = db.execute(text(
-        "SELECT id FROM risk_alerts WHERE trade_date = :d AND kind = :k AND title = :t LIMIT 1"
-    ), {"d": trade_date, "k": kind, "t": title}).fetchone()
+        "SELECT id FROM risk_alerts WHERE trade_date = :d AND kind = :k AND title = :t "
+        "AND user_id IS NOT DISTINCT FROM :uid LIMIT 1"
+    ), {"d": trade_date, "k": kind, "t": title, "uid": user_id}).fetchone()
     if row:
         return False
     db.execute(text(
-        "INSERT INTO risk_alerts (trade_date, kind, level, title, body) "
-        "VALUES (:d, :k, :lv, :t, :b)"
-    ), {"d": trade_date, "k": kind, "lv": level, "t": title, "b": body})
+        "INSERT INTO risk_alerts (user_id, trade_date, kind, level, title, body) "
+        "VALUES (:uid, :d, :k, :lv, :t, :b)"
+    ), {"uid": user_id, "d": trade_date, "k": kind, "lv": level, "t": title, "b": body})
     return True
 
 

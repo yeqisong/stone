@@ -507,12 +507,20 @@ def setup_gate(db, code: str, quote: Optional[dict] = None) -> dict:
 
 # ── 风险闸门（复用现有交易前检查） ─────────────────────────────────────────
 
+def _call_user(fn, db, user_id, *args, **kwargs):
+    """兼容旧调用：user_id=None 时走单用户签名；生产路径始终传 user_id。"""
+    if user_id is None:
+        return fn(db, *args, **kwargs)
+    return fn(db, user_id, *args, **kwargs)
+
+
 def _risk_gate(db, code: str, entry: float, stop: float, target: float,
-               qty: Optional[float] = None) -> dict:
+               qty: Optional[float] = None,
+               user_id: int | None = None) -> dict:
     body = {"stock_code": code, "side": "buy", "quantity": 1,
             "price": entry, "stop_price": stop}
     try:
-        probe = intraday_check(db, body)
+        probe = _call_user(intraday_check, db, user_id, body)
     except Exception as e:
         logger.warning(f"[buy-check] {code} 风险检查失败: {str(e)[:150]}")
         return {
@@ -526,7 +534,8 @@ def _risk_gate(db, code: str, entry: float, stop: float, target: float,
     risk = probe
     if want_qty > 0 and want_qty != 1:
         try:
-            risk = intraday_check(db, {**body, "quantity": want_qty})
+            risk = _call_user(intraday_check, db, user_id,
+                              {**body, "quantity": want_qty})
         except Exception as e:
             logger.warning(f"[buy-check] {code} 目标仓位检查失败: {str(e)[:150]}")
             risk = dict(probe)
@@ -587,7 +596,7 @@ def _risk_gate(db, code: str, entry: float, stop: float, target: float,
 
 def check(db, code: str, entry: Optional[float] = None,
           stop: Optional[float] = None, target: Optional[float] = None,
-          qty: Optional[float] = None) -> dict:
+          qty: Optional[float] = None, user_id: int | None = None) -> dict:
     code = str(code or "").strip().zfill(6)
     market = market_gate(db)
     sector = sector_gate(db, code)
@@ -598,7 +607,8 @@ def check(db, code: str, entry: Optional[float] = None,
     use_entry = _f(entry) or price or _f(det.get("entry"))
     use_stop = _f(stop) or _f(det.get("stop"))
     use_target = _f(target) or _f(det.get("target"))
-    risk = _risk_gate(db, code, use_entry, use_stop, use_target, qty)
+    risk = _risk_gate(db, code, use_entry, use_stop, use_target, qty,
+                      user_id=user_id)
 
     gates = [market, sector, setup, risk]
     allowed = all(g.get("pass") for g in gates)
@@ -642,7 +652,7 @@ def check(db, code: str, entry: Optional[float] = None,
     }
 
 
-def _focus_pool(db) -> list[dict]:
+def _focus_pool(db, user_id: int) -> list[dict]:
     rows = db.execute(text("""
         SELECT DISTINCT ON (fp.stock_code) fp.stock_code, sm.stock_name,
                sm.industry_l1, sm.stock_type
@@ -653,9 +663,10 @@ def _focus_pool(db) -> list[dict]:
             ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END
             LIMIT 1
         ) sm ON true
+        WHERE fp.user_id=:uid
         ORDER BY fp.stock_code
         LIMIT 50
-    """)).fetchall()
+    """), {"uid": user_id}).fetchall()
     return [{"code": r[0], "name": r[1], "industry": r[2], "type": r[3]} for r in rows]
 
 
@@ -677,7 +688,8 @@ def _state_digest(st: dict) -> dict:
     return {k: st.get(k) for k in keys}
 
 
-def _recent_sold_codes(db, st: dict, days: int = 5) -> set[str]:
+def _recent_sold_codes(db, st: dict, days: int = 5,
+                       user_id: int | None = None) -> set[str]:
     """同日/近期卖出的票不再作为买点候选，避免点进去才发现当日回补/5日回补被拦。"""
     codes = {a.get("stock_code") for a in (st.get("today_actions") or [])
              if a.get("side") == "sell" and a.get("stock_code")}
@@ -687,20 +699,20 @@ def _recent_sold_codes(db, st: dict, days: int = 5) -> set[str]:
     try:
         rows = db.execute(text("""
             SELECT DISTINCT stock_code FROM trade_slip
-            WHERE LOWER(side)='sell' AND trade_date >= :cut
+            WHERE user_id=:uid AND LOWER(side)='sell' AND trade_date >= :cut
             UNION
             SELECT DISTINCT stock_code FROM trade_intraday
-            WHERE LOWER(side)='sell' AND trade_date >= :cut
+            WHERE user_id=:uid AND LOWER(side)='sell' AND trade_date >= :cut
               AND COALESCE(reconciled, false)=false
-        """), {"cut": cutoff}).fetchall()
+        """), {"uid": int(user_id or 0), "cut": cutoff}).fetchall()
         codes |= {r[0] for r in rows if r[0]}
     except Exception:
         pass
     return codes
 
 
-def candidates(db, limit: int = 8) -> dict:
-    st = intraday_state(db)
+def candidates(db, limit: int = 8, user_id: int | None = None) -> dict:
+    st = _call_user(intraday_state, db, user_id)
     market = market_gate(db)
     digest = _state_digest(st)
     asof = datetime.now().strftime("%H:%M:%S")
@@ -714,10 +726,10 @@ def candidates(db, limit: int = 8) -> dict:
     else:
         gate_reason = ""
 
-    pool = _focus_pool(db)
+    pool = _call_user(_focus_pool, db, user_id)
     holdings = {p.get("stock_code") for p in (st.get("positions") or [])}
-    sold_codes = _recent_sold_codes(
-        db, st, int((st.get("rules") or {}).get("no_rebuy_days") or 5))
+    no_rebuy = int((st.get("rules") or {}).get("no_rebuy_days") or 5)
+    sold_codes = _recent_sold_codes(db, st, no_rebuy, user_id=user_id)
     pool = [p for p in pool if p["code"] not in holdings
             and p["code"] not in sold_codes and p.get("type") == "stock"]
     codes = [p["code"] for p in pool]

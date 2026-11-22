@@ -4,9 +4,10 @@
 未总结的行 summary/importance/sentiment 为 NULL：前端据此显示「待总结」，
 不要用 0 代替（0 是「中性」的合法值，混用会让「未总结」被当成「中性」）。
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy import text
 
+from app.auth.auth import Principal, get_principal
 from app.db.connection import get_sync_db
 
 router = APIRouter(tags=["news"])
@@ -26,9 +27,11 @@ def list_news(
     sort: str = Query('time', description='time=按发布时间 / importance=按重要度'),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=200),
+    principal: Principal = Depends(get_principal),
 ):
     """资讯列表（分页）。默认按发布时间倒序，未总结条目不隐藏（可见采集进度）。"""
-    where, params = ["1=1"], {}
+    uid = principal.data_user_id
+    where, params = ["1=1"], {"uid": uid}
     if category:
         if category not in CATEGORIES:
             raise HTTPException(400, f"category 需为 {CATEGORIES} 之一")
@@ -49,7 +52,7 @@ def list_news(
         params['imp'] = min_importance
     if only_focus:
         where.append("""EXISTS (SELECT 1 FROM news_stock ns JOIN v_focus_pool f
-                                ON f.stock_code = ns.stock_code
+                                ON f.stock_code = ns.stock_code AND f.user_id = :uid
                                 WHERE ns.news_id = v_news_feed.id)""")
     if since_hours:
         where.append("published_at >= now() - make_interval(hours => :hrs)")
@@ -79,7 +82,7 @@ def list_news(
                    (content IS NOT NULL) AS has_content,
                    length(COALESCE(content, '')) AS content_len,
                    EXISTS (SELECT 1 FROM news_stock ns JOIN v_focus_pool f
-                           ON f.stock_code = ns.stock_code
+                           ON f.stock_code = ns.stock_code AND f.user_id = :uid
                            WHERE ns.news_id = v_news_feed.id) AS focus_linked
             FROM v_news_feed WHERE {w}
             ORDER BY {order}
@@ -190,7 +193,9 @@ def news_health():
             'sources': sources,
             'total': stats[0], 'today': stats[1], 'today_flash': stats[2],
             'summarized': summ[0], 'summarized_today': summ[1], 'pending_summary': pending,
-            'focus_n': db.execute(text("SELECT count(*) FROM v_focus_pool")).scalar(),
+            'focus_n': db.execute(text(
+                "SELECT count(DISTINCT stock_code) FROM v_focus_pool_all"
+            )).scalar(),
         }
     finally:
         db.close()

@@ -93,7 +93,7 @@ FAIL_MAX = 3
 WORKERS = 8           # 实测单请求约 20-30s，8 并发约 17 rpm
 
 
-FOCUS_LINKED = """EXISTS (SELECT 1 FROM news_stock ns JOIN v_focus_pool f
+FOCUS_LINKED = """EXISTS (SELECT 1 FROM news_stock ns JOIN v_focus_pool_all f
                               ON f.stock_code = ns.stock_code WHERE ns.news_id = n.id)"""
 
 

@@ -114,7 +114,7 @@ def load_focus_pool(db) -> tuple:
     """
     rows = db.execute(text("""
         SELECT m.stock_code, m.stock_name
-        FROM v_focus_pool f
+        FROM v_focus_pool_all f
         JOIN stock_master m ON m.stock_code = f.stock_code AND m.stock_type = 'stock'
         ORDER BY m.stock_code
     """)).fetchall()
@@ -130,7 +130,7 @@ def ensure_poll_rows(db) -> int:
     """
     res = db.execute(text("""
         INSERT INTO news_poll_state (stock_code)
-        SELECT stock_code FROM v_focus_pool
+        SELECT stock_code FROM v_focus_pool_all
         ON CONFLICT (stock_code) DO NOTHING
     """))
     db.commit()

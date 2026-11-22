@@ -3,19 +3,20 @@ import json
 from loguru import logger
 
 from app.ai.deepseek_client import chat, is_available, get_fallback_menu
-from app.ai.tools import TOOL_REGISTRY, get_tools_for_deepseek
+from app.ai.tools import TOOL_PERMISSIONS, TOOL_REGISTRY, get_tools_for_deepseek
 from app.feishu.context import build_system_context
 from app.feishu.history import get_history, save_history
+from app.feishu.identity import history_key
 
 
-async def handle_message(user_text: str, db) -> str:
+async def handle_message(user_text: str, db, principal) -> str:
     """
-    处理飞书用户消息。
+    处理飞书用户消息（principal 已由 open_id 绑定解析，数据范围 = 该用户本人）。
 
     流程：
     1. DeepSeek 不可用 → 返回快捷菜单
     2. 组装系统上下文 + 对话历史 → 调 DeepSeek
-    3. DeepSeek 返回 tool_calls → Python 执行
+    3. DeepSeek 返回 tool_calls → Python 执行（先校验底层权限）
     4. 写入类工具不执行，返回确认卡片 JSON
     5. 查询类工具执行，结果发回 DeepSeek 生成自然语言回复
     6. DeepSeek 直接回复 → 直接返回文本
@@ -24,9 +25,11 @@ async def handle_message(user_text: str, db) -> str:
     if not is_available():
         return get_fallback_menu()
 
+    user_id = principal.data_user_id
+
     # 2. 组装消息
-    system_ctx = await build_system_context(db)
-    history_msgs, summary = get_history()
+    system_ctx = await build_system_context(db, user_id)
+    history_msgs, summary = get_history(history_key(user_id))
 
     messages = []
     if summary:
@@ -35,7 +38,8 @@ async def handle_message(user_text: str, db) -> str:
     messages.extend(history_msgs)
     messages.append({"role": "user", "content": user_text})
 
-    tools = get_tools_for_deepseek()
+    is_admin = "admin" in principal.role_codes
+    tools = get_tools_for_deepseek(principal.permission_codes(), is_admin=is_admin)
 
     # 3. 第一轮：DeepSeek 理解意图
     response = chat(messages, tools)
@@ -48,7 +52,7 @@ async def handle_message(user_text: str, db) -> str:
     # 4. 无 tool_calls → 纯文字回复
     if not response["tool_calls"]:
         reply = response["content"] or "抱歉，我没有理解你的意思。"
-        save_history(user_text, reply)
+        save_history(history_key(user_id), user_text, reply)
         return reply
 
     # 5. 有 tool_calls → 执行
@@ -73,16 +77,19 @@ async def handle_message(user_text: str, db) -> str:
         tool_name = tc["name"]
         tool_def = TOOL_REGISTRY.get(tool_name)
 
+        need = TOOL_PERMISSIONS.get(tool_name)
         if tool_def is None:
             result = {"ok": False, "error": f"未知工具: {tool_name}"}
+        elif tool_def.category == "admin" and not is_admin:
+            result = {"ok": False, "error": "无权限：该操作仅管理员可用"}
+        elif need and not principal.can(need):
+            result = {"ok": False, "error": f"无权限：需要 {need}"}
         else:
             try:
-                # 调用工具处理函数，传入 db
+                # 工具只接受 principal.data_user_id，模型不能自行指定用户
                 kwargs = dict(tc["arguments"])
-                if tool_def.category == "query" or tool_def.category == "admin":
-                    kwargs["db"] = db
-                else:
-                    kwargs["db"] = db  # 写入类也需要 db 做校验
+                kwargs["db"] = db
+                kwargs["user_id"] = user_id
 
                 result_obj = await tool_def.handler(**kwargs)
                 result = {
@@ -119,7 +126,7 @@ async def handle_message(user_text: str, db) -> str:
     # 6. 第二轮：DeepSeek 基于执行结果生成回复
     response2 = chat(messages)  # 无需再传 tools
     reply = response2.get("content") or "操作已完成。"
-    save_history(user_text, reply)
+    save_history(history_key(user_id), user_text, reply)
     return reply
 
 

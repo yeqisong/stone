@@ -120,12 +120,16 @@ KIND_LABEL = {
 CRITICAL = {'it_stop', 'it_limit_down', 'it_drop'}
 
 _CTX_TTL_S = 60
-_ctx = {'ts': 0.0, 'rules': dict(DEFAULT_CONFIG), 'pool': [], 'costs': {},
-        'cash': 0.0, 'sentiment': None, 'prev_levels': {}, 'trade_day': True}
+_ctx_by_user: dict[int, dict] = {}   # user_id -> 上下文（规则/池/持仓/现金）
 _trade_day_cache = {'day': None, 'ok': True}
 _prev_cache = {'day': None, 'key': None, 'levels': {}}
-_state: dict = {}          # code -> 日内状态（高低/量比/限价/采样 + VWAP/OR/昨高昨低侧别）
+_state_by_user: dict[int, dict] = {}  # user_id -> {code: 日内状态}
 _started = False
+
+
+def _new_ctx() -> dict:
+    return {'ts': 0.0, 'rules': dict(DEFAULT_CONFIG), 'pool': [], 'costs': {},
+            'cash': 0.0, 'sentiment': None, 'prev_levels': {}, 'trade_day': True}
 
 
 def _bj_now() -> datetime:
@@ -155,11 +159,11 @@ def _session_minutes(now: datetime) -> int:
     return 120 + max(0, hm - 13 * 60)
 
 
-def get_intraday_rules(db) -> dict:
-    """读取 strategy_config.intraday_rules；无记录时用默认值（启用）。"""
+def get_intraday_rules(db, user_id: int) -> dict:
+    """读取个人 user_config.intraday_rules；无记录时用默认值（启用）。"""
     row = db.execute(text(
-        "SELECT params, enabled FROM strategy_config WHERE strategy_name = :k LIMIT 1"
-    ), {"k": CONFIG_KEY}).fetchone()
+        "SELECT params, enabled FROM user_config WHERE user_id=:uid AND config_key=:k"
+    ), {"uid": user_id, "k": CONFIG_KEY}).fetchone()
     rules = dict(DEFAULT_CONFIG)
     if row:
         try:
@@ -172,17 +176,18 @@ def get_intraday_rules(db) -> dict:
     return rules
 
 
-def save_intraday_rules(db, rules: dict, enabled: bool = True) -> dict:
+def save_intraday_rules(db, user_id: int, rules: dict, enabled: bool = True) -> dict:
     merged = {**DEFAULT_CONFIG, **(rules or {}), 'enabled': bool(enabled)}
     db.execute(text("""
-        INSERT INTO strategy_config (strategy_name, display_name, enabled, params, updated_by)
-        VALUES (:k, '盘中提醒', :e, :p, 'manual')
-        ON CONFLICT (strategy_name) DO UPDATE SET
+        INSERT INTO user_config (user_id, config_key, params, enabled, updated_at)
+        VALUES (:uid, :k, CAST(:p AS jsonb), :e, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, config_key) DO UPDATE SET
             enabled = EXCLUDED.enabled, params = EXCLUDED.params,
             updated_at = CURRENT_TIMESTAMP
-    """), {"k": CONFIG_KEY, "e": merged['enabled'], "p": json.dumps(merged)})
+    """), {"uid": user_id, "k": CONFIG_KEY, "e": merged['enabled'],
+           "p": json.dumps(merged)})
     db.commit()
-    _ctx['ts'] = 0.0          # 下一轮立即生效
+    invalidate_context(user_id)   # 下一轮立即生效
     return merged
 
 
@@ -201,8 +206,8 @@ def _is_trade_day(db, day) -> bool:
     return ok
 
 
-def _load_pool(db) -> list:
-    """关注池 = 持仓 ∪ 自选；只保留 stock/etf（指数不做盘中提醒）。"""
+def _load_pool(db, user_id: int) -> list:
+    """当前用户关注池 = 持仓 ∪ 自选；只保留 stock/etf。"""
     rows = db.execute(text("""
         SELECT DISTINCT fp.stock_code, sm.stock_name, sm.stock_type
         FROM v_focus_pool fp
@@ -212,21 +217,27 @@ def _load_pool(db) -> list:
             ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END
             LIMIT 1
         ) sm ON true
+        WHERE fp.user_id=:uid
         ORDER BY fp.stock_code
-    """)).fetchall()
+    """), {"uid": user_id}).fetchall()
     return [{'code': r[0], 'name': r[1] or r[0], 'type': r[2] or 'stock'} for r in rows]
 
 
-def invalidate_context():
+def invalidate_context(user_id: int | None = None):
     """手工成交/现金修正后，让 watcher 下一轮立即重载持仓。"""
-    _ctx['ts'] = 0.0
+    if user_id is None:
+        for ctx in _ctx_by_user.values():
+            ctx['ts'] = 0.0
+    else:
+        ctx = _ctx_by_user.get(user_id)
+        if ctx:
+            ctx['ts'] = 0.0
 
 
-def _load_live(db) -> tuple[dict, float]:
+def _load_live(db, user_id: int | None = None) -> tuple[dict, float]:
     # 与护栏/教练/雷达同一口径：交割单 + 今日未对账手工成交。
-    # 直接读 portfolio 会在手工卖出后继续按旧持仓发止损提醒。
     from app.trade_intraday import live_positions
-    snap = live_positions(db)
+    snap = live_positions(db) if user_id is None else live_positions(db, user_id)
     costs = {
         p["stock_code"]: {
             "name": p["stock_name"], "cost": p["cost_price"],
@@ -237,8 +248,8 @@ def _load_live(db) -> tuple[dict, float]:
     return costs, float(snap.get("cash") or 0.0)
 
 
-def _load_costs(db) -> dict:
-    return _load_live(db)[0]
+def _load_costs(db, user_id: int | None = None) -> dict:
+    return _load_live(db, user_id)[0]
 
 
 def _load_prev_levels(db, codes: list, day) -> dict:
@@ -274,22 +285,23 @@ def _load_prev_levels(db, codes: list, day) -> dict:
     return levels
 
 
-def _load_context() -> dict:
+def _load_context(user_id: int) -> dict:
+    ctx = _ctx_by_user.setdefault(user_id, _new_ctx())
     now = time.monotonic()
-    if now - _ctx['ts'] < _CTX_TTL_S:
-        return _ctx
+    if now - ctx['ts'] < _CTX_TTL_S:
+        return ctx
     db = get_sync_db()
     try:
-        pool = _load_pool(db)
-        costs, cash = _load_live(db)
+        pool = _load_pool(db, user_id)
+        costs, cash = _load_live(db, user_id)
         try:
             from app.market_sentiment import get as market_sentiment
             sentiment = market_sentiment.get(db)
         except Exception:
             sentiment = None
-        _ctx.update(
+        ctx.update(
             ts=now,
-            rules=get_intraday_rules(db),
+            rules=get_intraday_rules(db, user_id),
             pool=pool,
             costs=costs,
             cash=cash,
@@ -298,10 +310,10 @@ def _load_context() -> dict:
             trade_day=_is_trade_day(db, _bj_now().date()),
         )
     except Exception as e:
-        logger.warning(f"[intraday] 上下文加载失败，沿用旧缓存: {e}")
+        logger.warning(f"[intraday] 用户 {user_id} 上下文加载失败，沿用旧缓存: {e}")
     finally:
         db.close()
-    return _ctx
+    return ctx
 
 
 def _fetch_quotes(pool: list) -> dict:
@@ -717,10 +729,12 @@ def evaluate_tick(quotes: dict, state: dict, costs: dict, rules: dict,
     return out
 
 
-def _persist(candidates: list, rules: dict, now: datetime) -> int:
-    """冷却/单日上限过滤后写 risk_alerts；返回实际插入条数。"""
+def _persist(candidates: list, rules: dict, now: datetime,
+             user_id: int | None = None) -> int:
+    """冷却/单日上限过滤后写 risk_alerts（按用户）；返回实际插入条数。"""
     if not candidates:
         return 0
+    uid = int(user_id or 0)
     max_day = max(0, _num(rules.get('max_alerts_per_day'), 30, int))
     max_tick = max(1, _num(rules.get('max_per_tick'), 3, int))
     cooldown_default = max(1, _num(rules.get('cooldown_min'), 30, int))
@@ -735,8 +749,9 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
     inserted = 0
     try:
         count = db.execute(text(
-            "SELECT count(*) FROM risk_alerts WHERE trade_date=:d AND kind LIKE 'it%'"
-        ), {"d": now.date()}).scalar() or 0
+            "SELECT count(*) FROM risk_alerts "
+            "WHERE user_id=:uid AND trade_date=:d AND kind LIKE 'it%'"
+        ), {"uid": uid, "d": now.date()}).scalar() or 0
         for c in candidates:
             # 单日上限用于压噪声，不压止损/跌停/急跌等 critical 告警
             if count >= max_day and not (max_day > 0 and c['level'] == 'critical'):
@@ -744,9 +759,9 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             cd = COOLDOWN_MIN.get(c['kind'], cooldown_default)
             cutoff = now - timedelta(minutes=cd)
             seen = db.execute(text(
-                "SELECT 1 FROM risk_alerts WHERE stock_code=:c AND kind=:k "
+                "SELECT 1 FROM risk_alerts WHERE user_id=:uid AND stock_code=:c AND kind=:k "
                 "AND created_at >= :cut LIMIT 1"
-            ), {"c": c['stock_code'], "k": c['kind'], "cut": cutoff}).fetchone()
+            ), {"uid": uid, "c": c['stock_code'], "k": c['kind'], "cut": cutoff}).fetchone()
             if seen:
                 continue
             # 同族冷却：VWAP 上/下、OR 上/下、昨高/昨低共享窗口，压住 30 秒内反向穿越
@@ -754,9 +769,9 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             if fam and family_cd:
                 fam_cut = now - timedelta(minutes=family_cd)
                 seen_fam = db.execute(text(
-                    "SELECT 1 FROM risk_alerts WHERE stock_code=:c "
+                    "SELECT 1 FROM risk_alerts WHERE user_id=:uid AND stock_code=:c "
                     "AND kind = ANY(CAST(:ks AS varchar[])) AND created_at >= :cut LIMIT 1"
-                ), {"c": c['stock_code'], "ks": FAMILY_KINDS.get(fam, []),
+                ), {"uid": uid, "c": c['stock_code'], "ks": FAMILY_KINDS.get(fam, []),
                     "cut": fam_cut}).fetchone()
                 if seen_fam:
                     continue
@@ -764,16 +779,17 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             if stock_cd and c['kind'] not in STOCK_COOLDOWN_BYPASS:
                 stock_cut = now - timedelta(minutes=stock_cd)
                 seen_stock = db.execute(text(
-                    "SELECT 1 FROM risk_alerts WHERE stock_code=:c AND trade_date=:d "
-                    "AND kind LIKE 'it%' AND created_at >= :cut LIMIT 1"
-                ), {"c": c['stock_code'], "d": now.date(), "cut": stock_cut}).fetchone()
+                    "SELECT 1 FROM risk_alerts WHERE user_id=:uid AND stock_code=:c "
+                    "AND trade_date=:d AND kind LIKE 'it%' AND created_at >= :cut LIMIT 1"
+                ), {"uid": uid, "c": c['stock_code'], "d": now.date(),
+                    "cut": stock_cut}).fetchone()
                 if seen_stock:
                     continue
             row = db.execute(text(
                 "INSERT INTO risk_alerts "
-                "(trade_date, kind, stock_code, level, title, body, trigger_price, created_at) "
-                "VALUES (:d, :k, :c, :lv, :t, :b, :p, :ts) RETURNING id"
-            ), {"d": now.date(), "k": c['kind'], "c": c['stock_code'],
+                "(user_id, trade_date, kind, stock_code, level, title, body, trigger_price, created_at) "
+                "VALUES (:uid, :d, :k, :c, :lv, :t, :b, :p, :ts) RETURNING id"
+            ), {"uid": uid, "d": now.date(), "k": c['kind'], "c": c['stock_code'],
                 "lv": c['level'], "t": c['title'], "b": c['body'],
                 "p": c.get('price'), "ts": now}).fetchone()
             count += 1
@@ -782,6 +798,7 @@ def _persist(candidates: list, rules: dict, now: datetime) -> int:
             if row and ai_enabled and c['kind'] in ai_kinds:
                 to_enqueue.append({
                     'alert_id': row[0],
+                    'user_id': user_id,
                     'stock_code': c['stock_code'],
                     'kind': c['kind'],
                     'title': c['title'],
@@ -919,20 +936,58 @@ def _flush_and_save() -> int:
     return _save_bars(_flush_bars())
 
 
-def _tick(now: datetime, rules: dict | None = None) -> int:
-    ctx = _load_context()
-    rules = rules or ctx['rules']
-    quotes = _fetch_quotes(ctx['pool'])
+def _active_contexts() -> list[tuple[int, dict]]:
+    """所有启用提醒/分钟采集的活跃用户上下文。"""
+    db = get_sync_db()
+    try:
+        users = db.execute(text(
+            "SELECT id FROM users WHERE status='active' ORDER BY id"
+        )).fetchall()
+    finally:
+        db.close()
+    out = []
+    for (uid,) in users:
+        ctx = _load_context(int(uid))
+        rules = ctx.get('rules') or {}
+        if rules.get('enabled') or rules.get('collect_minute', True):
+            out.append((int(uid), ctx))
+    return out
+
+
+def _tick(now: datetime, contexts: list[tuple[int, dict]] | None = None) -> int:
+    """单次行情拉取 → 全体用户关注池并集 → 逐用户规则评估。"""
+    contexts = contexts if contexts is not None else _active_contexts()
+    if not contexts:
+        return 0
+
+    union: dict[str, dict] = {}
+    for _uid, ctx in contexts:
+        for p in ctx.get('pool') or []:
+            union.setdefault(p['code'], p)
+    quotes = _fetch_quotes(list(union.values()))
     if not quotes:
         return 0
-    if rules.get('collect_minute', True):
+
+    if any((ctx.get('rules') or {}).get('collect_minute', True) for _, ctx in contexts):
         _save_bars(_collect_bars(quotes, now))
-    if not rules.get('enabled'):
-        return 0
-    candidates = evaluate_tick(quotes, _state, ctx['costs'], rules, now,
-                               ctx.get('prev_levels'), cash=ctx.get('cash', 0.0),
-                               sentiment=ctx.get('sentiment'))
-    return _persist(candidates, rules, now)
+
+    inserted = 0
+    for uid, ctx in contexts:
+        rules = ctx.get('rules') or {}
+        if not rules.get('enabled'):
+            continue
+        pool_codes = {p['code'] for p in (ctx.get('pool') or [])}
+        user_quotes = {c: q for c, q in quotes.items() if c in pool_codes}
+        if not user_quotes:
+            continue
+        state = _state_by_user.setdefault(uid, {})
+        candidates = evaluate_tick(
+            user_quotes, state, ctx.get('costs') or {}, rules, now,
+            ctx.get('prev_levels'), cash=ctx.get('cash', 0.0),
+            sentiment=ctx.get('sentiment'),
+        )
+        inserted += _persist(candidates, rules, now, uid)
+    return inserted
 
 
 async def intraday_watch_loop():
@@ -953,11 +1008,15 @@ async def intraday_watch_loop():
                     await asyncio.to_thread(maybe_evaluate_outcomes)
                 except Exception as e:
                     logger.debug(f"[outcome] 评估循环失败: {str(e)[:120]}")
-                ctx = await asyncio.to_thread(_load_context)
-                rules = ctx['rules']
-                collect = bool(rules.get('collect_minute', True))
-                active = bool(rules.get('enabled')) or collect
-                in_session = active and ctx['trade_day'] and _in_session(now)
+                contexts = await asyncio.to_thread(_active_contexts)
+                if not contexts:
+                    await asyncio.sleep(60)
+                    continue
+                all_rules = [ctx.get('rules') or {} for _uid, ctx in contexts]
+                collect = any(bool(r.get('collect_minute', True)) for r in all_rules)
+                active = any(bool(r.get('enabled')) for r in all_rules)
+                trade_day = any(bool(ctx.get('trade_day')) for _uid, ctx in contexts)
+                in_session = (active or collect) and trade_day and _in_session(now)
                 if not in_session:
                     if was_session:
                         await asyncio.to_thread(_flush_and_save)
@@ -965,8 +1024,11 @@ async def intraday_watch_loop():
                     await asyncio.sleep(20 if collect else 60)
                     continue
                 was_session = True
-                await asyncio.to_thread(_tick, now, rules)
-                await asyncio.sleep(max(5, _num(rules.get('interval_s'), 10, int)))
+                await asyncio.to_thread(_tick, now, contexts)
+                interval = min(
+                    [max(5, _num(r.get('interval_s'), 10, int)) for r in all_rules] or [10]
+                )
+                await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

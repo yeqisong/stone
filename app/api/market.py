@@ -369,7 +369,13 @@ def get_market_breadth(days: int = Query(250, ge=30, le=1200)):
 
 @router.get("/market/margin")
 def get_market_margin(days: int = Query(1000, ge=30, le=4000)):
-    """全市场逐日两融余额合计（fin_amount=rzye，单位元；数据 2014-01 起）。"""
+    """全市场逐日两融余额合计（fin_amount=rzye，单位元；数据 2014-01 起）。
+
+    残缺日防御：交易所披露延迟/上游缺失时当日样本骤降（如 2026-11-20 只有
+    2019 行 vs 邻日 4491），聚合值与邻日不可比，折线出"假跳崖"——行数低于
+    前后邻日 70% 的日剔除（邻日比较而非全局中位数：上市公司数逐年增长，
+    全局阈值会误伤早年天然低行数的日子），趋势线保持连续。"""
+
     def _load():
         db = get_sync_db()
         try:
@@ -377,16 +383,29 @@ def get_market_margin(days: int = Query(1000, ge=30, le=4000)):
                 SELECT trade_date,
                        SUM(fin_amount) AS fin,
                        SUM(sec_amount) AS sec,
-                       SUM(total_amount) AS total
+                       SUM(total_amount) AS total,
+                       COUNT(*) AS n
                 FROM stock_margin_detail
                 WHERE trade_date IN ({recent_dates})
                 GROUP BY trade_date ORDER BY trade_date
             """.format(recent_dates=_RECENT_DATES.format(col='trade_date', table='stock_margin_detail'))),
                 {"n": days}).fetchall()
+            # 邻日比较（全局中位数会误伤"上市公司数逐年增长"的结构性漂移：
+            # 早年行数天然低）。当日行数 < 前后邻日 70% 视为披露残缺，剔除。
+            ns = [int(r.n) for r in rows]
+            keep = []
+            for i, r in enumerate(rows):
+                ok = True
+                if i > 0 and ns[i] < ns[i - 1] * 0.7:
+                    ok = False
+                if i + 1 < len(rows) and ns[i] < ns[i + 1] * 0.7:
+                    ok = False
+                if ok:
+                    keep.append(r)
             data = [{
                 "date": str(r.trade_date),
                 "fin": _num(r.fin), "sec": _num(r.sec), "total": _num(r.total),
-            } for r in rows]
+            } for r in keep]
             return {"data": data}
         finally:
             db.close()
@@ -417,3 +436,31 @@ def get_market_macro():
             db.close()
 
     return _cached(("macro",), 600, _load)
+
+
+# ── 7. 市场情绪分日度序列（恐慌指数趋势，v3.22）──
+
+@router.get("/market/sentiment-history")
+def get_market_sentiment_history(days: int = Query(1000, ge=30, le=6500)):
+    """情绪分日度序列（三成分口径 2000 起，design/11 §口径决策）。
+    score=序列主分（历史与增量可比）；score_rt=当日实时四成分参考分（仅节点落库日有值）。"""
+    def _load():
+        db = get_sync_db()
+        try:
+            rows = db.execute(text("""
+                SELECT trade_date, score, level, up_ratio, median, limit_up, limit_down,
+                       up, down, flat, total, score_rt, vwap_ratio
+                FROM market_sentiment_daily ORDER BY trade_date DESC LIMIT :d
+            """), {"d": days}).fetchall()
+            data = [{
+                "date": str(r.trade_date), "score": _num(r.score, 1), "level": r.level,
+                "up_ratio": _num(r.up_ratio, 4), "median": _num(r.median, 2),
+                "limit_up": int(r.limit_up or 0), "limit_down": int(r.limit_down or 0),
+                "up": int(r.up or 0), "down": int(r.down or 0), "total": int(r.total or 0),
+                "score_rt": _num(r.score_rt, 1), "vwap_ratio": _num(r.vwap_ratio, 4),
+            } for r in reversed(rows)]
+            return {"data": data}
+        finally:
+            db.close()
+
+    return _cached(("sentiment-history", days), 300, _load)

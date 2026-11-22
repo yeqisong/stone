@@ -69,7 +69,7 @@ class _Base(unittest.TestCase):
             patch.object(runtime, "_save", side_effect=self._save),
             patch.object(runtime, "_history_for_model", return_value=[]),
             patch.object(runtime, "_auto_title", return_value=False),
-            patch.object(runtime, "get_session", return_value={}),
+            patch.object(runtime, "get_session", return_value={"user_id": 1}),
             patch.object(runtime, "_system_prompt", return_value="sys"),
         ]
         for p in self.patches:
@@ -156,7 +156,8 @@ class TestToolImages(_Base):
         snapshots = iter([{"a.png": 1.0}, {"a.png": 2.0}])
         with patch.object(runtime, "_client",
                           return_value=(fake, {"model": "m", "base_url": "", "api_key": "x"})), \
-                patch.object(runtime, "workspace_images", side_effect=lambda sid: next(snapshots)), \
+                patch.object(runtime, "workspace_images",
+                             side_effect=lambda sid, user_id=None: next(snapshots)), \
                 patch.object(runtime, "execute_tool",
                              return_value={"ok": True, "stdout": "1", "truncated": False}):
             events = list(runtime.stream_agent(self.SID, "画图"))

@@ -62,28 +62,38 @@ def _f(v: Any, default: float = 0.0) -> float:
         return default
 
 
-def _slip_end(db) -> Optional[_date]:
-    return db.execute(text("SELECT MAX(trade_date) FROM trade_slip")).scalar()
+def _call_user(fn, db, user_id, *args, **kwargs):
+    """兼容旧调用：user_id=None 时走单用户签名；生产路径始终传 user_id。"""
+    if user_id is None:
+        return fn(db, *args, **kwargs)
+    return fn(db, user_id, *args, **kwargs)
 
 
-def _snapshot(db, day: _date) -> Optional[float]:
+def _slip_end(db, user_id: int) -> Optional[_date]:
+    return db.execute(text(
+        "SELECT MAX(trade_date) FROM trade_slip WHERE user_id=:uid"
+    ), {"uid": user_id}).scalar()
+
+
+def _snapshot(db, user_id: int, day: _date) -> Optional[float]:
     row = db.execute(text(
-        "SELECT cash FROM trade_cash_snapshot WHERE trade_date=:d"
-    ), {"d": day}).fetchone()
+        "SELECT cash FROM trade_cash_snapshot WHERE user_id=:uid AND trade_date=:d"
+    ), {"uid": user_id, "d": day}).fetchone()
     return float(row[0]) if row else None
 
 
-def _save_snapshot(db, day: _date, cash: float) -> None:
+def _save_snapshot(db, user_id: int, day: _date, cash: float) -> None:
     db.execute(text("""
-        INSERT INTO trade_cash_snapshot (trade_date, cash, updated_at)
-        VALUES (:d, :c, CURRENT_TIMESTAMP)
-        ON CONFLICT (trade_date) DO UPDATE SET cash=EXCLUDED.cash, updated_at=CURRENT_TIMESTAMP
-    """), {"d": day, "c": round(cash, 2)})
+        INSERT INTO trade_cash_snapshot (user_id, trade_date, cash, updated_at)
+        VALUES (:uid, :d, :c, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, trade_date) DO UPDATE
+        SET cash=EXCLUDED.cash, updated_at=CURRENT_TIMESTAMP
+    """), {"uid": user_id, "d": day, "c": round(cash, 2)})
 
 
-def _manual_rows(db, after: Optional[_date], until: Optional[_date] = None) -> list[dict]:
+def _manual_rows(db, user_id: int, after: Optional[_date], until: Optional[_date] = None) -> list[dict]:
     sql = "SELECT * FROM trade_intraday"
-    cond, params = [], {}
+    cond, params = ["user_id = :uid"], {"uid": user_id}
     if after:
         cond.append("trade_date > :after")
         params["after"] = after
@@ -168,10 +178,10 @@ def _apply_manual(pos: dict[str, dict], cash: float, row: dict, apply_cash: bool
     return cash
 
 
-def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
+def _today_actions(db, user_id: int, slip_end: Optional[_date], today: _date) -> list[dict]:
     """当天已发生的操作：交割单覆盖今天时用交割单，否则用临时记录。"""
     if slip_end and slip_end >= today:
-        rows = load_slip_rows(db, start=today, end=today)
+        rows = load_slip_rows(db, start=today, end=today, user_id=user_id)
         return [{
             "id": None, "source": "slip", "trade_time": r.get("trade_time") or "",
             "side": r["side"], "stock_code": r["stock_code"], "stock_name": r["stock_name"],
@@ -180,8 +190,9 @@ def _today_actions(db, slip_end: Optional[_date], today: _date) -> list[dict]:
             "override_reason": "", "emotion": "",
         } for r in rows]
     rows = db.execute(text(
-        "SELECT * FROM trade_intraday WHERE trade_date=:d ORDER BY trade_time, id"
-    ), {"d": today}).mappings().fetchall()
+        "SELECT * FROM trade_intraday WHERE user_id=:uid AND trade_date=:d "
+        "ORDER BY trade_time, id"
+    ), {"uid": user_id, "d": today}).mappings().fetchall()
     return [{
         "id": r["id"], "source": "manual", "trade_time": r["trade_time"] or "",
         "side": r["side"], "stock_code": r["stock_code"], "stock_name": r["stock_name"],
@@ -278,15 +289,17 @@ def _profile_from_review(r: dict) -> dict:
     }
 
 
-def _get_profile(db) -> dict:
-    row = db.execute(text("SELECT COUNT(*), MAX(trade_date) FROM trade_slip")).fetchone()
-    key = (int(row[0] or 0), str(row[1] or ""))
+def _get_profile(db, user_id: int) -> dict:
+    row = db.execute(text(
+        "SELECT COUNT(*), MAX(trade_date) FROM trade_slip WHERE user_id=:uid"
+    ), {"uid": user_id}).fetchone()
+    key = (user_id, int(row[0] or 0), str(row[1] or ""))
     now = time.time()
     cached = _PROFILE_CACHE
     if cached["data"] is not None and cached["key"] == key and now - cached["ts"] < 600:
         return cached["data"]
     try:
-        data = _profile_from_review(build_review(db))
+        data = _profile_from_review(build_review(db, user_id=user_id))
     except Exception as e:
         logger.warning(f"[intraday] 交易画像失败: {str(e)[:120]}")
         data = {"types": [], "metrics": {}}
@@ -468,12 +481,12 @@ def _plan_status(plan: dict, st: dict) -> dict:
     }
 
 
-def get_or_create_plan(db, st: dict, today: Optional[_date] = None) -> Optional[dict]:
+def get_or_create_plan(db, user_id: int, st: dict, today: Optional[_date] = None) -> Optional[dict]:
     """当天第一次生成后固定计划，盘中只回填执行状态，不随价格漂移。"""
     day = today or _date.fromisoformat(str(st["trade_date"])[:10])
     row = db.execute(text(
-        "SELECT plan FROM trade_plan WHERE trade_date=:d"
-    ), {"d": day}).scalar()
+        "SELECT plan FROM trade_plan WHERE user_id=:uid AND trade_date=:d"
+    ), {"uid": user_id, "d": day}).scalar()
     if row is not None:
         plan = json.loads(row) if isinstance(row, str) else row
         if "rows" not in plan:
@@ -482,8 +495,10 @@ def get_or_create_plan(db, st: dict, today: Optional[_date] = None) -> Optional[
             if new_plan:
                 db.execute(text("""
                     UPDATE trade_plan SET plan=CAST(:p AS jsonb),
-                        updated_at=CURRENT_TIMESTAMP WHERE trade_date=:d
-                """), {"d": day, "p": json.dumps(new_plan, ensure_ascii=False)})
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=:uid AND trade_date=:d
+                """), {"uid": user_id, "d": day,
+                       "p": json.dumps(new_plan, ensure_ascii=False)})
                 db.commit()
                 return new_plan
         return plan
@@ -491,13 +506,14 @@ def get_or_create_plan(db, st: dict, today: Optional[_date] = None) -> Optional[
     if not plan:
         return None
     db.execute(text("""
-        INSERT INTO trade_plan (trade_date, plan) VALUES (:d, CAST(:p AS jsonb))
-        ON CONFLICT (trade_date) DO NOTHING
-    """), {"d": day, "p": json.dumps(plan, ensure_ascii=False)})
+        INSERT INTO trade_plan (user_id, trade_date, plan)
+        VALUES (:uid, :d, CAST(:p AS jsonb))
+        ON CONFLICT (user_id, trade_date) DO NOTHING
+    """), {"uid": user_id, "d": day, "p": json.dumps(plan, ensure_ascii=False)})
     db.commit()
     row = db.execute(text(
-        "SELECT plan FROM trade_plan WHERE trade_date=:d"
-    ), {"d": day}).scalar()
+        "SELECT plan FROM trade_plan WHERE user_id=:uid AND trade_date=:d"
+    ), {"uid": user_id, "d": day}).scalar()
     if row is None:
         return plan
     return json.loads(row) if isinstance(row, str) else row
@@ -632,17 +648,18 @@ def _build_coach(st: dict, profile: dict, sectors: list[dict],
             "sectors": sectors}
 
 
-def live_snapshot(db, cash_override: Optional[float] = None) -> dict:
-    """实时持仓/现金快照（行情无关）：交割单 + 今日未对账手工成交。
+def live_snapshot(db, user_id: int | None = None,
+                  cash_override: Optional[float] = None) -> dict:
+    """实时持仓/现金快照（行情无关）：指定用户的交割单 + 今日未对账手工成交。
 
     这是交易链路的实时持仓唯一口径：护栏、教练、雷达、盘中 watcher 都必须用它，
     不能再直接读 portfolio 表——否则手工卖出后，旧持仓还会继续触发止损提醒。
-    （持仓页的财务报表仍以交割单为准，P0-3 会给它加“待导入”提示。）
+    user_id=None 仅用于单测/旧脚本，生产 API 必须传当前用户。
     """
     today = _today()
-    base = build_positions(db)
-    slip_end = _slip_end(db)
-    rules = get_discipline(db)
+    base = _call_user(build_positions, db, user_id)
+    slip_end = _call_user(_slip_end, db, user_id)
+    rules = _call_user(get_discipline, db, user_id)
 
     pos: dict[str, dict] = {}
     for p in base.get("positions") or []:
@@ -654,14 +671,14 @@ def live_snapshot(db, cash_override: Optional[float] = None) -> dict:
             "estimated": bool(p.get("cost_estimated")),
         }
 
-    snap = _snapshot(db, today)
+    snap = _call_user(_snapshot, db, user_id, today)
     if cash_override is not None:
         snap = _f(cash_override)
     use_snapshot = snap is not None
     cash = _f(snap if use_snapshot else (base.get("summary") or {}).get("cash") or 0.0)
     cash_source = "snapshot" if use_snapshot else ("slip+manual" if slip_end else "manual")
 
-    manual = _manual_rows(db, slip_end)
+    manual = _call_user(_manual_rows, db, user_id, slip_end)
     for r in manual:
         cash = _apply_manual(pos, cash, r, apply_cash=not use_snapshot)
 
@@ -671,9 +688,10 @@ def live_snapshot(db, cash_override: Optional[float] = None) -> dict:
     }
 
 
-def live_positions(db, cash_override: Optional[float] = None) -> dict:
+def live_positions(db, user_id: int | None = None,
+                   cash_override: Optional[float] = None) -> dict:
     """实时持仓的展示口径（不含行情）：供 watcher/雷达/临时持仓提示复用。"""
-    live = live_snapshot(db, cash_override)
+    live = live_snapshot(db, user_id, cash_override)
     out = []
     for code, p in live["positions"].items():
         qty = p["qty"]
@@ -696,9 +714,10 @@ def live_positions(db, cash_override: Optional[float] = None) -> dict:
     }
 
 
-def _build_state(db, cash_override: Optional[float] = None) -> dict:
+def _build_state(db, user_id: int | None = None,
+                 cash_override: Optional[float] = None) -> dict:
     now = _now()
-    live = live_snapshot(db, cash_override)
+    live = live_snapshot(db, user_id, cash_override)
     today = live["today"]
     pos = live["positions"]
     slip_end = live["slip_end"]
@@ -741,7 +760,7 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
     top_weight = (top["market_value"] / equity) if top and equity > 0 else 0.0
 
     # 今日操作 / 额度
-    today_actions = _today_actions(db, slip_end, today)
+    today_actions = _call_user(_today_actions, db, user_id, slip_end, today)
     daily_buys = [a for a in today_actions if a["side"] == "buy"]
     daily_sells = [a for a in today_actions if a["side"] == "sell"]
     daily_buy_amount = sum(a["amount"] for a in daily_buys)
@@ -757,7 +776,7 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
     max_buy_amount = min(max_buy_by_cash, max_buy_by_target, daily_buy_budget)
 
     try:
-        gate = today_gate(db)
+        gate = today_gate(db, user_id)
         consec = int(gate.get("consecutive_loss_days") or 0)
     except Exception:
         consec = 0
@@ -869,34 +888,34 @@ def _build_state(db, cash_override: Optional[float] = None) -> dict:
     }
     plan = None
     try:
-        plan = get_or_create_plan(db, state, today)
+        plan = _call_user(get_or_create_plan, db, user_id, state, today)
     except Exception as e:
         logger.warning(f"[intraday] 计划生成失败: {str(e)[:120]}")
     try:
-        profile = _get_profile(db)
+        profile = _call_user(_get_profile, db, user_id)
         sectors = _top_sectors(db, positions)
         state["coach"] = _build_coach(state, profile, sectors, plan=plan)
     except Exception as e:
         logger.warning(f"[intraday] 教练生成失败: {str(e)[:120]}")
         state["coach"] = None
     try:
-        state["journal"] = journal_get(db, today)
+        state["journal"] = journal_get(db, user_id, today)
     except Exception:
         state["journal"] = None
     return state
 
 
-def state(db) -> dict:
-    return _build_state(db)
+def state(db, user_id: int | None = None) -> dict:
+    return _build_state(db, user_id)
 
 
-def journal_get(db, day: Optional[_date] = None) -> dict:
+def journal_get(db, user_id: int, day: Optional[_date] = None) -> dict:
     day = day or _today()
     try:
         row = db.execute(text("""
             SELECT trade_date, pre_plan, post_review, updated_at
-            FROM trade_journal WHERE trade_date=:d
-        """), {"d": day}).mappings().fetchone()
+            FROM trade_journal WHERE user_id=:uid AND trade_date=:d
+        """), {"uid": user_id, "d": day}).mappings().fetchone()
     except Exception:
         row = None
     if not row:
@@ -908,22 +927,22 @@ def journal_get(db, day: Optional[_date] = None) -> dict:
             "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None}
 
 
-def journal_save(db, pre_plan: Optional[str] = None,
+def journal_save(db, user_id: int, pre_plan: Optional[str] = None,
                  post_review: Optional[str] = None,
                  day: Optional[_date] = None) -> dict:
     day = day or _today()
-    cur = journal_get(db, day)
+    cur = journal_get(db, user_id, day)
     pre = cur["pre_plan"] if pre_plan is None else str(pre_plan)[:4000]
     post = cur["post_review"] if post_review is None else str(post_review)[:4000]
     db.execute(text("""
-        INSERT INTO trade_journal (trade_date, pre_plan, post_review, updated_at)
-        VALUES (:d, :pre, :post, CURRENT_TIMESTAMP)
-        ON CONFLICT (trade_date) DO UPDATE SET
+        INSERT INTO trade_journal (user_id, trade_date, pre_plan, post_review, updated_at)
+        VALUES (:uid, :d, :pre, :post, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, trade_date) DO UPDATE SET
             pre_plan=EXCLUDED.pre_plan, post_review=EXCLUDED.post_review,
             updated_at=CURRENT_TIMESTAMP
-    """), {"d": day, "pre": pre, "post": post})
+    """), {"uid": user_id, "d": day, "pre": pre, "post": post})
     db.commit()
-    return journal_get(db, day)
+    return journal_get(db, user_id, day)
 
 
 def quote(db, code: str) -> dict:
@@ -959,20 +978,23 @@ def _estimate_fees(side: str, amount: float) -> dict:
     }
 
 
-def _recent_sell(db, code: str, today: _date, days: int) -> Optional[str]:
+def _recent_sell(db, user_id: int | None, code: str, today: _date,
+                 days: int) -> Optional[str]:
     start = today - timedelta(days=max(1, days))
     row = db.execute(text("""
         SELECT trade_date FROM trade_slip
-        WHERE stock_code=:c AND side='sell' AND trade_date >= :s AND trade_date < :t
+        WHERE user_id=:uid AND stock_code=:c AND side='sell'
+          AND trade_date >= :s AND trade_date < :t
         ORDER BY trade_date DESC LIMIT 1
-    """), {"c": code, "s": start, "t": today}).fetchone()
+    """), {"uid": int(user_id or 0), "c": code, "s": start, "t": today}).fetchone()
     if row:
         return row[0].isoformat()
     row = db.execute(text("""
         SELECT trade_date FROM trade_intraday
-        WHERE stock_code=:c AND side='sell' AND trade_date >= :s AND trade_date < :t
+        WHERE user_id=:uid AND stock_code=:c AND side='sell'
+          AND trade_date >= :s AND trade_date < :t
         ORDER BY trade_date DESC LIMIT 1
-    """), {"c": code, "s": start, "t": today}).fetchone()
+    """), {"uid": int(user_id or 0), "c": code, "s": start, "t": today}).fetchone()
     return row[0].isoformat() if row else None
 
 
@@ -986,14 +1008,14 @@ def _is_hard_block(chk: dict) -> bool:
                for v in (chk.get("violations") or []))
 
 
-def _cooling_off(db) -> Optional[dict]:
+def _cooling_off(db, user_id: int | None = None) -> Optional[dict]:
     """最近一次硬拦截买入后的 30 分钟冷静期；返回剩余时间或 None。"""
     try:
         row = db.execute(text("""
             SELECT created_at, stock_name FROM trade_intraday
-            WHERE trade_date=CURRENT_DATE AND side='buy' AND hard_block=true
+            WHERE user_id=:uid AND trade_date=CURRENT_DATE AND side='buy' AND hard_block=true
             ORDER BY created_at DESC LIMIT 1
-        """)).fetchone()
+        """), {"uid": int(user_id or 0)}).fetchone()
     except Exception:
         return None
     if not row or row[0] is None:
@@ -1028,8 +1050,12 @@ def _max_buy_qty(st: dict, existing: Optional[dict], price: float, stop: float) 
     return max(0, qty)
 
 
-def check(db, body: dict) -> dict:
-    st = _build_state(db, cash_override=body.get("cash"))
+def check(db, user_id: int | None = None, body: dict | None = None) -> dict:
+    # 兼容旧调用 check(db, body)；生产 API 必须传 user_id
+    if body is None and isinstance(user_id, dict):
+        body, user_id = user_id, None
+    body = body or {}
+    st = _call_user(_build_state, db, user_id, cash_override=body.get("cash"))
     code = str(body.get("stock_code") or "").strip().zfill(6)
     side = str(body.get("side") or "buy").lower()
     qty = _f(body.get("quantity"))
@@ -1060,7 +1086,7 @@ def check(db, body: dict) -> dict:
             add("stop_loss", "block", "买入必须填写止损价（建议 -8%）")
         elif stop >= price:
             add("stop_loss", "block", "止损价必须低于买入价")
-        cool = _cooling_off(db)
+        cool = _call_user(_cooling_off, db, user_id)
         if cool:
             add("cooling_off", "block",
                 f"{COOLING_MIN}分钟冷静期：{cool['until']} 前禁止新买入"
@@ -1105,7 +1131,8 @@ def check(db, body: dict) -> dict:
         same_day_sell = any(a["stock_code"] == code and a["side"] == "sell" for a in st["today_actions"])
         if same_day_sell:
             add("same_day_roundtrip", "block", f"今天已经卖过 {name}，禁止当日回补")
-        rs = _recent_sell(db, code, _today(), r["no_rebuy_days"])
+        rs = _call_user(_recent_sell, db, user_id, code, _today(),
+                        r["no_rebuy_days"])
         if rs:
             add("no_rebuy_days", "block", f"{name} 在 {rs} 卖出过，{r['no_rebuy_days']} 天内禁止回补")
         if qty > max_qty:
@@ -1185,8 +1212,8 @@ def _state_summary(st: dict) -> dict:
     return {k: st.get(k) for k in keys}
 
 
-def record(db, body: dict) -> dict:
-    """记录今天已发生的操作。即使检查会拦截也照实记录（市场不会因为规则重来）。"""
+def record(db, user_id: int, body: dict) -> dict:
+    """记录指定用户今天已发生的操作。即使检查会拦截也照实记录。"""
     code = str(body.get("stock_code") or "").strip().zfill(6)
     side = str(body.get("side") or "buy").lower()
     qty = _f(body.get("quantity"))
@@ -1197,19 +1224,20 @@ def record(db, body: dict) -> dict:
         raise ValueError("数量和价格必须大于 0")
     amount = round(price * qty, 2)
     fees = _estimate_fees(side, amount)
-    chk = check(db, {**body, "stock_code": code, "side": side, "quantity": qty, "price": price})
+    chk = check(db, user_id, {**body, "stock_code": code, "side": side,
+                              "quantity": qty, "price": price})
     hard_block = _is_hard_block(chk)
     reason_text = str(body.get("reason") or "")[:200]
     now = _now()
     db.execute(text("""
         INSERT INTO trade_intraday
-            (trade_date, trade_time, stock_code, stock_name, side, quantity, price, amount,
+            (user_id, trade_date, trade_time, stock_code, stock_name, side, quantity, price, amount,
              commission, stamp_tax, transfer_fee, extra_fee, stop_price, reason,
              hard_block, override_reason, emotion, source)
-        VALUES (:d, :t, :c, :n, :s, :q, :p, :a, :com, :st, :tr, :ex, :stop, :r,
+        VALUES (:uid, :d, :t, :c, :n, :s, :q, :p, :a, :com, :st, :tr, :ex, :stop, :r,
                 :hb, :or, :em, 'manual')
     """), {
-        "d": now.date(), "t": now.strftime("%H:%M:%S"), "c": code,
+        "uid": user_id, "d": now.date(), "t": now.strftime("%H:%M:%S"), "c": code,
         "n": chk.get("stock_name") or _stock_name(db, code), "s": side, "q": qty, "p": price,
         "a": amount, "com": fees["commission"], "st": fees["stamp_tax"],
         "tr": fees["transfer_fee"], "ex": fees["extra_fee"],
@@ -1218,60 +1246,63 @@ def record(db, body: dict) -> dict:
         "em": str(body.get("emotion") or "")[:16],
     })
     # 如果用户已经修正过当前现金，记录操作后同步扣/加现金
-    snap = _snapshot(db, now.date())
+    snap = _snapshot(db, user_id, now.date())
     if snap is not None:
         if side == "buy":
             snap = snap - amount - fees["total"]
         else:
             snap = snap + amount - fees["total"]
-        _save_snapshot(db, now.date(), snap)
+        _save_snapshot(db, user_id, now.date(), snap)
     db.commit()
-    logger.info(f"[intraday] 记录 {side} {code} {qty:g}@{price} allow={chk['allow']} "
-                f"hard_block={hard_block}")
-    return {"ok": True, "check": chk, "state": _build_state(db)}
+    logger.info(f"[intraday] 记录 user={user_id} {side} {code} {qty:g}@{price} "
+                f"allow={chk['allow']} hard_block={hard_block}")
+    return {"ok": True, "check": chk, "state": _build_state(db, user_id)}
 
 
-def set_cash(db, cash: float) -> dict:
+def set_cash(db, user_id: int, cash: float) -> dict:
     today = _today()
-    _save_snapshot(db, today, _f(cash))
+    _save_snapshot(db, user_id, today, _f(cash))
     db.commit()
-    return _build_state(db)
+    return _build_state(db, user_id)
 
 
-def delete_action(db, action_id: int) -> dict:
-    row = db.execute(text("SELECT * FROM trade_intraday WHERE id=:id"), {"id": action_id}).mappings().fetchone()
+def delete_action(db, user_id: int, action_id: int) -> dict:
+    row = db.execute(text(
+        "SELECT * FROM trade_intraday WHERE id=:id AND user_id=:uid"
+    ), {"id": action_id, "uid": user_id}).mappings().fetchone()
     if not row:
         raise ValueError("记录不存在")
     amount = _f(row["amount"])
     fees = sum(_f(row[k]) for k in ("commission", "stamp_tax", "transfer_fee", "extra_fee"))
-    snap = _snapshot(db, row["trade_date"])
+    snap = _snapshot(db, user_id, row["trade_date"])
     if snap is not None:
         if row["side"] == "buy":
             snap = snap + amount + fees
         else:
             snap = snap - amount + fees
-        _save_snapshot(db, row["trade_date"], snap)
-    db.execute(text("DELETE FROM trade_intraday WHERE id=:id"), {"id": action_id})
+        _save_snapshot(db, user_id, row["trade_date"], snap)
+    db.execute(text(
+        "DELETE FROM trade_intraday WHERE id=:id AND user_id=:uid"
+    ), {"id": action_id, "uid": user_id})
     db.commit()
-    return _build_state(db)
+    return _build_state(db, user_id)
 
 
-def reconcile(db) -> int:
-    """导入交割单后，把已覆盖日期的临时记录标记为已对账（不再参与临时持仓）。
-
-    同时清掉这些日期的现金快照：交割单里的资金余额是权威值，
-    之前手动修正的现金可能已过期；用户如仍有出入金，重新修正即可。
-    """
+def reconcile(db, user_id: int) -> int:
+    """导入交割单后，把该用户已覆盖日期的临时记录标记为已对账。"""
     n = db.execute(text("""
         UPDATE trade_intraday SET reconciled=true
-        WHERE reconciled=false
-          AND trade_date <= (SELECT COALESCE(MAX(trade_date), '1900-01-01') FROM trade_slip)
-    """)).rowcount or 0
+        WHERE user_id=:uid AND reconciled=false
+          AND trade_date <= (SELECT COALESCE(MAX(trade_date), '1900-01-01')
+                             FROM trade_slip WHERE user_id=:uid)
+    """), {"uid": user_id}).rowcount or 0
     try:
         db.execute(text("""
             DELETE FROM trade_cash_snapshot
-            WHERE trade_date <= (SELECT COALESCE(MAX(trade_date), '1900-01-01') FROM trade_slip)
-        """))
+            WHERE user_id=:uid
+              AND trade_date <= (SELECT COALESCE(MAX(trade_date), '1900-01-01')
+                                 FROM trade_slip WHERE user_id=:uid)
+        """), {"uid": user_id})
     except Exception:
         pass
     db.commit()

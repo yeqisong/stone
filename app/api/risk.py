@@ -3,31 +3,37 @@
 规则也随 DAG paper_portfolio 节点每日自动评估；
 告警经 status.py WS 广播循环推送（type='risk_alert'），前端 Chrome 通知呈现。
 """
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends, HTTPException, Request
 from sqlalchemy import text
 
-from app.risk import get_risk_rules, save_risk_rules, evaluate_risk_rules
+from app.auth.auth import Principal, get_principal
+from app.risk import (
+    get_user_risk_rules,
+    save_user_risk_rules,
+    evaluate_risk_rules,
+)
 from app.intraday_watch import get_intraday_rules, save_intraday_rules, KIND_LABEL
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 
 
 @router.get("/rules")
-def read_rules():
+def read_rules(principal: Principal = Depends(get_principal)):
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
-        return get_risk_rules(db)
+        return get_user_risk_rules(db, principal.data_user_id)
     finally:
         db.close()
 
 
 @router.post("/rules")
-def write_rules(rules: dict, enabled: bool = True):
+def write_rules(rules: dict, enabled: bool = True,
+                principal: Principal = Depends(get_principal)):
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
-        return save_risk_rules(db, rules, enabled)
+        return save_user_risk_rules(db, principal.data_user_id, rules, enabled)
     finally:
         db.close()
 
@@ -44,23 +50,24 @@ def run_evaluate(trade_date: str = None):
 
 
 @router.get("/intraday-rules")
-def read_intraday_rules():
-    """盘中提醒规则（strategy_config.intraday_rules）。"""
+def read_intraday_rules(principal: Principal = Depends(get_principal)):
+    """个人盘中提醒规则（user_config.intraday_rules）。"""
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
-        return get_intraday_rules(db)
+        return get_intraday_rules(db, principal.data_user_id)
     finally:
         db.close()
 
 
 @router.post("/intraday-rules")
-def write_intraday_rules(rules: dict, enabled: bool = True):
-    """保存盘中提醒规则；enabled=false 时 watcher 下一轮休眠。"""
+def write_intraday_rules(rules: dict, enabled: bool = True,
+                         principal: Principal = Depends(get_principal)):
+    """保存个人盘中提醒规则；enabled=false 时该用户下一轮休眠。"""
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
-        return save_intraday_rules(db, rules, enabled)
+        return save_intraday_rules(db, principal.data_user_id, rules, enabled)
     finally:
         db.close()
 
@@ -168,22 +175,45 @@ def signal_outcomes(code: str = Query(''), days: int = Query(30, ge=1, le=365),
         db.close()
 
 
+def _ack_alerts(db, principal: Principal, scope: str) -> int:
+    if scope == "model":
+        if not principal.can("model.alerts.ack"):
+            raise HTTPException(403, "无权限: model.alerts.ack")
+        n = db.execute(text("""
+            UPDATE risk_alerts SET ack=true, ack_by=:actor, ack_at=CURRENT_TIMESTAMP
+            WHERE ack=false AND user_id IS NULL
+        """), {"actor": principal.user_id}).rowcount or 0
+    else:
+        if not principal.can("risk.alerts.ack"):
+            raise HTTPException(403, "无权限: risk.alerts.ack")
+        n = db.execute(text("""
+            UPDATE risk_alerts SET ack=true, ack_by=:actor, ack_at=CURRENT_TIMESTAMP
+            WHERE ack=false AND user_id=:uid
+        """), {"actor": principal.user_id, "uid": principal.data_user_id}).rowcount or 0
+    db.commit()
+    return int(n)
+
+
 @router.get("/alerts")
 def list_alerts(limit: int = Query(50, ge=1, le=500), ack: bool = False,
                 code: str = Query('', description='按个股过滤，空=全部'),
-                intraday: bool = Query(False, description='只看盘中提醒 it*')):
-    """告警列表；ack=true 时顺带全部确认。
-
-    code/intraday 供详情页「盘中提醒」块使用；日频风控告警 stock_code 为 NULL，
-    只会被「全部」查询看到。
-    """
+                intraday: bool = Query(False, description='只看盘中提醒 it*'),
+                scope: str = Query('', description='model=模型/系统告警；空=个人告警'),
+                principal: Principal = Depends(get_principal)):
+    """告警列表；scope=model 查看模型/系统告警，否则只看自己的告警。"""
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
         if ack:
-            db.execute(text("UPDATE risk_alerts SET ack = true WHERE ack = false"))
-            db.commit()
+            _ack_alerts(db, principal, scope)
         where, params = ["1=1"], {"n": limit}
+        if scope == "model":
+            if not principal.can("model.alerts.view"):
+                raise HTTPException(403, "无权限: model.alerts.view")
+            where.append("user_id IS NULL")
+        else:
+            where.append("user_id = :uid")
+            params["uid"] = principal.data_user_id
         if code:
             where.append("stock_code = :code")
             params["code"] = code
@@ -197,5 +227,16 @@ def list_alerts(limit: int = Query(50, ge=1, le=500), ack: bool = False,
                  "level": r[4], "title": r[5], "body": r[6], "ack": r[7],
                  "created_at": str(r[8])[:19]}
                 for r in rows]
+    finally:
+        db.close()
+
+
+@router.post("/alerts/ack")
+def ack_alerts(scope: str = Query('', description='model=模型/系统告警；空=个人告警'),
+               principal: Principal = Depends(get_principal)):
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        return {"ok": True, "updated": _ack_alerts(db, principal, scope)}
     finally:
         db.close()

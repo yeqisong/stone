@@ -6,8 +6,12 @@
 避免把几十个技能全文塞进上下文。
 
 存放位置：
-- 内置技能 skills/<slug>/SKILL.md —— 随仓库版本管理，只读；
-- 用户技能 data/skills/<slug>/SKILL.md —— 页面/Agent 创建，可删可改（同名覆盖内置）。
+- 内置技能 skills/<slug>/SKILL.md —— 随仓库版本管理，所有用户只读；
+- 全局技能 data/skills/global/<slug>/SKILL.md —— 管理员从 GitHub 导入，所有用户只读；
+- 个人技能 data/skills/u<user_id>/<slug>/SKILL.md —— 每个用户独立命名空间，可删可改。
+
+同名时个人覆盖全局、全局覆盖内置；内置/全局技能不可被保存覆盖或删除。
+无 user_id（CLI/单测）时沿用旧的 data/skills/<slug>/ 目录，避免破坏历史脚本。
 """
 import re
 import shutil
@@ -19,9 +23,18 @@ from loguru import logger
 ROOT = Path(__file__).resolve().parents[2]
 BUILTIN_DIR = ROOT / "skills"
 USER_DIR = ROOT / "data" / "skills"
+GLOBAL_DIR = USER_DIR / "global"       # 管理员导入的全局技能（所有用户只读）
+LEGACY_DIR = USER_DIR                  # 无 user_id 时沿用旧顶层布局
 
 MAX_BODY = 20000     # read_skill 返回正文上限
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+
+
+def user_skill_dir(user_id: int | None) -> Path:
+    """用户个人技能根目录：data/skills/u<id>/；None 退回旧的顶层目录。"""
+    if user_id is None or int(user_id) <= 0:
+        return LEGACY_DIR
+    return USER_DIR / f"u{int(user_id)}"
 
 
 def _slug(name: str) -> str:
@@ -43,7 +56,7 @@ def _parse(text: str) -> dict:
     return {"meta": meta, "body": body.strip()}
 
 
-def _load_dir(d: Path, builtin: bool) -> dict:
+def _load_dir(d: Path, builtin: bool, global_: bool = False) -> dict:
     out = {}
     if not d.exists():
         return out
@@ -64,6 +77,8 @@ def _load_dir(d: Path, builtin: bool) -> dict:
             "display_name": parsed["meta"].get("title") or name,
             "description": desc,
             "builtin": builtin,
+            "global": global_,
+            "readonly": builtin or global_,
             "path": str(p),
             "size": len(parsed["body"]),
             "files": sorted(x.name for x in p.iterdir() if x.is_file() and x.name != "SKILL.md"),
@@ -71,22 +86,25 @@ def _load_dir(d: Path, builtin: bool) -> dict:
     return out
 
 
-def all_skills() -> dict:
-    """内置 + 用户（同名用户覆盖内置）。"""
+def all_skills(user_id: int | None = None) -> dict:
+    """可见技能：内置 + 全局 + 当前用户个人（后者同名覆盖前者）。"""
     merged = _load_dir(BUILTIN_DIR, True)
-    merged.update(_load_dir(USER_DIR, False))
+    merged.update(_load_dir(GLOBAL_DIR, False, global_=True))
+    merged.update(_load_dir(user_skill_dir(user_id), False))
     return merged
 
 
-def list_skills() -> list:
-    return sorted(all_skills().values(), key=lambda s: (not s["builtin"], s["name"]))
+def list_skills(user_id: int | None = None) -> list:
+    return sorted(all_skills(user_id).values(),
+                  key=lambda s: (not s["builtin"], not s["global"], s["name"]))
 
 
-def read_skill(name: str, file: str = "") -> dict:
-    """读技能正文（或技能目录下的附加文件）。"""
-    sk = all_skills().get((name or "").strip())
+def read_skill(name: str, file: str = "", user_id: int | None = None) -> dict:
+    """读技能正文（或技能目录下的附加文件），仅限当前用户可见的技能。"""
+    sk = all_skills(user_id).get((name or "").strip())
     if not sk:
-        return {"error": f"技能不存在: {name}", "available": [s["name"] for s in list_skills()]}
+        return {"error": f"技能不存在: {name}",
+                "available": [s["name"] for s in list_skills(user_id)]}
     base = Path(sk["path"]).resolve()
     target = base / "SKILL.md" if not file else (base / file).resolve()
     # 防目录穿越
@@ -103,36 +121,42 @@ def read_skill(name: str, file: str = "") -> dict:
             "files": sk["files"]}
 
 
-def save_skill(name: str, description: str, content: str, title: str = "") -> dict:
-    """创建/覆盖用户技能（不碰内置技能）。name 为目录名（英文/数字/-_.）。"""
+def save_skill(name: str, description: str, content: str, title: str = "",
+               user_id: int | None = None) -> dict:
+    """创建/覆盖当前用户的个人技能（不碰内置/全局技能）。name 为目录名。"""
     slug = (name or "").strip()
     if not _NAME_RE.match(slug):
         return {"error": "技能名只能用字母/数字/._-（建议英文短横线命名，如 stock-deep-dive）"}
     if (BUILTIN_DIR / slug).exists():
         return {"error": f"「{slug}」是内置技能目录名，请换一个名字"}
+    if (GLOBAL_DIR / slug).exists():
+        return {"error": f"「{slug}」是全局技能目录名，请换一个名字"}
     desc = (description or "").strip()
     if len(desc) < 4:
         return {"error": "description 至少 4 个字符（模型靠它判断何时使用该技能）"}
     if not (content or "").strip():
         return {"error": "技能正文不能为空"}
-    d = USER_DIR / slug
+    d = user_skill_dir(user_id) / slug
     d.mkdir(parents=True, exist_ok=True)
     fm = ["---", f"name: {slug}", f"description: {desc}"]
     if title:
         fm.append(f"title: {title.strip()}")
     fm.append("---")
     (d / "SKILL.md").write_text("\n".join(fm) + "\n\n" + content.strip() + "\n", encoding="utf-8")
-    logger.info(f"[skills] 已保存用户技能 {slug}")
+    logger.info(f"[skills] 用户 {user_id or 'legacy'} 已保存技能 {slug}")
     return {"ok": True, "name": slug, "description": desc}
 
 
-def delete_skill(name: str) -> dict:
+def delete_skill(name: str, user_id: int | None = None) -> dict:
+    """删除当前用户的个人技能；内置/全局技能只读。"""
     slug = (name or "").strip()
-    sk = all_skills().get(slug)
+    sk = all_skills(user_id).get(slug)
     if not sk:
         return {"error": "技能不存在"}
     if sk["builtin"]:
         return {"error": "内置技能随仓库维护、不可删除（要定制请用新名字另建技能）"}
+    if sk.get("global"):
+        return {"error": "全局技能由管理员维护、普通用户不可删除"}
     shutil.rmtree(Path(sk["path"]), ignore_errors=True)
     return {"ok": True}
 
@@ -219,8 +243,14 @@ def import_github_preview(repo_url: str) -> dict:
         return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
-def import_github_confirm(repo_url: str, slug: str = "") -> dict:
-    """确认入库：移动临时目录到 data/skills/<slug>（优先复用预览的克隆）。"""
+def import_github_confirm(repo_url: str, slug: str = "",
+                          user_id: int | None = None,
+                          global_skill: bool = False) -> dict:
+    """确认入库：移动到全局或用户个人技能目录（优先复用预览的克隆）。
+
+    global_skill=True 仅供管理员导入（写入 data/skills/global/，所有用户只读）；
+    否则写入当前用户的个人命名空间。
+    """
     if not _NAME_RE.match((slug or "").strip() or "x"):
         pass  # slug 缺省时用 repo 名再校验
     try:
@@ -245,7 +275,8 @@ def import_github_confirm(repo_url: str, slug: str = "") -> dict:
     except ValueError as e:
         shutil.rmtree(tmp, ignore_errors=True)
         return {"error": str(e)}
-    dest = USER_DIR / use
+    base = GLOBAL_DIR if global_skill else user_skill_dir(user_id)
+    dest = base / use
     if dest.exists():
         shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
@@ -253,13 +284,13 @@ def import_github_confirm(repo_url: str, slug: str = "") -> dict:
         shutil.move(str(item), str(dest / item.name))
     shutil.rmtree(tmp, ignore_errors=True)
     _IMPORT_CACHE.pop((repo_url or "").strip(), None)
-    logger.info(f"[skills] 已从 GitHub 导入技能 {use}")
-    return {"ok": True, "name": use}
+    logger.info(f"[skills] 已从 GitHub 导入{'全局' if global_skill else '个人'}技能 {use}")
+    return {"ok": True, "name": use, "global": bool(global_skill)}
 
 
-def skill_index_text(limit: int = 120) -> str:
+def skill_index_text(limit: int = 120, user_id: int | None = None) -> str:
     """系统提示用的技能清单（名称 + 描述）。超过上限时明确提示还有未列出的技能。"""
-    all_items = list_skills()
+    all_items = list_skills(user_id)
     items = all_items[:limit]
     if not items:
         return "（暂无技能）"

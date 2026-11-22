@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS index_daily_quote (
 CREATE_PORTFOLIO = """
 CREATE TABLE IF NOT EXISTS portfolio (
     id          SERIAL PRIMARY KEY,
+    user_id     INT REFERENCES users(id) ON DELETE RESTRICT,
     stock_code  VARCHAR(6) NOT NULL,
     stock_name  VARCHAR(30) NOT NULL,
     exchange    VARCHAR(4) NOT NULL,
@@ -94,10 +95,6 @@ CREATE TABLE IF NOT EXISTS portfolio (
     is_active   BOOLEAN NOT NULL DEFAULT true,
     notes       VARCHAR(200) DEFAULT ''
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_active_stock
-    ON portfolio (stock_code) WHERE is_active = true;
-CREATE INDEX IF NOT EXISTS idx_portfolio_active
-    ON portfolio (is_active, updated_at DESC);
 """
 
 # ── 自选/自定义分组（v3.11：持仓页 tab 化 + 详情页分组标签）──
@@ -105,7 +102,8 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_active
 CREATE_WATCH_GROUPS = """
 CREATE TABLE IF NOT EXISTS watch_groups (
     id          SERIAL PRIMARY KEY,
-    group_name  VARCHAR(32) NOT NULL UNIQUE,
+    user_id     INT REFERENCES users(id) ON DELETE RESTRICT,
+    group_name  VARCHAR(32) NOT NULL,
     is_default  BOOLEAN NOT NULL DEFAULT false,   -- true=自选组（不可删除）
     sort_order  INT NOT NULL DEFAULT 0,           -- 自选恒排最前，动态组按 id
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -123,6 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_wgi_code ON watch_group_items (stock_code);
 CREATE_PORTFOLIO_HISTORY = """
 CREATE TABLE IF NOT EXISTS portfolio_history (
     id               SERIAL PRIMARY KEY,
+    user_id          INT REFERENCES users(id) ON DELETE RESTRICT,
     stock_code       VARCHAR(6) NOT NULL,
     stock_name       VARCHAR(20) NOT NULL,
     action           VARCHAR(10) NOT NULL,
@@ -132,7 +131,6 @@ CREATE TABLE IF NOT EXISTS portfolio_history (
     cost_after       NUMERIC(10,3) NOT NULL,
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_ph_stock ON portfolio_history (stock_code, created_at DESC);
 """
 
 # ── 交割单（券商成交明细）──
@@ -142,6 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_ph_stock ON portfolio_history (stock_code, create
 CREATE_TRADE_SLIP = """
 CREATE TABLE IF NOT EXISTS trade_slip (
     id              BIGSERIAL PRIMARY KEY,
+    user_id         INT REFERENCES users(id) ON DELETE RESTRICT,
     account_no      VARCHAR(32) NOT NULL DEFAULT '',
     trade_date      DATE NOT NULL,
     trade_time      VARCHAR(8) NOT NULL DEFAULT '',
@@ -167,9 +166,6 @@ CREATE TABLE IF NOT EXISTS trade_slip (
     raw             JSONB,
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_trade_slip_order
-    ON trade_slip (account_no, trade_date, order_no) WHERE order_no <> '';
-CREATE UNIQUE INDEX IF NOT EXISTS uq_trade_slip_hash ON trade_slip (row_hash);
 CREATE INDEX IF NOT EXISTS idx_trade_slip_date ON trade_slip (trade_date DESC);
 CREATE INDEX IF NOT EXISTS idx_trade_slip_code ON trade_slip (stock_code, trade_date);
 CREATE INDEX IF NOT EXISTS idx_trade_slip_batch ON trade_slip (import_batch_id);
@@ -178,6 +174,7 @@ CREATE INDEX IF NOT EXISTS idx_trade_slip_batch ON trade_slip (import_batch_id);
 CREATE_TRADE_IMPORT_BATCH = """
 CREATE TABLE IF NOT EXISTS trade_import_batch (
     id               SERIAL PRIMARY KEY,
+    user_id          INT REFERENCES users(id) ON DELETE RESTRICT,
     filename         VARCHAR(200) NOT NULL DEFAULT '',
     file_size        INTEGER NOT NULL DEFAULT 0,
     file_format      VARCHAR(20) NOT NULL DEFAULT '',
@@ -202,6 +199,7 @@ CREATE TABLE IF NOT EXISTS trade_import_batch (
 CREATE_TRADE_INTRADAY = """
 CREATE TABLE IF NOT EXISTS trade_intraday (
     id            BIGSERIAL PRIMARY KEY,
+    user_id       INT REFERENCES users(id) ON DELETE RESTRICT,
     trade_date    DATE NOT NULL DEFAULT CURRENT_DATE,
     trade_time    VARCHAR(8) NOT NULL DEFAULT '',
     stock_code    VARCHAR(8) NOT NULL,
@@ -224,35 +222,39 @@ CREATE TABLE IF NOT EXISTS trade_intraday (
     note          VARCHAR(200) NOT NULL DEFAULT '',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_trade_intraday_date ON trade_intraday (trade_date DESC);
-CREATE INDEX IF NOT EXISTS idx_trade_intraday_code ON trade_intraday (stock_code, trade_date);
 """
 
 CREATE_TRADE_CASH_SNAPSHOT = """
 CREATE TABLE IF NOT EXISTS trade_cash_snapshot (
-    trade_date DATE PRIMARY KEY,
+    user_id    INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    trade_date DATE NOT NULL,
     cash       NUMERIC(16,2) NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, trade_date)
 );
 """
 
 # 每日减仓计划：当天第一次生成后固定，盘中只更新执行状态，不随价格漂移
 CREATE_TRADE_PLAN = """
 CREATE TABLE IF NOT EXISTS trade_plan (
-    trade_date DATE PRIMARY KEY,
+    user_id    INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    trade_date DATE NOT NULL,
     plan       JSONB NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, trade_date)
 );
 """
 
 # 每日交易日志：盘前计划 + 收盘复盘（人工填写，不参与自动决策）
 CREATE_TRADE_JOURNAL = """
 CREATE TABLE IF NOT EXISTS trade_journal (
-    trade_date  DATE PRIMARY KEY,
+    user_id     INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    trade_date  DATE NOT NULL,
     pre_plan    TEXT NOT NULL DEFAULT '',
     post_review TEXT NOT NULL DEFAULT '',
-    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, trade_date)
 );
 """
 
@@ -445,6 +447,7 @@ CREATE TABLE IF NOT EXISTS model_versions (
     activated_at  TIMESTAMP,
     archived_at   TIMESTAMP,
     deleted_at    TIMESTAMP,
+    role          VARCHAR(16) NOT NULL DEFAULT 'primary',
     CONSTRAINT chk_model_status CHECK (status IN ('DRAFT','TRAINING','VALIDATING','PENDING','ACTIVE','REJECTED','ARCHIVED'))
 );
 """
@@ -1086,6 +1089,32 @@ CREATE TABLE IF NOT EXISTS index_valuation (
 CREATE INDEX IF NOT EXISTS idx_index_val_date ON index_valuation (trade_date DESC);
 """
 
+# ── 市场情绪日度（恐慌指数趋势，v3.22）——历史从 daily_quote 重算，当日由
+#    sentiment_daily DAG 节点收盘后落库。序列主分统一三成分口径（宽度40/中位数20/
+#    涨跌停20 + VWAP 项按 _verdict 缺省 10 分），与实时四成分分(score_rt)区分，
+#    保证历史回补段与增量段可比（design/11 §口径决策）。──
+
+CREATE_MARKET_SENTIMENT_DAILY = """
+CREATE TABLE IF NOT EXISTS market_sentiment_daily (
+    trade_date   DATE NOT NULL,          -- 交易日
+    score        FLOAT NOT NULL,         -- 序列主分 0-100（三成分口径，历史与增量可比）
+    level        VARCHAR(12) NOT NULL,   -- panic/weak/neutral/strong（复用 _verdict 判定）
+    up_ratio     FLOAT,                  -- 上涨占比 0-1
+    median       FLOAT,                  -- 全市场中位数涨跌幅 %
+    limit_up     INT,
+    limit_down   INT,
+    up           INT,
+    down         INT,
+    flat         INT,
+    total        INT,                    -- 参与统计的股票数
+    score_rt     FLOAT,                  -- 实时四成分分（含 VWAP；仅当日节点落库有值）
+    vwap_ratio   FLOAT,                  -- 指数站上 VWAP 占比（同上，历史为 NULL）
+    extra        JSONB,                  -- 预留成分明细
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date)
+);
+"""
+
 # ── 可转债（tushare cb_basic/cb_daily/cb_share；独立域，不进 daily_quote/stock_master）──
 
 CREATE_CB_BASIC = """
@@ -1175,6 +1204,7 @@ CREATE INDEX IF NOT EXISTS idx_cb_metrics_asof ON cb_metrics (asof_date);
 CREATE_AGENT = """
 CREATE TABLE IF NOT EXISTS agent_sessions (
     id          SERIAL PRIMARY KEY,
+    user_id     INT REFERENCES users(id) ON DELETE RESTRICT,
     title       VARCHAR(100) NOT NULL DEFAULT '新会话',
     status      VARCHAR(16) DEFAULT 'active',   -- active / archived
     model       VARCHAR(64),                     -- 会话级模型覆盖（空=全局配置）
@@ -1428,6 +1458,7 @@ CREATE INDEX IF NOT EXISTS idx_fic_name ON factor_ic_stats (feature_name, horizo
 CREATE_RISK_ALERTS = """
 CREATE TABLE IF NOT EXISTS risk_alerts (
     id          SERIAL PRIMARY KEY,
+    user_id     INT REFERENCES users(id) ON DELETE SET NULL,
     trade_date  DATE NOT NULL,
     kind        VARCHAR(20) NOT NULL,       -- stop_loss / drawdown / industry_cap / node_fail / it_*
     stock_code  VARCHAR(6),                 -- 盘中提醒按个股查询；日频风控告警为 NULL
@@ -1436,6 +1467,8 @@ CREATE TABLE IF NOT EXISTS risk_alerts (
     body        TEXT,
     trigger_price NUMERIC(12,3),           -- 触发时现价（信号结果追踪入口）
     ack         BOOLEAN DEFAULT false,
+    ack_by      INT REFERENCES users(id) ON DELETE SET NULL,
+    ack_at      TIMESTAMP,
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_ra_date ON risk_alerts (trade_date);
@@ -1470,6 +1503,7 @@ CREATE INDEX IF NOT EXISTS idx_smb_code_time ON stock_minute_bar (stock_code, ba
 CREATE_INTRADAY_AI_EVENT = """
 CREATE TABLE IF NOT EXISTS intraday_ai_event (
     id          SERIAL PRIMARY KEY,
+    user_id     INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     alert_id    INTEGER NOT NULL UNIQUE REFERENCES risk_alerts(id) ON DELETE CASCADE,
     stock_code  VARCHAR(6) NOT NULL,
     kind        VARCHAR(20) NOT NULL,
@@ -1488,6 +1522,7 @@ CREATE INDEX IF NOT EXISTS idx_iae_code ON intraday_ai_event (stock_code, create
 CREATE_INTRADAY_SIGNAL_OUTCOME = """
 CREATE TABLE IF NOT EXISTS intraday_signal_outcome (
     id            SERIAL PRIMARY KEY,
+    user_id       INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     alert_id      INTEGER NOT NULL UNIQUE REFERENCES risk_alerts(id) ON DELETE CASCADE,
     stock_code    VARCHAR(6) NOT NULL,
     kind          VARCHAR(20) NOT NULL,
@@ -1566,9 +1601,260 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 CREATE INDEX IF NOT EXISTS idx_ppt_date ON paper_trades (trade_date, action);
 """
 
+# ── 多用户 / RBAC（design/10）──
+
+CREATE_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+    id                   SERIAL PRIMARY KEY,
+    username             VARCHAR(32) NOT NULL,
+    password_hash        VARCHAR(255) NOT NULL,
+    display_name         VARCHAR(32) NOT NULL DEFAULT '',
+    email                VARCHAR(128),
+    phone                VARCHAR(32),
+    status               VARCHAR(16) NOT NULL DEFAULT 'active',
+    must_change_password BOOLEAN NOT NULL DEFAULT false,
+    token_version        INT NOT NULL DEFAULT 0,
+    perm_version         INT NOT NULL DEFAULT 0,
+    failed_login_count   INT NOT NULL DEFAULT 0,
+    locked_until         TIMESTAMP,
+    last_login_at        TIMESTAMP,
+    last_login_ip        INET,
+    feishu_open_id       VARCHAR(64),
+    feishu_union_id      VARCHAR(64),
+    created_by           INT REFERENCES users(id) ON DELETE SET NULL,
+    created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_users_status CHECK (status IN ('active','disabled','locked')),
+    CONSTRAINT ck_users_username CHECK (username ~ '^[A-Za-z0-9_.-]{3,32}$')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username ON users (username);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_feishu_open_id
+    ON users (feishu_open_id) WHERE feishu_open_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_status ON users (status);
+"""
+
+CREATE_ROLES = """
+CREATE TABLE IF NOT EXISTS roles (
+    id          SERIAL PRIMARY KEY,
+    code        VARCHAR(32) NOT NULL,
+    name        VARCHAR(32) NOT NULL,
+    description VARCHAR(200) NOT NULL DEFAULT '',
+    is_system   BOOLEAN NOT NULL DEFAULT false,
+    data_scope  VARCHAR(16) NOT NULL DEFAULT 'self',
+    status      VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_roles_scope CHECK (data_scope IN ('self','team')),
+    CONSTRAINT ck_roles_status CHECK (status IN ('active','disabled'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_roles_code ON roles (code);
+"""
+
+CREATE_PERMISSIONS = """
+CREATE TABLE IF NOT EXISTS permissions (
+    id          SERIAL PRIMARY KEY,
+    code        VARCHAR(64) NOT NULL,
+    name        VARCHAR(64) NOT NULL,
+    type        VARCHAR(16) NOT NULL,
+    parent_id   INT REFERENCES permissions(id) ON DELETE RESTRICT,
+    route       VARCHAR(128),
+    api_pattern VARCHAR(256),
+    sort_order  INT NOT NULL DEFAULT 0,
+    is_system   BOOLEAN NOT NULL DEFAULT false,
+    is_public   BOOLEAN NOT NULL DEFAULT false,
+    description VARCHAR(200) NOT NULL DEFAULT '',
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_permissions_type CHECK (type IN ('menu','action','sensitive','data','admin','public','system'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_permissions_code ON permissions (code);
+CREATE INDEX IF NOT EXISTS idx_permissions_parent ON permissions (parent_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_permissions_type ON permissions (type);
+"""
+
+CREATE_ROLE_PERMISSIONS = """
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id       INT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission_id INT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+    scope         VARCHAR(16) NOT NULL DEFAULT 'self',
+    support_only  BOOLEAN NOT NULL DEFAULT false,
+    conditions    JSONB NOT NULL DEFAULT '{}',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (role_id, permission_id),
+    CONSTRAINT ck_role_permissions_scope CHECK (scope IN ('self','team','global'))
+);
+CREATE INDEX IF NOT EXISTS idx_role_permissions_perm ON role_permissions (permission_id);
+"""
+
+CREATE_USER_ROLES = """
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id     INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id     INT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    assigned_by INT REFERENCES users(id) ON DELETE SET NULL,
+    assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at  TIMESTAMP,
+    PRIMARY KEY (user_id, role_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles (role_id);
+CREATE INDEX IF NOT EXISTS idx_user_roles_expires ON user_roles (expires_at)
+    WHERE expires_at IS NOT NULL;
+"""
+
+CREATE_USER_PERMISSION_OVERRIDES = """
+CREATE TABLE IF NOT EXISTS user_permission_overrides (
+    user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    permission_id INT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+    effect        VARCHAR(8) NOT NULL,
+    scope         VARCHAR(16) NOT NULL DEFAULT 'self',
+    conditions    JSONB NOT NULL DEFAULT '{}',
+    reason        VARCHAR(200) NOT NULL DEFAULT '',
+    expires_at    TIMESTAMP,
+    created_by    INT REFERENCES users(id) ON DELETE SET NULL,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, permission_id),
+    CONSTRAINT ck_user_overrides_effect CHECK (effect IN ('allow','deny')),
+    CONSTRAINT ck_user_overrides_scope CHECK (scope IN ('self','team','global'))
+);
+CREATE INDEX IF NOT EXISTS idx_user_overrides_expires ON user_permission_overrides (expires_at)
+    WHERE expires_at IS NOT NULL;
+"""
+
+CREATE_SUPPORT_SESSIONS = """
+CREATE TABLE IF NOT EXISTS support_sessions (
+    id             BIGSERIAL PRIMARY KEY,
+    admin_user_id  INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_user_id INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    reason         VARCHAR(200) NOT NULL,
+    token_hash     CHAR(64) NOT NULL,
+    expires_at     TIMESTAMP NOT NULL,
+    revoked_at     TIMESTAMP,
+    revoked_by     INT REFERENCES users(id) ON DELETE SET NULL,
+    used_at        TIMESTAMP,
+    last_access_at TIMESTAMP,
+    access_count   INT NOT NULL DEFAULT 0,
+    created_ip     INET,
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_support_not_self CHECK (admin_user_id <> target_user_id),
+    CONSTRAINT ck_support_expiry CHECK (expires_at > created_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_support_token_hash ON support_sessions (token_hash);
+CREATE INDEX IF NOT EXISTS idx_support_admin ON support_sessions (admin_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_support_target ON support_sessions (target_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_support_expires ON support_sessions (expires_at)
+    WHERE revoked_at IS NULL;
+"""
+
+CREATE_AUDIT_LOG = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id             BIGSERIAL PRIMARY KEY,
+    actor_user_id  INT REFERENCES users(id) ON DELETE SET NULL,
+    target_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+    action         VARCHAR(64) NOT NULL,
+    resource_type  VARCHAR(32) NOT NULL,
+    resource_id    VARCHAR(64),
+    before         JSONB,
+    after          JSONB,
+    ip             INET,
+    user_agent     VARCHAR(256),
+    request_id     VARCHAR(64),
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log (actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log (target_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_log (resource_type, resource_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log (action, created_at DESC);
+"""
+
+CREATE_USER_CONFIG = """
+CREATE TABLE IF NOT EXISTS user_config (
+    user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    config_key VARCHAR(40) NOT NULL,
+    params     JSONB NOT NULL DEFAULT '{}',
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, config_key)
+);
+"""
+
+CREATE_USER_SIGNAL_HISTORY = """
+CREATE TABLE IF NOT EXISTS user_signal_history (
+    id                 BIGSERIAL PRIMARY KEY,
+    user_id            INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    signal_date        DATE NOT NULL,
+    stock_code         VARCHAR(6) NOT NULL,
+    stock_name         VARCHAR(30) NOT NULL DEFAULT '',
+    direction          VARCHAR(7) NOT NULL,
+    strength           SMALLINT NOT NULL DEFAULT 0,
+    reason             TEXT NOT NULL DEFAULT '',
+    model_version      VARCHAR(20) NOT NULL DEFAULT '',
+    preference         VARCHAR(10) NOT NULL DEFAULT 'balanced',
+    combined_signal    BOOLEAN NOT NULL DEFAULT false,
+    suggested_action   VARCHAR(20),
+    source_strategies  TEXT,
+    params_snapshot    TEXT NOT NULL DEFAULT '',
+    predict_5d_return  NUMERIC(8,4),
+    predict_10d_return NUMERIC(8,4),
+    predict_20d_return NUMERIC(8,4),
+    predict_score      NUMERIC(8,4),
+    price              NUMERIC(10,2),
+    status             VARCHAR(10),
+    actual_return      NUMERIC(8,4),
+    close_reason       VARCHAR(30),
+    closed_at          TIMESTAMP,
+    created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_user_signal_direction CHECK (direction IN ('buy','sell'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_signal_day
+    ON user_signal_history (user_id, signal_date, stock_code, direction, model_version);
+CREATE INDEX IF NOT EXISTS idx_user_signal_date ON user_signal_history (user_id, signal_date);
+CREATE INDEX IF NOT EXISTS idx_user_signal_stock
+    ON user_signal_history (user_id, stock_code, signal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_user_signal_status
+    ON user_signal_history (user_id, status) WHERE status IS NULL;
+"""
+
+CREATE_AGENT_USAGE_DAILY = """
+CREATE TABLE IF NOT EXISTS agent_usage_daily (
+    user_id           INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    usage_date        DATE NOT NULL,
+    messages          INT NOT NULL DEFAULT 0,
+    llm_calls         INT NOT NULL DEFAULT 0,
+    prompt_tokens     BIGINT NOT NULL DEFAULT 0,
+    completion_tokens BIGINT NOT NULL DEFAULT 0,
+    tool_calls        INT NOT NULL DEFAULT 0,
+    updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, usage_date)
+);
+"""
+
+CREATE_MODEL_SCORE_DAILY = """
+CREATE TABLE IF NOT EXISTS model_score_daily (
+    model_version VARCHAR(20) NOT NULL,
+    trade_date    DATE NOT NULL,
+    stock_code    VARCHAR(6) NOT NULL,
+    score         NUMERIC(12,6),
+    rank_pct      NUMERIC(8,6),
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (model_version, trade_date, stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_model_score_date ON model_score_daily (trade_date, model_version);
+"""
+
 # ── 顺序很重要（满足外键/依赖）──
 
 ALL_TABLES = [
+    ("users", CREATE_USERS),
+    ("roles", CREATE_ROLES),
+    ("permissions", CREATE_PERMISSIONS),
+    ("role_permissions", CREATE_ROLE_PERMISSIONS),
+    ("user_roles", CREATE_USER_ROLES),
+    ("user_permission_overrides", CREATE_USER_PERMISSION_OVERRIDES),
+    ("support_sessions", CREATE_SUPPORT_SESSIONS),
+    ("audit_log", CREATE_AUDIT_LOG),
+    ("user_config", CREATE_USER_CONFIG),
+    ("user_signal_history", CREATE_USER_SIGNAL_HISTORY),
+    ("agent_usage_daily", CREATE_AGENT_USAGE_DAILY),
+    ("model_score_daily", CREATE_MODEL_SCORE_DAILY),
     ("backfill_tasks", CREATE_BACKFILL_TASKS),
     ("trade_calendar", CREATE_TRADE_CALENDAR),
     ("stock_master", CREATE_STOCK_MASTER),
@@ -1646,6 +1932,7 @@ ALL_TABLES = [
     ("agent", CREATE_AGENT),
     ("macro_indicator", CREATE_MACRO_INDICATOR),
     ("index_valuation", CREATE_INDEX_VALUATION),
+    ("market_sentiment_daily", CREATE_MARKET_SENTIMENT_DAILY),
 ]
 
 
@@ -1699,15 +1986,147 @@ def init_db(sync_session) -> None:
     # 默认策略配置
     sync_session.execute(text(DEFAULT_STRATEGY_CONFIG))
 
-    # 自选默认组（watch_groups 的 is_default 行，幂等播种）
+    # 多用户/RBAC 种子（权限节点、系统角色、种子管理员；幂等）
     try:
-        sync_session.execute(text(
-            "INSERT INTO watch_groups (group_name, is_default, sort_order) "
-            "VALUES ('自选', true, 0) ON CONFLICT (group_name) DO NOTHING"
-        ))
+        from app.auth.seed import seed_auth
+        admin_id = seed_auth(sync_session)
         sync_session.commit()
-    except Exception:
+    except Exception as e:
         sync_session.rollback()
+        # 认证种子失败不应静默：否则系统无 admin 可登录
+        raise RuntimeError(f"RBAC seed failed: {e}") from e
+
+    # 迁移：个人表加 owner（P2：portfolio/watch；trade_* 在 P3 继续）
+    try:
+        for ddl in [
+            "ALTER TABLE portfolio ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT",
+            "ALTER TABLE portfolio_history ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT",
+            "ALTER TABLE watch_groups ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT",
+        ]:
+            sync_session.execute(text(ddl))
+        sync_session.execute(text("UPDATE portfolio SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+        sync_session.execute(text("UPDATE portfolio_history SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+        sync_session.execute(text("UPDATE watch_groups SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+        sync_session.execute(text("DROP INDEX IF EXISTS idx_portfolio_active_stock"))
+        sync_session.execute(text("DROP INDEX IF EXISTS idx_ph_stock"))
+        sync_session.execute(text("ALTER TABLE watch_groups DROP CONSTRAINT IF EXISTS watch_groups_group_name_key"))
+
+        # 每个用户只保留一个默认组；已有非默认“自选”则提升；完全没有则补建
+        sync_session.execute(text("""
+            UPDATE watch_groups g SET is_default=false
+            WHERE g.is_default=true
+              AND g.id <> (SELECT min(x.id) FROM watch_groups x
+                           WHERE x.user_id=g.user_id AND x.is_default=true)
+        """))
+        sync_session.execute(text("""
+            UPDATE watch_groups g SET is_default=true
+            WHERE g.group_name='自选' AND g.is_default=false
+              AND NOT EXISTS (SELECT 1 FROM watch_groups x
+                              WHERE x.user_id=g.user_id AND x.is_default=true)
+        """))
+        sync_session.execute(text("""
+            INSERT INTO watch_groups (user_id, group_name, is_default, sort_order)
+            SELECT u.id, '自选', true, 0 FROM users u
+            WHERE NOT EXISTS (SELECT 1 FROM watch_groups g
+                              WHERE g.user_id=u.id AND g.group_name='自选')
+        """))
+        sync_session.execute(text(
+            "ALTER TABLE watch_groups ALTER COLUMN user_id SET NOT NULL"))
+        for ddl in [
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_user_stock_active ON portfolio (user_id, stock_code) WHERE is_active=true",
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_user_active ON portfolio (user_id, is_active, updated_at DESC)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_watch_user_group_name ON watch_groups (user_id, group_name)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_watch_user_default ON watch_groups (user_id) WHERE is_default=true",
+            "CREATE INDEX IF NOT EXISTS idx_watch_user_sort ON watch_groups (user_id, is_default DESC, sort_order, id)",
+            "CREATE INDEX IF NOT EXISTS idx_ph_user_stock ON portfolio_history (user_id, stock_code, created_at DESC)",
+        ]:
+            sync_session.execute(text(ddl))
+
+        # P3：交割单/导入批次 owner
+        sync_session.execute(text(
+            "ALTER TABLE trade_slip ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT"))
+        sync_session.execute(text(
+            "ALTER TABLE trade_import_batch ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT"))
+        sync_session.execute(text("UPDATE trade_slip SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+        sync_session.execute(text("UPDATE trade_import_batch SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+        sync_session.execute(text("DROP INDEX IF EXISTS uq_trade_slip_order"))
+        sync_session.execute(text("DROP INDEX IF EXISTS uq_trade_slip_hash"))
+        sync_session.execute(text("ALTER TABLE trade_slip ALTER COLUMN user_id SET NOT NULL"))
+        sync_session.execute(text("ALTER TABLE trade_import_batch ALTER COLUMN user_id SET NOT NULL"))
+        for ddl in [
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_trade_slip_user_order ON trade_slip (user_id, account_no, trade_date, order_no) WHERE order_no <> ''",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_trade_slip_user_hash ON trade_slip (user_id, row_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_trade_slip_user_date ON trade_slip (user_id, trade_date DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_trade_slip_user_code ON trade_slip (user_id, stock_code, trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_trade_slip_user_batch ON trade_slip (user_id, import_batch_id)",
+            "CREATE INDEX IF NOT EXISTS idx_trade_batch_user ON trade_import_batch (user_id, created_at DESC)",
+        ]:
+            sync_session.execute(text(ddl))
+
+        # P3：盘中记录/现金/计划/日志 owner
+        for table in ("trade_intraday", "trade_cash_snapshot", "trade_plan", "trade_journal"):
+            sync_session.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT"))
+            sync_session.execute(text(f"UPDATE {table} SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+            sync_session.execute(text(f"ALTER TABLE {table} ALTER COLUMN user_id SET NOT NULL"))
+        for table in ("trade_cash_snapshot", "trade_plan", "trade_journal"):
+            sync_session.execute(text(f"""
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = '{table}'::regclass AND contype = 'p'
+                      AND pg_get_constraintdef(oid) LIKE '%(user_id, trade_date)%'
+                  ) THEN
+                    ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_pkey;
+                    ALTER TABLE {table} ADD PRIMARY KEY (user_id, trade_date);
+                  END IF;
+                END $$;
+            """))
+        for ddl in [
+            "CREATE INDEX IF NOT EXISTS idx_trade_intraday_user_date ON trade_intraday (user_id, trade_date DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_trade_intraday_user_code ON trade_intraday (user_id, stock_code, trade_date)",
+        ]:
+            sync_session.execute(text(ddl))
+
+        # P3：告警 owner（NULL=模型/系统告警；it* 归种子管理员）
+        for ddl in [
+            "ALTER TABLE risk_alerts ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE risk_alerts ADD COLUMN IF NOT EXISTS ack_by INT REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE risk_alerts ADD COLUMN IF NOT EXISTS ack_at TIMESTAMP",
+            "UPDATE risk_alerts SET user_id=:a WHERE user_id IS NULL AND kind LIKE 'it%%'",
+            "CREATE INDEX IF NOT EXISTS idx_ra_user_ack ON risk_alerts (user_id, ack, id)",
+            "CREATE INDEX IF NOT EXISTS idx_ra_user_date_kind ON risk_alerts (user_id, trade_date, kind)",
+            "CREATE INDEX IF NOT EXISTS idx_ra_user_stock ON risk_alerts (user_id, stock_code, created_at DESC)",
+        ]:
+            sync_session.execute(text(ddl), {"a": admin_id} if ":a" in ddl else {})
+
+        # P4：AI 事件/结果追踪 owner
+        # P6：Agent 会话 owner
+        sync_session.execute(text(
+            "ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT"))
+        sync_session.execute(text("UPDATE agent_sessions SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+        sync_session.execute(text("ALTER TABLE agent_sessions ALTER COLUMN user_id SET NOT NULL"))
+        sync_session.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_agent_sess_user_updated ON agent_sessions (user_id, updated_at DESC)"))
+
+        for table in ("intraday_ai_event", "intraday_signal_outcome"):
+            sync_session.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE RESTRICT"))
+            sync_session.execute(text(f"""
+                UPDATE {table} t SET user_id = COALESCE(r.user_id, :a)
+                FROM risk_alerts r
+                WHERE r.id = t.alert_id AND t.user_id IS NULL
+            """), {"a": admin_id})
+            sync_session.execute(text(f"UPDATE {table} SET user_id=:a WHERE user_id IS NULL"), {"a": admin_id})
+            sync_session.execute(text(f"ALTER TABLE {table} ALTER COLUMN user_id SET NOT NULL"))
+            ts_col = "created_at" if table == "intraday_ai_event" else "alert_time"
+            sync_session.execute(text(
+                f"CREATE INDEX IF NOT EXISTS idx_{table}_user ON {table} (user_id, {ts_col} DESC)"))
+        sync_session.commit()
+    except Exception as e:
+        sync_session.rollback()
+        logger.warning(f"[schema] 个人表 owner 迁移失败: {str(e)[:200]}")
 
     # 播种：宏观与指数估值采集流程（每日 23:05，幂等；同名流程存在则跳过）
     try:
@@ -2021,16 +2440,49 @@ def init_db(sync_session) -> None:
         except Exception:
             sync_session.rollback()
 
+        # 迁移：市场情绪日度（v3.22，恐慌指数趋势）——收盘后落库当日情绪分，
+        # 历史（2000 起）由 scripts/backfill_sentiment_daily.py 从 daily_quote 重算。
+        # 序列统一三成分口径（VWAP 项缺省 10 分），score_rt 只在当日节点落库有值。
+        try:
+            sync_session.execute(text("""
+                INSERT INTO dag_config (node_name, deps, label, sort_order)
+                VALUES ('sentiment_daily', '', '📉 市场情绪日度', 98)
+                ON CONFLICT (node_name) DO UPDATE SET deps='', label='📉 市场情绪日度', sort_order=98
+            """))
+            # 独立定时流程（15:30 收盘后）：等 treemap 快照落定，避开 17:00 主流程
+            sync_session.execute(text("""
+                INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+                SELECT '市场情绪日度', '收盘后落库当日市场情绪分（恐慌指数趋势，幂等）',
+                       :n, :e, '30 15 * * *', 'published', false
+                WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='市场情绪日度')
+            """), {
+                'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
+                     '{"deps": ["cron"], "position": {"x": 20, "y": 120}, '
+                     '"node_name": "sentiment_daily"}]',
+                'e': '[{"source": "cron", "target": "sentiment_daily"}]',
+            })
+            sync_session.commit()
+        except Exception:
+            sync_session.rollback()
+
         # 迁移：新闻资讯模块（design/07，2026-09-29）——第 1 层原文 + 第 2 层 LLM 总结
         #  关注池 v_focus_pool = 持仓 ∪ 自选分组：既是采集分片轮转的范围（个股新闻/研报/公告
         #  只采池内，不采全市场 5000 只），也是文本→个股匹配的字典——限定在几百个名字内
         #  暴力长名优先完全够用，且天然绕开全市场重名/短名歧义。
         #  v_news_feed = 原文 LEFT JOIN 总结：下游（API/前端）统一入口，未总结的行 summary 为 NULL。
         news_views = """
-        CREATE OR REPLACE VIEW v_focus_pool AS
-        SELECT stock_code FROM portfolio WHERE is_active = true
+        DROP VIEW IF EXISTS v_focus_pool CASCADE;
+        CREATE VIEW v_focus_pool AS
+        SELECT p.user_id, p.stock_code
+        FROM portfolio p
+        WHERE p.is_active = true AND p.quantity > 0
         UNION
-        SELECT stock_code FROM watch_group_items;
+        SELECT g.user_id, i.stock_code
+        FROM watch_group_items i JOIN watch_groups g ON g.id = i.group_id;
+
+        DROP VIEW IF EXISTS v_focus_pool_all CASCADE;
+        CREATE VIEW v_focus_pool_all AS
+        SELECT DISTINCT stock_code FROM v_focus_pool;
 
         CREATE OR REPLACE VIEW v_news_feed AS
         SELECT n.id, n.source, n.category, n.source_id, n.content_hash,
@@ -2391,6 +2843,7 @@ def init_db(sync_session) -> None:
         ('strategy_scan_results', 'JSONB'),
         ('test_performance', 'JSONB'),
         ('perm_test', 'JSONB'),  # 置换检验留档（v3.5：real vs 打乱分布 vs random）
+        ('role', "VARCHAR(16) NOT NULL DEFAULT 'primary'"),  # primary / candidate（备模型）
     ]:
         try:
             sync_session.execute(text(f"ALTER TABLE model_versions ADD COLUMN IF NOT EXISTS {col} {col_type}"))

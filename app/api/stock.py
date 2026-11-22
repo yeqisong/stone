@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response, Depends
 from loguru import logger
 from sqlalchemy import text
 
+from app.auth.auth import Principal, get_principal
 from app.db.connection import get_sync_db
 from app.api.pricing import hfq_to_raw_factors, raw_price
 from strategy.indicators import bollinger_bands, rsi, macd
@@ -878,8 +879,8 @@ def _quote_session(ts_text: str | None, now: datetime | None = None):
     return status, live, max(0, int(age))
 
 
-def _quote_levels(db, code: str, stype: str, trade_date: str | None) -> dict:
-    """详情页价位：昨高/昨低 + 持仓成本/止损/止盈（60s 缓存，无需每次快照都查库）。
+def _quote_levels(db, user_id: int, code: str, stype: str, trade_date: str | None) -> dict:
+    """详情页价位：昨高/昨低 + 当前用户持仓成本/止损/止盈（60s 缓存）。
 
     - 昨高/昨低取 quote.trade_date 之前最近一个交易日；盘前/盘后都对应图上最后一日的前一日。
     - 止损用 risk_rules.stop_loss_pct（比例），止盈用 intraday_rules.take_profit_pct（百分数）。
@@ -907,14 +908,14 @@ def _quote_levels(db, code: str, stype: str, trade_date: str | None) -> dict:
     if stype in ('stock', 'etf'):
         pos = db.execute(text(
             "SELECT cost_price FROM portfolio "
-            "WHERE stock_code=:c AND is_active=true AND cost_price > 0 LIMIT 1"
-        ), {'c': code}).fetchone()
+            "WHERE user_id=:uid AND stock_code=:c AND is_active=true AND cost_price > 0 LIMIT 1"
+        ), {'uid': user_id, 'c': code}).fetchone()
         if pos and pos[0]:
-            from app.risk import get_risk_rules
+            from app.risk import get_user_risk_rules
             from app.intraday_watch import get_intraday_rules
             cost = float(pos[0])
-            stop_pct = float(get_risk_rules(db).get('stop_loss_pct') or 0.08)
-            take_pct = float(get_intraday_rules(db).get('take_profit_pct') or 20.0)
+            stop_pct = float(get_user_risk_rules(db, user_id).get('stop_loss_pct') or 0.08)
+            take_pct = float(get_intraday_rules(db, user_id).get('take_profit_pct') or 20.0)
             levels['cost_price'] = round(cost, 3)
             levels['stop_price'] = round(cost * (1 - stop_pct), 3)
             levels['take_profit_price'] = round(cost * (1 + take_pct / 100), 3)
@@ -922,13 +923,15 @@ def _quote_levels(db, code: str, stype: str, trade_date: str | None) -> dict:
 
 
 @router.get("/stock/{code}/quote")
-def get_stock_quote(code: str, response: Response, type: str = Query(None)):
+def get_stock_quote(code: str, response: Response, type: str = Query(None),
+                    principal: Principal = Depends(get_principal)):
     """实时快照（腾讯财经，不入库）。个股/指数/ETF 通用。
 
-    3s 服务端缓存：详情页 5s 轮询、多标签页共享同一结果，避免前端直连外部源。
+    3s 服务端缓存：按用户隔离持仓成本/止损/止盈，行情本身仍复用。
     """
     response.headers['Cache-Control'] = 'no-store'
-    cache_key = (code, type or '')
+    uid = principal.data_user_id
+    cache_key = (uid, code, type or '')
     now = time.time()
     hit = _quote_cache.get(cache_key)
     if hit and now - hit[0] < _QUOTE_TTL_S:
@@ -960,14 +963,14 @@ def get_stock_quote(code: str, response: Response, type: str = Query(None)):
                'is_realtime': live, 'stale_seconds': stale}
 
     # 价位（昨高/昨低/持仓成本/止损/止盈）：60s 缓存，避免 5s 快照每次都查库
-    lv_key = (code, stype or 'stock', quote.get('trade_date'))
+    lv_key = (uid, code, stype or 'stock', quote.get('trade_date'))
     lv_hit = _levels_cache.get(lv_key)
     if lv_hit and now - lv_hit[0] < _LEVELS_TTL_S:
         levels = lv_hit[1]
     else:
         db = get_sync_db()
         try:
-            levels = _quote_levels(db, code, stype or 'stock', quote.get('trade_date'))
+            levels = _quote_levels(db, uid, code, stype or 'stock', quote.get('trade_date'))
         finally:
             db.close()
         _levels_cache[lv_key] = (now, levels)
@@ -982,20 +985,20 @@ def get_stock_quote(code: str, response: Response, type: str = Query(None)):
 
 
 @router.get("/stock/{code}/ai-intraday/latest-event")
-def get_stock_ai_intraday_latest_event(code: str, within_min: int = Query(120, ge=1, le=1440)):
-    """最近一次事件 AI 解读（详情页从通知/其他页面进入时补展示）。
-
-    只返回窗口内 status='done' 的结果；没有则 {ok:false, empty:true}。
-    """
+def get_stock_ai_intraday_latest_event(
+    code: str, within_min: int = Query(120, ge=1, le=1440),
+    principal: Principal = Depends(get_principal),
+):
+    """当前用户最近一次事件 AI 解读（详情页从通知/其他页面进入时补展示）。"""
     cutoff = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None) - timedelta(minutes=within_min)
     db = get_sync_db()
     try:
         row = db.execute(text("""
             SELECT id, alert_id, kind, result, created_at
             FROM intraday_ai_event
-            WHERE stock_code=:c AND status='done' AND created_at >= :cut
+            WHERE user_id=:uid AND stock_code=:c AND status='done' AND created_at >= :cut
             ORDER BY id DESC LIMIT 1
-        """), {'c': code, 'cut': cutoff}).fetchone()
+        """), {'uid': principal.data_user_id, 'c': code, 'cut': cutoff}).fetchone()
     finally:
         db.close()
     if not row or not row[3]:
@@ -1133,10 +1136,11 @@ _RADAR_TTL_S = 10
 
 
 @router.get("/stock/radar")
-def get_intraday_radar():
-    """关注池盘中雷达：一次批量快照 + 规则打分，点进详情做进一步验证。"""
+def get_intraday_radar(principal: Principal = Depends(get_principal)):
+    """当前用户关注池盘中雷达：一次批量快照 + 规则打分，点进详情做进一步验证。"""
     now = time.time()
-    hit = _radar_cache.get('all')
+    uid = principal.data_user_id
+    hit = _radar_cache.get(uid)
     if hit and now - hit[0] < _RADAR_TTL_S:
         return hit[1]
     db = get_sync_db()
@@ -1150,15 +1154,16 @@ def get_intraday_radar():
                 ORDER BY CASE stock_type WHEN 'stock' THEN 1 ELSE 2 END
                 LIMIT 1
             ) sm ON true
+            WHERE fp.user_id=:uid
             ORDER BY fp.stock_code
             LIMIT 50
-        """)).fetchall()
+        """), {"uid": uid}).fetchall()
         # 与护栏/教练同一口径：portfolio + 今日临时成交（手工卖出/回补）
         # 只读 portfolio 会把今天已卖出的票继续当成持仓，继续发止损信号。
         equity = 0.0
         try:
             from app.trade_intraday import state as intraday_state
-            _st = intraday_state(db)
+            _st = intraday_state(db, uid)
             equity = float(_st.get("equity") or 0)
             positions = {
                 p["stock_code"]: {"qty": int(p["quantity"] or 0),
@@ -1172,11 +1177,11 @@ def get_intraday_radar():
                 r[0]: {"qty": int(r[1] or 0), "cost": float(r[2] or 0)}
                 for r in db.execute(text("""
                     SELECT stock_code, quantity, cost_price FROM portfolio
-                    WHERE is_active=true AND quantity > 0
-                """)).fetchall()
+                    WHERE user_id=:uid AND is_active=true AND quantity > 0
+                """), {"uid": uid}).fetchall()
             }
         from app.trade_review import get_discipline
-        _disc = get_discipline(db)
+        _disc = get_discipline(db, uid)
         max_single = float(_disc.get("max_single_weight") or 0.20)
         stop_loss = float(_disc.get("stop_loss_pct") or -0.08)
     finally:
@@ -1249,7 +1254,7 @@ def get_intraday_radar():
     items.sort(key=lambda x: -x['score'])
     payload = {'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
                'items': items}
-    _radar_cache['all'] = (now, payload)
+    _radar_cache[uid] = (now, payload)
     return payload
 
 

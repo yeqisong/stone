@@ -15,26 +15,34 @@ SCOPE = "agent_file"
 DEFAULT_TTL = 24 * 3600
 
 
-def sign_path(session_id: int, rel: str, ttl: int = DEFAULT_TTL) -> str:
-    """返回带签名的文件 URL（rel 为工作区内相对路径）。"""
-    token = jwt.encode(
-        {"scope": SCOPE, "sid": int(session_id), "rel": rel,
-         "exp": datetime.utcnow() + timedelta(seconds=ttl)},
-        settings.APP_SECRET_KEY, algorithm="HS256")
+def sign_path(session_id: int, rel: str, user_id: int | None = None,
+              ttl: int = DEFAULT_TTL) -> str:
+    """返回带签名的文件 URL（rel 为工作区内相对路径，绑定 user_id）。"""
+    payload = {"scope": SCOPE, "sid": int(session_id), "rel": rel,
+               "exp": datetime.utcnow() + timedelta(seconds=ttl)}
+    if user_id is not None:
+        payload["uid"] = int(user_id)
+    token = jwt.encode(payload, settings.APP_SECRET_KEY, algorithm="HS256")
     return f"/api/agent/sessions/{session_id}/files/{quote(rel)}?sig={token}"
 
 
-def verify_sig(session_id: int, rel: str, sig: str) -> bool:
+def verify_sig(session_id: int, rel: str, sig: str,
+               user_id: int | None = None) -> bool:
     try:
         payload = jwt.decode(sig, settings.APP_SECRET_KEY, algorithms=["HS256"])
     except JWTError:
         return False
-    return (payload.get("scope") == SCOPE
-            and int(payload.get("sid") or 0) == int(session_id)
-            and payload.get("rel") == rel)
+    ok = (payload.get("scope") == SCOPE
+          and int(payload.get("sid") or 0) == int(session_id)
+          and payload.get("rel") == rel)
+    if not ok:
+        return False
+    if user_id is not None:
+        return int(payload.get("uid") or 0) == int(user_id)
+    return True
 
 
-def sign_images(session_id: int, images: list) -> list:
+def sign_images(session_id: int, images: list, user_id: int | None = None) -> list:
     """把 [{name, url}] 里的 url 重签成短时签名地址。"""
     out = []
     for im in images or []:
@@ -44,5 +52,5 @@ def sign_images(session_id: int, images: list) -> list:
         if not rel:
             continue
         out.append({"name": im.get("name") or rel,
-                    "url": sign_path(session_id, rel)})
+                    "url": sign_path(session_id, rel, user_id=user_id)})
     return out

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from app.db.connection import get_sync_db
-from app.auth.auth import optional_auth, get_current_user
+from app.auth.auth import optional_auth, get_current_user, Principal
 
 router = APIRouter(tags=["portfolio"])
 
@@ -25,30 +25,29 @@ class UpdatePosition(BaseModel):
 
 # ── 查（同步，确保读写同一连接看到最新数据）──
 
-_watch_cache = {'ts': 0.0, 'payload': None}
+_watch_cache: dict[int, dict] = {}
 _WATCH_TTL_S = 5
-_risk_heat_cache = {'ts': 0.0, 'payload': None}
+_risk_heat_cache: dict[int, dict] = {}
 _RISK_HEAT_TTL_S = 5
 
 
 @router.get("/portfolio/watch-window")
-def get_watch_window(user: str = Depends(get_current_user)):
-    """浮窗盯盘：全部持仓的最新价/涨跌 + 当日 1 分钟收盘迷你序列。
-
-    一次批量腾讯快照 + 一次 stock_minute_bar 查询；供 Document PiP 悬浮窗 5s 轮询。
-    """
+def get_watch_window(principal: Principal = Depends(get_current_user)):
+    """浮窗盯盘：当前用户全部持仓的最新价/涨跌 + 当日 1 分钟收盘迷你序列。"""
     import time as _time
     from datetime import datetime, timedelta, timezone
     now = _time.time()
-    if _watch_cache['payload'] and now - _watch_cache['ts'] < _WATCH_TTL_S:
-        return _watch_cache['payload']
+    uid = principal.data_user_id
+    cache = _watch_cache.setdefault(uid, {'ts': 0.0, 'payload': None})
+    if cache['payload'] and now - cache['ts'] < _WATCH_TTL_S:
+        return cache['payload']
     db = get_sync_db()
     try:
         pos = db.execute(text("""
             SELECT stock_code, stock_name, quantity, cost_price
-            FROM portfolio WHERE is_active=true AND quantity > 0
+            FROM portfolio WHERE user_id=:uid AND is_active=true AND quantity > 0
             ORDER BY stock_code
-        """)).fetchall()
+        """), {"uid": uid}).fetchall()
         codes = [r[0] for r in pos]
         sparks = {}
         if codes:
@@ -67,7 +66,7 @@ def get_watch_window(user: str = Depends(get_current_user)):
         db.close()
     if not codes:
         payload = {'asof': None, 'items': []}
-        _watch_cache.update(ts=now, payload=payload)
+        cache.update(ts=now, payload=payload)
         return payload
     try:
         from crawler.adapters.tencent_adapter import realtime_quotes
@@ -95,11 +94,11 @@ def get_watch_window(user: str = Depends(get_current_user)):
         'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
         'items': items,
     }
-    _watch_cache.update(ts=now, payload=payload)
+    cache.update(ts=now, payload=payload)
     return payload
 
 
-def _write_watch_token(user: str) -> bool:
+def _write_watch_token(principal: Principal) -> bool:
     """把当前登录态写入 WPF 的 %APPDATA%\\KdaoWatch\\token.txt（24h 有效）。"""
     import subprocess
     from pathlib import Path
@@ -114,7 +113,12 @@ def _write_watch_token(user: str) -> bool:
         ['wslpath', '-u', appdata], text=True, timeout=5).strip()
     tokdir = Path(wsl_appdata) / 'KdaoWatch'
     tokdir.mkdir(parents=True, exist_ok=True)
-    (tokdir / 'token.txt').write_text(create_token(user), encoding='utf-8')
+    (tokdir / 'token.txt').write_text(
+        create_token(principal.user_id, username=principal.username,
+                     token_version=principal.token_version,
+                     perm_version=principal.perm_version),
+        encoding='utf-8',
+    )
     return True
 
 
@@ -135,10 +139,10 @@ def _watch_protocol_registered() -> bool:
 
 
 @router.post("/portfolio/watch/prepare")
-def prepare_watch_window(user: str = Depends(get_current_user)):
+def prepare_watch_window(principal: Principal = Depends(get_current_user)):
     """网页按钮调用：写入 WPF token，并返回 kdaowatch:// 是否已注册。"""
     try:
-        _write_watch_token(user)
+        _write_watch_token(principal)
         return {'ok': True, 'scheme': 'kdaowatch://open',
                 'registered': _watch_protocol_registered()}
     except Exception as e:
@@ -146,7 +150,7 @@ def prepare_watch_window(user: str = Depends(get_current_user)):
 
 
 @router.post("/portfolio/watch/launch")
-def launch_watch_window(user: str = Depends(get_current_user)):
+def launch_watch_window(principal: Principal = Depends(get_current_user)):
     """后端直接拉起 WPF（备用；某些 WSL/服务会话下窗口可能不在交互桌面）。"""
     import subprocess
     from pathlib import Path
@@ -156,7 +160,7 @@ def launch_watch_window(user: str = Depends(get_current_user)):
         return {'ok': False, 'error': '仅支持 Windows/WSL 本机启动'}
     try:
         try:
-            _write_watch_token(user)
+            _write_watch_token(principal)
         except Exception:
             pass
         win_path = subprocess.check_output(['wslpath', '-w', str(script)], text=True).strip()
@@ -171,13 +175,15 @@ def launch_watch_window(user: str = Depends(get_current_user)):
 
 
 @router.get("/portfolio/risk-heat")
-def get_portfolio_risk_heat(user: str = Depends(get_current_user)):
-    """组合风险热度：单票/行业集中度、浮盈、今日盘中 critical 提醒。"""
+def get_portfolio_risk_heat(principal: Principal = Depends(get_current_user)):
+    """组合风险热度：当前用户单票/行业集中度、浮盈、今日盘中 critical 提醒。"""
     import time as _time
     from datetime import datetime, timedelta, timezone
     now = _time.time()
-    if _risk_heat_cache['payload'] and now - _risk_heat_cache['ts'] < _RISK_HEAT_TTL_S:
-        return _risk_heat_cache['payload']
+    uid = principal.data_user_id
+    cache = _risk_heat_cache.setdefault(uid, {'ts': 0.0, 'payload': None})
+    if cache['payload'] and now - cache['ts'] < _RISK_HEAT_TTL_S:
+        return cache['payload']
     db = get_sync_db()
     try:
         rows = db.execute(text("""
@@ -187,9 +193,9 @@ def get_portfolio_risk_heat(user: str = Depends(get_current_user)):
                 SELECT industry_l1 FROM stock_master
                 WHERE stock_code=p.stock_code AND stock_type='stock' LIMIT 1
             ) sm ON true
-            WHERE p.is_active=true AND p.quantity > 0
+            WHERE p.user_id=:uid AND p.is_active=true AND p.quantity > 0
             ORDER BY p.stock_code
-        """)).fetchall()
+        """), {"uid": uid}).fetchall()
         codes = [r[0] for r in rows]
         fallback = {}
         if codes:
@@ -203,17 +209,18 @@ def get_portfolio_risk_heat(user: str = Depends(get_current_user)):
         alert_row = db.execute(text("""
             SELECT COUNT(*), COUNT(*) FILTER (WHERE level='critical')
             FROM risk_alerts
-            WHERE trade_date=CURRENT_DATE AND stock_code = ANY(CAST(:codes AS varchar[]))
+            WHERE user_id=:uid AND trade_date=CURRENT_DATE
+              AND stock_code = ANY(CAST(:codes AS varchar[]))
               AND kind LIKE 'it%'
-        """), {'codes': codes or ['']}).fetchone() if codes else (0, 0)
-        from app.risk import get_risk_rules
-        rules = get_risk_rules(db)
+        """), {'uid': uid, 'codes': codes or ['']}).fetchone() if codes else (0, 0)
+        from app.risk import get_user_risk_rules
+        rules = get_user_risk_rules(db, uid)
         industry_cap = float(rules.get('industry_cap_pct') or 0.45)
     finally:
         db.close()
     if not codes:
         payload = {'ok': True, 'positions': 0, 'asof': None}
-        _risk_heat_cache.update(ts=now, payload=payload)
+        cache.update(ts=now, payload=payload)
         return payload
 
     qmap = {}
@@ -280,13 +287,13 @@ def get_portfolio_risk_heat(user: str = Depends(get_current_user)):
                            'market_value': round(p['market_value'], 2)}
                           for p in sorted(positions, key=lambda p: -p['weight'])[:5]],
     }
-    _risk_heat_cache.update(ts=now, payload=payload)
+    cache.update(ts=now, payload=payload)
     return payload
 
 
 @router.get("/portfolio")
-def get_portfolio():
-    """获取当前持仓（含浮动盈亏）。"""
+def get_portfolio(principal: Principal = Depends(get_current_user)):
+    """获取当前用户持仓（含浮动盈亏）。"""
     db = get_sync_db()
     try:
         result = db.execute(text("""
@@ -300,28 +307,49 @@ def get_portfolio():
                  ORDER BY dq.trade_date DESC LIMIT 1),
                 p.cost_price
             ) AS current_price,
-            (SELECT sh.direction FROM signal_history sh
-             WHERE sh.stock_code = p.stock_code
-               AND sh.combined_signal = true
-               AND sh.direction IN ('buy','sell')
-               AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
-             LIMIT 1) AS signal_direction,
-            (SELECT sh.signal_date FROM signal_history sh
-             WHERE sh.stock_code = p.stock_code
-               AND sh.combined_signal = true
-               AND sh.direction IN ('buy','sell')
-               AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
-             LIMIT 1) AS signal_date,
-            (SELECT sh.strength FROM signal_history sh
-             WHERE sh.stock_code = p.stock_code
-               AND sh.combined_signal = true
-               AND sh.direction IN ('buy','sell')
-               AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
-             LIMIT 1) AS signal_strength
+            COALESCE(
+                (SELECT 'sell' FROM user_signal_history ush
+                 WHERE ush.user_id = p.user_id AND ush.stock_code = p.stock_code
+                   AND ush.direction = 'sell'
+                   AND ush.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+                 LIMIT 1),
+                (SELECT sh.direction FROM signal_history sh
+                 WHERE sh.stock_code = p.stock_code
+                   AND sh.combined_signal = true
+                   AND sh.direction = 'buy'
+                   AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+                 LIMIT 1)
+            ) AS signal_direction,
+            COALESCE(
+                (SELECT ush.signal_date FROM user_signal_history ush
+                 WHERE ush.user_id = p.user_id AND ush.stock_code = p.stock_code
+                   AND ush.direction = 'sell'
+                   AND ush.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+                 LIMIT 1),
+                (SELECT sh.signal_date FROM signal_history sh
+                 WHERE sh.stock_code = p.stock_code
+                   AND sh.combined_signal = true
+                   AND sh.direction = 'buy'
+                   AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+                 LIMIT 1)
+            ) AS signal_date,
+            COALESCE(
+                (SELECT ush.strength FROM user_signal_history ush
+                 WHERE ush.user_id = p.user_id AND ush.stock_code = p.stock_code
+                   AND ush.direction = 'sell'
+                   AND ush.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+                 LIMIT 1),
+                (SELECT sh.strength FROM signal_history sh
+                 WHERE sh.stock_code = p.stock_code
+                   AND sh.combined_signal = true
+                   AND sh.direction = 'buy'
+                   AND sh.signal_date = (SELECT MAX(cal_date) FROM trade_calendar WHERE is_trade_day = true AND cal_date <= CURRENT_DATE)
+                 LIMIT 1)
+            ) AS signal_strength
         FROM portfolio p
-        WHERE p.is_active = true
+        WHERE p.user_id = :uid AND p.is_active = true
         ORDER BY p.updated_at DESC
-    """))
+    """), {"uid": principal.data_user_id})
         rows = result.fetchall()
         portfolio = []
         for r in rows:
@@ -363,8 +391,9 @@ def get_portfolio():
 # ── 增/改/删（同步 session）──
 
 @router.post("/portfolio")
-def add_position(body: AddPosition, user: str = Depends(optional_auth)):
-    """新增持仓。已存在则加权平均更新。"""
+def add_position(body: AddPosition, principal: Principal = Depends(optional_auth)):
+    """新增当前用户持仓。已存在则加权平均更新。"""
+    uid = principal.data_user_id
     code = body.stock_code.zfill(6)
     if len(code) != 6 or not code.isdigit():
         raise HTTPException(400, "无效的股票代码")
@@ -379,25 +408,30 @@ def add_position(body: AddPosition, user: str = Depends(optional_auth)):
             name = sm_row[0]
 
         existing = db.execute(text(
-            "SELECT id, quantity, cost_price FROM portfolio WHERE stock_code=:c AND is_active=true"
-        ), {"c": code})
+            "SELECT id, quantity, cost_price FROM portfolio "
+            "WHERE user_id=:uid AND stock_code=:c AND is_active=true"
+        ), {"uid": uid, "c": code})
         row = existing.fetchone()
         if row:
             old_qty, old_cost = row[1], float(row[2])
             new_qty = old_qty + body.quantity
             new_cost = ((old_cost * old_qty) + (body.cost_price * body.quantity)) / new_qty
             db.execute(text("""
-                UPDATE portfolio SET quantity=:q, cost_price=:c, notes=:n, updated_at=CURRENT_TIMESTAMP WHERE id=:id
-            """), {"q": new_qty, "c": round(new_cost, 3), "n": body.notes, "id": row[0]})
+                UPDATE portfolio SET quantity=:q, cost_price=:c, notes=:n, updated_at=CURRENT_TIMESTAMP
+                WHERE id=:id AND user_id=:uid
+            """), {"q": new_qty, "c": round(new_cost, 3), "n": body.notes, "id": row[0], "uid": uid})
             db.execute(text("""
-                INSERT INTO portfolio_history (stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
-                VALUES (:c, :n, 'add', :qb, :qa, :cb, :ca)
-            """), {"c": code, "n": name, "qb": old_qty, "qa": new_qty, "cb": old_cost, "ca": round(new_cost, 3)})
+                INSERT INTO portfolio_history
+                    (user_id, stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
+                VALUES (:uid, :c, :n, 'add', :qb, :qa, :cb, :ca)
+            """), {"uid": uid, "c": code, "n": name, "qb": old_qty, "qa": new_qty,
+                   "cb": old_cost, "ca": round(new_cost, 3)})
         else:
             db.execute(text("""
-                INSERT INTO portfolio (stock_code, stock_name, exchange, quantity, cost_price, notes)
-                VALUES (:c, :n, :e, :q, :p, :nt)
-            """), {"c": code, "n": name, "e": ex, "q": body.quantity, "p": body.cost_price, "nt": body.notes})
+                INSERT INTO portfolio (user_id, stock_code, stock_name, exchange, quantity, cost_price, notes)
+                VALUES (:uid, :c, :n, :e, :q, :p, :nt)
+            """), {"uid": uid, "c": code, "n": name, "e": ex, "q": body.quantity,
+                   "p": body.cost_price, "nt": body.notes})
 
         db.commit()
         return {"ok": True}
@@ -406,13 +440,16 @@ def add_position(body: AddPosition, user: str = Depends(optional_auth)):
 
 
 @router.put("/portfolio/{stock_code}")
-def update_position(stock_code: str, body: UpdatePosition, user: str = Depends(optional_auth)):
-    """更新持仓数量/成本/备注。"""
+def update_position(stock_code: str, body: UpdatePosition,
+                    principal: Principal = Depends(optional_auth)):
+    """更新当前用户持仓数量/成本/备注。"""
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
         existing = db.execute(text(
-            "SELECT id, quantity, cost_price FROM portfolio WHERE stock_code=:c AND is_active=true"
-        ), {"c": stock_code})
+            "SELECT id, quantity, cost_price FROM portfolio "
+            "WHERE user_id=:uid AND stock_code=:c AND is_active=true"
+        ), {"uid": uid, "c": stock_code})
         row = existing.fetchone()
         if not row:
             raise HTTPException(404, "持仓不存在")
@@ -423,13 +460,17 @@ def update_position(stock_code: str, body: UpdatePosition, user: str = Depends(o
         new_notes = body.notes if body.notes is not None else ""
 
         db.execute(text("""
-            UPDATE portfolio SET quantity=:q, cost_price=:c, notes=:n, updated_at=CURRENT_TIMESTAMP WHERE id=:id
-        """), {"q": new_qty, "c": round(new_cost, 3), "n": new_notes, "id": row[0]})
+            UPDATE portfolio SET quantity=:q, cost_price=:c, notes=:n, updated_at=CURRENT_TIMESTAMP
+            WHERE id=:id AND user_id=:uid
+        """), {"q": new_qty, "c": round(new_cost, 3), "n": new_notes, "id": row[0], "uid": uid})
 
         db.execute(text("""
-            INSERT INTO portfolio_history (stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
-            SELECT stock_code, stock_name, 'update', :qb, :qa, :cb, :ca FROM portfolio WHERE id=:id
-        """), {"qb": old_qty, "qa": new_qty, "cb": old_cost, "ca": round(new_cost, 3), "id": row[0]})
+            INSERT INTO portfolio_history
+                (user_id, stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
+            SELECT user_id, stock_code, stock_name, 'update', :qb, :qa, :cb, :ca
+            FROM portfolio WHERE id=:id AND user_id=:uid
+        """), {"qb": old_qty, "qa": new_qty, "cb": old_cost, "ca": round(new_cost, 3),
+               "id": row[0], "uid": uid})
 
         db.commit()
         return {"ok": True, "updated": {"qty": new_qty, "cost": round(new_cost, 3)}}
@@ -438,22 +479,29 @@ def update_position(stock_code: str, body: UpdatePosition, user: str = Depends(o
 
 
 @router.delete("/portfolio/{stock_code}")
-def delete_position(stock_code: str, user: str = Depends(optional_auth)):
-    """删除持仓（软删除，设置 is_active=false）。"""
+def delete_position(stock_code: str, principal: Principal = Depends(optional_auth)):
+    """删除当前用户持仓（软删除，设置 is_active=false）。"""
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
         existing = db.execute(text(
-            "SELECT id, quantity FROM portfolio WHERE stock_code=:c AND is_active=true"
-        ), {"c": stock_code})
+            "SELECT id, quantity FROM portfolio "
+            "WHERE user_id=:uid AND stock_code=:c AND is_active=true"
+        ), {"uid": uid, "c": stock_code})
         row = existing.fetchone()
         if not row:
             raise HTTPException(404, "持仓不存在")
 
-        db.execute(text("UPDATE portfolio SET is_active=false, updated_at=CURRENT_TIMESTAMP WHERE id=:id"), {"id": row[0]})
+        db.execute(text(
+            "UPDATE portfolio SET is_active=false, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=:id AND user_id=:uid"
+        ), {"id": row[0], "uid": uid})
         db.execute(text("""
-            INSERT INTO portfolio_history (stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
-            SELECT stock_code, stock_name, 'delete', :q, 0, cost_price, cost_price FROM portfolio WHERE id=:id
-        """), {"q": row[1], "id": row[0]})
+            INSERT INTO portfolio_history
+                (user_id, stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
+            SELECT user_id, stock_code, stock_name, 'delete', :q, 0, cost_price, cost_price
+            FROM portfolio WHERE id=:id AND user_id=:uid
+        """), {"q": row[1], "id": row[0], "uid": uid})
 
         db.commit()
         return {"ok": True, "deleted": stock_code}
@@ -462,15 +510,16 @@ def delete_position(stock_code: str, user: str = Depends(optional_auth)):
 
 
 @router.get("/portfolio/{stock_code}/history")
-def get_position_history(stock_code: str):
-    """获取指定持仓的加减仓历史记录。"""
+def get_position_history(stock_code: str, principal: Principal = Depends(get_current_user)):
+    """获取当前用户指定持仓的加减仓历史记录。"""
+    uid = principal.data_user_id
     db = get_sync_db()
     try:
         result = db.execute(text("""
             SELECT action, quantity_before, quantity_after, cost_before, cost_after, created_at
-            FROM portfolio_history WHERE stock_code = :c
+            FROM portfolio_history WHERE user_id=:uid AND stock_code = :c
             ORDER BY created_at DESC LIMIT 50
-        """), {"c": stock_code})
+        """), {"uid": uid, "c": stock_code})
         records = []
         for r in result.fetchall():
             records.append({
@@ -484,8 +533,8 @@ def get_position_history(stock_code: str):
 
         current = db.execute(text("""
             SELECT stock_name, quantity, cost_price, notes
-            FROM portfolio WHERE stock_code = :c AND is_active = true
-        """), {"c": stock_code}).fetchone()
+            FROM portfolio WHERE user_id=:uid AND stock_code = :c AND is_active = true
+        """), {"uid": uid, "c": stock_code}).fetchone()
 
         position = None
         if current:

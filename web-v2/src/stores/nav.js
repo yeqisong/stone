@@ -42,6 +42,10 @@ export const useNavStore = defineStore('nav', () => {
     if (path === '/k') { midx.value = q('idx') || '000001.SH'; tab.value = 'k'; return }
     if (hash.startsWith('/stock-fund/')) { stockFundType.value = hash.split('/')[2] || 'stock'; tab.value = 'u'; return }
     if (path === '/trade-review') { tradeReviewTab.value = q('tab') || 'review'; tab.value = 't'; return }
+    if (path === '/admin/users') { tab.value = 'y'; return }
+    if (path === '/admin/roles') { tab.value = 'z'; return }
+    if (path === '/admin/audit') { tab.value = 'h'; return }
+    if (path === '/admin/settings') { tab.value = 'o'; return }
     if (path.startsWith('/models')) {
       const parts = path.split('/')
       modelEntity.value = parts[2] || 'stock'
@@ -56,7 +60,7 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b','/k':'k'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b','/k':'k','/admin/users':'y','/admin/roles':'z','/admin/audit':'h','/admin/settings':'o'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
   }
@@ -119,6 +123,10 @@ export const useNavStore = defineStore('nav', () => {
       case 'u': target = '/stock-fund/' + stockFundType.value; break
       case 't': target = '/trade-review' + (tradeReviewTab.value && tradeReviewTab.value !== 'review' ? '?tab=' + tradeReviewTab.value : ''); break
       case 'w': target = '/dbx'; break
+      case 'y': target = '/admin/users'; break
+      case 'z': target = '/admin/roles'; break
+      case 'h': target = '/admin/audit'; break
+      case 'o': target = '/admin/settings'; break
       case 'i': target = '/agent'; break
       case 'n': {
         // 同 'l'：保留列表页查询参数（cat/kw/imp/sf/page，NewsView 维护），

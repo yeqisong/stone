@@ -37,7 +37,7 @@ class _DB:
             'ai_event_cooldown_min': 15,
             'ai_event_max_per_day': 10,
         }
-        self.alert = (1, date(2026, 11, 13), 'it_surge', '600519',
+        self.alert = (1, 1, date(2026, 11, 13), 'it_surge', '600519',
                       '贵州茅台 盘中急涨', '5分钟 +2.1%') if alert is _MISSING else alert
         self.existing_alert = existing_alert
         self.cooldown = cooldown
@@ -46,7 +46,7 @@ class _DB:
 
     def execute(self, stmt, params=None):
         sql = str(stmt)
-        if 'FROM strategy_config' in sql:
+        if 'FROM user_config' in sql:
             return _Res(rows=[(json.dumps(self.rules, ensure_ascii=False), True)])
         if 'FROM risk_alerts WHERE id' in sql:
             return _Res(rows=[self.alert] if self.alert else [])
@@ -54,7 +54,7 @@ class _DB:
             return _Res(rows=[(1,)] if self.existing_alert else [])
         if 'count(*)' in sql:
             return _Res(scalar=self.ai_count)
-        if 'FROM intraday_ai_event WHERE stock_code' in sql:
+        if 'FROM intraday_ai_event WHERE user_id' in sql:
             return _Res(rows=[(1,)] if self.cooldown else [])
         if sql.strip().startswith('INSERT'):
             self.inserts.append(dict(params))
@@ -151,7 +151,7 @@ class TestProcessEvent:
 
     def test_new_level_kind_goes_through_same_bus(self, monkeypatch, fake_analyze):
         db = self._install(monkeypatch, _DB(
-            alert=(1, date(2026, 11, 13), 'it_or_up', '600519',
+            alert=(1, 1, date(2026, 11, 13), 'it_or_up', '600519',
                    '贵州茅台 突破开盘区间', '现价 101.80，区间 98.50-101.50'),
             rules={'ai_event_enabled': True, 'ai_event_kinds': ['it_or_up'],
                    'ai_event_cooldown_min': 15, 'ai_event_max_per_day': 10},

@@ -9,7 +9,7 @@ from app.auth.auth import create_token
 from app.db.connection import SyncSessionLocal
 from app.db.schema import init_db
 
-AUTH = {"Authorization": f"Bearer {create_token('test')}"}
+AUTH = {"Authorization": f"Bearer {create_token('admin')}"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -48,14 +48,14 @@ async def test_data_status(client):
 
 @pytest.mark.asyncio
 async def test_portfolio(client):
-    response = await client.get("/api/portfolio")
+    response = await client.get("/api/portfolio", headers=AUTH)
     assert response.status_code == 200
     assert "positions" in response.json()
 
 
 @pytest.mark.asyncio
 async def test_buy_signals_empty(client):
-    response = await client.get("/api/buy_signals")
+    response = await client.get("/api/buy_signals", headers=AUTH)
     assert response.status_code == 200
 
 
