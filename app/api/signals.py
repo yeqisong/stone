@@ -1,12 +1,49 @@
 """买点扫描 API — 同步 session。"""
 import json
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from sqlalchemy import text
 from datetime import date
 
+from app.auth.auth import Principal, get_principal
 from app.db.connection import get_sync_db
 
 router = APIRouter(tags=["signals"])
+
+
+@router.get("/signals/personal")
+def get_personal_signals(
+    signal_date: str = Query(None, description="日期 YYYY-MM-DD，空=最近"),
+    limit: int = Query(200, ge=1, le=1000),
+    principal: Principal = Depends(get_principal),
+):
+    """当前用户个人卖出/个人信号（user_signal_history）。"""
+    db = get_sync_db()
+    try:
+        params = {"uid": principal.data_user_id, "n": limit}
+        where = "user_id=:uid"
+        if signal_date:
+            where += " AND signal_date=:d"
+            params["d"] = signal_date
+        rows = db.execute(text(f"""
+            SELECT id, signal_date, stock_code, stock_name, direction, strength, price,
+                   reason, model_version, predict_score, status, actual_return,
+                   close_reason, created_at
+            FROM user_signal_history
+            WHERE {where}
+            ORDER BY signal_date DESC, id DESC LIMIT :n
+        """), params).fetchall()
+        return {"items": [{
+            "id": r[0], "signal_date": str(r[1]), "stock_code": r[2],
+            "stock_name": r[3], "direction": r[4], "strength": r[5],
+            "price": float(r[6]) if r[6] is not None else None,
+            "reason": r[7], "model_version": r[8],
+            "predict_score": float(r[9]) if r[9] is not None else None,
+            "status": r[10],
+            "actual_return": float(r[11]) if r[11] is not None else None,
+            "close_reason": r[12], "created_at": str(r[13])[:19] if r[13] else None,
+        } for r in rows]}
+    finally:
+        db.close()
 
 
 @router.get("/buy_signals")
@@ -96,6 +133,7 @@ def get_buy_signals(
         # rank 标签模型（v15+）的 predict_* 是当日截面分位(0~1)而非收益率，
         # 前端需按分位渲染（否则 0.52 显示成 +52% 收益造成误读）
         predict_is_rank = False
+        predict_is_prob = False
         if active_ver:
             try:
                 _cfg = db.execute(text(

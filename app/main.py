@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.config import settings
-from app.db.connection import async_engine, check_db_connection
+from app.db.connection import async_engine, check_db_connection, get_db
 from app.db.schema import init_db, DEFAULT_STRATEGY_CONFIG
 from app.api.portfolio import router as portfolio_router
 from app.api.trades import router as trades_router
@@ -31,7 +31,15 @@ from app.api.dag_types import router as dag_types_router
 from app.api.lineage import router as lineage_router
 from app.api.dag_flows import router as dag_flows_router
 from app.feishu.webhook import router as feishu_router
-from app.auth.auth import verify_password, create_token, get_current_user
+from app.auth.auth import (
+    authorize_request,
+    get_current_user,
+    get_principal,
+    principal_payload,
+    require_admin,
+)
+from app.auth.security import hash_password, verify_password_hash
+from app.auth.service import authenticate, issue_login_token, load_principal
 
 
 @asynccontextmanager
@@ -169,6 +177,7 @@ app = FastAPI(
     description="Stock Buy/Sell Point Monitoring System",
     version="1.0.0",
     lifespan=lifespan,
+    dependencies=[Depends(authorize_request)],
 )
 
 app.add_middleware(
@@ -202,6 +211,8 @@ from app.api.news import router as news_router
 app.include_router(news_router, prefix="/api")
 from app.api.dbexplorer import router as dbex_router
 app.include_router(dbex_router, prefix="/api")
+from app.api.admin import router as admin_router
+app.include_router(admin_router, prefix="/api")
 app.include_router(lineage_router, prefix="/api")
 app.include_router(dag_types_router)  # /api/dag 已含前缀
 app.include_router(dag_flows_router)  # /api/dag 已含前缀
@@ -217,7 +228,7 @@ class LoginRequest(BaseModel):
 _login_attempts: dict = {}  # ip → [(timestamp, ...)]
 
 @app.post("/api/login")
-async def login(request: LoginRequest, req: Request = None):
+def login(request: LoginRequest, req: Request = None):
     """登录接口，返回 JWT Token。频率限制：5次/分钟/IP。"""
     # 频率限制
     import time as _time
@@ -230,14 +241,103 @@ async def login(request: LoginRequest, req: Request = None):
     attempts.append(now_ts)
     _login_attempts[client_ip] = attempts
 
-    username = request.username
-    password = request.password
-    if not verify_password(username, password):
-        raise HTTPException(status_code=401, detail="用户名或密码错误")
-    token = create_token(username)
+    principal, error = authenticate(request.username, request.password)
+    if principal is None:
+        raise HTTPException(status_code=401, detail=error or "用户名或密码错误")
+    token = issue_login_token(principal)
     # 登录成功后清除该 IP 的尝试记录
     _login_attempts.pop(client_ip, None)
-    return {"ok": True, "token": token, "username": username}
+    return {"ok": True, "token": token, **principal_payload(principal)}
+
+
+@app.get("/api/me")
+def me(principal=Depends(get_principal)):
+    """当前用户信息 + 权限码（前端导航/按钮使用）。"""
+    return principal_payload(principal)
+
+
+class PasswordChangeRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@app.post("/api/me/password")
+def change_my_password(body: PasswordChangeRequest, principal=Depends(get_principal)):
+    """修改自己的密码；成功后 token_version+1，返回新 token。"""
+    from sqlalchemy import text
+    from app.db.connection import get_sync_db
+
+    if len(body.new_password or "") < 8:
+        raise HTTPException(status_code=422, detail="新密码至少 8 位")
+    db = get_sync_db()
+    try:
+        row = db.execute(text(
+            "SELECT password_hash FROM users WHERE id = :uid"
+        ), {"uid": principal.user_id}).fetchone()
+        if not row or not verify_password_hash(body.old_password, row[0]):
+            raise HTTPException(status_code=400, detail="旧密码错误")
+        try:
+            new_hash = hash_password(body.new_password)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        db.execute(text("""
+            UPDATE users
+            SET password_hash = :p, must_change_password = false,
+                token_version = token_version + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :uid
+        """), {"p": new_hash, "uid": principal.user_id})
+        db.commit()
+        fresh = load_principal(principal.user_id, db=db)
+        return {"ok": True, "token": issue_login_token(fresh), **principal_payload(fresh)}
+    finally:
+        db.close()
+
+
+@app.post("/api/me/reauth")
+def reauth(body: dict, principal=Depends(get_principal)):
+    """二次认证：校验当前密码，返回短期 step-up token（供审批使用）。"""
+    from sqlalchemy import text
+    from app.db.connection import get_sync_db
+    from app.auth.service import create_token
+
+    password = (body or {}).get("password", "")
+    db = get_sync_db()
+    try:
+        row = db.execute(text(
+            "SELECT password_hash FROM users WHERE id = :uid"
+        ), {"uid": principal.user_id}).fetchone()
+        if not row or not verify_password_hash(password, row[0]):
+            raise HTTPException(status_code=400, detail="密码错误")
+        return {
+            "ok": True,
+            "stepup_token": create_token(
+                principal.user_id, principal.username,
+                principal.token_version, principal.perm_version,
+                expires_hours=1,
+            ),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/me/feishu/bind-code")
+async def feishu_bind_code(db=Depends(get_db), principal=Depends(get_principal)):
+    """生成一次性飞书绑定码（10 分钟有效），到飞书发送「绑定 123456」。"""
+    from app.feishu.identity import issue_bind_code
+
+    r = await issue_bind_code(db, principal.user_id)
+    if r.get("error"):
+        raise HTTPException(400, r["error"])
+    return r
+
+
+@app.delete("/api/me/feishu/bind")
+async def feishu_unbind(db=Depends(get_db), principal=Depends(get_principal)):
+    """解除当前用户与飞书账号的绑定。"""
+    from app.feishu.identity import unbind
+
+    return await unbind(db, principal.user_id)
 
 
 @app.get("/health")
@@ -261,4 +361,40 @@ async def _no_cache_html(request, call_next):
     return resp
 
 
-app.mount("/", StaticFiles(directory="web-v2/dist", html=True), name="web")
+from pathlib import Path as _Path
+_dist_dir = _Path("web-v2/dist")
+if _dist_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(_dist_dir), html=True), name="web")
+else:
+    # 开发/测试 worktree 可能尚未构建前端；API 仍可用
+    logger.warning("web-v2/dist 不存在，跳过前端静态挂载")
+
+
+def _validate_route_permissions() -> None:
+    """启动自检：每条 API/WS 路由必须有 public/auth_only/permission 规则。"""
+    from fastapi.routing import APIRoute, APIWebSocketRoute
+    from app.auth.route_permissions import ROUTE_RULES, resolve_rule
+    from app.auth.definitions import PERMISSION_CODES
+
+    for rule in ROUTE_RULES:
+        if rule.permission and rule.permission not in PERMISSION_CODES:
+            raise RuntimeError(f"路由规则引用未知权限码: {rule.permission}")
+
+    unmatched = []
+    for route in app.routes:
+        if isinstance(route, APIWebSocketRoute):
+            if resolve_rule("GET", route.path) is None:
+                unmatched.append(("WS", route.path))
+            continue
+        if not isinstance(route, APIRoute):
+            continue
+        for method in sorted(route.methods or []):
+            if method in ("HEAD", "OPTIONS"):
+                continue
+            if resolve_rule(method, route.path) is None:
+                unmatched.append((method, route.path))
+    if unmatched:
+        raise RuntimeError(f"路由未声明权限: {unmatched[:10]}（共 {len(unmatched)} 条）")
+
+
+_validate_route_permissions()

@@ -44,11 +44,13 @@ def register(name: str, description: str, parameters: dict, category: str):
 
 # ── 查询类工具 ──
 
-@register("get_my_portfolio", "获取用户当前持仓列表和浮动盈亏", {
+@register("get_my_portfolio", "获取当前用户自己的持仓列表和浮动盈亏", {
     "type": "object", "properties": {}, "required": []
 }, "query")
-async def get_my_portfolio(db=None) -> QueryResult:
+async def get_my_portfolio(db=None, user_id: int | None = None) -> QueryResult:
     from sqlalchemy import text
+    if not user_id:
+        return QueryResult(success=False, error="缺少用户身份")
     try:
         result = await db.execute(text("""
             SELECT p.stock_code, p.stock_name, p.quantity, p.cost_price,
@@ -60,8 +62,8 @@ async def get_my_portfolio(db=None) -> QueryResult:
                         WHERE dq.stock_code = p.stock_code
                         ORDER BY dq.trade_date DESC LIMIT 1)
                    ) AS current_price
-            FROM portfolio p WHERE p.is_active = true
-        """))
+            FROM portfolio p WHERE p.is_active = true AND p.user_id = :u
+        """), {"u": int(user_id)})
         rows = result.fetchall()
         positions = []
         for r in rows:
@@ -86,7 +88,7 @@ async def get_my_portfolio(db=None) -> QueryResult:
     "properties": {"code": {"type": "string", "description": "6位股票代码"}},
     "required": ["code"]
 }, "query")
-async def get_stock_detail(code: str, db=None) -> QueryResult:
+async def get_stock_detail(code: str, db=None, user_id: int | None = None) -> QueryResult:
     from sqlalchemy import text
     try:
         result = await db.execute(text("""
@@ -132,7 +134,8 @@ async def get_stock_detail(code: str, db=None) -> QueryResult:
     "properties": {"top_n": {"type": "integer", "description": "返回前N只", "default": 10}},
     "required": []
 }, "query")
-async def get_buy_signals(top_n: int = 10, db=None) -> QueryResult:
+async def get_buy_signals(top_n: int = 10, db=None,
+                           user_id: int | None = None) -> QueryResult:
     from sqlalchemy import text
     try:
         result = await db.execute(text("""
@@ -173,7 +176,7 @@ async def get_buy_signals(top_n: int = 10, db=None) -> QueryResult:
 @register("get_data_status", "获取系统数据采集状态", {
     "type": "object", "properties": {}, "required": []
 }, "query")
-async def get_data_status(db=None) -> QueryResult:
+async def get_data_status(db=None, user_id: int | None = None) -> QueryResult:
     from sqlalchemy import text
     from datetime import date
     try:
@@ -197,7 +200,7 @@ async def get_data_status(db=None) -> QueryResult:
 @register("get_strategy_config", "查看当前策略配置（启用状态和参数）", {
     "type": "object", "properties": {}, "required": []
 }, "query")
-async def get_strategy_config(db=None) -> QueryResult:
+async def get_strategy_config(db=None, user_id: int | None = None) -> QueryResult:
     from sqlalchemy import text
     try:
         result = await db.execute(text(
@@ -236,7 +239,8 @@ async def get_strategy_config(db=None) -> QueryResult:
     "required": ["stock_code", "quantity", "cost_price"]
 }, "write")
 async def confirm_add_portfolio(stock_code: str, quantity: int, cost_price: float,
-                                 stock_name: str = "", db=None) -> QueryResult:
+                                 stock_name: str = "", db=None,
+                                 user_id: int | None = None) -> QueryResult:
     return QueryResult(success=True, data={
         "action": "confirm_card",
         "card_type": "add_portfolio",
@@ -248,7 +252,7 @@ async def confirm_add_portfolio(stock_code: str, quantity: int, cost_price: floa
     })
 
 
-@register("confirm_set_preference", "切换全局交易偏好", {
+@register("confirm_set_preference", "切换当前用户自己的交易偏好", {
     "type": "object",
     "properties": {
         "mode": {"type": "string", "enum": ["left", "right", "balanced"],
@@ -256,7 +260,8 @@ async def confirm_add_portfolio(stock_code: str, quantity: int, cost_price: floa
     },
     "required": ["mode"]
 }, "write")
-async def confirm_set_preference(mode: str, db=None) -> QueryResult:
+async def confirm_set_preference(mode: str, db=None,
+                                  user_id: int | None = None) -> QueryResult:
     mode_names = {"left": "左侧交易", "right": "右侧交易", "balanced": "均衡"}
     return QueryResult(success=True, data={
         "action": "confirm_card",
@@ -273,7 +278,8 @@ async def confirm_set_preference(mode: str, db=None) -> QueryResult:
     "properties": {"scope": {"type": "string", "default": "all"}},
     "required": []
 }, "admin")
-async def trigger_recalculation(scope: str = "all", db=None) -> QueryResult:
+async def trigger_recalculation(scope: str = "all", db=None,
+                                 user_id: int | None = None) -> QueryResult:
     return QueryResult(success=True, data={
         "action": "recalculate",
         "message": "策略重算已触发，请稍候查看结果",
@@ -281,10 +287,29 @@ async def trigger_recalculation(scope: str = "all", db=None) -> QueryResult:
     })
 
 
-def get_tools_for_deepseek() -> list:
-    """生成 DeepSeek API 格式的工具列表。"""
+# 飞书工具 → 底层权限（None 表示登录即可，但仍按 data_user_id 过滤数据）
+TOOL_PERMISSIONS: dict[str, str | None] = {
+    "get_my_portfolio": "portfolio.position.view",
+    "get_stock_detail": "research.signal.view",
+    "get_buy_signals": "research.signal.view",
+    "get_data_status": "system.status.view",
+    "get_strategy_config": "system.settings.view",
+    "confirm_add_portfolio": "portfolio.position.edit",
+    "confirm_set_preference": "portfolio.position.edit",
+    "trigger_recalculation": "dag.execute",
+}
+
+
+def get_tools_for_deepseek(permission_codes=None, is_admin: bool = False) -> list:
+    """生成当前用户可见的工具列表（执行前仍会再次校验权限）。"""
+    allowed = set(permission_codes) if permission_codes is not None else None
     tools = []
     for name, td in TOOL_REGISTRY.items():
+        if td.category == "admin" and not is_admin:
+            continue
+        need = TOOL_PERMISSIONS.get(name)
+        if allowed is not None and need and need not in allowed:
+            continue
         tools.append({
             "type": "function",
             "function": {

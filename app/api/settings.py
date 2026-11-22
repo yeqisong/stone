@@ -5,9 +5,11 @@ from sqlalchemy import text
 from pydantic import BaseModel
 
 from app.db.connection import get_sync_db
-from app.auth.auth import optional_auth
+from app.auth.auth import optional_auth, get_principal, Principal
 
 router = APIRouter(tags=["settings"])
+
+_PREF_MODES = ("left", "balanced", "right")
 
 
 class StrategyToggle(BaseModel):
@@ -26,6 +28,68 @@ class DeepSeekKey(BaseModel):
 class StrategyParams(BaseModel):
     strategy_name: str
     params: dict
+
+
+class MySettingsBody(BaseModel):
+    trade_preference: str | None = None
+
+
+def _read_user_pref(db, user_id: int) -> str:
+    row = db.execute(text(
+        "SELECT params FROM user_config WHERE user_id=:u AND config_key='trade_preference'"
+    ), {"u": int(user_id)}).fetchone()
+    if not row or not row[0]:
+        return "balanced"
+    params = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    mode = params.get("mode") or "balanced"
+    return mode if mode in _PREF_MODES else "balanced"
+
+
+def _read_global_pref(db) -> str:
+    row = db.execute(text(
+        "SELECT params FROM strategy_config WHERE strategy_name='global_preference'"
+    )).fetchone()
+    if not row or not row[0]:
+        return "balanced"
+    params = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    mode = params.get("mode") or "balanced"
+    return mode if mode in _PREF_MODES else "balanced"
+
+
+@router.get("/me/settings")
+def get_my_settings(principal: Principal = Depends(get_principal)):
+    """当前用户的个人设置；global_preference 只读（影响共享信号生成）。"""
+    db = get_sync_db()
+    try:
+        return {
+            "trade_preference": _read_user_pref(db, principal.user_id),
+            "global_preference": _read_global_pref(db),
+        }
+    finally:
+        db.close()
+
+
+@router.put("/me/settings")
+def update_my_settings(body: MySettingsBody,
+                       principal: Principal = Depends(get_principal)):
+    """保存个人交易偏好（只影响自己的展示/飞书教练，不改全局信号口径）。"""
+    mode = (body.trade_preference or "").strip()
+    if mode not in _PREF_MODES:
+        raise HTTPException(422, "trade_preference 只能是 left/balanced/right")
+    db = get_sync_db()
+    try:
+        db.execute(text("""
+            INSERT INTO user_config (user_id, config_key, params, enabled, updated_at)
+            VALUES (:u, 'trade_preference', CAST(:p AS jsonb), true, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, config_key) DO UPDATE
+               SET params = EXCLUDED.params, enabled = true,
+                   updated_at = CURRENT_TIMESTAMP
+        """), {"u": principal.user_id,
+               "p": json.dumps({"mode": mode}, ensure_ascii=False)})
+        db.commit()
+        return {"ok": True, "trade_preference": mode}
+    finally:
+        db.close()
 
 
 @router.get("/settings")

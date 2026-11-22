@@ -27,15 +27,6 @@
       <span v-else-if="quota.risk_level==='medium'" style="color:var(--c-warn)">注意</span>
       <span style="color:var(--c-text-faint)">分钟 {{quota.minute_calls}}/{{quota.minute_limit}}</span>
     </div>
-    <!-- 全局交易偏好（右侧右对齐） -->
-    <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
-      <span style="font-size: var(--text-meta);color:var(--c-text-dim)"><AppIcon name="target" :size="13" />  交易偏好</span>
-      <n-button-group size="tiny">
-        <n-button size="tiny" :type="prefMode==='left'?'primary':'default'" @click="setPref('left')">左侧</n-button>
-        <n-button size="tiny" :type="prefMode==='balanced'?'primary':'default'" @click="setPref('balanced')">均衡</n-button>
-        <n-button size="tiny" :type="prefMode==='right'?'primary':'default'" @click="setPref('right')">右侧</n-button>
-      </n-button-group>
-    </span>
   </div>
 
   <!-- 数据明细（通栏：≥1440px 3列，以下 2列） -->
@@ -48,7 +39,7 @@
       <div v-for="dt in dataTables" :key="dt.label" class="sv-dt-card" style="display:flex;align-items:baseline;justify-content:space-between;padding:4px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
         <div style="display:flex;align-items:baseline;gap:6px;min-width:0">
           <span style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap">{{dt.label}}</span>
-          <span v-if="dt.items!=null" style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
+          <span v-if="dt.items!=null && dt.items>=0" style="font-size: var(--text-meta);color:var(--c-text-faint);white-space:nowrap">{{dt.items}} 只</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-size:14px;font-weight:600;color:var(--c-text)"><span v-if="dt.detail" style="font-size: var(--text-meta);font-weight:400;color:var(--c-text-dimmer)">{{dt.detail}} / </span>{{dt.rows>0?fmt(dt.rows)+' 条':dt.rows===0?'0 条':'-'}}</div>
@@ -160,85 +151,6 @@
     </div>
   </div>
 
-  <!-- 大模型配置（通栏：左表单 / 右实时指标） -->
-  <div style="margin-top:12px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-      <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="target" :size="13" />  大模型配置</span>
-      <span v-if="llmCfg.key_tail" style="font-size: var(--text-meta);color:var(--c-text-faint)">已配置，尾号 {{llmCfg.key_tail }}</span>
-      <span v-else style="font-size: var(--text-meta);color:var(--c-up)">未配置</span>
-      <span style="font-size: var(--text-meta);color:var(--c-text-faint)">新闻总结 / 雪球打分 / 问答 Agent / 连通性测试 共用</span>
-    </div>
-    <div class="sv-llm">
-      <!-- 左：表单 -->
-      <div class="sv-llm-form">
-        <span class="sv-llm-lb">API Key</span>
-        <n-input v-model:value="llmForm.api_key" size="small" type="password" show-password-on="click"
-                 :placeholder="llmCfg.key_tail ? `已配置（尾号 ${llmCfg.key_tail}），留空=不修改` : '粘贴 API Key'"
-                 class="sv-llm-span3" />
-        <span class="sv-llm-lb">模型 ID</span>
-        <n-input v-model:value="llmForm.model" size="small" placeholder="如 glm-5.3-flash" />
-        <span class="sv-llm-lb">Base URL</span>
-        <n-input v-model:value="llmForm.base_url" size="small" placeholder="https://open.bigmodel.cn/api/paas/v4" />
-        <span class="sv-llm-lb">限速</span>
-        <div class="sv-llm-span3" style="display:flex;align-items:center;gap:6px">
-          <n-input-number v-model:value="llmForm.rpm" size="small" :min="1" :max="3000" style="width:92px" />
-          <span class="sv-llm-unit">RPM</span>
-          <n-input-number v-model:value="llmForm.workers" size="small" :min="1" :max="16" style="width:80px" />
-          <span class="sv-llm-unit">并发</span>
-        </div>
-        <span class="sv-llm-lb">操作</span>
-        <div class="sv-llm-span3" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <n-button class="cta" size="tiny" type="primary" :loading="llmSaving" @click="saveLlm">保存</n-button>
-          <n-button size="tiny" :loading="llmTesting" @click="testLlm">测试连接</n-button>
-          <span v-if="llmTestMsg" :style="{fontSize:'10.5px',color:llmTestMsg.ok?'var(--c-down)':'var(--c-up)'}">
-            {{ llmTestMsg.ok ? `✓ ${llmTestMsg.model} 通（${llmTestMsg.latency_ms}ms）` : `✕ ${llmTestMsg.error}` }}
-          </span>
-        </div>
-      </div>
-
-      <!-- 右：实时指标 -->
-      <div class="sv-llm-metrics">
-        <div class="sv-llm-mhead">
-          实时调用
-          <span style="font-size: var(--text-meta);color:var(--c-text-faint);font-weight:400">5 秒刷新 / 进程内计数</span>
-        </div>
-        <div class="sv-llm-mgrid">
-          <div class="sv-llm-mt" :style="{ borderColor: llmM.saturated ? 'color-mix(in srgb, var(--c-warn) 50%, transparent)' : 'var(--c-card-bg-hover)' }">
-            <div class="sv-llm-ml">在途并发</div>
-            <div class="sv-llm-mv" :style="{ color: llmM.saturated ? 'var(--c-warn)' : 'var(--c-text)' }">
-              {{ llmM.active ?? '-' }}<span class="sv-llm-ms">/ {{ llmM.config?.workers ?? '-' }}</span>
-            </div>
-          </div>
-          <div class="sv-llm-mt">
-            <div class="sv-llm-ml">近 1 分钟</div>
-            <div class="sv-llm-mv">{{ llmM.rpm_1m ?? '-' }}<span class="sv-llm-ms">/ {{ llmM.config?.rpm ?? '-' }} RPM</span></div>
-          </div>
-          <div class="sv-llm-mt">
-            <div class="sv-llm-ml">峰值并发</div>
-            <div class="sv-llm-mv">{{ llmM.peak ?? '-' }}</div>
-          </div>
-          <div class="sv-llm-mt">
-            <div class="sv-llm-ml">成功 / 失败</div>
-            <div class="sv-llm-mv">{{ llmM.ok ?? 0 }}<span class="sv-llm-ms" :style="{ color: (llmM.fail ? 'var(--c-up)' : 'var(--c-text-faint)') }">/ {{ llmM.fail ?? 0 }}</span></div>
-          </div>
-          <div class="sv-llm-mt">
-            <div class="sv-llm-ml">平均时延</div>
-            <div class="sv-llm-mv">{{ llmM.avg_ms ?? '-' }}<span class="sv-llm-ms">ms</span></div>
-          </div>
-          <div class="sv-llm-mt">
-            <div class="sv-llm-ml">P95 时延</div>
-            <div class="sv-llm-mv">{{ llmM.p95_ms ?? '-' }}<span class="sv-llm-ms">ms</span></div>
-          </div>
-        </div>
-        <div v-if="llmM.recent_errors && llmM.recent_errors.length" class="llm-err">
-          <span v-for="e in llmM.recent_errors.slice(-2)" :key="e.at + e.code">
-            {{ e.at }} / {{ e.code }} / {{ e.msg.slice(0, 46) }}
-          </span>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- ══════════════════════════════════════════ -->
   <!--  历史补数                                            -->
   <div style="margin-top:12px">
@@ -327,8 +239,8 @@
 <script setup>
 import AppIcon from './AppIcon.vue'
 import ListPagination from './ListPagination.vue'
-import { ref, reactive, computed, onMounted, onUnmounted, h } from 'vue'
-import { NDataTable, NButton, NButtonGroup, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, NInput, NInputNumber, useDialog, useMessage } from 'naive-ui'
+import { ref, computed, onMounted, onUnmounted, h } from 'vue'
+import { NDataTable, NButton, NSpace, NSpin, NPagination, NModal, NEmpty, NTag, useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
 import BackfillModal from './BackfillModal.vue'
 import StatStrip from './StatStrip.vue'
@@ -340,19 +252,8 @@ const dialog = useDialog()
 const message = useMessage()
 
 const API = window.location.origin
-const prefMode = ref('balanced')
 // 北京时间 YYYY-MM-DD（共享工具，见 utils/date.js）
 
-async function loadPref() {
-  try {
-    const r = await axios.get(API + '/api/settings')
-    prefMode.value = r.data.preference?.mode || 'balanced'
-  } catch(e) { prefMode.value = 'balanced' }
-}
-function setPref(m) {
-  prefMode.value = m
-  axios.post(API + '/api/settings/preference', { mode: m }).catch(() => {})
-}
 const loading = ref(true)
 const overview = ref({total_rows:0,total_stocks:0,latest_date:'',exchanges:{}})
 const missingDates = ref([])
@@ -624,10 +525,6 @@ onMounted(() => {
   loadNews()
   loadMinuteData()
   loadSysMetrics()
-  loadLlm()
-  loadLlmMetrics()
-  llmTimer = setInterval(loadLlmMetrics, 5000)
-  loadPref()
   // 配额定期刷新（30s，与补数/采集共用配额时保持最新）
   quotaTimer = setInterval(loadQuota, 30000)
   xqTimer = setInterval(loadXq, 30000)
@@ -673,7 +570,7 @@ let quotaTimer = null
 let xqTimer = null
 let newsTimer = null
 let minuteTimer = null
-onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer); if (minuteTimer) clearInterval(minuteTimer); if (llmTimer) clearInterval(llmTimer) })
+onUnmounted(() => { if (wsUnwatch.value) wsUnwatch.value(); if (quotaTimer) clearInterval(quotaTimer); if (xqTimer) clearInterval(xqTimer); if (newsTimer) clearInterval(newsTimer); if (minuteTimer) clearInterval(minuteTimer) })
 
 // ── 历史补数 ──
 
@@ -777,48 +674,6 @@ async function openDbDetail() {
   } catch(e) {}
 }
 
-// ── 大模型配置（新闻总结/雪球打分等 LLM 链路共用；key 明文不出接口，只回尾号） ──
-const llmCfg = ref({ key_tail: '', model: '', base_url: '', rpm: 6, workers: 2 })
-const llmForm = reactive({ api_key: '', model: '', base_url: '', rpm: 6, workers: 2 })
-const llmTesting = ref(false), llmSaving = ref(false), llmTestMsg = ref(null)
-const llmM = ref({})
-let llmTimer = null
-async function loadLlmMetrics() {
-  try { llmM.value = (await axios.get(API + '/api/llm_config/metrics')).data } catch (e) {}
-}
-
-async function loadLlm() {
-  try {
-    const r = await axios.get(API + '/api/llm_config')
-    llmCfg.value = r.data
-    llmForm.model = r.data.model || ''
-    llmForm.base_url = r.data.base_url || ''
-    llmForm.rpm = r.data.rpm || 6
-    llmForm.workers = r.data.workers || 2
-    llmForm.api_key = ''   // 明文不出接口：留空=保留已存 key
-  } catch(e) {}
-}
-async function saveLlm() {
-  llmSaving.value = true
-  try {
-    await axios.post(API + '/api/llm_config', {
-      api_key: llmForm.api_key, base_url: llmForm.base_url,
-      model: llmForm.model, rpm: llmForm.rpm, workers: llmForm.workers })
-    message.success('大模型配置已保存（即时生效，无需重启）')
-    await loadLlm()
-  } catch(e) { message.error(e.response?.data?.detail || '保存失败') }
-  llmSaving.value = false
-}
-async function testLlm() {
-  llmTesting.value = true; llmTestMsg.value = null
-  try {
-    const r = await axios.post(API + '/api/llm_config/test', {
-      api_key: llmForm.api_key, base_url: llmForm.base_url, model: llmForm.model })
-    llmTestMsg.value = r.data
-  } catch(e) { llmTestMsg.value = { ok: false, error: e.response?.data?.detail || e.message } }
-  llmTesting.value = false
-}
-
 async function loadSysMetrics() {
   try {
     const r = await axios.get(API + '/api/system/metrics')
@@ -899,27 +754,6 @@ async function loadBfLogs() {
 <style>
 .nowrap-cell, .nowrap-cell .n-data-table-th { white-space:nowrap !important; }
 .n-data-table-td__ellipsis { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap !important; }
-
-/* 状态页：大模型配置（通栏：左表单 / 右指标） */
-.sv-llm { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
-.sv-llm-form { flex: 1.6; min-width: 420px; display: grid; grid-template-columns: 58px minmax(0, 1.2fr) 58px minmax(0, 1fr);
-  gap: 8px 8px; align-items: center; padding: 10px 12px; background: var(--c-card-bg);
-  border: 1px solid var(--c-card-bg-hover); border-radius: 6px; }
-.sv-llm-lb { font-size: var(--text-meta); color: var(--c-text-dim); text-align: right; white-space: nowrap; }
-.sv-llm-unit { font-size: var(--text-meta); color: var(--c-text-faint); white-space: nowrap; }
-.sv-llm-span3 { grid-column: span 3; }
-.sv-llm-metrics { flex: 1; min-width: 320px; padding: 10px 12px; background: var(--c-card-bg);
-  border: 1px solid var(--c-card-bg-hover); border-radius: 6px; display: flex; flex-direction: column; }
-.sv-llm-mhead { font-size: var(--text-meta); font-weight: 600; color: var(--c-text); margin-bottom: 8px;
-  display: flex; align-items: baseline; gap: 6px; }
-.sv-llm-mgrid { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.sv-llm-mt { padding: 6px 8px; border: 1px solid var(--c-card-bg-hover); border-radius: var(--radius-sm);
-  background: var(--c-bg); min-width: 0; }
-.sv-llm-ml { font-size: var(--text-meta); color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sv-llm-mv { font-size: 15px; font-weight: 600; color: var(--c-text); line-height: 1.3; }
-.sv-llm-ms { font-size: var(--text-meta); font-weight: 400; color: var(--c-text-faint); margin-left: 2px; }
-.llm-err { margin-top: 6px; font-size: var(--text-meta); color: var(--c-up); line-height: 1.5;
-  display: flex; flex-direction: column; gap: 1px; }
 
 /* 状态页：数据明细通栏网格（≥1440px 3列，以下 2列，手机 1列） */
 .sv-dt-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }

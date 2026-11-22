@@ -80,12 +80,13 @@ def _loop():
             _QUEUE.task_done()
 
 
-def _get_rules(db) -> dict:
+def _get_rules(db, user_id: int) -> dict:
     from app.intraday_watch import get_intraday_rules
-    return get_intraday_rules(db)
+    return get_intraday_rules(db, user_id)
 
 
-def _skip_reason(db, alert_id: int, code: str, kind: str, now: datetime, rules: dict):
+def _skip_reason(db, user_id: int, alert_id: int, code: str, kind: str,
+                 now: datetime, rules: dict):
     """返回跳过原因；None 表示可以解读。"""
     if not rules.get('ai_event_enabled', True):
         return 'disabled'
@@ -98,13 +99,14 @@ def _skip_reason(db, alert_id: int, code: str, kind: str, now: datetime, rules: 
     cooldown = max(1, int(rules.get('ai_event_cooldown_min') or 15))
     cutoff = now - timedelta(minutes=cooldown)
     if db.execute(text(
-        "SELECT 1 FROM intraday_ai_event WHERE stock_code=:c AND created_at >= :cut LIMIT 1"
-    ), {'c': code, 'cut': cutoff}).fetchone():
+        "SELECT 1 FROM intraday_ai_event WHERE user_id=:uid AND stock_code=:c "
+        "AND created_at >= :cut LIMIT 1"
+    ), {'uid': user_id, 'c': code, 'cut': cutoff}).fetchone():
         return 'cooldown'
     max_day = max(0, int(rules.get('ai_event_max_per_day') or 10))
     today_count = db.execute(text(
-        "SELECT count(*) FROM intraday_ai_event WHERE created_at::date = :d"
-    ), {'d': now.date()}).scalar() or 0
+        "SELECT count(*) FROM intraday_ai_event WHERE user_id=:uid AND created_at::date = :d"
+    ), {'uid': user_id, 'd': now.date()}).scalar() or 0
     if today_count >= max_day:
         return 'daily_cap'
     return None
@@ -119,14 +121,18 @@ def process_event(item: dict):
     db = get_sync_db()
     try:
         row = db.execute(text(
-            "SELECT id, trade_date, kind, stock_code, title, body "
+            "SELECT id, user_id, trade_date, kind, stock_code, title, body "
             "FROM risk_alerts WHERE id=:id"
         ), {'id': alert_id}).fetchone()
         if not row:
             return
-        _, trade_date, kind, code, title, body = row
-        rules = _get_rules(db)
-        reason = _skip_reason(db, alert_id, code, kind, now, rules)
+        _, row_user_id, trade_date, kind, code, title, body = row
+        user_id = item.get('user_id') or row_user_id
+        if not user_id:
+            logger.warning(f"[intraday-ai] alert {alert_id} 缺少 owner，跳过")
+            return
+        rules = _get_rules(db, int(user_id))
+        reason = _skip_reason(db, int(user_id), alert_id, code, kind, now, rules)
         if reason:
             logger.info(f"[intraday-ai] 跳过 {code} {kind}: {reason}")
             return
@@ -135,6 +141,7 @@ def process_event(item: dict):
 
     event = {
         'alert_id': alert_id,
+        'user_id': int(user_id),
         'kind': kind,
         'title': title,
         'body': body,
@@ -152,11 +159,11 @@ def process_event(item: dict):
     try:
         db.execute(text("""
             INSERT INTO intraday_ai_event
-            (alert_id, stock_code, kind, status, result, error, created_at, finished_at)
-            VALUES (:a, :c, :k, :s, CAST(:r AS jsonb), :e, :ts, :ts)
+            (user_id, alert_id, stock_code, kind, status, result, error, created_at, finished_at)
+            VALUES (:uid, :a, :c, :k, :s, CAST(:r AS jsonb), :e, :ts, :ts)
             ON CONFLICT (alert_id) DO NOTHING
         """), {
-            'a': alert_id, 'c': code, 'k': kind, 's': status,
+            'uid': int(user_id), 'a': alert_id, 'c': code, 'k': kind, 's': status,
             'r': json.dumps(result, ensure_ascii=False) if result.get('ok') else None,
             'e': result.get('error') if not result.get('ok') else None,
             'ts': finished,

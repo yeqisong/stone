@@ -55,6 +55,18 @@ TABLE_DOCS = {
     "tushare_quota": "tushare 当日配额。列 trade_date/calls_today/calls_limit/quota_exhausted",
 }
 
+# 个人/敏感表：管理员原始 SQL 也不允许查（A7）。个人数据只能走带 owner 的业务 API。
+PERSONAL_TABLES = frozenset({
+    "users", "roles", "permissions", "role_permissions", "user_roles",
+    "user_permission_overrides", "support_sessions", "audit_log", "user_config",
+    "user_signal_history", "portfolio", "portfolio_history", "watch_groups",
+    "watch_group_items", "trade_slip", "trade_import_batch", "trade_intraday",
+    "trade_cash_snapshot", "trade_plan", "trade_journal", "risk_alerts",
+    "agent_sessions", "agent_messages", "agent_feedback", "agent_usage_daily",
+    "v_focus_pool",
+})
+SHARED_TABLES = frozenset(TABLE_DOCS) - PERSONAL_TABLES
+
 DAG_NODE_HINT = ("常用节点：cron(定时触发)、kline(个股日K)、index、etf、fund、moneyflow、margin_daily、"
                  "top_list、feature_compute(特征计算)、model_signal(信号)、model_health、paper_portfolio、"
                  "news_crawl、news_summary、xueqiu_sentiment、stats、analyze、backup_qiniu")
@@ -79,6 +91,8 @@ def _json_safe(v):
 # ══════════════════════════════════════════════
 
 def tool_list_tables(_session_id: int, **kw) -> dict:
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：数据表结构仅管理员可查看"}
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
@@ -86,16 +100,21 @@ def tool_list_tables(_session_id: int, **kw) -> dict:
             SELECT relname, reltuples::bigint FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname='public' AND c.relkind IN ('r','v','p') AND relname = ANY(:names)
-        """), {"names": list(TABLE_DOCS)}).fetchall()
+        """), {"names": list(SHARED_TABLES)}).fetchall()
         est = {r[0]: max(int(r[1] or 0), 0) for r in rows}
-        out = [{"table": t, "est_rows": est.get(t, 0), "desc": d} for t, d in TABLE_DOCS.items()]
+        out = [{"table": t, "est_rows": est.get(t, 0), "desc": TABLE_DOCS[t]}
+               for t in sorted(SHARED_TABLES)]
         return {"tables": out, "note": "est_rows 为 planner 估算；查询请用 describe_table 看列名"}
     finally:
         db.close()
 
 
 def tool_describe_table(_session_id: int, table: str = "", **kw) -> dict:
-    if table not in TABLE_DOCS:
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：表结构仅管理员可查看"}
+    if table in PERSONAL_TABLES:
+        return {"error": "个人/敏感表不允许通过原始 SQL 查看；个人数据请用业务 API"}
+    if table not in SHARED_TABLES:
         return {"error": f"未知表 {table}，可用表见 list_tables"}
     from app.db.connection import get_sync_db
     db = get_sync_db()
@@ -131,8 +150,46 @@ def _fit_rows(cols: list, data: list, budget: int = _SQL_BUDGET) -> tuple:
     return out, len(out) < len(data)
 
 
+_SQL_TABLE_RE = re.compile(
+    r'\b(?:from|join)\s+(?:"?([A-Za-z_][\w$]*)"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?', re.I)
+_CTE_RE = re.compile(
+    r'\b(?:with(?:\s+recursive)?|,)\s*"?([A-Za-z_][\w$]*)"?\s+as\s*\(', re.I)
+_SQL_FROM_KEYWORDS = {"lateral", "only", "select"}
+_SQL_DANGER_RE = re.compile(
+    r'\b(pg_read_file|pg_ls_dir|pg_stat_file|dblink|lo_import|lo_export|'
+    r'current_setting|set_config|pg_sleep)\b', re.I)
+
+
+def _sql_table_error(q: str) -> str | None:
+    """表白名单校验（共享表 + CTE）。正则只做初筛，配合只读事务与超时。"""
+    ctes = {m.group(1).lower() for m in _CTE_RE.finditer(q)}
+    for m in _SQL_TABLE_RE.finditer(q):
+        schema, table = m.group(1), m.group(2)
+        t = (table or "").lower()
+        if not t or t in _SQL_FROM_KEYWORDS:
+            continue
+        if schema and schema.lower() not in ("public",):
+            return f"不允许访问 schema {schema}（仅 public 共享表）"
+        if t in ctes or t in SHARED_TABLES:
+            continue
+        if t in PERSONAL_TABLES:
+            return f"表 {table} 是个人/敏感表，不允许通过原始 SQL 查看"
+        return f"表 {table} 不在共享表白名单内，可用表见 list_tables"
+    # 逗号连接/别名等绕开 FROM/JOIN 扫描的情况：个人表名出现即拒绝
+    for t in PERSONAL_TABLES:
+        if re.search(rf"\b{re.escape(t)}\b", q, re.I):
+            return f"表 {t} 是个人/敏感表，不允许通过原始 SQL 查看"
+    if re.search(r"\b(pg_catalog|information_schema)\b", q, re.I):
+        return "不允许访问系统 schema"
+    if _SQL_DANGER_RE.search(q):
+        return "SQL 包含不允许的函数调用"
+    return None
+
+
 def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> dict:
     """只读 SQL：单条 SELECT/WITH，只读事务 + 25s 超时 + 行数上限。"""
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：原始 SQL 仅管理员可用"}
     q = (sql or "").strip().rstrip(";").strip()
     if not q:
         return {"error": "SQL 为空"}
@@ -141,6 +198,9 @@ def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> d
     # 多条语句拦截（引号内的分号少见，宁可误拒也不放行写操作）
     if ";" in q:
         return {"error": "只允许单条 SQL（检测到分号）"}
+    err = _sql_table_error(q)
+    if err:
+        return {"error": err}
     lim = max(1, min(int(limit or 100), 500))
     if not re.search(r"\blimit\s+\d+(\s+offset\s+\d+)?\s*$", q, re.I):
         q = f"{q}\nLIMIT {lim}"
@@ -203,7 +263,9 @@ def tool_stock_overview(_session_id: int, stock_code: str = "", **kw) -> dict:
             {"c": code}).fetchall()
         groups = db.execute(text("""
             SELECT g.group_name FROM watch_group_items i JOIN watch_groups g ON g.id=i.group_id
-            WHERE i.stock_code=:c ORDER BY g.is_default DESC, g.id"""), {"c": code}).fetchall()
+            WHERE g.user_id=:uid AND i.stock_code=:c
+            ORDER BY g.is_default DESC, g.id"""),
+            {"c": code, "uid": kw.get('_user_id') or 0}).fetchall()
         xq = db.execute(text("""
             SELECT s.sentiment, COUNT(*) FROM xueqiu_status x
             JOIN xueqiu_sentiment s ON s.status_id = x.status_id
@@ -274,29 +336,39 @@ def tool_search_news(_session_id: int, keyword: str = "", days: int = 30, limit:
 # ══════════════════════════════════════════════
 
 def tool_run_python(session_id: int, code: str = "", timeout: int = 60, **kw) -> dict:
-    r = sandbox.run_python(session_id, code or "", timeout=max(5, min(int(timeout or 60), 180)))
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：代码执行仅管理员可用"}
+    r = sandbox.run_python(session_id, code or "", timeout=max(5, min(int(timeout or 60), 180)),
+                           user_id=kw.get('_user_id'))
     r["hint"] = "工作区文件跨调用保留；pip_install 装的包在 PYTHONPATH 内可直接 import"
     return r
 
 
 def tool_run_node(session_id: int, code: str = "", timeout: int = 60, **kw) -> dict:
-    r = sandbox.run_node(session_id, code or "", timeout=max(5, min(int(timeout or 60), 180)))
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：代码执行仅管理员可用"}
+    r = sandbox.run_node(session_id, code or "", timeout=max(5, min(int(timeout or 60), 180)),
+                         user_id=kw.get('_user_id'))
     r["hint"] = "npm_install 装的包在 NODE_PATH 内可直接 import"
     return r
 
 
 def tool_pip_install(session_id: int, packages: list = None, **kw) -> dict:
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：依赖安装仅管理员可用"}
     pkgs = packages if isinstance(packages, list) else [str(packages or "")]
-    return sandbox.pip_install(session_id, pkgs)
+    return sandbox.pip_install(session_id, pkgs, user_id=kw.get('_user_id'))
 
 
 def tool_npm_install(session_id: int, packages: list = None, **kw) -> dict:
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：依赖安装仅管理员可用"}
     pkgs = packages if isinstance(packages, list) else [str(packages or "")]
-    return sandbox.npm_install(session_id, pkgs)
+    return sandbox.npm_install(session_id, pkgs, user_id=kw.get('_user_id'))
 
 
 def tool_list_workspace(session_id: int, **kw) -> dict:
-    return sandbox.list_workspace(session_id)
+    return sandbox.list_workspace(session_id, user_id=kw.get('_user_id'))
 
 
 # ══════════════════════════════════════════════
@@ -321,6 +393,8 @@ def tool_list_dag_flows(_session_id: int, **kw) -> dict:
 def tool_create_dag_flow(_session_id: int, flow_name: str = "", description: str = "",
                          nodes: list = None, cron_expr: str = "", **kw) -> dict:
     """创建 DAG 流程（draft，不自动发布）。nodes: [{"node_name":"kline","deps":[]}, ...]"""
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：DAG 创建仅管理员可用"}
     from app.api.dag_flows import FlowNode, _validate_flow
     from app.db.connection import get_sync_db
     name = (flow_name or "").strip()
@@ -366,6 +440,8 @@ def tool_create_dag_flow(_session_id: int, flow_name: str = "", description: str
 
 def tool_run_dag_flow(_session_id: int, flow_id: int = 0, trade_date: str = "", **kw) -> dict:
     """触发已发布流程执行（后台任务，受同流程互斥约束）。"""
+    if not kw.get('_is_admin'):
+        return {"error": "无权限：DAG 执行仅管理员可用"}
     from app.api.dag_flows import _execute_flow_internal
     if not flow_id:
         return {"error": "flow_id 必填（先用 list_dag_flows 查）"}
@@ -488,7 +564,10 @@ def tool_model_performance(_session_id: int, version: str = "", limit: int = 5, 
 
 
 def tool_portfolio_summary(_session_id: int, **kw) -> dict:
-    """实盘持仓 + 纸面组合现状（市值按最新收盘价，收益按成本价）。"""
+    """当前用户实盘持仓 + 模型纸面组合现状（市值按最新收盘价，收益按成本价）。"""
+    uid = kw.get('_user_id')
+    if not uid:
+        return {"error": "缺少用户上下文"}
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
@@ -498,7 +577,8 @@ def tool_portfolio_summary(_session_id: int, **kw) -> dict:
                    (SELECT q.close FROM daily_quote q
                      WHERE q.stock_code=p.stock_code AND q.close > 0
                      ORDER BY q.trade_date DESC LIMIT 1) AS last_close
-            FROM portfolio p WHERE p.is_active ORDER BY p.stock_code""")).fetchall()
+            FROM portfolio p WHERE p.user_id=:uid AND p.is_active
+            ORDER BY p.stock_code"""), {"uid": uid}).fetchall()
         pos, total_cost, total_mv = [], 0.0, 0.0
         for r in rows:
             qty = float(r[2] or 0)
@@ -576,24 +656,27 @@ def tool_recent_signals(_session_id: int, days: int = 5, direction: str = "",
 # ══════════════════════════════════════════════
 
 def tool_list_skills(_session_id: int, **kw) -> dict:
-    """可用技能清单（内置 + 用户）。"""
+    """可用技能清单（内置 + 全局 + 当前用户个人）。"""
     from app.agent.skills import list_skills
     return {"skills": [{"name": s["name"], "title": s["display_name"],
                         "description": s["description"], "builtin": s["builtin"],
-                        "files": s["files"]} for s in list_skills()]}
+                        "global": s.get("global", False),
+                        "readonly": s.get("readonly", s["builtin"]),
+                        "files": s["files"]}
+                       for s in list_skills(kw.get('_user_id'))]}
 
 
 def tool_read_skill(_session_id: int, name: str = "", file: str = "", **kw) -> dict:
     """读技能全文（先 list_skills 看清单，命中再读）。file 可读技能目录下的附加文件。"""
     from app.agent.skills import read_skill
-    return read_skill(name, file)
+    return read_skill(name, file, user_id=kw.get('_user_id'))
 
 
 def tool_save_skill(_session_id: int, name: str = "", description: str = "",
                     content: str = "", title: str = "", **kw) -> dict:
-    """把一套分析方法沉淀为技能（写入 data/skills，供以后所有会话复用）。"""
+    """把一套分析方法沉淀为当前用户的个人技能，供该用户以后所有会话复用。"""
     from app.agent.skills import save_skill
-    return save_skill(name, description, content, title)
+    return save_skill(name, description, content, title, user_id=kw.get('_user_id'))
 
 
 # ══════════════════════════════════════════════
@@ -653,7 +736,7 @@ TOOL_SPECS = [
     _tool("read_skill", "读取技能全文（含步骤、SQL 模板、注意事项）。判断技能命中后必须先读再执行。",
           {"name": {"type": "string", "description": "技能名（list_skills 返回的 name）"},
            "file": {"type": "string", "description": "可选：技能目录下的附加文件"}}, ["name"]),
-    _tool("save_skill", "把一套分析方法/流程沉淀为技能，供以后所有会话复用。",
+    _tool("save_skill", "把一套分析方法/流程沉淀为个人技能，供该用户以后所有会话复用。",
           {"name": {"type": "string", "description": "英文短横线名，如 my-screen"},
            "description": {"type": "string", "description": "一句话说明何时使用（模型靠它判断命中）"},
            "content": {"type": "string", "description": "Markdown 正文：步骤、SQL 模板、输出格式、注意事项"},
@@ -680,8 +763,21 @@ _DISPATCH = {
 _LIST_KEYS = ("rows", "items", "nodes", "positions", "skills", "flows", "tables",
               "backtests", "recent_runs", "files")
 
+# 高权限工具：默认只发给 admin（执行时也会再校验一次）
+ADMIN_ONLY_TOOLS = frozenset({
+    "list_tables", "describe_table", "query_sql",
+    "run_python", "run_node", "pip_install", "npm_install",
+})
 
-def execute_tool(session_id: int, name: str, args: dict) -> dict:
+
+def tool_specs_for(is_admin: bool = False) -> list:
+    """按角色返回可下发给模型的工具清单（不改变执行时的权限校验）。"""
+    return [t for t in TOOL_SPECS
+            if is_admin or t["function"]["name"] not in ADMIN_ONLY_TOOLS]
+
+
+def execute_tool(session_id: int, name: str, args: dict,
+                 user_id: int | None = None, is_admin: bool = False) -> dict:
     """执行工具并统一截断（返回给模型的内容不超过 12KB）。
 
     超限时优先裁剪列表字段而不是把整个结构换成 preview 字符串——否则前端
@@ -691,7 +787,7 @@ def execute_tool(session_id: int, name: str, args: dict) -> dict:
     if not fn:
         return {"error": f"未知工具 {name}"}
     try:
-        r = fn(session_id, **(args or {}))
+        r = fn(session_id, _user_id=user_id, _is_admin=is_admin, **(args or {}))
     except TypeError as e:
         return {"error": f"参数错误: {e}"}
     except Exception as e:

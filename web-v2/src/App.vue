@@ -2,7 +2,8 @@
   <n-config-provider :theme="theme.naiveTheme" :theme-overrides="themeOverrides">
     <n-dialog-provider>
     <n-message-provider>
-      <LoginView v-if="showLogin" />
+      <ChangePasswordView v-if="showChangePassword" @done="afterPasswordChange" />
+      <LoginView v-else-if="showLogin" />
       <div v-else class="app-root" :style="{
         '--c-bg':theme.colors.bg, '--c-bg-header':theme.colors.bgHeader,
         '--c-text':theme.colors.text, '--c-text-dim':theme.colors.textDim,
@@ -51,9 +52,15 @@
           <template v-for="t in primaryTabs" :key="t.key">
             <n-button :type="nav.tab===t.key?'primary':'default'" size="small" :title="t.label" :aria-label="t.label" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
           </template>
-          <span class="nav-divider"></span>
+          <span v-if="adminTabs.length" class="nav-divider"></span>
           <template v-for="t in adminTabs" :key="t.key">
             <n-button :type="nav.tab===t.key?'primary':'default'" size="small" :title="t.label" :aria-label="t.label" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
+          </template>
+          <template v-if="backendTabs.length">
+            <span class="nav-divider nav-sep">|</span>
+            <template v-for="t in backendTabs" :key="t.key">
+              <n-button :type="nav.tab===t.key?'primary':'default'" size="small" :title="t.label" :aria-label="t.label" @click="nav.switchTab(t.key)"><AppIcon :name="t.icon || t.key" :size="13" /><span class="nav-label">{{ t.label }}</span></n-button>
+            </template>
           </template>
         </div>
 
@@ -84,6 +91,10 @@
           <div v-if="nav.tab==='g'" style="flex:1;min-height:0;display:flex;flex-direction:column"><DagFlowEdit :flowId="nav.flowId" @back="nav.backFromFlowEditor()" @show-log="(id) => { nav.flowId = parseInt(id); nav.tab = 'q' }" /></div>
           <div v-if="nav.tab==='q'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FlowLogView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
           <div v-if="nav.tab==='r'" style="flex:1;min-height:0;display:flex;flex-direction:column"><FlowRunView :flowId="nav.flowId" @back="nav.flowId = null; nav.tab = 'g'" /></div>
+          <div v-if="nav.tab==='y'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminUsersView /></div>
+          <div v-if="nav.tab==='z'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminRolesView /></div>
+          <div v-if="nav.tab==='h'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminAuditView /></div>
+          <div v-if="nav.tab==='o'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminSettingsView /></div>
         </div>
 
         <!-- H5 底部 TabBar：5 核心 + 管理 入口 -->
@@ -108,6 +119,13 @@
                 <span>{{ t.label }}</span>
               </button>
             </div>
+            <div v-if="backendTabs.length" class="admin-sheet-title" style="margin-top:12px">后台管理</div>
+            <div v-if="backendTabs.length" class="admin-sheet-grid">
+              <button v-for="t in backendTabs" :key="t.key" class="admin-sheet-item" :class="{ active: nav.tab===t.key }" @click="nav.switchTab(t.key); showAdmin = false">
+                <span class="admin-sheet-icon"><AppIcon :name="t.icon || t.key" :size="16" /></span>
+                <span>{{ t.label }}</span>
+              </button>
+            </div>
             <button class="admin-sheet-close" @click="showAdmin = false">关闭</button>
           </div>
         </div>
@@ -117,6 +135,14 @@
         <span>页面有新版本</span>
         <n-button size="tiny" type="primary" @click="reloadNow">刷新</n-button>
       </div>
+      <FeishuBindModal v-if="!showLogin && !showChangePassword"
+                       :show="showFeishuBind"
+                       :bound="!!auth.user?.feishu_bound"
+                       @close="showFeishuBind = false"
+                       @changed="afterFeishuChange" />
+      <PersonalSettingsModal v-if="!showLogin && !showChangePassword"
+                             :show="showPersonalSettings"
+                             @close="showPersonalSettings = false" />
     </n-message-provider>
     </n-dialog-provider>
   </n-config-provider>
@@ -133,30 +159,34 @@ import { useThemeStore } from './stores/theme'
 import { useViewport } from './utils/viewport'
 import AppIcon from './components/AppIcon.vue'
 
-import { connectWebSocket, wsState, addWsListener } from './utils/ws'
+import { connectWebSocket, disconnectWebSocket, wsState, addWsListener } from './utils/ws'
 
 const theme = useThemeStore()
+const auth = useAuthStore()
+const nav = useNavStore()
 const wsConnected = ref(false)
 // ── 风控告警 → Chrome 通知（step3）──
-const notifEnabled = ref(localStorage.getItem('notif_enabled') === '1')
+function notifKey() { return 'notif_enabled:' + (auth.user?.id || auth.username || 'anon') }
+const notifEnabled = ref(localStorage.getItem(notifKey()) === '1')
+watch(() => auth.user?.id, () => { notifEnabled.value = localStorage.getItem(notifKey()) === '1' })
 const notifHint = computed(() => notifEnabled.value ? '风控/盘中提醒/AI事件 Chrome 通知已开启，点击关闭'
                                       : ('开启风控/盘中提醒/AI事件 Chrome 通知' + (typeof Notification !== 'undefined' && Notification.permission === 'denied' ? '（浏览器已禁止，请在地址栏设置中放行）' : '')))
 function toggleNotif() {
   if (notifEnabled.value) {
     notifEnabled.value = false
-    localStorage.setItem('notif_enabled', '0')
+    localStorage.setItem(notifKey(), '0')
     return
   }
   if (typeof Notification === 'undefined') { return }
   if (Notification.permission === 'granted') {
     notifEnabled.value = true
-    localStorage.setItem('notif_enabled', '1')
+    localStorage.setItem(notifKey(), '1')
     new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动/AI事件解读将实时推送' })
   } else {
     Notification.requestPermission().then(p => {
       if (p === 'granted') {
         notifEnabled.value = true
-        localStorage.setItem('notif_enabled', '1')
+        localStorage.setItem(notifKey(), '1')
         new Notification('K道 提醒已开启', { body: '止损/回撤/盘中异动/AI事件解读将实时推送' })
       }
     })
@@ -195,12 +225,23 @@ addWsListener(data => {
   }
 })
 
-onMounted(() => {
-  connectWebSocket()
+onMounted(async () => {
+  if (auth.token) {
+    try { await auth.refreshMe() } catch (_) { auth.logout() }
+  }
+  if (auth.token) connectWebSocket()
   theme.startAutoTimer()
   setInterval(() => { wsConnected.value = wsState.connected }, 1000)
 })
+
+watch(() => auth.token, (t) => {
+  if (t) connectWebSocket()
+  else disconnectWebSocket()
+})
 import LoginView from './components/LoginView.vue'
+import ChangePasswordView from './components/ChangePasswordView.vue'
+import FeishuBindModal from './components/FeishuBindModal.vue'
+import PersonalSettingsModal from './components/PersonalSettingsModal.vue'
 import PortfolioView from './components/PortfolioView.vue'
 import TradeReview from './components/TradeReview.vue'
 import SignalsView from './components/SignalsView.vue'
@@ -223,9 +264,10 @@ import FeatureDetail from './components/FeatureDetail.vue'
 import DagFlowEdit from './components/DagFlowEdit.vue'
 import FlowLogView from './components/FlowLogView.vue'
 import FlowRunView from './components/FlowRunView.vue'
-
-const auth = useAuthStore()
-const nav = useNavStore()
+import AdminUsersView from './components/AdminUsersView.vue'
+import AdminRolesView from './components/AdminRolesView.vue'
+import AdminAuditView from './components/AdminAuditView.vue'
+import AdminSettingsView from './components/AdminSettingsView.vue'
 
 // ── 响应式视口 + 导航定义 ──
 const { isNarrow } = useViewport()
@@ -249,25 +291,46 @@ const marketStatus = computed(() => {
 
 
 
-const primaryTabs = [
-  { key: 'p', label: '持仓' },
-  { key: 'k', label: '大盘', icon: 'activity' },
-  { key: 'm', label: '选股' },
-  { key: 's', label: '信号' },
-  { key: 'l', label: '个股', icon: 'filter' },
-  { key: 'b', label: '可转债', icon: 'bond' },
-  { key: 'n', label: '资讯', icon: 'n' },
-  { key: 'i', label: '问答', icon: 'compass' },
-  { key: 'x', label: '状态' },
+const allPrimaryTabs = [
+  { key: 'p', label: '持仓', perm: 'portfolio.position.view' },
+  { key: 'k', label: '大盘', icon: 'activity', perm: 'research.market.view' },
+  { key: 'm', label: '选股', perm: 'research.treemap.view' },
+  { key: 's', label: '信号', perm: 'research.signal.view' },
+  { key: 'l', label: '个股', icon: 'filter', perm: 'research.stock.view' },
+  { key: 'b', label: '可转债', icon: 'bond', perm: 'research.cb.view' },
+  { key: 'n', label: '资讯', icon: 'n', perm: 'research.news.view' },
+  { key: 'i', label: '问答', icon: 'compass', perm: 'agent.use' },
+  { key: 'x', label: '状态', perm: 'system.status.view' },
 ]
-const adminTabs = [
-  { key: 'a', label: '模型' },
-  { key: 'f', label: '函数' },
-  { key: 'e', label: '特征' },
-  { key: 'g', label: 'DAG' },
-  { key: 'w', label: '数据' },
+const allAdminTabs = [
+  { key: 'a', label: '模型', perm: 'model.view' },
+  { key: 'f', label: '函数', perm: 'function.view' },
+  { key: 'e', label: '特征', perm: 'feature.view' },
+  { key: 'g', label: 'DAG', perm: 'dag.view' },
+  { key: 'w', label: '数据', perm: 'system.dbexplorer.view' },
 ]
-const isAdminTab = computed(() => adminTabs.some(t => t.key === nav.tab))
+const allBackendTabs = [
+  { key: 'y', label: '用户', icon: 'user', perm: 'system.user.manage' },
+  { key: 'z', label: '角色权限', icon: 'shield', perm: 'system.role.manage' },
+  { key: 'h', label: '审计', icon: 'file-text', perm: 'system.audit.view' },
+  { key: 'o', label: '系统设置', icon: 'sliders', perm: 'system.settings.view' },
+]
+const primaryTabs = computed(() => allPrimaryTabs.filter(t => auth.can(t.perm)))
+const adminTabs = computed(() => allAdminTabs.filter(t => auth.can(t.perm)))
+const backendTabs = computed(() => allBackendTabs.filter(t => auth.can(t.perm)))
+const isAdminTab = computed(() => [...allAdminTabs, ...allBackendTabs].some(t => t.key === nav.tab))
+
+function canAccessTab(key) {
+  const t = [...allPrimaryTabs, ...allAdminTabs, ...allBackendTabs].find(x => x.key === key)
+  return !t || auth.can(t.perm)
+}
+function firstAllowedTab() {
+  const t = [...allPrimaryTabs, ...allAdminTabs, ...allBackendTabs].find(x => auth.can(x.perm))
+  return t ? t.key : 'p'
+}
+watch([() => nav.tab, () => auth.permissions, () => auth.roles], () => {
+  if (auth.token && !canAccessTab(nav.tab)) nav.switchTab(firstAllowedTab())
+}, { deep: false })
 
 // 全局主题：品牌红 = 上涨红；绿色只表示下跌
 const themeOverrides = computed(() => {
@@ -334,13 +397,31 @@ watchEffect(() => {
 })
 
 // 关闭管理抽屉：切到非管理 tab 时收起
-watch(() => nav.tab, (t) => { if (!adminTabs.some(x => x.key === t)) showAdmin.value = false })
+watch(() => nav.tab, (t) => {
+  if (![...adminTabs.value, ...backendTabs.value].some(x => x.key === t)) showAdmin.value = false
+})
 
+const showFeishuBind = ref(false)
+const showPersonalSettings = ref(false)
 const userOptions = [
+  { label: '个人设置', key: 'personal' },
+  { label: '绑定飞书', key: 'feishu' },
+  { label: '修改密码', key: 'password' },
   { label: '退出登录', key: 'logout' }
 ]
 function handleUserMenu(key) {
-  if (key === 'logout') auth.logout()
+  if (key === 'logout') {
+    auth.logout()
+  } else if (key === 'password') {
+    showChangePassword.value = true
+  } else if (key === 'feishu') {
+    showFeishuBind.value = true
+  } else if (key === 'personal') {
+    showPersonalSettings.value = true
+  }
+}
+function afterFeishuChange() {
+  auth.refreshMe().catch(() => {})
 }
 // ── 版本自检：构建哈希变化 → 自动/提示刷新（解决"总看到上一版"）──
 const updateReady = ref(false)
@@ -361,6 +442,14 @@ onUnmounted(() => {
 })
 
 const showLogin = computed(() => !auth.token)
+const forceChangePassword = ref(false)
+const showChangePassword = computed(() => auth.token && (auth.mustChangePassword || forceChangePassword.value))
+
+function afterPasswordChange() {
+  forceChangePassword.value = false
+  auth.refreshMe().catch(() => {})
+  connectWebSocket()
+}
 
 watch(showLogin, (v) => {
   if (v) document.title = '登录 - K道'
@@ -383,6 +472,10 @@ const pageMeta = computed(() => ({
   g: { title: 'DAG', sub: '流程编排与执行' },
   w: { title: '数据', sub: '数据库浏览' },
   u: { title: '证券主档', sub: '个股 / 指数 / ETF' },
+  y: { title: '用户', sub: '账号、角色与支持会话' },
+  z: { title: '角色权限', sub: '角色模板与功能节点' },
+  h: { title: '审计', sub: '操作与权限变更留痕' },
+  o: { title: '系统设置', sub: '全局策略、LLM 与配额' },
 }[nav.tab] || null))
 
 const titleMap = {
@@ -401,6 +494,9 @@ const titleMap = {
   f: '函数管理 - K道',
   e: '特征管理 - K道',
   g: 'DAG 流程 - K道',
+  y: '用户管理 - K道',
+  z: '角色权限 - K道',
+  h: '审计 - K道',
   o: '系统设置 - K道',
 }
 

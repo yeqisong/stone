@@ -1923,23 +1923,35 @@ def dag_task_model_signal(trade_date=None, **kw):
                    "p20": round(p20, 4) if p20 is not None else None, "score": score,
                    "conf": round(rank, 3) if rank is not None else None})
 
-        def _insert_sell(row, strength, reason, rank=None):
+        def _insert_user_sell(user_id: int, row, strength, reason, rank=None):
             p5 = pred_by_h.get('5d', {}).get(row.stock_code)
             p10 = pred_by_h.get('10d', {}).get(row.stock_code)
             p20 = pred_by_h.get('20d', {}).get(row.stock_code)
             score = round((p5 + p10 + p20) / 3.0, 4) if None not in (p5, p10, p20) else None
             db.execute(text("""
-                INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference,
-                    predict_5d_return, predict_10d_return, predict_20d_return, predict_score,
-                    ml_confidence, suggested_action, source_strategies)
-                VALUES (:d,:c,:n,'sell',:s,:p,'model_signal',:r,true,:v,:sn,:pref,
-                    :p5,:p10,:p20,:score,:conf,'sell','["model_signal"]')
-            """), {"d": td, "c": row.stock_code, "n": row.stock_name, "s": strength, "p": row.close,
-                   "r": reason, "v": ver, "sn": model_snapshot, "pref": pref_mode,
+                INSERT INTO user_signal_history
+                    (user_id, signal_date, stock_code, stock_name, direction, strength, price,
+                     reason, combined_signal, model_version, params_snapshot, preference,
+                     predict_5d_return, predict_10d_return, predict_20d_return, predict_score,
+                     suggested_action, source_strategies)
+                VALUES
+                    (:uid, :d, :c, :n, 'sell', :s, :p,
+                     :r, true, :v, :sn, :pref,
+                     :p5, :p10, :p20, :score,
+                     'sell', '["model_signal"]')
+                ON CONFLICT (user_id, signal_date, stock_code, direction, model_version)
+                DO UPDATE SET
+                    strength=EXCLUDED.strength, price=EXCLUDED.price, reason=EXCLUDED.reason,
+                    predict_5d_return=EXCLUDED.predict_5d_return,
+                    predict_10d_return=EXCLUDED.predict_10d_return,
+                    predict_20d_return=EXCLUDED.predict_20d_return,
+                    predict_score=EXCLUDED.predict_score
+            """), {"uid": user_id, "d": td, "c": row.stock_code, "n": row.stock_name,
+                   "s": strength, "p": row.close, "r": reason, "v": ver,
+                   "sn": model_snapshot, "pref": pref_mode,
                    "p5": round(p5, 4) if p5 is not None else None,
                    "p10": round(p10, 4) if p10 is not None else None,
-                   "p20": round(p20, 4) if p20 is not None else None, "score": score,
-                   "conf": round(1 - rank, 3) if rank is not None else None})
+                   "p20": round(p20, 4) if p20 is not None else None, "score": score})
 
         if use_predict and xgb_models:
             # M2：预测统一走 predict_for_version（特征派生/标准化/模型加载共享唯一入口，消除内联漂移）
@@ -2022,25 +2034,44 @@ def dag_task_model_signal(trade_date=None, **kw):
                 sell_thr = (float(_sig.get('sell_threshold') if _sig.get('sell_threshold') is not None else 0.4)
                             if _lt in ('rank', 'top20') else None)
                 if sell_thr is not None:
-                    held = {r[0] for r in db.execute(text(
-                        "SELECT stock_code FROM portfolio WHERE is_active=true AND quantity>0"
-                    )).fetchall()}
-                    for code in held:
-                        p = preds_map.get(code)
-                        rank_pct = rank_map.get(code)
-                        if p is None or rank_pct is None:
+                    # 卖出信号按用户生成：持仓口径用交割单实时持仓（含今日手工成交），
+                    # 写入 user_signal_history，不污染全局 signal_history / model_health。
+                    from app.trade_intraday import live_positions
+                    users = db.execute(text(
+                        "SELECT id FROM users WHERE status='active' ORDER BY id"
+                    )).fetchall()
+                    for (uid,) in users:
+                        try:
+                            live = live_positions(db, int(uid))
+                        except Exception as e:
+                            logger.warning(f"[model_signal] user={uid} 实时持仓失败: {str(e)[:120]}")
                             continue
-                        # quantile：按当日截面分位；absolute：按预测值本身
-                        if not _sell_triggered(rank_pct, p, sell_thr, ml_mode == 'quantile'):
+                        held = {p["stock_code"] for p in (live.get("positions") or [])
+                                if (p.get("quantity") or 0) > 0}
+                        if not held:
                             continue
-                        row = next((r for r in rows if r.stock_code == code), None)
-                        if not row or not row.close:
-                            continue
-                        strength = _sell_strength(rank_pct, sell_thr)
-                        _insert_sell(row, strength,
-                                     f'模型分位{rank_pct*100:.2f}% < 卖出阈值{sell_thr*100:.0f}%；持仓退出',
-                                     rank=rank_pct)
-                        sell_count += 1
+                        db.execute(text("""
+                            DELETE FROM user_signal_history
+                            WHERE user_id=:uid AND signal_date=:d
+                              AND model_version=:v AND direction='sell'
+                        """), {"uid": uid, "d": td, "v": ver})
+                        for code in held:
+                            p = preds_map.get(code)
+                            rank_pct = rank_map.get(code)
+                            if p is None or rank_pct is None:
+                                continue
+                            if not _sell_triggered(rank_pct, p, sell_thr, ml_mode == 'quantile'):
+                                continue
+                            row = next((r for r in rows if r.stock_code == code), None)
+                            if not row or not row.close:
+                                continue
+                            strength = _sell_strength(rank_pct, sell_thr)
+                            _insert_user_sell(
+                                int(uid), row, strength,
+                                f'模型分位{rank_pct*100:.2f}% < 卖出阈值{sell_thr*100:.0f}%；持仓退出',
+                                rank=rank_pct,
+                            )
+                            sell_count += 1
 
         else:
             # 规则评分：风险期同样只保留卖出能力（规则模式无模型分，不产生卖出）

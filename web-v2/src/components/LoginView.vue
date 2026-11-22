@@ -97,8 +97,7 @@ async function login() {
       username: username.value,
       password: password.value
     })
-    auth.setToken(r.data.token)
-    auth.setUser(r.data.username)
+    auth.setAuth(r.data)
     // 登录后跳回原页面
     const params = new URLSearchParams(location.hash.includes('?') ? location.hash.split('?')[1] : '')
     const returnUrl = params.get('return')

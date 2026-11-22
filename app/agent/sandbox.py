@@ -35,8 +35,9 @@ _PROCS: dict = {}
 _PROC_GUARD = threading.Lock()
 
 
-def workspace(session_id: int) -> Path:
-    ws = WS_ROOT / str(session_id)
+def workspace(session_id: int, user_id: int | None = None) -> Path:
+    base = WS_ROOT / (str(user_id) if user_id else "_legacy")
+    ws = base / str(session_id)
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "pylibs").mkdir(exist_ok=True)
     (ws / "node").mkdir(exist_ok=True)
@@ -47,7 +48,8 @@ def workspace(session_id: int) -> Path:
 _NAME_RE = re.compile(r"[^A-Za-z0-9._\-\u4e00-\u9fff]+")
 
 
-def save_upload(session_id: int, filename: str, data: bytes) -> dict:
+def save_upload(session_id: int, filename: str, data: bytes,
+                user_id: int | None = None) -> dict:
     """把用户上传文件落到 <ws>/uploads/，文件名去危险字符并防重名覆盖。"""
     if not data:
         return {"error": "文件为空"}
@@ -58,7 +60,7 @@ def save_upload(session_id: int, filename: str, data: bytes) -> dict:
     if len(safe) > 120:
         suffix = Path(safe).suffix[:16]
         safe = safe[:100] + suffix
-    ws = workspace(session_id)
+    ws = workspace(session_id, user_id)
     d = ws / "uploads"
     target = d / safe
     if target.exists():
@@ -174,8 +176,9 @@ def _run(cmd: list, ws: Path, timeout: int, kind: str = "python",
             "elapsed_ms": int((time.time() - t0) * 1000), "timed_out": timed_out}
 
 
-def run_python(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
-    ws = workspace(session_id)
+def run_python(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT,
+               user_id: int | None = None) -> dict:
+    ws = workspace(session_id, user_id)
     (ws / "main.py").write_text(code, encoding="utf-8")
     r = _run(["main.py"], ws, timeout, kind="python", session_id=session_id)
     r["cwd"] = str(ws)
@@ -183,8 +186,9 @@ def run_python(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT) -> di
     return r
 
 
-def run_node(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
-    ws = workspace(session_id)
+def run_node(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT,
+             user_id: int | None = None) -> dict:
+    ws = workspace(session_id, user_id)
     (ws / "main.mjs").write_text(code, encoding="utf-8")
     node = shutil.which("node") or "/usr/bin/node"
     r = _run([node, "main.mjs"], ws, timeout, kind="node", session_id=session_id)
@@ -193,21 +197,23 @@ def run_node(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT) -> dict
     return r
 
 
-def pip_install(session_id: int, packages: list, timeout: int = 180) -> dict:
+def pip_install(session_id: int, packages: list, timeout: int = 180,
+                user_id: int | None = None) -> dict:
     pkgs = [p for p in (packages or []) if p and len(p) < 80]
     if not pkgs:
         return {"ok": False, "stdout": "", "stderr": "未指定包名"}
-    ws = workspace(session_id)
+    ws = workspace(session_id, user_id)
     cmd = ["-m", "pip", "install", "--quiet", "--disable-pip-version-check",
            "--target", str(ws / "pylibs"), *pkgs]
     return _run(cmd, ws, timeout, kind="python", session_id=session_id, use_sandbox=False)
 
 
-def npm_install(session_id: int, packages: list, timeout: int = 240) -> dict:
+def npm_install(session_id: int, packages: list, timeout: int = 240,
+                user_id: int | None = None) -> dict:
     pkgs = [p for p in (packages or []) if p and len(p) < 80]
     if not pkgs:
         return {"ok": False, "stdout": "", "stderr": "未指定包名"}
-    ws = workspace(session_id)
+    ws = workspace(session_id, user_id)
     npm = shutil.which("npm") or "/usr/bin/npm"
     if not os.path.exists(npm):
         return {"ok": False, "stdout": "", "stderr": "npm 不可用"}
@@ -216,9 +222,9 @@ def npm_install(session_id: int, packages: list, timeout: int = 240) -> dict:
                 session_id=session_id, use_sandbox=False)
 
 
-def list_workspace(session_id: int) -> dict:
+def list_workspace(session_id: int, user_id: int | None = None) -> dict:
     """列会话工作区文件（给模型和自己排查用）。"""
-    ws = workspace(session_id)
+    ws = workspace(session_id, user_id)
     items = []
     for p in sorted(ws.iterdir()):
         if p.name in ("pylibs", "node"):
@@ -231,8 +237,9 @@ def list_workspace(session_id: int) -> dict:
     return {"cwd": str(ws), "files": items[:100]}
 
 
-def reset_workspace(session_id: int):
-    ws = WS_ROOT / str(session_id)
+def reset_workspace(session_id: int, user_id: int | None = None):
+    base = WS_ROOT / (str(user_id) if user_id else "_legacy")
+    ws = base / str(session_id)
     if ws.exists():
         shutil.rmtree(ws, ignore_errors=True)
         logger.info(f"[agent] 已重置会话 {session_id} 工作区")

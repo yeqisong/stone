@@ -52,29 +52,32 @@ DEFAULT_DISCIPLINE: dict[str, Any] = {
 
 # ── 配置读写 ──
 
-def get_discipline(db) -> dict:
+def get_discipline(db, user_id: int) -> dict:
     row = db.execute(text(
-        "SELECT params FROM strategy_config WHERE strategy_name=:k ORDER BY id DESC LIMIT 1"
-    ), {"k": DISCIPLINE_KEY}).fetchone()
+        "SELECT params FROM user_config WHERE user_id=:uid AND config_key=:k"
+    ), {"uid": user_id, "k": DISCIPLINE_KEY}).fetchone()
     cfg = dict(DEFAULT_DISCIPLINE)
     if row and row[0]:
         try:
-            cfg.update(json.loads(row[0]) or {})
+            parsed = row[0] if isinstance(row[0], dict) else json.loads(row[0] or "{}")
+            cfg.update(parsed or {})
         except Exception:
             pass
     return cfg
 
 
-def save_discipline(db, params: dict) -> dict:
+def save_discipline(db, user_id: int, params: dict) -> dict:
     cfg = dict(DEFAULT_DISCIPLINE)
     for k, v in (params or {}).items():
         if k in cfg:
             cfg[k] = v
-    db.execute(text("DELETE FROM strategy_config WHERE strategy_name=:k"), {"k": DISCIPLINE_KEY})
-    db.execute(text(
-        "INSERT INTO strategy_config (strategy_name, display_name, enabled, params) "
-        "VALUES (:k, '交易纪律', true, :p)"
-    ), {"k": DISCIPLINE_KEY, "p": json.dumps(cfg, ensure_ascii=False)})
+    db.execute(text("""
+        INSERT INTO user_config (user_id, config_key, params, enabled, updated_at)
+        VALUES (:uid, :k, CAST(:p AS jsonb), true, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, config_key) DO UPDATE SET
+            params=EXCLUDED.params, updated_at=CURRENT_TIMESTAMP
+    """), {"uid": user_id, "k": DISCIPLINE_KEY,
+           "p": json.dumps(cfg, ensure_ascii=False)})
     db.commit()
     return cfg
 
@@ -831,9 +834,11 @@ def _score(summary: dict, beh: dict, cfg: dict) -> dict:
 
 # ── 主入口 ──
 
-def build_review(db, start: Optional[_date] = None, end: Optional[_date] = None,
+def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[_date] = None,
                  benchmark: str = "000300") -> dict:
-    all_rows = load_slip_rows(db, end=end)
+    if not user_id:
+        raise ValueError("build_review 需要 user_id")
+    all_rows = load_slip_rows(db, end=end, user_id=user_id)
     if not all_rows:
         return {"ok": False, "error": "尚无交割单数据，请先在持仓页导入交割单",
                 "warnings": ["尚无交割单数据"]}
@@ -967,7 +972,7 @@ def build_review(db, start: Optional[_date] = None, end: Optional[_date] = None,
         m["net_deposit"] = round(m["net_deposit"], 2)
         m.pop("prev_end", None)
 
-    cfg = get_discipline(db)
+    cfg = get_discipline(db, user_id)
     findings = _findings(summary_base, beh, cfg, counterfactual)
     rules = _rules(beh, summary_base, cfg)
     score = _score(summary_base, beh, cfg)
@@ -1092,7 +1097,7 @@ def _daily_realized(rows: list[dict], state0: dict) -> dict[_date, float]:
     return out
 
 
-def _manual_today(db, day: _date) -> list[dict]:
+def _manual_today(db, user_id: int, day: _date) -> list[dict]:
     """今日临时记录；交割单尚未覆盖今天时，用它补齐当日买卖/违规统计。"""
     try:
         rows = db.execute(text("""
@@ -1100,9 +1105,9 @@ def _manual_today(db, day: _date) -> list[dict]:
                    quantity, price, amount, commission, stamp_tax, transfer_fee,
                    extra_fee, stop_price, reason, source
             FROM trade_intraday
-            WHERE trade_date=:d AND COALESCE(reconciled, false)=false
+            WHERE user_id=:uid AND trade_date=:d AND COALESCE(reconciled, false)=false
             ORDER BY trade_time, id
-        """), {"d": day}).mappings().fetchall()
+        """), {"uid": user_id, "d": day}).mappings().fetchall()
     except Exception:
         return []
     out = []
@@ -1115,12 +1120,12 @@ def _manual_today(db, day: _date) -> list[dict]:
     return out
 
 
-def today_gate(db, today: Optional[_date] = None) -> dict:
+def today_gate(db, user_id: int, today: Optional[_date] = None) -> dict:
     today = today or _date.today()
-    cfg = get_discipline(db)
-    rows = load_slip_rows(db, end=today)
+    cfg = get_discipline(db, user_id)
+    rows = load_slip_rows(db, end=today, user_id=user_id)
     slip_end = max((r["trade_date"] for r in rows), default=None)
-    manual_today = _manual_today(db, today) if (slip_end is None or slip_end < today) else []
+    manual_today = _manual_today(db, user_id, today) if (slip_end is None or slip_end < today) else []
     if not rows and not manual_today:
         return {"ok": True, "date": today.isoformat(), "checked": False,
                 "message": "尚无交割单数据", "violations": [], "allow_new_buy": True}
@@ -1178,7 +1183,7 @@ def today_gate(db, today: Optional[_date] = None) -> dict:
 
     # 当前持仓集中度（用最新收盘）
     from app.trade_slip import build_positions
-    preview = build_positions(db)
+    preview = build_positions(db, user_id)
     positions = [dict(p) for p in (preview.get("positions") or [])]
     # 叠加今日临时成交的净数量，避免用旧 portfolio 算集中度（如今天已清仓的票）
     manual_net: dict[str, float] = defaultdict(float)
@@ -1204,8 +1209,8 @@ def today_gate(db, today: Optional[_date] = None) -> dict:
     total = sum(mv.values())
     # 单票上限是「占账户」，分母必须加现金；用占持仓会把 42% 显示成 50%
     snap_cash = db.execute(text(
-        "SELECT cash FROM trade_cash_snapshot WHERE trade_date=:d"
-    ), {"d": today}).scalar()
+        "SELECT cash FROM trade_cash_snapshot WHERE user_id=:uid AND trade_date=:d"
+    ), {"uid": user_id, "d": today}).scalar()
     if snap_cash is not None:
         cash = float(snap_cash)
     else:

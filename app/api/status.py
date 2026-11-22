@@ -175,6 +175,20 @@ def get_data_status(
                 {'label':'交易信号','rows':q("SELECT COUNT(*) FROM signal_history"),'items':q("SELECT COUNT(DISTINCT stock_code) FROM signal_history"),'start':q("SELECT MIN(signal_date)::text FROM signal_history"),'end':q("SELECT MAX(signal_date)::text FROM signal_history"),'detail':'买' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='buy'") or 0) + ' 卖' + str(q("SELECT COUNT(*) FROM signal_history WHERE direction='sell'") or 0)},
                 {'label':'可转债','rows':q("SELECT COUNT(*) FROM cb_daily"),'items':q("SELECT COUNT(*) FROM cb_basic WHERE delist_date IS NULL OR delist_date >= CURRENT_DATE"),'start':q("SELECT MIN(trade_date)::text FROM cb_daily"),'end':q("SELECT MAX(trade_date)::text FROM cb_daily"),'detail':'全量 ' + str(q("SELECT COUNT(*) FROM cb_basic") or 0) + ' 只','sub':'转股公告 ' + str(q("SELECT COUNT(*) FROM cb_share") or 0) + ' 条'},
                 {'label':'交易日历','rows':q("SELECT COUNT(*) FROM trade_calendar"),'start':q("SELECT MIN(cal_date)::text FROM trade_calendar"),'end':q("SELECT MAX(cal_date)::text FROM trade_calendar")},
+                # 扩展数据：正常由 stats 节点写入 data_stats_cache；缓存未生成时也先占位，
+                # 避免状态页只显示 9 张卡片、让人误以为功能缺失。
+                {'label':'个股资金流','rows':-1,'items':-1},
+                {'label':'两融明细','rows':-1,'items':-1},
+                {'label':'龙虎榜','rows':-1,'items':-1},
+                {'label':'大宗交易','rows':-1,'items':-1},
+                {'label':'沪深港通','rows':-1},
+                {'label':'指数权重','rows':-1,'items':-1},
+                {'label':'限售解禁','rows':-1,'items':-1},
+                {'label':'股票回购','rows':-1,'items':-1},
+                {'label':'分红送配','rows':-1,'items':-1},
+                {'label':'业绩预告','rows':-1,'items':-1},
+                {'label':'业绩快报','rows':-1,'items':-1},
+                {'label':'财务指标','rows':-1,'items':-1},
                 # 特征因子：14.9 亿行级精确 COUNT/MIN/MAX 实测 ~90s，仅缓存全空的一次性回退可承受
                 {'label':'特征因子','rows':q("SELECT COUNT(*) FROM feature_values"),'start':q("SELECT MIN(trade_date)::text FROM feature_values"),'end':q("SELECT MAX(trade_date)::text FROM feature_values"),
                  'sub':str(q("SELECT COUNT(*) FROM features") or 0) + ' 个特征'},
@@ -408,30 +422,48 @@ import json as _json
 from collections import OrderedDict
 
 _ws_clients: set = set()
+_ws_meta: dict = {}          # websocket -> {user_id, roles, permissions}
 _last_dag_broadcast = {}
+
+
+def _ws_has(ws, perm: str) -> bool:
+    meta = _ws_meta.get(ws) or {}
+    return perm in (meta.get('permissions') or set()) or 'admin' in (meta.get('roles') or set())
+
+
+def _ws_ops(ws) -> bool:
+    return _ws_has(ws, 'dag.view') or _ws_has(ws, 'system.status.view')
+
 
 @router.websocket("/ws/dag")
 async def ws_dag(websocket: WebSocket):
-    # WebSocket 认证：dev 模式放行，prod 模式强制校验 token
+    # WebSocket 认证：必须带有效 JWT（多用户后不再 dev 放行）
     token = websocket.query_params.get("token", "")
-    if token:
-        try:
-            from app.auth.auth import verify_token
-            verify_token(token)
-        except Exception:
-            if getattr(settings, 'APP_ENV', 'dev') == 'prod':
-                await websocket.close(code=4001, reason="Invalid token")
-                return
-            # dev 模式：token 无效不阻塞，仅记录日志
-            logger.warning(f"[ws] token 校验失败，dev 模式放行")
-    elif getattr(settings, 'APP_ENV', 'dev') == 'prod':
+    if not token:
         await websocket.close(code=4001, reason="Token required")
+        return
+    try:
+        from app.auth.service import decode_token, load_principal
+        payload = decode_token(token)
+        uid = int(payload.get("uid", payload.get("sub")))
+        principal = load_principal(uid)
+        if principal is None or int(payload.get("token_version", 0)) != principal.token_version:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token")
         return
     await websocket.accept()
     _ws_clients.add(websocket)
+    _ws_meta[websocket] = {
+        'user_id': principal.user_id,
+        'roles': set(principal.role_codes),
+        'permissions': set(principal.permission_codes()),
+    }
     # 立即发送当前状态（新连接不用等广播周期）
     try:
-        await _send_current_state(websocket)
+        if _ws_ops(websocket):
+            await _send_current_state(websocket)
         while True:
             msg = await websocket.receive_text()
             if msg == "ping":
@@ -440,6 +472,7 @@ async def ws_dag(websocket: WebSocket):
         pass
     finally:
         _ws_clients.discard(websocket)
+        _ws_meta.pop(websocket, None)
 
 
 async def _send_current_state(ws):
@@ -524,50 +557,66 @@ async def broadcast_dag_status():
         try:
             _adb = get_sync_db()
             _arows = _adb.execute(text(
-                "SELECT id, trade_date, kind, stock_code, level, title, body, created_at "
+                "SELECT id, user_id, trade_date, kind, stock_code, level, title, body, created_at "
                 "FROM risk_alerts WHERE id > :last ORDER BY id LIMIT 20"
             ), {"last": _last_alert_id}).fetchall()
             _adb.close()
             if _arows:
                 _last_alert_id = _arows[-1][0]
-                _amsg = _json.dumps({"type": "risk_alert", "alerts": [
-                    {"id": r[0], "trade_date": str(r[1]), "kind": r[2],
-                     "stock_code": r[3], "level": r[4], "title": r[5], "body": r[6],
-                     "created_at": str(r[7])[:19] if r[7] else None}
-                    for r in _arows
-                ]})
                 dead_a = set()
                 for ws in list(_ws_clients):
+                    meta = _ws_meta.get(ws) or {}
+                    visible = [
+                        r for r in _arows
+                        if (r[1] is not None and r[1] == meta.get('user_id'))
+                        or (r[1] is None and _ws_has(ws, 'model.alerts.view'))
+                    ]
+                    if not visible:
+                        continue
+                    msg = _json.dumps({"type": "risk_alert", "alerts": [
+                        {"id": r[0], "trade_date": str(r[2]), "kind": r[3],
+                         "stock_code": r[4], "level": r[5], "title": r[6], "body": r[7],
+                         "created_at": str(r[8])[:19] if r[8] else None}
+                        for r in visible
+                    ]}, ensure_ascii=False)
                     try:
-                        await ws.send_text(_amsg)
+                        await ws.send_text(msg)
                     except Exception:
                         dead_a.add(ws)
-                _ws_clients -= dead_a
+                for ws in dead_a:
+                    _ws_clients.discard(ws)
+                    _ws_meta.pop(ws, None)
         except Exception:
             pass
         # 事件 AI 结果增量推送：worker 落库后 2s 内推给前端
         try:
             _aadb = get_sync_db()
             _airows = _aadb.execute(text(
-                "SELECT id, alert_id, stock_code, kind, status, result, error, created_at "
+                "SELECT id, user_id, alert_id, stock_code, kind, status, result, error, created_at "
                 "FROM intraday_ai_event WHERE id > :last ORDER BY id LIMIT 10"
             ), {"last": _last_ai_id}).fetchall()
             _aadb.close()
             if _airows:
                 _last_ai_id = _airows[-1][0]
-                _aimsg = _json.dumps({"type": "intraday_ai", "events": [
-                    {"id": r[0], "alert_id": r[1], "stock_code": r[2], "kind": r[3],
-                     "status": r[4], "result": r[5], "error": r[6],
-                     "created_at": str(r[7])[:19] if r[7] else None}
-                    for r in _airows
-                ]}, ensure_ascii=False)
                 dead_ai = set()
                 for ws in list(_ws_clients):
+                    meta = _ws_meta.get(ws) or {}
+                    visible = [r for r in _airows if r[1] == meta.get('user_id')]
+                    if not visible:
+                        continue
+                    msg = _json.dumps({"type": "intraday_ai", "events": [
+                        {"id": r[0], "alert_id": r[2], "stock_code": r[3], "kind": r[4],
+                         "status": r[5], "result": r[6], "error": r[7],
+                         "created_at": str(r[8])[:19] if r[8] else None}
+                        for r in visible
+                    ]}, ensure_ascii=False)
                     try:
-                        await ws.send_text(_aimsg)
+                        await ws.send_text(msg)
                     except Exception:
                         dead_ai.add(ws)
-                _ws_clients -= dead_ai
+                for ws in dead_ai:
+                    _ws_clients.discard(ws)
+                    _ws_meta.pop(ws, None)
         except Exception:
             pass
         node_list = []
@@ -626,6 +675,8 @@ async def broadcast_dag_status():
                 })
                 dead = set()
                 for ws in _ws_clients:
+                    if not _ws_ops(ws):
+                        continue
                     try:
                         await ws.send_text(payload)
                     except:
@@ -638,6 +689,8 @@ async def broadcast_dag_status():
                 log_payload = _json.dumps({"type": "dag_log", "nodes": node_list})
                 dead = set()
                 for ws in _ws_clients:
+                    if not _ws_ops(ws):
+                        continue
                     try:
                         await ws.send_text(log_payload)
                     except:
@@ -710,6 +763,8 @@ async def broadcast_dag_status():
                     }})
                     dead = set()
                     for ws in _ws_clients:
+                        if not _ws_ops(ws):
+                            continue
                         try: await ws.send_text(sys_payload)
                         except: dead.add(ws)
                     _ws_clients -= dead
@@ -725,6 +780,8 @@ async def broadcast_dag_status():
                     payload = _json.dumps({"type": "backfill_progress", **active})
                     dead = set()
                     for ws in _ws_clients:
+                        if not _ws_ops(ws):
+                            continue
                         try: await ws.send_text(payload)
                         except: dead.add(ws)
                     _ws_clients -= dead
@@ -739,6 +796,8 @@ async def broadcast_dag_status():
                     payload = _json.dumps({"type": "feature_compute_progress", **t})
                     dead = set()
                     for ws in _ws_clients:
+                        if not _ws_ops(ws):
+                            continue
                         try: await ws.send_text(payload)
                         except: dead.add(ws)
                     _ws_clients -= dead
@@ -753,6 +812,8 @@ async def broadcast_dag_status():
                     payload = _json.dumps({"type": "task_progress", **t.to_dict()})
                     dead = set()
                     for ws in _ws_clients:
+                        if not _ws_ops(ws):
+                            continue
                         try: await ws.send_text(payload)
                         except: dead.add(ws)
                     _ws_clients -= dead

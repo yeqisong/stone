@@ -376,12 +376,12 @@ def parse_slip_bytes(data: bytes) -> dict:
 
 _INSERT_SQL = text("""
 INSERT INTO trade_slip (
-    account_no, trade_date, trade_time, stock_code, stock_name, side, business_name,
+    user_id, account_no, trade_date, trade_time, stock_code, stock_name, side, business_name,
     quantity, price, amount, balance_qty, clean_amount, commission, stamp_tax,
     transfer_fee, extra_fee, cash_balance, order_no, exchange_name,
     source_file, import_batch_id, row_hash, raw
 ) VALUES (
-    :account_no, :trade_date, :trade_time, :stock_code, :stock_name, :side, :business_name,
+    :user_id, :account_no, :trade_date, :trade_time, :stock_code, :stock_name, :side, :business_name,
     :quantity, :price, :amount, :balance_qty, :clean_amount, :commission, :stamp_tax,
     :transfer_fee, :extra_fee, :cash_balance, :order_no, :exchange_name,
     :source_file, :import_batch_id, :row_hash, CAST(:raw AS jsonb)
@@ -389,17 +389,19 @@ INSERT INTO trade_slip (
 """)
 
 
-def import_slip(db, filename: str, data: bytes) -> dict:
-    """解析并幂等导入。返回批次摘要（positions 预览由调用方另行取）。"""
+def import_slip(db, filename: str, data: bytes, user_id: int) -> dict:
+    """解析并幂等导入到指定用户。返回批次摘要（positions 预览由调用方另行取）。"""
+    if not user_id:
+        raise ValueError("import_slip 需要 user_id")
     parsed = parse_slip_bytes(data)
     rows, meta = parsed["rows"], parsed["meta"]
     batch = db.execute(text("""
         INSERT INTO trade_import_batch
-            (filename, file_size, file_format, rows_total, date_min, date_max, detail)
-        VALUES (:fn, :sz, :fmt, :total, :dmin, :dmax, CAST(:detail AS jsonb))
+            (user_id, filename, file_size, file_format, rows_total, date_min, date_max, detail)
+        VALUES (:uid, :fn, :sz, :fmt, :total, :dmin, :dmax, CAST(:detail AS jsonb))
         RETURNING id
     """), {
-        "fn": filename[:200], "sz": len(data), "fmt": meta["format"][:20],
+        "uid": user_id, "fn": filename[:200], "sz": len(data), "fmt": meta["format"][:20],
         "total": len(rows), "dmin": meta["date_min"], "dmax": meta["date_max"],
         "detail": json.dumps({"parse": meta}, ensure_ascii=False),
     }).fetchone()
@@ -420,6 +422,7 @@ def import_slip(db, filename: str, data: bytes) -> dict:
                 "side", "business_name", "quantity", "price", "amount", "balance_qty",
                 "clean_amount", "commission", "stamp_tax", "transfer_fee", "extra_fee",
                 "cash_balance", "order_no", "exchange_name", "row_hash")},
+            "user_id": user_id,
             "source_file": filename[:200],
             "import_batch_id": batch_id,
             "raw": raw_json,
@@ -460,9 +463,12 @@ def import_slip(db, filename: str, data: bytes) -> dict:
 
 # ── 读取 + 重放 ──
 
-def load_slip_rows(db, start: Optional[_date] = None, end: Optional[_date] = None) -> list[dict]:
+def load_slip_rows(db, start: Optional[_date] = None, end: Optional[_date] = None,
+                   user_id: int | None = None) -> list[dict]:
+    if not user_id:
+        raise ValueError("load_slip_rows 需要 user_id")
     sql = "SELECT * FROM trade_slip"
-    cond, params = [], {}
+    cond, params = ["user_id = :uid"], {"uid": user_id}
     if start:
         cond.append("trade_date >= :start")
         params["start"] = start
@@ -628,11 +634,11 @@ def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
 
 # ── 持仓预览 / 同步 ──
 
-def _portfolio_map(db) -> dict[str, dict]:
+def _portfolio_map(db, user_id: int) -> dict[str, dict]:
     rows = db.execute(text("""
         SELECT id, stock_code, stock_name, quantity, cost_price, exchange
-        FROM portfolio WHERE is_active=true ORDER BY stock_code
-    """)).fetchall()
+        FROM portfolio WHERE user_id=:uid AND is_active=true ORDER BY stock_code
+    """), {"uid": user_id}).fetchall()
     return {r[1]: {"id": r[0], "name": r[2], "qty": int(r[3] or 0),
                    "cost": float(r[4] or 0), "exchange": r[5]} for r in rows}
 
@@ -645,12 +651,12 @@ def _exchange_of(code: str) -> str:
     return "BSE"
 
 
-def build_positions(db) -> dict:
-    """按全部交割单重建当前持仓 + 与 portfolio 的差异。"""
-    rows = load_slip_rows(db)
+def build_positions(db, user_id: int) -> dict:
+    """按指定用户的全部交割单重建当前持仓 + 与 portfolio 的差异。"""
+    rows = load_slip_rows(db, user_id=user_id)
     if not rows:
         return {"positions": [], "diff": [], "summary": {"positions": 0}, "warnings": ["尚无交割单数据"]}
-    pmap = _portfolio_map(db)
+    pmap = _portfolio_map(db, user_id)
     # 只有「portfolio 数量 == 交割单反推的期初数量」时才信任手工维护的成本；
     # 数量对不上说明这笔持仓在别处被改过，成本宁可用期初收盘价估算。
     pre_qty: dict[str, float] = {}
@@ -740,9 +746,11 @@ def build_positions(db) -> dict:
     }
 
 
-def apply_positions(db, preview: Optional[dict] = None) -> dict:
-    """把交割单重建结果写入 portfolio（增量更新 + 清仓）。"""
-    preview = preview or build_positions(db)
+def apply_positions(db, user_id: int, preview: Optional[dict] = None) -> dict:
+    """把指定用户的交割单重建结果写入其 portfolio（增量更新 + 清仓）。"""
+    if not user_id:
+        raise ValueError("apply_positions 需要 user_id")
+    preview = preview or build_positions(db, user_id)
     applied = {"inserted": 0, "updated": 0, "closed": 0, "unchanged": 0}
     for d in preview["diff"]:
         code = d["stock_code"]
@@ -750,18 +758,21 @@ def apply_positions(db, preview: Optional[dict] = None) -> dict:
             continue
         if d["status"] == "closed":
             cur = db.execute(text(
-                "SELECT id, quantity, cost_price FROM portfolio WHERE stock_code=:c AND is_active=true"
-            ), {"c": code}).fetchone()
+                "SELECT id, quantity, cost_price FROM portfolio "
+                "WHERE user_id=:uid AND stock_code=:c AND is_active=true"
+            ), {"uid": user_id, "c": code}).fetchone()
             if not cur:
                 continue
             db.execute(text(
-                "UPDATE portfolio SET is_active=false, quantity=0, updated_at=CURRENT_TIMESTAMP WHERE id=:id"
-            ), {"id": cur[0]})
+                "UPDATE portfolio SET is_active=false, quantity=0, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=:id AND user_id=:uid"
+            ), {"id": cur[0], "uid": user_id})
             db.execute(text("""
                 INSERT INTO portfolio_history
-                    (stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
-                VALUES (:c, :n, 'slip_out', :qb, 0, :cb, :cb)
-            """), {"c": code, "n": d["stock_name"], "qb": cur[1], "cb": float(cur[2] or 0)})
+                    (user_id, stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
+                VALUES (:uid, :c, :n, 'slip_out', :qb, 0, :cb, :cb)
+            """), {"uid": user_id, "c": code, "n": d["stock_name"], "qb": cur[1],
+                   "cb": float(cur[2] or 0)})
             applied["closed"] += 1
             continue
         if d["status"] == "same":
@@ -769,33 +780,35 @@ def apply_positions(db, preview: Optional[dict] = None) -> dict:
             continue
 
         cur = db.execute(text(
-            "SELECT id, quantity, cost_price FROM portfolio WHERE stock_code=:c AND is_active=true"
-        ), {"c": code}).fetchone()
+            "SELECT id, quantity, cost_price FROM portfolio "
+            "WHERE user_id=:uid AND stock_code=:c AND is_active=true"
+        ), {"uid": user_id, "c": code}).fetchone()
         qty = int(round(d["quantity"]))
         cost = round(float(d["cost_price"]), 3)
         if cur:
             db.execute(text("""
                 UPDATE portfolio SET quantity=:q, cost_price=:p, stock_name=:n,
-                       updated_at=CURRENT_TIMESTAMP WHERE id=:id
-            """), {"q": qty, "p": cost, "n": d["stock_name"], "id": cur[0]})
+                       updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:uid
+            """), {"q": qty, "p": cost, "n": d["stock_name"], "id": cur[0], "uid": user_id})
             db.execute(text("""
                 INSERT INTO portfolio_history
-                    (stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
-                VALUES (:c, :n, 'slip_sync', :qb, :qa, :cb, :ca)
-            """), {"c": code, "n": d["stock_name"], "qb": cur[1], "qa": qty,
+                    (user_id, stock_code, stock_name, action, quantity_before, quantity_after, cost_before, cost_after)
+                VALUES (:uid, :c, :n, 'slip_sync', :qb, :qa, :cb, :ca)
+            """), {"uid": user_id, "c": code, "n": d["stock_name"], "qb": cur[1], "qa": qty,
                    "cb": float(cur[2] or 0), "ca": cost})
             applied["updated"] += 1
         else:
             db.execute(text("""
-                INSERT INTO portfolio (stock_code, stock_name, exchange, quantity, cost_price, notes)
-                VALUES (:c, :n, :e, :q, :p, :notes)
-            """), {"c": code, "n": d["stock_name"], "e": d.get("exchange") or _exchange_of(code),
+                INSERT INTO portfolio (user_id, stock_code, stock_name, exchange, quantity, cost_price, notes)
+                VALUES (:uid, :c, :n, :e, :q, :p, :notes)
+            """), {"uid": user_id, "c": code, "n": d["stock_name"],
+                   "e": d.get("exchange") or _exchange_of(code),
                    "q": qty, "p": cost, "notes": "交割单同步"})
             applied["inserted"] += 1
     db.execute(text(
         "UPDATE trade_import_batch SET positions_synced=true, synced_at=CURRENT_TIMESTAMP "
-        "WHERE positions_synced=false"
-    ))
+        "WHERE user_id=:uid AND positions_synced=false"
+    ), {"uid": user_id})
     db.commit()
     logger.info(f"[trade-slip] 持仓同步 {applied}")
     return applied
@@ -803,10 +816,12 @@ def apply_positions(db, preview: Optional[dict] = None) -> dict:
 
 # ── 查询 ──
 
-def list_trades(db, start: Optional[_date] = None, end: Optional[_date] = None,
+def list_trades(db, user_id: int, start: Optional[_date] = None, end: Optional[_date] = None,
                 code: str = "", side: str = "", keyword: str = "",
                 page: int = 1, page_size: int = 100) -> dict:
-    cond, params = [], {}
+    if not user_id:
+        raise ValueError("list_trades 需要 user_id")
+    cond, params = ["user_id = :uid"], {"uid": user_id}
     if start:
         cond.append("trade_date >= :start"); params["start"] = start
     if end:
@@ -861,13 +876,15 @@ def list_trades(db, start: Optional[_date] = None, end: Optional[_date] = None,
     }
 
 
-def list_batches(db, limit: int = 50) -> list[dict]:
+def list_batches(db, user_id: int, limit: int = 50) -> list[dict]:
+    if not user_id:
+        raise ValueError("list_batches 需要 user_id")
     rows = db.execute(text("""
         SELECT id, filename, file_size, file_format, rows_total, rows_inserted,
                rows_duplicate, rows_invalid, date_min, date_max, side_counts,
                positions_synced, synced_at, created_at
-        FROM trade_import_batch ORDER BY id DESC LIMIT :lim
-    """), {"lim": limit}).mappings().fetchall()
+        FROM trade_import_batch WHERE user_id=:uid ORDER BY id DESC LIMIT :lim
+    """), {"uid": user_id, "lim": limit}).mappings().fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -879,9 +896,15 @@ def list_batches(db, limit: int = 50) -> list[dict]:
     return out
 
 
-def delete_batch(db, batch_id: int) -> dict:
-    n = db.execute(text("DELETE FROM trade_slip WHERE import_batch_id=:id"), {"id": batch_id}).rowcount or 0
-    db.execute(text("DELETE FROM trade_import_batch WHERE id=:id"), {"id": batch_id})
+def delete_batch(db, batch_id: int, user_id: int) -> dict:
+    if not user_id:
+        raise ValueError("delete_batch 需要 user_id")
+    n = db.execute(text(
+        "DELETE FROM trade_slip WHERE user_id=:uid AND import_batch_id=:id"
+    ), {"uid": user_id, "id": batch_id}).rowcount or 0
+    db.execute(text(
+        "DELETE FROM trade_import_batch WHERE user_id=:uid AND id=:id"
+    ), {"uid": user_id, "id": batch_id})
     db.commit()
-    logger.info(f"[trade-slip] 删除批次 {batch_id}: {n} 行")
+    logger.info(f"[trade-slip] 删除批次 {batch_id} (user={user_id}): {n} 行")
     return {"deleted_rows": n}

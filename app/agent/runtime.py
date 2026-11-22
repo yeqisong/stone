@@ -22,7 +22,8 @@ from pathlib import Path
 from loguru import logger
 
 from app.agent import media, sandbox
-from app.agent.tools import TOOL_SPECS, DAG_NODE_HINT, TABLE_DOCS, execute_tool
+from app.agent.tools import (DAG_NODE_HINT, TABLE_DOCS,
+                             execute_tool, tool_specs_for)
 from app.agent.skills import skill_index_text
 
 MAX_STEPS = 0               # 单轮工具调用步数上限：0 = 不限制（用户可随时停止）；>0 时作为安全阀
@@ -74,9 +75,9 @@ def request_stop(session_id: int) -> bool:
     return False
 
 
-def workspace_images(session_id: int) -> dict:
+def workspace_images(session_id: int, user_id: int | None = None) -> dict:
     """工作区内图片文件 → {相对路径: mtime}（跳过 pylibs/node 依赖目录）。"""
-    ws = sandbox.workspace(session_id)
+    ws = sandbox.workspace(session_id, user_id)
     out = {}
     for ext in IMAGE_EXTS:
         for f in ws.rglob(f'*{ext}'):
@@ -96,10 +97,10 @@ def _new_or_changed(before: dict, after: dict) -> list:
 
 # ── 多模态图片 ────────────────────────────────────────────────
 
-def _attachment_file(sid: int, name: str):
+def _attachment_file(sid: int, name: str, user_id: int | None = None):
     """附件名 → 工作区 uploads/ 内的真实文件（越界/不存在返回 None）。"""
     try:
-        ws = sandbox.workspace(sid).resolve()
+        ws = sandbox.workspace(sid, user_id).resolve()
         p = (ws / "uploads" / Path(str(name)).name).resolve()
         if ws not in p.parents or not p.is_file():
             return None
@@ -153,7 +154,8 @@ def _image_data_url(path: Path) -> str:
         return ""
 
 
-def _user_content(sid: int, text: str, attachments, include_images: bool = True):
+def _user_content(sid: int, text: str, attachments, include_images: bool = True,
+                  user_id: int | None = None):
     """用户消息 → 纯文本或 OpenAI 多模态 content parts。
 
     include_images=False 时只保留附件文件名说明（历史轮次不重复传图，省 token）。
@@ -170,7 +172,7 @@ def _user_content(sid: int, text: str, attachments, include_images: bool = True)
     for a in atts:
         if Path(a).suffix.lower() not in _IMG_MIME:
             continue
-        p = _attachment_file(sid, a)
+        p = _attachment_file(sid, a, user_id)
         if not p:
             skipped.append(a)
             continue
@@ -254,14 +256,32 @@ def _freshness_text() -> str:
     return _FRESH_CACHE["text"]
 
 
-def _system_prompt() -> str:
+def _system_prompt(user_id: int | None = None, is_admin: bool = False) -> str:
     docs = "\n".join(f"- {t}: {d}" for t, d in TABLE_DOCS.items())
-    skills = skill_index_text()
+    skills = skill_index_text(user_id=user_id)
+    if is_admin:
+        duty = ("需要计算或统计时，优先写 SQL 查库，或用沙箱跑 Python"
+                "（pandas/numpy/matplotlib 可用）。")
+        dag_ops = ("- 你可以创建 DAG 流程草稿（create_dag_flow，默认 draft 不发布会），"
+                   "也可触发已发布流程（run_dag_flow）")
+        sandbox = """## 沙箱
+- 会话有独立工作区：代码、数据、依赖都保存在里面，跨轮次可用
+- Python 可直接 import pandas/numpy；matplotlib 等其它包先 pip_install；Node 用 run_node + npm_install
+- 沙箱默认无外网、根目录只读，只有工作区可写（需要联网取数时说明限制，改用本地库）
+- 图表用 matplotlib 存 PNG 到工作区后会自动显示在对话里（用户可直接看图），优先给图 + 一句结论"""
+    else:
+        duty = ("请使用平台提供的只读数据工具（个股全景、资讯检索、组合概览等）回答；"
+                "原始 SQL 与代码执行仅管理员可用，不要尝试。")
+        dag_ops = "- 你可以查看 DAG 流程定义与运行状态（只读）"
+        sandbox = """## 权限边界
+- 当前账号只能访问共享研究数据与自己的持仓/自选/信号；不得尝试读取其他用户数据
+- 原始 SQL、代码执行、依赖安装、DAG 创建/触发仅管理员可用
+- 附件与生成文件保存在当前用户自己的会话工作区，彼此隔离"""
     return f"""你是「K道」个股监测平台的内部数据分析助手。今天是 {date.today()}。
 
 ## 你的职责
 用平台**本地数据**回答选股、行情、特征、信号、资讯、雪球舆情、组合与流程编排类问题；
-需要计算或统计时，优先写 SQL 查库，或用沙箱跑 Python（pandas/numpy/matplotlib 可用）。
+{duty}
 不要凭记忆编造行情数字；不确定就先查库或问清楚。
 
 ## 可用数据表
@@ -273,14 +293,14 @@ def _system_prompt() -> str:
 ## 平台能力
 - DAG 流程编排：{DAG_NODE_HINT}
 - 特征库：features 注册表（151 个特征）+ feature_values 长表（查询务必带 trade_date 或 feature_name 限定）
-- 你可以创建 DAG 流程草稿（create_dag_flow，默认 draft 不发布会），也可触发已发布流程（run_dag_flow）
-- 用户上传的附件保存在会话工作区 uploads/ 目录，用 list_workspace 查看，用 pandas 读取分析
+{dag_ops}
+- 用户上传的附件保存在会话工作区 uploads/ 目录，用 list_workspace 查看并分析
 
 ## 技能（Skills）
 下面是可用技能清单（名称：描述）。接到某类分析任务时，先看清单里有没有匹配的技能；
 命中就用 read_skill 读全文，严格按技能里的步骤与 SQL 模板执行——技能是沉淀好的口径，
 避免每次自由发挥导致统计口径漂移。用户要求「以后都这么分析 / 把这套流程记下来」时，
-用 save_skill 沉淀成新技能。
+用 save_skill 沉淀成当前用户的个人技能（不会影响其他用户）。
 
 {skills}
 
@@ -290,11 +310,7 @@ def _system_prompt() -> str:
 - 较早轮次的图片可能不会重复传入模型；如果当前消息里没有图而任务依赖它，请让用户重新发送。
 - CSV/Excel 等文件在会话工作区 uploads/ 目录，用 list_workspace 查看、pandas 读取。
 
-## 沙箱
-- 会话有独立工作区：代码、数据、依赖都保存在里面，跨轮次可用
-- Python 可直接 import pandas/numpy；matplotlib 等其它包先 pip_install；Node 用 run_node + npm_install
-- 沙箱默认无外网、根目录只读，只有工作区可写（需要联网取数时说明限制，改用本地库）
-- 图表用 matplotlib 存 PNG 到工作区后会自动显示在对话里（用户可直接看图），优先给图 + 一句结论
+{sandbox}
 
 ## 回答规范
 - 中文回答；结论先行，再给依据（数据来源表/时间窗/样本量）
@@ -335,25 +351,28 @@ def ensure_tables():
         db.close()
 
 
-def get_session(sid: int) -> dict:
+def get_session(sid: int, user_id: int | None = None) -> dict:
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
     try:
         r = db.execute(text("""
-            SELECT id, title, status, model, memo, memo_until, pinned, created_at, updated_at
-            FROM agent_sessions WHERE id=:i"""), {"i": sid}).fetchone()
+            SELECT id, user_id, title, status, model, memo, memo_until, pinned,
+                   created_at, updated_at
+            FROM agent_sessions WHERE id=:i AND (:uid = 0 OR user_id=:uid)"""),
+            {"i": sid, "uid": int(user_id or 0)}).fetchone()
         if not r:
             return {}
-        return {"id": r[0], "title": r[1], "status": r[2], "model": r[3], "memo": r[4],
-                "memo_until": int(r[5] or 0), "pinned": bool(r[6]),
-                "created_at": str(r[7])[:19], "updated_at": str(r[8])[:19]}
+        return {"id": r[0], "user_id": r[1], "title": r[2], "status": r[3],
+                "model": r[4], "memo": r[5], "memo_until": int(r[6] or 0),
+                "pinned": bool(r[7]), "created_at": str(r[8])[:19],
+                "updated_at": str(r[9])[:19]}
     finally:
         db.close()
 
 
-def list_sessions(q: str = "", limit: int = 100, offset: int = 0,
-                  include_archived: bool = False) -> list:
+def list_sessions(user_id: int | None = None, q: str = "", limit: int = 100,
+                  offset: int = 0, include_archived: bool = False) -> list:
     """会话列表：支持标题/正文搜索、置顶排序、归档过滤。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
@@ -368,11 +387,14 @@ def list_sessions(q: str = "", limit: int = 100, offset: int = 0,
                    (SELECT LEFT(m.content, 100) FROM agent_messages m
                      WHERE m.session_id=s.id AND m.role='user' ORDER BY m.id DESC LIMIT 1) AS last_q
             FROM agent_sessions s
-            WHERE (:all = 1 OR s.status='active')
+            WHERE (:uid = 0 OR s.user_id = :uid)
+              AND (:all = 1 OR s.status='active')
               AND (:q = '' OR s.title ILIKE :kw OR EXISTS (
                    SELECT 1 FROM agent_messages m WHERE m.session_id=s.id AND m.content ILIKE :kw))
             ORDER BY s.pinned DESC, s.updated_at DESC
-            LIMIT :lim OFFSET :off"""), {"all": 1 if include_archived else 0, "q": (q or "").strip(),
+            LIMIT :lim OFFSET :off"""), {"uid": int(user_id or 0),
+                                         "all": 1 if include_archived else 0,
+                                         "q": (q or "").strip(),
                                          "kw": kw, "lim": lim, "off": off}).fetchall()
         return [{"id": r[0], "title": r[1], "updated_at": str(r[2])[:19], "model": r[3],
                  "pinned": bool(r[4]), "status": r[5], "message_count": r[6],
@@ -382,42 +404,54 @@ def list_sessions(q: str = "", limit: int = 100, offset: int = 0,
         db.close()
 
 
-def create_session(title: str = "新会话", model: str = "") -> dict:
+def create_session(title: str = "新会话", model: str = "",
+                   user_id: int | None = None) -> dict:
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
     try:
+        if user_id is None:
+            user_id = db.execute(text(
+                "SELECT id FROM users ORDER BY id LIMIT 1"
+            )).scalar()
+        if not user_id:
+            return {"error": "没有可用用户"}
         sid = db.execute(text(
-            "INSERT INTO agent_sessions (title, model) VALUES (:t, :m) RETURNING id"),
-            {"t": (title or "新会话")[:100], "m": (model or None)}).scalar()
+            "INSERT INTO agent_sessions (user_id, title, model) VALUES (:uid, :t, :m) RETURNING id"),
+            {"uid": int(user_id), "t": (title or "新会话")[:100], "m": (model or None)}).scalar()
         db.commit()
         return {"id": sid, "title": title or "新会话", "model": model or None}
     finally:
         db.close()
 
 
-def delete_session(sid: int) -> bool:
+def delete_session(sid: int, user_id: int | None = None) -> bool:
     from app.db.connection import get_sync_db
     from sqlalchemy import text
+    if not get_session(sid, user_id):
+        return False
     request_stop(sid)
     db = get_sync_db()
     try:
-        db.execute(text("DELETE FROM agent_sessions WHERE id=:i"), {"i": sid})
+        db.execute(text(
+            "DELETE FROM agent_sessions WHERE id=:i AND (:uid = 0 OR user_id=:uid)"
+        ), {"i": sid, "uid": int(user_id or 0)})
         db.commit()
-        sandbox.reset_workspace(sid)
+        sandbox.reset_workspace(sid, user_id)
         return True
     finally:
         db.close()
 
 
-def rename_session(sid: int, title: str) -> bool:
-    return update_session(sid, title=title)
+def rename_session(sid: int, title: str, user_id: int | None = None) -> bool:
+    return update_session(sid, title=title, user_id=user_id)
 
 
 def update_session(sid: int, title=None, model=None, status=None,
-                   pinned=None, memo=None, memo_until=None) -> bool:
+                   pinned=None, memo=None, memo_until=None,
+                   user_id: int | None = None) -> bool:
     """局部更新会话（只改传入字段；model 传空串表示恢复全局模型）。"""
-    sets, params = [], {"i": sid}
+    sets, params = [], {"i": sid, "uid": int(user_id or 0)}
     if title is not None:
         sets.append("title=:t")
         params["t"] = (title or "新会话")[:100]
@@ -443,17 +477,21 @@ def update_session(sid: int, title=None, model=None, status=None,
     from sqlalchemy import text
     db = get_sync_db()
     try:
-        db.execute(text(f"UPDATE agent_sessions SET {', '.join(sets)} WHERE id=:i"), params)
+        db.execute(text(
+            f"UPDATE agent_sessions SET {', '.join(sets)} WHERE id=:i AND (:uid = 0 OR user_id=:uid)"
+        ), params)
         db.commit()
         return True
     finally:
         db.close()
 
 
-def truncate_from(sid: int, message_id: int) -> int:
+def truncate_from(sid: int, message_id: int, user_id: int | None = None) -> int:
     """删除 message_id 及其之后的消息（编辑/重答的前置动作）。返回删除条数。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
+    if not get_session(sid, user_id):
+        return 0
     db = get_sync_db()
     try:
         n = db.execute(text(
@@ -469,20 +507,23 @@ def truncate_from(sid: int, message_id: int) -> int:
         db.close()
 
 
-def branch_session(sid: int, message_id: int, title: str = "") -> dict:
+def branch_session(sid: int, message_id: int, title: str = "",
+                   user_id: int | None = None) -> dict:
     """把会话截至 message_id 的内容复制成新会话（分支探索）。"""
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
     try:
-        base = db.execute(text("SELECT title, model FROM agent_sessions WHERE id=:s"),
-                          {"s": sid}).fetchone()
+        base = db.execute(text(
+            "SELECT title, model, user_id FROM agent_sessions "
+            "WHERE id=:s AND (:uid = 0 OR user_id=:uid)"
+        ), {"s": sid, "uid": int(user_id or 0)}).fetchone()
         if not base:
             return {"error": "会话不存在"}
         name = (title or f"{base[0]}（分支）")[:100]
         new_id = db.execute(text(
-            "INSERT INTO agent_sessions (title, model) VALUES (:t, :m) RETURNING id"),
-            {"t": name, "m": base[1]}).scalar()
+            "INSERT INTO agent_sessions (user_id, title, model) VALUES (:uid, :t, :m) RETURNING id"),
+            {"uid": base[2], "t": name, "m": base[1]}).scalar()
         n = db.execute(text("""
             INSERT INTO agent_messages (session_id, role, content, tool_calls,
                                         tool_call_id, tool_name, meta, created_at)
@@ -498,20 +539,23 @@ def branch_session(sid: int, message_id: int, title: str = "") -> dict:
         db.close()
 
 
-def list_messages(sid: int) -> list:
+def list_messages(sid: int, user_id: int | None = None) -> list:
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     db = get_sync_db()
     try:
         rows = db.execute(text("""
             SELECT id, role, content, tool_calls, tool_call_id, tool_name, meta, created_at
-            FROM agent_messages WHERE session_id=:s ORDER BY id"""), {"s": sid}).fetchall()
+            FROM agent_messages WHERE session_id=:s
+              AND EXISTS (SELECT 1 FROM agent_sessions s
+                          WHERE s.id=:s AND (:uid = 0 OR s.user_id=:uid))
+            ORDER BY id"""), {"s": sid, "uid": int(user_id or 0)}).fetchall()
         out = []
         for r in rows:
             meta = (json.loads(r[6]) if isinstance(r[6], str) else (r[6] or {}))
             # 回放时重新签发图片 URL（旧签名过期也不影响）
             if isinstance(meta, dict) and meta.get("images"):
-                meta["images"] = media.sign_images(sid, meta["images"])
+                meta["images"] = media.sign_images(sid, meta["images"], user_id=user_id)
             out.append({
                 "id": r[0], "role": r[1], "content": r[2] or "",
                 "tool_calls": (json.loads(r[3]) if isinstance(r[3], str) else (r[3] or [])),
@@ -544,13 +588,14 @@ def _save(sid: int, role: str, content: str = "", tool_calls=None,
         db.close()
 
 
-def _history_for_model(sid: int, memo_until: int = 0) -> list:
+def _history_for_model(sid: int, memo_until: int = 0,
+                       user_id: int | None = None) -> list:
     """DB 消息 → OpenAI messages。
 
     按「用户轮」切分后再裁剪，保证 assistant(tool_calls) 与 tool 结果不被拆散；
     较早轮次的工具结果压缩成一行摘要，控制上下文体积。
     """
-    msgs = [m for m in list_messages(sid) if m["id"] > int(memo_until or 0)]
+    msgs = [m for m in list_messages(sid, user_id) if m["id"] > int(memo_until or 0)]
     turns, cur = [], None
     for m in msgs:
         if m["role"] == "user":
@@ -581,7 +626,8 @@ def _history_for_model(sid: int, memo_until: int = 0) -> list:
             body = m["content"] or ""
             if m["role"] == "user":
                 atts = (m.get("meta") or {}).get("attachments") or []
-                content = _user_content(sid, body, atts, include_images=include_images)
+                content = _user_content(sid, body, atts, include_images=include_images,
+                                        user_id=user_id)
                 if atts and not include_images:
                     prefix = content if isinstance(content, str) else body
                     content = prefix + "\n（较早轮次的图片未重复传入；如任务依赖该图，请让用户重新发送）"
@@ -662,13 +708,13 @@ def _auto_title_llm(sid: int, first_text: str, client, model: str):
         logger.debug(f"[agent] LLM 标题失败 sid={sid}: {type(e).__name__}")
 
 
-def _maybe_compact(sid: int, model: str):
+def _maybe_compact(sid: int, model: str, user_id: int | None = None):
     """消息过多时把较早内容压成 memo，后续轮次只带 memo + 最近若干条。"""
     try:
-        sess = get_session(sid)
+        sess = get_session(sid, user_id)
         if not sess:
             return
-        msgs = list_messages(sid)
+        msgs = list_messages(sid, user_id)
         memo_until = int(sess.get("memo_until") or 0)
         pending = [m for m in msgs if m["id"] > memo_until]
         if len(pending) <= COMPACT_TRIGGER:
@@ -693,7 +739,8 @@ def _maybe_compact(sid: int, model: str):
         )
         memo = (r.choices[0].message.content or "").strip()
         if memo:
-            update_session(sid, memo=memo, memo_until=older[-1]["id"])
+            update_session(sid, memo=memo, memo_until=older[-1]["id"],
+                           user_id=user_id)
             logger.info(f"[agent] 会话 {sid} 上下文已压缩至消息 {older[-1]['id']}")
     except Exception as e:
         logger.debug(f"[agent] memo 压缩跳过 sid={sid}: {type(e).__name__}: {e}")
@@ -703,10 +750,13 @@ def _maybe_compact(sid: int, model: str):
 #  反馈
 # ══════════════════════════════════════════════
 
-def save_feedback(sid: int, message_id: int, rating: int, comment: str = "") -> dict:
+def save_feedback(sid: int, message_id: int, rating: int, comment: str = "",
+                  user_id: int | None = None) -> dict:
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     rating = 1 if int(rating) > 0 else -1
+    if not get_session(sid, user_id):
+        return {"error": "会话不存在"}
     db = get_sync_db()
     try:
         q = db.execute(text("""
@@ -724,7 +774,7 @@ def save_feedback(sid: int, message_id: int, rating: int, comment: str = "") -> 
         db.close()
 
 
-def list_feedback(limit: int = 100, rating: int = 0) -> list:
+def list_feedback(limit: int = 100, rating: int = 0, user_id: int | None = None) -> list:
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     lim = max(1, min(int(limit or 100), 500))
@@ -735,7 +785,9 @@ def list_feedback(limit: int = 100, rating: int = 0) -> list:
                    s.title
             FROM agent_feedback f LEFT JOIN agent_sessions s ON s.id=f.session_id
             WHERE (:r = 0 OR f.rating = :r)
-            ORDER BY f.created_at DESC LIMIT :lim"""), {"r": int(rating or 0), "lim": lim}).fetchall()
+              AND (:uid = 0 OR s.user_id = :uid)
+            ORDER BY f.created_at DESC LIMIT :lim"""),
+            {"r": int(rating or 0), "lim": lim, "uid": int(user_id or 0)}).fetchall()
         return [{"id": r[0], "session_id": r[1], "message_id": r[2], "rating": r[3],
                  "comment": r[4], "question": r[5], "created_at": str(r[6])[:19],
                  "session_title": r[7]} for r in rows]
@@ -775,8 +827,13 @@ def _est_tokens(messages: list) -> int:
     return max(1, n // 2)
 
 
-def stream_agent(sid: int, user_content: str, attachments=None):
+def stream_agent(sid: int, user_content: str, attachments=None,
+                 user_id: int | None = None, is_admin: bool = False):
     """生成事件字典（API 层包装为 SSE）。同会话串行，支持中断。"""
+    sess0 = get_session(sid, user_id)
+    if not sess0:
+        yield {"type": "error", "error": "会话不存在"}
+        return
     lock = _session_lock(sid)
     if not lock.acquire(blocking=False):
         yield {"type": "error", "error": "该会话正在处理上一条消息，请稍候或先点停止"}
@@ -784,7 +841,7 @@ def stream_agent(sid: int, user_content: str, attachments=None):
     stop_ev = threading.Event()
     _STOP[sid] = stop_ev
     try:
-        sess = get_session(sid) or {}
+        sess = get_session(sid, user_id) or {}
         user_meta = {"attachments": list(attachments)} if attachments else None
         user_mid = _save(sid, "user", user_content, meta=user_meta)
         title_changed = _auto_title(sid, user_content)
@@ -793,11 +850,12 @@ def stream_agent(sid: int, user_content: str, attachments=None):
         llm = {**llm, "model": model}
         yield {"type": "start", "session_id": sid, "model": model, "user_message_id": user_mid}
 
-        messages = [{"role": "system", "content": _system_prompt()}]
+        messages = [{"role": "system", "content": _system_prompt(user_id, is_admin)}]
         if sess.get("memo"):
             messages.append({"role": "system",
                              "content": "本会话较早内容的摘要（延续上下文用）：\n" + sess["memo"]})
-        messages += _history_for_model(sid, memo_until=sess.get("memo_until") or 0)
+        messages += _history_for_model(sid, memo_until=sess.get("memo_until") or 0,
+                                       user_id=user_id)
 
         if title_changed is True:
             threading.Thread(target=_auto_title_llm,
@@ -833,7 +891,8 @@ def stream_agent(sid: int, user_content: str, attachments=None):
 
                 def _call(msgs):
                     return client.chat.completions.create(
-                        model=model, messages=msgs, tools=TOOL_SPECS,
+                        model=model, messages=msgs,
+                        tools=tool_specs_for(is_admin),
                         tool_choice="auto", temperature=0.3, max_tokens=4096,
                         stream=True,
                     )
@@ -931,7 +990,8 @@ def stream_agent(sid: int, user_content: str, attachments=None):
                 yield {"type": "done", "message_id": mid, "steps": step,
                        "usage": usage_total, "elapsed_ms": int((time.time() - t_turn) * 1000)}
                 # 压缩判断放在后台（内部会查库并自行判断条数，未超阈值立即返回）
-                threading.Thread(target=_maybe_compact, args=(sid, model), daemon=True).start()
+                threading.Thread(target=_maybe_compact, args=(sid, model, user_id),
+                                 daemon=True).start()
                 return
 
             for tc in tool_calls:
@@ -946,13 +1006,16 @@ def stream_agent(sid: int, user_content: str, attachments=None):
                     yield {"type": "stopped"}
                     return
                 tt = time.time()
-                _img_before = workspace_images(sid) if name in ('run_python', 'run_node') else None
-                result = execute_tool(sid, name, args)
+                _img_before = (workspace_images(sid, user_id)
+                               if name in ('run_python', 'run_node') else None)
+                result = execute_tool(sid, name, args, user_id=user_id,
+                                      is_admin=is_admin)
                 elapsed = int((time.time() - tt) * 1000)
                 ok = not (isinstance(result, dict) and (result.get("error") or result.get("ok") is False))
                 images = []
                 if _img_before is not None:
-                    for img in _new_or_changed(_img_before, workspace_images(sid))[:6]:
+                    for img in _new_or_changed(_img_before,
+                                               workspace_images(sid, user_id))[:6]:
                         images.append({"name": img, "path": img})
                 res_str = json.dumps(result, ensure_ascii=False, default=str)
                 _save(sid, "tool", res_str[:TOOL_RESULT_MAX], tool_call_id=tc["id"], tool_name=name,
@@ -962,7 +1025,8 @@ def stream_agent(sid: int, user_content: str, attachments=None):
                 messages.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": res_str[:TOOL_CONTEXT_CHARS]})
                 yield {"type": "tool_result", "id": tc["id"], "name": name, "ok": ok,
-                       "elapsed_ms": elapsed, "images": media.sign_images(sid, images),
+                       "elapsed_ms": elapsed,
+                       "images": media.sign_images(sid, images, user_id=user_id),
                        "truncated": bool(isinstance(result, dict) and result.get("truncated")),
                        "preview": res_str[:TOOL_RESULT_MAX]}
                 if stop_ev.is_set():
