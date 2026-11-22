@@ -9,15 +9,15 @@
       </n-button>
     </n-button-group>
     <div class="pf-actions">
-      <n-button size="tiny" quaternary @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
-      <n-button size="tiny" :disabled="!canFloatWatch()"
+      <n-button v-perm="'watch.group.edit'" size="tiny" quaternary @click="openNewGroup"><AppIcon name="plus" :size="13" />  新增分组</n-button>
+      <n-button v-perm="'portfolio.watch_window.launch'" size="tiny" :disabled="!canFloatWatch()"
         :title="canFloatWatch() ? 'Chrome 置顶悬浮窗，浏览器最小化也保留' : '需要 Chrome/Edge 116+（Document Picture-in-Picture）'"
         @click="openWatchWindow"><AppIcon name="monitor" :size="13" />  浮窗盯盘</n-button>
-      <n-button size="tiny" :loading="launchingDesktop" title="调用 Windows WPF 透明置顶小窗"
+      <n-button v-perm="'portfolio.watch_window.launch'" size="tiny" :loading="launchingDesktop" title="调用 Windows WPF 透明置顶小窗"
         @click="launchDesktopWatch"><AppIcon name="maximize" :size="13" />  桌面浮窗</n-button>
-      <n-button size="tiny" @click="openTradeReview('review')" title="交割单明细与交易复盘"><AppIcon name="activity" :size="13" />  交易复盘</n-button>
-      <n-button size="tiny" @click="showTradeImport=true" title="导入券商交割单，自动去重并按股份余额更新持仓"><AppIcon name="upload" :size="13" />  导入交割单</n-button>
-      <n-button class="cta" size="tiny" type="primary" @click="startAdd"><AppIcon name="plus" :size="13" />  新增持仓</n-button>
+      <n-button v-perm="'portfolio.trades.view'" size="tiny" @click="openTradeReview('review')" title="交割单明细与交易复盘"><AppIcon name="activity" :size="13" />  交易复盘</n-button>
+      <n-button v-perm="'portfolio.trades.import'" size="tiny" @click="showTradeImport=true" title="导入券商交割单，自动去重并按股份余额更新持仓"><AppIcon name="upload" :size="13" />  导入交割单</n-button>
+      <n-button v-perm="'portfolio.position.edit'" class="cta" size="tiny" type="primary" @click="startAdd"><AppIcon name="plus" :size="13" />  新增持仓</n-button>
     </div>
   </div>
 
@@ -56,8 +56,8 @@
               <span v-else class="pos-signal muted">今日无信号</span>
               <div class="pos-actions">
                 <n-button size="tiny" @click="showHistory(row.stock_code)">详情</n-button>
-                <n-button size="tiny" @click="startEdit(row)">编辑</n-button>
-                <n-button size="tiny" type="error" quaternary @click="askDelete(row.stock_code)">删除</n-button>
+                <n-button v-perm="'portfolio.position.edit'" size="tiny" @click="startEdit(row)">编辑</n-button>
+                <n-button v-perm="'portfolio.position.edit'" size="tiny" type="error" quaternary @click="askDelete(row.stock_code)">删除</n-button>
               </div>
             </div>
           </div>
@@ -97,7 +97,7 @@
           <span v-if="tradeGate.today_buys || tradeGate.today_sells" class="tg-manual-note">
             今日手工成交已计入纪律统计；持仓表待导入交割单后同步
           </span>
-          <n-button size="tiny" quaternary style="margin-left:auto" @click="openTradeReview('rules')">处理</n-button>
+          <n-button v-perm="'portfolio.discipline.edit'" size="tiny" quaternary style="margin-left:auto" @click="openTradeReview('rules')">处理</n-button>
         </div>
       </aside>
     </div>
@@ -147,7 +147,7 @@
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showEdit=false">取消</n-button>
-        <n-button type="primary" @click="isAdding?doAdd():doSaveEdit()">{{isAdding?'添加':'保存'}}</n-button>
+        <n-button v-perm="'portfolio.position.edit'" type="primary" @click="isAdding?doAdd():doSaveEdit()">{{isAdding?'添加':'保存'}}</n-button>
       </n-space>
     </template>
   </n-card>
@@ -158,7 +158,7 @@
     <template #footer>
       <n-space justify="center">
         <n-button @click="showDeleteConfirm=false">取消</n-button>
-        <n-button type="error" @click="confirmDelete">确认删除</n-button>
+        <n-button v-perm="'portfolio.position.edit'" type="error" @click="confirmDelete">确认删除</n-button>
       </n-space>
     </template>
   </n-card>

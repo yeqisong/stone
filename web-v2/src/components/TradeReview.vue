@@ -14,7 +14,7 @@
           <n-button-group size="tiny">
             <n-button v-for="p in periods" :key="p.v" size="tiny" :type="period===p.v?'primary':'default'" @click="setPeriod(p.v)">{{ p.label }}</n-button>
           </n-button-group>
-          <n-button size="tiny" @click="showImport=true"><AppIcon name="upload" :size="12" />  导入交割单</n-button>
+          <n-button v-perm="'portfolio.trades.import'" size="tiny" @click="showImport=true"><AppIcon name="upload" :size="12" />  导入交割单</n-button>
           <n-button size="tiny" quaternary :loading="loading" @click="loadAll"><AppIcon name="refresh" :size="12" /></n-button>
           <n-button v-if="!page" size="tiny" quaternary @click="show=false">关闭</n-button>
         </div>

@@ -1305,6 +1305,7 @@ function updateNav() {
 function jump(c) { if (c) { _nav.dcode = c; _nav.syncHash(); code.value = c; inputCode.value = c; load() } }
 let navFallbackCode = ''
 async function ensureNavList(){
+  if (!authStore.can('portfolio.position.view')) return
   if (navList.includes(code.value) || navFallbackCode === code.value) return
   navFallbackCode = code.value
   try{

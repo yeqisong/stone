@@ -12,7 +12,7 @@
         <template v-else-if="taskInfo.status==='failed'"><AppIcon name="x-circle" :size="13" /> 失败</template>
         <template v-else>空闲</template>
       </span>
-      <n-button v-if="!taskInfo || taskInfo.status!=='running'" class="cta" size="tiny" type="primary" @click="doExecute"><AppIcon name="play" :size="13" />  执行</n-button>
+      <n-button v-if="!taskInfo || taskInfo.status!=='running'" v-perm="'dag.execute'" class="cta" size="tiny" type="primary" @click="doExecute"><AppIcon name="play" :size="13" />  执行</n-button>
       <n-button size="small" @click="goLogs"><AppIcon name="file-text" :size="13" />  日志</n-button>
     </div>
   </div>

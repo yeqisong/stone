@@ -19,6 +19,9 @@ export const useAuthStore = defineStore('auth', () => {
   const permissions = ref(readJSON('auth_permissions', []))
   const permVersion = ref(Number(localStorage.getItem('auth_perm_version') || 0))
   const mustChangePassword = ref(localStorage.getItem('auth_must_change') === '1')
+  const supportMode = ref(false)
+  const supportTargetId = ref(null)
+  const supportTargetName = ref('')
   const permissionSet = computed(() => new Set(permissions.value || []))
   const username = computed(() => user.value?.username || localStorage.getItem('username') || '')
   const isLoggedIn = computed(() => !!token.value)
@@ -45,27 +48,27 @@ export const useAuthStore = defineStore('auth', () => {
     _persist()
   }
 
-  function setAuth(data) {
-    setToken(data.token)
-    if (data.user) user.value = data.user
-    else if (data.username) user.value = { username: data.username }
-    roles.value = data.roles || []
-    permissions.value = data.permissions || []
-    permVersion.value = Number(data.perm_version || 0)
-    mustChangePassword.value = !!data.must_change_password
-    _persist()
-  }
-
-  async function refreshMe() {
-    const r = await axios.get('/api/me')
-    const d = r.data || {}
+  function _apply(d) {
     if (d.user) user.value = d.user
     roles.value = d.roles || []
     permissions.value = d.permissions || []
     permVersion.value = Number(d.perm_version || 0)
     mustChangePassword.value = !!d.must_change_password
+    supportMode.value = !!d.support_mode
+    supportTargetId.value = d.support_target_id || null
+    supportTargetName.value = d.support_target_name || ''
     _persist()
-    return d
+  }
+
+  function setAuth(data) {
+    setToken(data.token)
+    _apply(data)
+  }
+
+  async function refreshMe() {
+    const r = await axios.get('/api/me')
+    _apply(r.data || {})
+    return r.data || {}
   }
 
   function can(code) {
@@ -85,6 +88,10 @@ export const useAuthStore = defineStore('auth', () => {
     permissions.value = []
     permVersion.value = 0
     mustChangePassword.value = false
+    supportMode.value = false
+    supportTargetId.value = null
+    supportTargetName.value = ''
+    localStorage.removeItem('support_token')
     localStorage.removeItem('token')
     localStorage.removeItem('username')
     localStorage.removeItem('auth_user')
@@ -98,6 +105,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     token, user, roles, permissions, permVersion, mustChangePassword,
+    supportMode, supportTargetId, supportTargetName,
     username, isLoggedIn, isAdmin, permissionSet,
     setToken, setUser, setAuth, refreshMe, can, canAny, logout,
   }

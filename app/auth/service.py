@@ -40,6 +40,7 @@ class Principal:
     feishu_open_id: str | None = None
     support_session_id: int | None = None
     support_target_id: int | None = None
+    support_target_name: str = ""
 
     @property
     def support_mode(self) -> bool:
@@ -219,12 +220,13 @@ def load_principal(
             if not sess:
                 return None
             target_ok = db.execute(text(
-                "SELECT 1 FROM users WHERE id = :tid AND status = 'active'"
+                "SELECT username FROM users WHERE id = :tid AND status = 'active'"
             ), {"tid": sess[1]}).fetchone()
             if not target_ok:
                 return None
             principal.support_session_id = int(sess[0])
             principal.support_target_id = int(sess[1])
+            principal.support_target_name = target_ok[0] or ""
             db.execute(text("""
                 UPDATE support_sessions
                 SET used_at = COALESCE(used_at, CURRENT_TIMESTAMP),
@@ -307,6 +309,7 @@ def principal_payload(principal: Principal) -> dict:
         "must_change_password": principal.must_change_password,
         "support_mode": principal.support_mode,
         "support_target_id": principal.support_target_id,
+        "support_target_name": principal.support_target_name,
     }
 
 

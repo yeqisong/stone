@@ -8,8 +8,8 @@
     </n-button-group>
     <StockSuggestInput v-model:value="kw" size="tiny" width="180px" placeholder="搜索代码或名称..." @select="onSuggestPick" @enter="doSearch" />
     <n-button class="cta" type="primary" size="tiny" :loading="loading" @click="doSearch">搜索</n-button>
-    <n-button size="tiny" :type="radarMode?'primary':'default'" @click="toggleRadar"><AppIcon name="activity" :size="13" />  盘中雷达</n-button>
-    <n-button size="tiny" @click="openBuyCheck()"><AppIcon name="target" :size="13" />  买点检查</n-button>
+    <n-button v-perm="'research.radar.view'" size="tiny" :type="radarMode?'primary':'default'" @click="toggleRadar"><AppIcon name="activity" :size="13" />  盘中雷达</n-button>
+    <n-button v-perm="'research.radar.view'" size="tiny" @click="openBuyCheck()"><AppIcon name="target" :size="13" />  买点检查</n-button>
   </n-space>
 
   <template v-if="radarMode">

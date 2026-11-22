@@ -21,7 +21,7 @@
     </div>
     <div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center">
       <n-button size="small" @click="refresh">刷新状态</n-button>
-      <n-button size="small" type="error" @click="stopTrain" :loading="stopping">停止训练</n-button>
+      <n-button v-perm="'model.train'" size="small" type="error" @click="stopTrain" :loading="stopping">停止训练</n-button>
     </div>
   </div>
   <div v-else-if="version.status==='PENDING'||version.status==='ACTIVE'" style="display:flex;gap:16px;flex-wrap:wrap">

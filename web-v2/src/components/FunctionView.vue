@@ -3,7 +3,7 @@
   <div class="no-shrink" style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px">
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openFields">字段注册表</n-button>
-      <n-button type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
+      <n-button v-perm="'function.edit'" type="primary" size="small" @click="openCreate">+ 新增函数</n-button>
     </div>
   </div>
 
@@ -29,7 +29,7 @@
           <n-select v-model:value="form.category" :options="catOpts" placeholder="分类" />
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
             <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)">函数定义（Python def，第一个参数必须是 df）</div>
-            <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size: var(--text-meta)"><AppIcon name="a" :size="13" />  AI 生成</n-button>
+            <n-button v-perm="'function.ai_chat'" size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size: var(--text-meta)"><AppIcon name="a" :size="13" />  AI 生成</n-button>
           </div>
           <MonacoEditor v-model="form.source_code" @update:modelValue="parseParams" />
           <!-- 动态参数表 -->
@@ -101,8 +101,8 @@
     <n-space vertical>
       <div style="font-size:12px;color:var(--c-text-dim)">对函数进行沙箱测试，检验语法、安全性和性能。</div>
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-        <n-button type="primary" size="small" @click="doTestRun" :loading="testRunning">执行测试</n-button>
-        <n-button size="small" :disabled="!editId" :title="editId ? '' : '请先保存草稿'" @click="publishFunc" :loading="publishing">保存并发布</n-button>
+        <n-button v-perm="'function.test'" type="primary" size="small" @click="doTestRun" :loading="testRunning">执行测试</n-button>
+        <n-button v-perm="'function.edit'" size="small" :disabled="!editId" :title="editId ? '' : '请先保存草稿'" @click="publishFunc" :loading="publishing">保存并发布</n-button>
       </div>
       <div v-if="testResult" style="margin-top:8px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
@@ -134,13 +134,13 @@
       <div v-if="aiResult" style="margin-top:8px">
         <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size: var(--text-meta);white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ aiResult }}</div>
-        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入编辑器</n-button>
+        <n-button v-perm="'function.ai_chat'" size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入编辑器</n-button>
       </div>
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showAiPrompt = false">取消</n-button>
-        <n-button type="primary" @click="callAiGenerate" :loading="aiLoading">生成</n-button>
+        <n-button v-perm="'function.ai_chat'" type="primary" @click="callAiGenerate" :loading="aiLoading">生成</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -225,6 +225,7 @@ import AppIcon from './AppIcon.vue'
 import ListPagination from './ListPagination.vue'
 import { ref, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
 import { useNavStore } from '../stores/nav'
+import { useAuthStore } from '../stores/auth'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NEmpty, NPagination, useMessage, useDialog } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import axios from 'axios'
@@ -328,7 +329,7 @@ const columns = [
   {
     title:'', key:'actions', width:80, fixed:'right',
     render(r) {
-      if (r.is_builtin) return ''
+      if (r.is_builtin || !auth.can('function.edit')) return ''
       return h('div', { style:'display:flex;gap:8px;align-items:center' }, [
         h('span', { 
           style:'cursor:pointer;color:var(--c-text-dim);font-size:14px',
@@ -706,6 +707,7 @@ function doRollback(v) {
 }
 
 const nav = useNavStore()
+const auth = useAuthStore()
 function onPopstate() {
   // 组件可能已卸载（v-if 切换）：非本页时不响应，避免用本页 URL 覆盖地址栏
   if (nav.tab !== 'f') return

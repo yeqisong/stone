@@ -3,8 +3,8 @@
   <div class="no-shrink" style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px">
     <div style="display:flex;gap:6px">
       <n-button size="small" quaternary @click="openDepGraph"><AppIcon name="link" :size="13" />  依赖图</n-button>
-      <n-button size="small" quaternary @click="showDedup = true"><AppIcon name="compass" :size="13" />  去冗推荐</n-button>
-      <n-button type="primary" size="small" @click="openCreate">+ 新增特征</n-button>
+      <n-button v-perm="'feature.compute'" size="small" quaternary @click="showDedup = true"><AppIcon name="compass" :size="13" />  去冗推荐</n-button>
+      <n-button v-perm="'feature.edit'" type="primary" size="small" @click="openCreate">+ 新增特征</n-button>
     </div>
   </div>
 
@@ -168,7 +168,7 @@
         <span v-if="detailItem?.description" style="font-size: var(--text-meta);color:var(--c-text-dim)">{{ detailItem.description }}</span>
         <div style="display:flex;gap:8px">
           <n-button size="small" @click="showDetail=false">关闭</n-button>
-          <n-button v-if="detailItem" size="small" type="primary" @click="showDetail=false; openEdit(detailItem)"><AppIcon name="edit" :size="13" />  编辑</n-button>
+          <n-button v-if="detailItem" v-perm="'feature.edit'" size="small" type="primary" @click="showDetail=false; openEdit(detailItem)"><AppIcon name="edit" :size="13" />  编辑</n-button>
         </div>
       </n-space>
     </template>
@@ -214,7 +214,7 @@
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showCompute=false">取消</n-button>
-        <n-button type="primary" @click="doCompute" :loading="computeSubmitting" :disabled="!!computeProgress">开始补数</n-button>
+        <n-button v-perm="'feature.compute'" type="primary" @click="doCompute" :loading="computeSubmitting" :disabled="!!computeProgress">开始补数</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -231,7 +231,7 @@
         <n-select v-model:value="dedupHorizon" :options="[1,5,10,20].map(h=>({label:h+'日前瞻',value:h}))" size="small" style="width:110px" />
         <span style="font-size: var(--text-meta);color:var(--c-text-dim)">近 3 年，≤120 个抽样截面，相关 &gt; 0.7 视为冗余，|ICIR| ≥ 0.10 才推荐</span>
         <div style="flex:1" />
-        <n-button size="small" type="primary" :loading="dedupLoading" @click="loadDedup">计算</n-button>
+        <n-button v-perm="'feature.compute'" size="small" type="primary" :loading="dedupLoading" @click="loadDedup">计算</n-button>
       </div>
       <n-spin v-if="dedupLoading" style="padding:24px" />
       <template v-if="dedup">
@@ -277,11 +277,13 @@ import { chartColors as T } from '../utils/chart'
 import { NButton, NDataTable, NModal, NSpace, NInput, NSelect, NTag, NSwitch, NSpin, NPagination, NDatePicker, NCheckbox, NProgress, NEmpty, useMessage } from 'naive-ui'
 import MonacoEditor from './MonacoEditor.vue'
 import { useNavStore } from '../stores/nav'
+import { useAuthStore } from '../stores/auth'
 import * as echarts from 'echarts'
 import axios from 'axios'
 import { addWsListener } from '../utils/ws'
 
 const API = window.location.origin
+const auth = useAuthStore()
 const message = useMessage()
 const loading = ref(false)
 const items = ref([])
@@ -772,10 +774,14 @@ const columns = [
   { title:'最近计算', key:'latest_computed_date', width:90, render:(row) => row.latest_computed_date || '—' },
   { title:'依赖数', key:'depends_on', width:60, align:'center', render:(row) => (row.depends_on?.length || 0) },
   { title:'操作', key:'actions', width:110, fixed:'right', render(row) {
-    return h('div', { style:{display:'flex',gap:'2px'} }, [
-      h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openEdit(row) }, () => '编辑'),
-      h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openCompute(row) }, () => h(AppIcon, { name: 'download', size: 12 })),
-    ])
+    const acts = []
+    if (auth.can('feature.edit')) {
+      acts.push(h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openEdit(row) }, () => '编辑'))
+    }
+    if (auth.can('feature.compute')) {
+      acts.push(h(NButton, { size:'tiny', quaternary:true, style:'fontSize:11px', onClick:() => openCompute(row) }, () => h(AppIcon, { name: 'download', size: 12 })))
+    }
+    return h('div', { style:{display:'flex',gap:'2px'} }, acts)
   }},
 ]
 

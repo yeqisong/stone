@@ -10,13 +10,13 @@
       </template>
     </div>
     <div style="display:flex;gap:6px">
-      <n-button v-if="editMode && flowStatus==='draft'" size="small" type="primary" @click="doPublish" :loading="saving">发布</n-button>
-      <n-button v-if="editMode && flowStatus==='published'" size="small" type="warning" @click="doUnpublish" :loading="saving">下线</n-button>
-      <n-button v-if="editMode && flowStatus==='published'" size="small" type="primary" @click="showExecModal=true">执行</n-button>
-      <n-button v-if="editMode" size="small" @click="autoLayout">自动布局</n-button>
-      <n-button v-if="editMode" size="small" @click="doValidate" :loading="saving">校验</n-button>
-      <n-button v-if="editMode" size="small" type="primary" @click="doSave" :loading="saving">保存</n-button>
-      <n-button v-if="!editMode" size="small" type="primary" @click="nav.showFlowEditor('new')">+ 新建</n-button>
+      <n-button v-if="editMode && flowStatus==='draft'" v-perm="'dag.publish'" size="small" type="primary" @click="doPublish" :loading="saving">发布</n-button>
+      <n-button v-if="editMode && flowStatus==='published'" v-perm="'dag.publish'" size="small" type="warning" @click="doUnpublish" :loading="saving">下线</n-button>
+      <n-button v-if="editMode && flowStatus==='published'" v-perm="'dag.execute'" size="small" type="primary" @click="showExecModal=true">执行</n-button>
+      <n-button v-if="editMode" v-perm="'dag.edit'" size="small" @click="autoLayout">自动布局</n-button>
+      <n-button v-if="editMode" v-perm="'dag.edit'" size="small" @click="doValidate" :loading="saving">校验</n-button>
+      <n-button v-if="editMode" v-perm="'dag.edit'" size="small" type="primary" @click="doSave" :loading="saving">保存</n-button>
+      <n-button v-if="!editMode" v-perm="'dag.edit'" size="small" type="primary" @click="nav.showFlowEditor('new')">+ 新建</n-button>
     </div>
   </div>
 
@@ -141,7 +141,7 @@
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showExecModal=false">取消</n-button>
-        <n-button type="primary" @click="doExecute" :loading="execLoading">执行</n-button>
+        <n-button v-perm="'dag.execute'" type="primary" @click="doExecute" :loading="execLoading">执行</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -179,9 +179,11 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import axios from 'axios'
 import { useNavStore } from '../stores/nav'
+import { useAuthStore } from '../stores/auth'
 import DagNode from './DagNode.vue'
 import { addWsListener } from '../utils/ws'
 const nav = useNavStore()
+const auth = useAuthStore()
 const message = useMessage()
 const dialog = useDialog()
 const customNodeTypes = markRaw({ 'dag-node': DagNode })
@@ -325,14 +327,16 @@ const flowCols = [
   { title:'执行', key:'_task', width:60, render(r){ const ts = taskStatuses.value[r.id]; if (!ts || ts.status!=='running') return '空闲'; return h('span',{style:{color:'var(--c-warning)',fontSize:'var(--text-meta)'}},'执行中') } },
   { title:'操作', key:'actions', width:240, fixed:'right', render(r){
     const hasRun = taskStatuses.value[r.id] && taskStatuses.value[r.id].status === 'running'
-    return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},[
-      h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'编辑'),
-      r.status==='draft' ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doPublishList(r.id)},()=>'发布') : null,
-      r.status==='published' ? h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'下线') : null,
-      r.status==='published' && !hasRun ? h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'执行') : null,
-      h(NButton,{size:'tiny',quaternary:true,onClick:()=>{ nav.flowId = r.id; nav.tab = 'r' }},()=>'查看'),
-      h(NButton,{size:'tiny',quaternary:true,onClick:()=>showFlowLog(r.id, r.flow_name)},()=>'日志'),
-    ])
+    const acts = []
+    if (auth.can('dag.edit')) acts.push(h(NButton,{size:'tiny',quaternary:true,onClick:()=>nav.showFlowEditor(r.id)},()=>'编辑'))
+    if (auth.can('dag.publish') && r.status==='draft') acts.push(h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doPublishList(r.id)},()=>'发布'))
+    if (auth.can('dag.publish') && r.status==='published') acts.push(h(NButton,{size:'tiny',quaternary:true,type:'warning',onClick:()=>doUnpublishList(r.id)},()=>'下线'))
+    if (auth.can('dag.execute') && r.status==='published' && !hasRun) acts.push(h(NButton,{size:'tiny',quaternary:true,type:'primary',onClick:()=>doExecuteQuick(r.id, r.flow_name)},()=>'执行'))
+    if (auth.can('dag.view')) {
+      acts.push(h(NButton,{size:'tiny',quaternary:true,onClick:()=>{ nav.flowId = r.id; nav.tab = 'r' }},()=>'查看'))
+      acts.push(h(NButton,{size:'tiny',quaternary:true,onClick:()=>showFlowLog(r.id, r.flow_name)},()=>'日志'))
+    }
+    return h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},acts)
   }},
 ]
 

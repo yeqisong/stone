@@ -105,12 +105,12 @@
     </div>
 
     <div class="tg-actions">
-      <n-button size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
-      <n-button size="small" @click="openCheck('buy')">记录今日操作</n-button>
-      <n-button size="small" quaternary @click="showReduction = true">减仓清单</n-button>
-      <n-button size="small" quaternary @click="openJournal">今日计划/复盘</n-button>
-      <n-button size="small" quaternary @click="openCash">修正现金</n-button>
-      <n-button size="small" quaternary @click="emit('import')">导入交割单</n-button>
+      <n-button v-perm="'portfolio.trades.intraday'" size="small" type="primary" @click="openCheck('buy')"><AppIcon name="shield" :size="12" />  交易前检查</n-button>
+      <n-button v-perm="'portfolio.trades.intraday'" size="small" @click="openCheck('buy')">记录今日操作</n-button>
+      <n-button v-perm="'portfolio.trades.intraday'" size="small" quaternary @click="showReduction = true">减仓清单</n-button>
+      <n-button v-perm="'portfolio.trades.journal.edit'" size="small" quaternary @click="openJournal">今日计划/复盘</n-button>
+      <n-button v-perm="'portfolio.trades.intraday'" size="small" quaternary @click="openCash">修正现金</n-button>
+      <n-button v-perm="'portfolio.trades.import'" size="small" quaternary @click="emit('import')">导入交割单</n-button>
     </div>
 
     <div v-if="!collapsed" class="tg-today">
