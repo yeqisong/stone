@@ -46,6 +46,7 @@ export const useNavStore = defineStore('nav', () => {
     if (path === '/admin/roles') { tab.value = 'z'; return }
     if (path === '/admin/audit') { tab.value = 'h'; return }
     if (path === '/admin/settings') { tab.value = 'o'; return }
+    if (path === '/support') { tab.value = 'j'; return }
     if (path.startsWith('/models')) {
       const parts = path.split('/')
       modelEntity.value = parts[2] || 'stock'
@@ -60,7 +61,7 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
-    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b','/k':'k','/admin/users':'y','/admin/roles':'z','/admin/audit':'h','/admin/settings':'o'}
+    const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b','/k':'k','/admin/users':'y','/admin/roles':'z','/admin/audit':'h','/admin/settings':'o','/support':'j'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
   }
@@ -99,6 +100,7 @@ export const useNavStore = defineStore('nav', () => {
         target = '/stocks' + qm
         break
       }
+      case 'j': target = '/support'; break
       case 'x': {
         target = '/status'
         const sq = []

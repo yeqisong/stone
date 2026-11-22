@@ -33,7 +33,7 @@
   <div>
     <div style="font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:6px"><AppIcon name="w" :size="13" />  数据明细
       <span v-if="statsTime" style="font-size: var(--text-meta);color:var(--c-text-faint);margin-left:6px">统计于 {{statsTime}}</span>
-      <n-button size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
+      <n-button v-perm="'system.stats.refresh'" size="tiny" text style="margin-left:4px" @click="refreshStats" :loading="statsLoading"></n-button>
     </div>
     <div class="sv-dt-grid">
       <div v-for="dt in dataTables" :key="dt.label" class="sv-dt-card" style="display:flex;align-items:baseline;justify-content:space-between;padding:4px 10px;background:var(--c-card-bg);border-radius:6px;border:1px solid var(--c-card-bg-hover);cursor:pointer" :title="dt.detail ? '点击查看详情' : ''" @click="goStockFundList(dt)">
@@ -156,10 +156,10 @@
   <div style="margin-top:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <span style="font-size:14px;font-weight:600;color:var(--c-text)"><AppIcon name="download" :size="13" />  历史补数</span>
-      <n-button size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()"><AppIcon name="file-text" :size="13" />  日志</n-button>
+      <n-button v-perm="'system.backfill.view'" size="tiny" @click="showBfLogModal = true; bfLogPage = 1; loadBfLogs()"><AppIcon name="file-text" :size="13" />  日志</n-button>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-      <n-button v-for="btn in backfillBtns" :key="btn.type" size="small" :data-bf="btn.type" @click="openBackfill(btn.type)">
+      <n-button v-for="btn in backfillBtns" :key="btn.type" v-perm="'system.backfill.execute'" size="small" :data-bf="btn.type" @click="openBackfill(btn.type)">
         {{ btn.icon }} {{ btn.label }}
       </n-button>
     </div>

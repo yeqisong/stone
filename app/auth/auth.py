@@ -93,11 +93,16 @@ def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
     return principal
 
 
-def authorize_request(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> Principal | None:
-    """应用级依赖：public 放行；其余按路由注册表校验权限。"""
+def _credentials_from_request(request: Request) -> HTTPAuthorizationCredentials | None:
+    """手动解析 Authorization；供 HTTP 中间件使用（WebSocket 不走这里）。"""
+    raw = request.headers.get("authorization", "")
+    if raw.lower().startswith("bearer "):
+        return HTTPAuthorizationCredentials(scheme="Bearer", credentials=raw[7:].strip())
+    return None
+
+
+def authorize_http_request(request: Request) -> Principal | None:
+    """HTTP 请求级授权核心：public 放行；其余按路由注册表校验权限。"""
     path = request.url.path
     # 静态文件/文档/健康检查等非 /api 路径不参与 RBAC
     if not (path.startswith("/api") or path in ("/health", "/webhook/feishu")):
@@ -108,7 +113,7 @@ def authorize_request(
     if rule.public:
         return None
 
-    principal = _extract_principal(request, credentials)
+    principal = _extract_principal(request, _credentials_from_request(request))
     if principal.must_change_password and request.url.path not in CHANGE_PASSWORD_ALLOWED:
         raise HTTPException(status_code=403, detail="请先修改初始密码")
 
@@ -123,6 +128,14 @@ def authorize_request(
 
     request.state.principal = principal
     return principal
+
+
+def authorize_request(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> Principal | None:
+    """兼容旧依赖用法；应用入口已改为 HTTP 中间件（避免命中 WebSocket）。"""
+    return authorize_http_request(request)
 
 
 def create_token(username_or_id, **kwargs) -> str:

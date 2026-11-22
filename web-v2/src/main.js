@@ -9,6 +9,8 @@ import axios from 'axios'
 axios.interceptors.request.use(config => {
   const t = localStorage.getItem('token')
   if (t) config.headers.Authorization = 'Bearer ' + t
+  const st = localStorage.getItem('support_token')
+  if (st) config.headers['X-Support-Session'] = st
   return config
 })
 
@@ -32,7 +34,20 @@ axios.interceptors.response.use(
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
+import { useAuthStore } from './stores/auth'
 
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
+
+// v-perm="'model.train'"：无权限时隐藏元素；权限变化（登录/角色切换）时自动恢复
+const auth = useAuthStore(pinia)
+function applyPerm(el, binding) {
+  el.style.display = auth.can(binding.value) ? '' : 'none'
+}
+app.directive('perm', {
+  mounted(el, binding) { applyPerm(el, binding) },
+  updated(el, binding) { applyPerm(el, binding) },
+})
+
 app.mount('#app')

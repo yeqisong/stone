@@ -66,6 +66,7 @@
 
         <!-- 主内容 -->
         <div class="main-content" :class="{ narrow: isNarrow }">
+          <template v-if="canAccessTab(nav.tab)">
           <div v-if="pageMeta" class="page-titlebar">
             <h1>{{ pageMeta.title }}</h1>
             <span>{{ pageMeta.sub }}</span>
@@ -95,6 +96,8 @@
           <div v-if="nav.tab==='z'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminRolesView /></div>
           <div v-if="nav.tab==='h'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminAuditView /></div>
           <div v-if="nav.tab==='o'" style="flex:1;min-height:0;display:flex;flex-direction:column"><AdminSettingsView /></div>
+          <div v-if="nav.tab==='j'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SupportView /></div>
+          </template>
         </div>
 
         <!-- H5 底部 TabBar：5 核心 + 管理 入口 -->
@@ -268,6 +271,7 @@ import AdminUsersView from './components/AdminUsersView.vue'
 import AdminRolesView from './components/AdminRolesView.vue'
 import AdminAuditView from './components/AdminAuditView.vue'
 import AdminSettingsView from './components/AdminSettingsView.vue'
+import SupportView from './components/SupportView.vue'
 
 // ── 响应式视口 + 导航定义 ──
 const { isNarrow } = useViewport()
@@ -314,6 +318,7 @@ const allBackendTabs = [
   { key: 'z', label: '角色权限', icon: 'shield', perm: 'system.role.manage' },
   { key: 'h', label: '审计', icon: 'file-text', perm: 'system.audit.view' },
   { key: 'o', label: '系统设置', icon: 'sliders', perm: 'system.settings.view' },
+  { key: 'j', label: '支持', icon: 'shield', perm: 'admin.support.view' },
 ]
 const primaryTabs = computed(() => allPrimaryTabs.filter(t => auth.can(t.perm)))
 const adminTabs = computed(() => allAdminTabs.filter(t => auth.can(t.perm)))
@@ -330,7 +335,7 @@ function firstAllowedTab() {
 }
 watch([() => nav.tab, () => auth.permissions, () => auth.roles], () => {
   if (auth.token && !canAccessTab(nav.tab)) nav.switchTab(firstAllowedTab())
-}, { deep: false })
+}, { deep: false, flush: 'sync' })
 
 // 全局主题：品牌红 = 上涨红；绿色只表示下跌
 const themeOverrides = computed(() => {
@@ -476,6 +481,7 @@ const pageMeta = computed(() => ({
   z: { title: '角色权限', sub: '角色模板与功能节点' },
   h: { title: '审计', sub: '操作与权限变更留痕' },
   o: { title: '系统设置', sub: '全局策略、LLM 与配额' },
+  j: { title: '支持', sub: '跨用户只读支持会话' },
 }[nav.tab] || null))
 
 const titleMap = {
@@ -497,6 +503,7 @@ const titleMap = {
   y: '用户管理 - K道',
   z: '角色权限 - K道',
   h: '审计 - K道',
+  j: '支持模式 - K道',
   o: '系统设置 - K道',
 }
 

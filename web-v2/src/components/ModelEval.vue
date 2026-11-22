@@ -167,7 +167,7 @@
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"><AppIcon name="search" :size="13" />  策略参数扫描</div>
-        <n-button size="tiny" @click="showScanModal=true" :disabled="scanRunning">开始扫描</n-button>
+        <n-button v-perm="'model.evaluate'" size="tiny" @click="showScanModal=true" :disabled="scanRunning">开始扫描</n-button>
       </div>
       <div v-if="scanTask" style="margin-top:8px;font-size: var(--text-meta);color:var(--c-text-dim)">
         {{ scanTask.status==='running' ? `扫描中 ${scanTask.completed}/${scanTask.total_combos}` : scanTask.status==='completed' ? `<AppIcon name="check" :size="13" />  完成 — 最优 sharpe=${scanTask.best_so_far?.sharpe?.toFixed(2) || '?'}` : '' }}
@@ -185,7 +185,7 @@
     <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="font-size:12px;font-weight:600;color:var(--c-text-dim)"><AppIcon name="bar-chart-2" :size="13" />  归因分析（基准锚定法）</div>
-        <n-button size="tiny" @click="loadAttribution" :loading="attrLoading"><AppIcon name="refresh" :size="13" />  重新分析</n-button>
+        <n-button v-perm="'model.evaluate'" size="tiny" @click="loadAttribution" :loading="attrLoading"><AppIcon name="refresh" :size="13" />  重新分析</n-button>
       </div>
       <div v-if="attrLoading && !attribution" style="font-size: var(--text-meta);color:var(--c-text-dim);padding:6px 0">分析中（宽表 + 三基线回测，约 1 分钟）…</div>
       <div v-if="attribution?.matrix" style="display:flex;gap:8px;flex-wrap:wrap">
@@ -224,7 +224,7 @@
         <div style="display:flex;gap:6px;align-items:center">
           <n-select v-model:value="permN" size="tiny" style="width:84px"
             :options="[10,20,50].map(n=>({label:n+' 次',value:n}))" />
-          <n-button size="tiny" @click="startPerm" :loading="permRunning">运行</n-button>
+          <n-button v-perm="'model.evaluate'" size="tiny" @click="startPerm" :loading="permRunning">运行</n-button>
         </div>
       </div>
       <div v-if="permTask?.status==='running'" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:8px">
@@ -265,7 +265,7 @@
         <div style="display:flex;gap:6px;align-items:center">
           <n-select v-model:value="wfWindows" size="tiny" style="width:92px"
             :options="[2,3,4,6].map(n=>({label:n+' 窗口',value:n}))" />
-          <n-button size="tiny" @click="startWF" :loading="wfRunning">运行</n-button>
+          <n-button v-perm="'model.evaluate'" size="tiny" @click="startWF" :loading="wfRunning">运行</n-button>
         </div>
       </div>
       <div v-if="wfTask?.status==='running'" style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:8px">
@@ -331,13 +331,13 @@
         </div>
         <div v-if="scanTask?.status==='completed' && scanTask.best_so_far" style="margin-top:8px;font-size: var(--text-meta);color:var(--c-down)">
           <AppIcon name="check" :size="13" />  最优[{{ scanTask.best_so_far.engine || 'v1' }}]：止盈{{ (scanTask.best_so_far.take_profit*100).toFixed(0) }}% 止损{{ (scanTask.best_so_far.stop_loss*100).toFixed(0) }}%<template v-if="scanTask.best_so_far.topk"> topk{{ scanTask.best_so_far.topk }}，换血{{ scanTask.best_so_far.n_drop }}</template> 夏普{{ scanTask.best_so_far.sharpe?.toFixed(2) }}
-          <n-button class="cta" size="tiny" type="primary" style="margin-left:8px" @click="applyScan">应用</n-button>
+          <n-button v-perm="'model.scan.apply'" class="cta" size="tiny" type="primary" style="margin-left:8px" @click="applyScan">应用</n-button>
         </div>
       </n-space>
       <template #footer>
         <n-space justify="flex-end">
           <n-button @click="showScanModal=false">取消</n-button>
-          <n-button type="primary" @click="startScan" :loading="scanRunning">开始扫描</n-button>
+          <n-button v-perm="'model.evaluate'" type="primary" @click="startScan" :loading="scanRunning">开始扫描</n-button>
         </n-space>
       </template>
     </n-modal>

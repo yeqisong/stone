@@ -8,7 +8,7 @@
         <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:13px;font-weight:600;color:var(--c-text)">模型版本</span>
           <div style="display:flex;gap:4px">
-            <n-button size="tiny" type="primary" ghost @click="showCreate=true">+ 创建</n-button>
+            <n-button v-perm="'model.config.edit'" size="tiny" type="primary" ghost @click="showCreate=true">+ 创建</n-button>
             <n-button v-if="isMobile" size="tiny" quaternary @click="showSidebar=false" style="padding:0 4px" title="收起列表">
             <svg viewBox="0 0 1024 1024" width="18" height="18" aria-hidden="true" style="fill:var(--c-text-dim)"><path d="M130.9 529.5l149.2 130.5a8.5 8.5 0 0 0 14.1-6.4V392.5a8.5 8.5 0 0 0-14.1-6.4L130.9 516.6a8.5 8.5 0 0 0 0 12.8z"/><path d="M128 213.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M128 725.3h682.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H128q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/><path d="M384 469.3h426.7q42.7 0 42.7 42.7v0q0 42.7-42.7 42.7H384q-42.7 0-42.7-42.7v0q0-42.7 42.7-42.7z"/></svg>
           </n-button>
@@ -31,11 +31,11 @@
               </div>
               <div v-if="!store.isMock && hoveredVersion === v.version" style="display:flex;gap:2px;flex-shrink:0">
                 <!-- 主备制：备模型 hover 出【切换】；主/备 hover 出【归档】；其余状态保留删除 -->
-                <n-button v-if="v.status==='ACTIVE' && v.role==='backup'" text size="tiny" type="primary" style="font-size:12px;padding:0 4px"
+                <n-button v-if="v.status==='ACTIVE' && v.role==='backup'" v-perm="'model.approve'" text size="tiny" type="primary" style="font-size:12px;padding:0 4px"
                   title="切换为主模型" @click.stop="handlePromote(v)"><AppIcon name="zap" :size="13" />  切换</n-button>
-                <n-button v-if="v.status==='ACTIVE'" text size="tiny" type="warning" style="font-size:12px;padding:0 4px"
+                <n-button v-if="v.status==='ACTIVE'" v-perm="'model.archive'" text size="tiny" type="warning" style="font-size:12px;padding:0 4px"
                   title="归档下线模型" @click.stop="handleArchive(v)"><AppIcon name="download" :size="13" />  归档</n-button>
-                <n-button v-if="v.status!=='ACTIVE'" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="trash" :size="13" /> </n-button>
+                <n-button v-if="v.status!=='ACTIVE'" v-perm="'model.archive'" text size="tiny" type="error" style="font-size:12px;padding:0 4px" @click.stop="handleDeleteClick(v)" title="删除模型"><AppIcon name="trash" :size="13" /> </n-button>
               </div>
             </div>
             <div style="font-size: var(--text-meta);color:var(--c-text-dim);margin-top:4px">{{v.model_name}}</div>
@@ -74,7 +74,7 @@
 
           <div v-if="store.detailTab==='basic'" style="display:flex;flex-direction:column;gap:12px">
             <div v-if="store.selected?.status==='DRAFT'" style="display:flex;gap:8px;align-items:center">
-              <n-button size="tiny" @click="startEditConfig"><AppIcon name="edit" :size="13" />  编辑配置</n-button>
+              <n-button v-perm="'model.config.edit'" size="tiny" @click="startEditConfig"><AppIcon name="edit" :size="13" />  编辑配置</n-button>
             </div>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
               <div v-for="m in basicMetrics" :key="m.label" style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 12px;min-width:80px;text-align:center">
@@ -92,15 +92,15 @@
           </div>
           <div v-else-if="store.detailTab==='train'">
             <div v-if="store.selected.status==='DRAFT' || store.selected.status==='REJECTED'" style="margin-bottom:12px">
-              <n-button type="primary" @click="startTrain" :loading="trainingLoading">{{ store.selected.status==='REJECTED' ? '重新训练' : '开始训练' }}</n-button>
+              <n-button v-perm="'model.train'" type="primary" @click="startTrain" :loading="trainingLoading">{{ store.selected.status==='REJECTED' ? '重新训练' : '开始训练' }}</n-button>
             </div>
             <ModelTraining :version="store.selected" />
           </div>
           <div v-else-if="store.detailTab==='eval'">
             <div v-if="store.selected.status==='PENDING'" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
-              <n-button type="primary" @click="approveModel('primary')"><AppIcon name="zap" :size="13" />  发布为主模型</n-button>
-              <n-button type="info" secondary @click="approveModel('backup')">发布为备模型</n-button>
-              <n-button type="error" @click="rejectModel">拒绝</n-button>
+              <n-button v-perm="'model.approve'" type="primary" @click="approveModel('primary')"><AppIcon name="zap" :size="13" />  发布为主模型</n-button>
+              <n-button v-perm="'model.approve'" type="info" secondary @click="approveModel('backup')">发布为备模型</n-button>
+              <n-button v-perm="'model.approve'" type="error" @click="rejectModel">拒绝</n-button>
             </div>
             <ModelEval :version="store.selected" />
           </div>
@@ -108,7 +108,7 @@
           <div v-else-if="store.detailTab==='indicators'" style="display:flex;flex-direction:column;gap:8px">
             <div style="display:flex;align-items:center;justify-content:space-between">
               <span style="font-size:12px;color:var(--c-text-dim)">模型使用的特征</span>
-              <n-button size="tiny" @click="loadFeatureCheck" :loading="fcLoading"><AppIcon name="refresh" :size="13" />  预检</n-button>
+              <n-button v-perm="'feature.view'" size="tiny" @click="loadFeatureCheck" :loading="fcLoading"><AppIcon name="refresh" :size="13" />  预检</n-button>
             </div>
             <div v-if="featuresForModel.length" style="display:flex;flex-wrap:wrap;gap:4px">
               <n-tag v-for="f in featuresForModel" :key="f" size="small" type="info" :bordered="false">{{ f }}</n-tag>
@@ -290,11 +290,13 @@ import { NButton, NTag, NSpin, NEmpty, NModal, NSpace, NInput, NInputNumber, NDa
 import { useDialog, useMessage } from 'naive-ui'
 import axios from 'axios'
 import { useModelStore } from '../stores/model'
+import { useAuthStore } from '../stores/auth'
 import { useNavStore } from '../stores/nav'
 import ModelTraining from './ModelTraining.vue'
 import ModelEval from './ModelEval.vue'
 import ModelLive from './ModelLive.vue'
 const store = useModelStore()
+const auth = useAuthStore()
 const nav = useNavStore()
 const dialog = useDialog()
 const message = useMessage()
@@ -381,7 +383,7 @@ function switchEntity(e) {
   nav.modelVersion = ''
   nav.modelTab = ''
   nav.syncHash()
-  loadFeatureOptions()
+  if (auth.can('feature.view')) loadFeatureOptions()
   store.loadVersions(e)
 }
 
@@ -412,7 +414,7 @@ async function loadFeatureOptions() {
     }
   } catch(e) { console.error(e) }
 }
-loadFeatureOptions()
+if (auth.can('feature.view')) loadFeatureOptions()
 function toggleFeature(key) {
   const idx = createForm.feature_names.indexOf(key)
   if (idx >= 0) createForm.feature_names.splice(idx, 1)
@@ -539,13 +541,14 @@ async function doCreate() {
   } finally { creating.value = false }
 }
 
-const tabs = [
+const allTabs = [
   { key:'basic', label:'基本信息' },
   { key:'indicators', label:'特征' },
-  { key:'train', label:'训练' },
+  { key:'train', label:'训练', perm:'model.train' },
   { key:'eval', label:'评估' },
   { key:'live', label:'实盘' },
 ]
+const tabs = computed(() => allTabs.filter(t => !t.perm || auth.can(t.perm)))
 
 const cfg = computed(() => store.selected?.config || {})
 // 配置详情行：全部取自 config 真实出处（risk/signal/regime/成本键），

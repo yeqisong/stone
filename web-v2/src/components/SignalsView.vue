@@ -11,7 +11,7 @@
     </n-button-group>
     <n-select v-if="tab==='list'" v-model:value="sigStatus" :options="sigStatusOptions" size="tiny" style="width:104px"
       @update:value="onStatusChange" />
-    <n-button class="cta" size="tiny" type="primary" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" />  生成</n-button>
+    <n-button v-perm="'model.regenerate'" class="cta" size="tiny" type="primary" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" />  生成</n-button>
   </n-space>
 
   <!-- Tab1: 信号列表（该模型全部信号，按日期倒序分页） -->
@@ -22,7 +22,7 @@
         <AppIcon name="trending-up" :size="40" style="color:var(--c-text-faint)" />
         <h3>暂无信号记录</h3>
         <p>当前筛选条件下没有信号。模型在每个交易日收盘后生成买入信号；如果今天还没生成，可以手动触发一次。</p>
-        <n-button type="primary" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" /> 立即生成</n-button>
+        <n-button v-perm="'model.regenerate'" type="primary" :disabled="!selModel" @click="showGenModal=true"><AppIcon name="zap" :size="13" /> 立即生成</n-button>
       </div>
       <TradeRulesNote :version="selModel" />
       <ListPagination :total="sig.total" :page="sigPage" :page-size="sigPageSize" @change="p=>{sigPage=p; loadSignals()}" />
@@ -76,7 +76,7 @@
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <n-button size="small" @click="showGenModal=false">取消</n-button>
-      <n-button size="small" type="primary" :loading="genLoading" @click="doGenerate">开始重算</n-button>
+      <n-button v-perm="'model.regenerate'" size="small" type="primary" :loading="genLoading" @click="doGenerate">开始重算</n-button>
     </div>
   </n-modal>
 </div>

@@ -56,7 +56,7 @@
         <n-select v-if="modelOptions.length" size="tiny" :options="modelOptions" :value="sessModel"
                   style="width:150px" @update:value="changeModel" />
         <n-button size="tiny" quaternary @click="openSkills"><AppIcon name="compass" :size="12" /> 技能 {{ skills.length }}</n-button>
-        <n-button size="tiny" quaternary title="查看差评反馈" @click="openFeedbackList">
+        <n-button v-perm="'agent.feedback.view'" size="tiny" quaternary title="查看差评反馈" @click="openFeedbackList">
           <AppIcon name="alert" :size="12" /> 反馈
         </n-button>
         <n-button v-if="isNarrow" size="tiny" quaternary @click="newSession"><AppIcon name="plus" :size="12" /></n-button>
@@ -201,10 +201,10 @@
   <n-modal v-model:show="showSkills" preset="card" title="技能（可复用的分析方法）" style="width:780px;max-width:94vw">
     <div class="agent-sk-wrap">
       <div class="agent-sk-list">
-        <n-button class="cta" size="tiny" type="primary" block style="margin-bottom:4px" @click="startNewSkill">
+        <n-button v-perm="'agent.skill.edit'" class="cta" size="tiny" type="primary" block style="margin-bottom:4px" @click="startNewSkill">
           <AppIcon name="plus" :size="12" /> 新建技能
         </n-button>
-        <n-button size="tiny" block style="margin-bottom:6px" @click="startImport">
+        <n-button v-perm="'agent.skill.import'" size="tiny" block style="margin-bottom:6px" @click="startImport">
           <AppIcon name="download" :size="12" /> GitHub 导入
         </n-button>
         <div v-for="s in skills" :key="s.name" class="agent-sess" :class="{ active: skEditing.name === s.name }"
@@ -230,8 +230,8 @@
                  :autosize="{ minRows: 12, maxRows: 20 }" placeholder="Markdown：步骤 / SQL 模板 / 输出格式 / 注意事项"
                  :disabled="skEditing.builtin" class="agent-sk-code" @update:value="markSkillDirty" />
         <div class="agent-sk-actions">
-          <n-button v-if="!skEditing.builtin" size="small" type="primary" :loading="skSaving" @click="saveSkill">保存</n-button>
-          <n-button v-if="!skEditing.builtin && isUserSkill" size="small" type="error" quaternary @click="removeSkill">删除</n-button>
+          <n-button v-if="!skEditing.builtin" v-perm="'agent.skill.edit'" size="small" type="primary" :loading="skSaving" @click="saveSkill">保存</n-button>
+          <n-button v-if="!skEditing.builtin && isUserSkill" v-perm="'agent.skill.edit'" size="small" type="error" quaternary @click="removeSkill">删除</n-button>
           <n-button size="small" quaternary @click="useSkill">在对话中使用</n-button>
           <span class="agent-hint">正文按需读取，不进常驻上下文</span>
         </div>

@@ -177,11 +177,13 @@ import axios from 'axios'
 import * as echarts from 'echarts'
 import { useMarketStore } from '../stores/market'
 import { useNavStore } from '../stores/nav'
+import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { bjDateStr } from '../utils/date'
 
 const store = useMarketStore()
 const navStore = useNavStore()
+const auth = useAuthStore()
 const theme = useThemeStore()
 const emit = defineEmits(['show-detail'])
 const API = window.location.origin
@@ -452,7 +454,7 @@ const paperLive = ref({})  // 纸面组合持仓 {code: {shares, buy_price}}
 
 async function loadHoldings() {
   // 实盘持仓 + 纸面组合（均失败容忍——无持仓/未登录场景静默跳过）
-  try {
+  if (!auth.can('portfolio.position.view')) { holdLive.value = {} } else try {
     const r = await axios.get(API + '/api/portfolio')
     const m = {}
     for (const p of (r.data.positions || [])) {

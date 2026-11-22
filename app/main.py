@@ -32,6 +32,7 @@ from app.api.lineage import router as lineage_router
 from app.api.dag_flows import router as dag_flows_router
 from app.feishu.webhook import router as feishu_router
 from app.auth.auth import (
+    authorize_http_request,
     authorize_request,
     get_current_user,
     get_principal,
@@ -177,8 +178,22 @@ app = FastAPI(
     description="Stock Buy/Sell Point Monitoring System",
     version="1.0.0",
     lifespan=lifespan,
-    dependencies=[Depends(authorize_request)],
 )
+
+
+@app.middleware("http")
+async def _rbac_middleware(request: Request, call_next):
+    """HTTP 请求统一鉴权。
+
+    不能用 app-level dependencies：FastAPI 会把它同样应用到 WebSocket 路由，
+    而 HTTPBearer 依赖在 WS scope 下拿不到 Request，握手直接 500。
+    """
+    from fastapi.responses import JSONResponse
+    try:
+        await asyncio.to_thread(authorize_http_request, request)
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code)
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,

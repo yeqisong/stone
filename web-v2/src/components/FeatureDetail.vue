@@ -8,7 +8,7 @@
       <span style="font-size:17px;font-weight:600;color:var(--c-text)">{{ feat.feature_name }}</span>
       <n-tag :type="statusTypeMap[feat.status]||'default'" size="tiny" :bordered="false">{{ statusMap[feat.status] }}</n-tag>
       <div style="flex:1" />
-      <n-button size="tiny" @click="openEditInline"><AppIcon name="edit" :size="13" />  编辑</n-button>
+      <n-button v-perm="'feature.edit'" size="tiny" @click="openEditInline"><AppIcon name="edit" :size="13" />  编辑</n-button>
     </div>
 
     <!-- 3 Tab 切换 -->
@@ -80,7 +80,7 @@
 
       <n-tab-pane name="diagnosis" tab="数据缺失诊断">
         <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-          <n-button size="tiny" quaternary @click="recomputeStats" :loading="statsLoading"><AppIcon name="refresh" :size="13" />  重新诊断</n-button>
+          <n-button v-perm="'feature.compute'" size="tiny" quaternary @click="recomputeStats" :loading="statsLoading"><AppIcon name="refresh" :size="13" />  重新诊断</n-button>
         </div>
         <div v-if="!feat.total_effective_cells" style="text-align:center;padding:60px 20px;color:var(--c-text-dim)">
           <div style="font-size:14px;margin-bottom:8px"><AppIcon name="inbox" :size="44" />  暂无特征计算数据</div>
@@ -131,10 +131,10 @@
             <n-tag v-if="icDetail?.direction==='-'" size="small" type="warning" :bordered="false">反向因子（取反使用）</n-tag>
             <div style="flex:1" />
             <n-select v-model:value="icHorizon" :options="horizonOptions" size="tiny" style="width:96px" @update:value="loadIcDetail" />
-            <n-button size="tiny" @click="openIcCompute"><AppIcon name="e" :size="13" />  重算…</n-button>
-            <n-button v-if="feat.ic_status!=='included'" class="cta" size="tiny" type="primary" @click="doSetIcStatus('included')"><AppIcon name="check" :size="13" />  入选</n-button>
-            <n-button v-if="feat.ic_status!=='excluded'" size="tiny" type="error" quaternary @click="doSetIcStatus('excluded')"> 剔除</n-button>
-            <n-button v-if="feat.ic_status==='candidate'||feat.ic_status==='excluded'" size="tiny" quaternary @click="doSetIcStatus('candidate')"><AppIcon name="refresh" :size="13" />  候选</n-button>
+            <n-button v-perm="'feature.compute'" size="tiny" @click="openIcCompute"><AppIcon name="e" :size="13" />  重算…</n-button>
+            <n-button v-perm="'feature.edit'" v-if="feat.ic_status!=='included'" class="cta" size="tiny" type="primary" @click="doSetIcStatus('included')"><AppIcon name="check" :size="13" />  入选</n-button>
+            <n-button v-perm="'feature.edit'" v-if="feat.ic_status!=='excluded'" size="tiny" type="error" quaternary @click="doSetIcStatus('excluded')"> 剔除</n-button>
+            <n-button v-perm="'feature.edit'" v-if="feat.ic_status==='candidate'||feat.ic_status==='excluded'" size="tiny" quaternary @click="doSetIcStatus('candidate')"><AppIcon name="refresh" :size="13" />  候选</n-button>
           </div>
 
           <n-spin v-if="icLoading" size="small" style="padding:24px" />
@@ -200,7 +200,7 @@
       <n-input v-model:value="editForm.description" type="textarea" placeholder="描述" :rows="2" />
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim)">KEPL 公式</div>
-        <n-button size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size: var(--text-meta)"><AppIcon name="a" :size="13" />  AI 生成</n-button>
+        <n-button v-perm="'feature.edit'" size="tiny" quaternary @click="showAiPrompt = true" :loading="aiLoading" style="font-size: var(--text-meta)"><AppIcon name="a" :size="13" />  AI 生成</n-button>
       </div>
       <MonacoEditor ref="formulaEditor" v-model="editForm.formula" :completions="keplCompletions" />
       <div style="display:flex;align-items:center;gap:8px;font-size: var(--text-meta);color:var(--c-text-dim)">
@@ -235,13 +235,13 @@
       <div v-if="aiResult" style="margin-top:8px">
         <div style="font-size: var(--text-meta);font-weight:600;color:var(--c-text-dim);margin-bottom:4px">生成结果</div>
         <div style="background:var(--c-card-bg);border:1px solid var(--c-border);border-radius:6px;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:160px;overflow-y:auto">{{ aiResult }}</div>
-        <n-button size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入公式框</n-button>
+        <n-button v-perm="'feature.edit'" size="small" type="primary" style="margin-top:8px" @click="applyAiResult"><AppIcon name="check" :size="13" />  填入公式框</n-button>
       </div>
     </n-space>
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showAiPrompt = false">取消</n-button>
-        <n-button type="primary" @click="callAiGenerate" :loading="aiLoading">生成</n-button>
+        <n-button v-perm="'feature.edit'" type="primary" @click="callAiGenerate" :loading="aiLoading">生成</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -275,7 +275,7 @@
     <template #footer>
       <n-space justify="flex-end">
         <n-button @click="showIcCompute=false">关闭</n-button>
-        <n-button type="primary" :loading="icSubmitting" :disabled="icTask?.status==='running'" @click="startIcCompute">开始检验</n-button>
+        <n-button v-perm="'feature.compute'" type="primary" :loading="icSubmitting" :disabled="icTask?.status==='running'" @click="startIcCompute">开始检验</n-button>
       </n-space>
     </template>
   </n-modal>
