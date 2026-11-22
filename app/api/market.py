@@ -438,7 +438,7 @@ def get_market_macro():
     return _cached(("macro",), 600, _load)
 
 
-# ── 7. 市场情绪分日度序列（恐慌指数趋势，v3.13）──
+# ── 7. 市场情绪分日度序列（恐慌指数趋势，v3.22）──
 
 @router.get("/market/sentiment-history")
 def get_market_sentiment_history(days: int = Query(1000, ge=30, le=6500)):

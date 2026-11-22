@@ -1086,7 +1086,7 @@ CREATE TABLE IF NOT EXISTS index_valuation (
 CREATE INDEX IF NOT EXISTS idx_index_val_date ON index_valuation (trade_date DESC);
 """
 
-# ── 市场情绪日度（恐慌指数趋势，v3.13）——历史从 daily_quote 重算，当日由
+# ── 市场情绪日度（恐慌指数趋势，v3.22）——历史从 daily_quote 重算，当日由
 #    sentiment_daily DAG 节点收盘后落库。序列主分统一三成分口径（宽度40/中位数20/
 #    涨跌停20 + VWAP 项按 _verdict 缺省 10 分），与实时四成分分(score_rt)区分，
 #    保证历史回补段与增量段可比（design/11 §口径决策）。──
@@ -2048,7 +2048,7 @@ def init_db(sync_session) -> None:
         except Exception:
             sync_session.rollback()
 
-        # 迁移：市场情绪日度（v3.13，恐慌指数趋势）——收盘后落库当日情绪分，
+        # 迁移：市场情绪日度（v3.22，恐慌指数趋势）——收盘后落库当日情绪分，
         # 历史（2000 起）由 scripts/backfill_sentiment_daily.py 从 daily_quote 重算。
         # 序列统一三成分口径（VWAP 项缺省 10 分），score_rt 只在当日节点落库有值。
         try:
