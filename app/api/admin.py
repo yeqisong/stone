@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.auth.auth import Principal, get_principal
-from app.auth.definitions import PERSONAL_PERMISSION_CODES
+from app.auth.definitions import (
+    PERMISSION_CODES,
+    PERSONAL_PERMISSION_CODES,
+    PUBLIC_PERMISSION_CODES,
+)
 from app.auth.security import hash_password
 from app.auth.service import audit, safe_ip
 from app.db.connection import get_sync_db
@@ -33,26 +37,13 @@ def _require_roles_exist(db, role_ids: list[int]) -> list[str]:
     return [r[1] for r in rows]
 
 
-def _actor_permissions(db, user_id: int) -> set[str]:
-    rows = db.execute(text("""
-        SELECT DISTINCT p.code
-        FROM user_roles ur
-        JOIN roles r ON r.id = ur.role_id AND r.status='active'
-        JOIN role_permissions rp ON rp.role_id = r.id
-        JOIN permissions p ON p.id = rp.permission_id
-        WHERE ur.user_id = :uid
-          AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-    """), {"uid": user_id}).fetchall()
-    return {r[0] for r in rows}
-
-
 def _assert_can_grant(actor: Principal, role_codes: list[str], db) -> None:
-    """防提权：只能授予自己拥有的权限（admin 拥有全部）。"""
+    """防提权：只能修改权限集合不超过自己的角色（admin 拥有全部）。"""
     if "admin" in actor.role_codes:
         return
-    actor_perms = _actor_permissions(db, actor.user_id)
     if not role_codes:
         return
+    actor_perms = set(actor.permission_codes())
     rows = db.execute(text("""
         SELECT DISTINCT p.code
         FROM roles r
@@ -61,6 +52,15 @@ def _assert_can_grant(actor: Principal, role_codes: list[str], db) -> None:
         WHERE r.code = ANY(:codes)
     """), {"codes": role_codes}).fetchall()
     missing = {r[0] for r in rows} - actor_perms
+    if missing:
+        raise HTTPException(403, f"不能修改权限超出自己的角色: {sorted(missing)[:5]}")
+
+
+def _assert_can_grant_codes(actor: Principal, codes: list[str]) -> None:
+    """逐项校验本次写入的新权限码必须属于操作者当前有效权限。"""
+    if "admin" in actor.role_codes:
+        return
+    missing = set(codes) - set(actor.permission_codes())
     if missing:
         raise HTTPException(403, f"不能授予自己没有的权限: {sorted(missing)[:5]}")
 
@@ -496,12 +496,26 @@ def set_role_permissions(role_id: int, body: RolePermsBody, request: Request,
                          principal: Principal = Depends(get_principal)):
     db = get_sync_db()
     try:
-        role = db.execute(text("SELECT code FROM roles WHERE id=:id"), {"id": role_id}).fetchone()
+        role = db.execute(text(
+            "SELECT code, is_system FROM roles WHERE id=:id"
+        ), {"id": role_id}).fetchone()
         if not role:
             raise HTTPException(404, "角色不存在")
-        # 防提权
+        role_code, is_system = role[0], bool(role[1])
         codes = [p.code for p in body.permissions]
-        _assert_can_grant(principal, [role[0]], db)
+        # admin 角色必须保留全部非 public 权限，避免管理员把自己锁死
+        if role_code == "admin":
+            if "admin" not in principal.role_codes:
+                raise HTTPException(403, "只有管理员可以修改 admin 角色")
+            expected = set(PERMISSION_CODES) - set(PUBLIC_PERMISSION_CODES)
+            if set(codes) != expected:
+                raise HTTPException(400, "admin 角色必须保留全部非 public 权限")
+        # 防提权：不能修改权限集合超出自己的角色，也不能新增自己没有的权限
+        if role_code != "admin":
+            if is_system and "admin" not in principal.role_codes:
+                raise HTTPException(403, "系统内置角色只能由管理员修改")
+            _assert_can_grant(principal, [role_code], db)
+            _assert_can_grant_codes(principal, codes)
         perm_rows = db.execute(text(
             "SELECT id, code FROM permissions WHERE code = ANY(:codes)"
         ), {"codes": codes}).fetchall()
