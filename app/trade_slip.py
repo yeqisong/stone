@@ -817,6 +817,7 @@ def build_positions(db, user_id: int) -> dict:
             "closed": sum(1 for d in diff if d["status"] == "closed"),
             "same": sum(1 for d in diff if d["status"] == "same"),
             "cash": round(cash, 2) if cash is not None else None,
+            "cash_known": cash is not None,
             "market_value": round(sum(p["market_value"] or 0 for p in positions), 2),
             "accounts": accounts,
         },

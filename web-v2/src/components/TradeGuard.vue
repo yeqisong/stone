@@ -5,6 +5,7 @@
     <span v-if="st" class="tg-asof">{{ st.asof }} · 20s 刷新</span>
     <span v-if="st" class="tg-source">{{ sourceText }}</span>
     <span v-if="st && !isToday(st.slip_end)" class="tg-warn-chip">今日交割单未导入</span>
+    <span v-if="st && st.cash_known === false" class="tg-warn-chip">现金未导入/未修正</span>
     <span v-if="collapsed && st" class="tg-mini">
       仓位 {{ pct(st.position_ratio) }} · 现金 {{ pct(st.cash_ratio) }} · 今日开仓 {{ st.daily_buy_count }}/{{ st.max_new_buys_per_day }} · 还能买 {{ money(st.max_buy_amount) }}
     </span>
@@ -27,8 +28,9 @@
       </div>
       <div class="tg-m">
         <span>现金</span>
-        <b>{{ money(st.cash) }}</b>
-        <i>{{ pct(st.cash_ratio) }} · 底线 ≥{{ pct(st.cash_floor, 0) }}</i>
+        <b>{{ st.cash_known === false ? '—' : money(st.cash) }}</b>
+        <i v-if="st.cash_known === false">请点「修正现金」填入券商可用资金</i>
+        <i v-else>{{ pct(st.cash_ratio) }} · 底线 ≥{{ pct(st.cash_floor, 0) }}</i>
       </div>
       <div class="tg-m">
         <span>今日开仓</span>
@@ -242,6 +244,7 @@ const ratioColor = computed(() => {
 })
 const sourceText = computed(() => {
   if (!st.value) return ''
+  if (st.value.cash_known === false) return '现金未导入/未修正'
   const end = st.value.slip_end
   if (!end) return '仅今日手动记录'
   if (isToday(end)) return '今日交割单'

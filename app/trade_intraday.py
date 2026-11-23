@@ -683,8 +683,11 @@ def live_snapshot(db, user_id: int | None = None,
     if cash_override is not None:
         snap = _f(cash_override)
     use_snapshot = snap is not None
-    cash = _f(snap if use_snapshot else (base.get("summary") or {}).get("cash") or 0.0)
-    cash_source = "snapshot" if use_snapshot else ("slip+manual" if slip_end else "manual")
+    slip_cash = (base.get("summary") or {}).get("cash")
+    cash_known = use_snapshot or slip_cash is not None
+    cash = _f(snap if use_snapshot else (slip_cash if slip_cash is not None else 0.0))
+    cash_source = "snapshot" if use_snapshot else (
+        "slip+manual" if slip_end and slip_cash is not None else "manual")
 
     manual = _call_user(_manual_rows, db, user_id, slip_end)
     for r in manual:
@@ -692,6 +695,7 @@ def live_snapshot(db, user_id: int | None = None,
 
     return {
         "positions": pos, "cash": cash, "cash_source": cash_source,
+        "cash_known": cash_known,
         "slip_end": slip_end, "rules": rules, "today": today,
     }
 
@@ -716,6 +720,7 @@ def live_positions(db, user_id: int | None = None,
     return {
         "positions": out,
         "cash": round(live["cash"], 2),
+        "cash_known": live.get("cash_known", True),
         "trade_date": live["today"].isoformat(),
         "slip_end": live["slip_end"].isoformat() if live["slip_end"] else None,
         "cash_source": live["cash_source"],
@@ -733,6 +738,7 @@ def _build_state(db, user_id: int | None = None,
     rules = live["rules"]
     cash = live["cash"]
     cash_source = live["cash_source"]
+    cash_known = live.get("cash_known", True)
 
     codes = list(pos.keys())
     qmap, quote_ok = _quotes(codes)
@@ -854,6 +860,7 @@ def _build_state(db, user_id: int | None = None,
         "trade_date": today.isoformat(),
         "slip_end": slip_end.isoformat() if slip_end else None,
         "cash_source": cash_source,
+        "cash_known": cash_known,
         "quote_ok": quote_ok,
         "cash": round(cash, 2),
         "market_value": round(mv, 2),
