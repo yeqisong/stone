@@ -33,6 +33,7 @@ SUPPORT_BLOCKED_PREFIXES = (
     "/api/settings",
     "/api/llm_config",
     "/api/agent",
+    "/api/dbex",
 )
 
 

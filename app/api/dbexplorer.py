@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from app.db.connection import get_sync_db
 from app.auth.auth import get_current_user
+from app.data_scope import SHARED_TABLES, is_shared_table
 
 router = APIRouter(prefix="/dbex", tags=["dbex"])
 
@@ -18,6 +19,8 @@ def _assert_table(db, table: str) -> None:
     """表名必须真实存在于 public schema 且符合命名规则（防注入：标识符无法参数化）。"""
     if not _TABLE_NAME_RE.match(table or ""):
         raise HTTPException(400, "非法表名")
+    if not is_shared_table(table):
+        raise HTTPException(403, "该表不在共享表白名单内")
     exists = db.execute(text(
         "SELECT 1 FROM information_schema.tables "
         "WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name=:n"
@@ -34,9 +37,7 @@ def overview(user: str = Depends(get_current_user)):
         name = db.execute(text("SELECT current_database()")).scalar()
         size = db.execute(text("SELECT pg_size_pretty(pg_database_size(current_database()))")).scalar()
         ver = db.execute(text("SHOW server_version")).scalar()
-        n_tables = db.execute(text(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_schema='public' AND table_type='BASE TABLE'")).scalar()
+        n_tables = len(SHARED_TABLES)
         db.close()
         return {"database": name, "size": size, "version": ver, "n_tables": n_tables}
     finally:
@@ -59,8 +60,9 @@ def list_tables(user: str = Depends(get_current_user)):
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = 'public' AND c.relkind = 'r'
+              AND c.relname = ANY(:names)
             ORDER BY pg_total_relation_size(c.oid) DESC
-        """)).fetchall()
+        """), {"names": list(SHARED_TABLES)}).fetchall()
         db.close()
         return {"tables": [
             {"name": r[0], "rows_est": max(int(r[1]), 0), "size": r[2], "comment": r[3]}
