@@ -612,14 +612,10 @@ def _apply_row(state: dict, row: dict) -> None:
                 st["estimated"] = False
 
 
-def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
-                     portfolio_costs: Optional[dict[str, float]] = None) -> tuple[dict, Optional[float]]:
-    """从交割单重放持仓。
-
-    返回 (state, cash)。state[code] = {qty, avg, realized, estimated, first_date, last_date}
-    - 期初已有持仓（交割单首行之前的余额）成本优先用 portfolio 现成本，否则用首行前收盘价；
-    - 数量始终以「股份余额」为最高优先级。
-    """
+def _replay_single_account(db, rows: list[dict], until: Optional[_date] = None,
+                           portfolio_costs: Optional[dict[str, float]] = None,
+                           ) -> tuple[dict, Optional[float]]:
+    """单资金账号重放（股份余额只在账号内是权威值，跨账号必须先分组）。"""
     if not rows:
         return {}, None
     portfolio_costs = portfolio_costs or {}
@@ -660,6 +656,58 @@ def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
         if r.get("cash_balance") is not None:
             cash = float(r["cash_balance"])
     return state, cash
+
+
+def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
+                     portfolio_costs: Optional[dict[str, float]] = None) -> tuple[dict, Optional[float]]:
+    """从交割单重放持仓（按资金账号分别重放后合并）。
+
+    返回 (state, cash)。state[code] = {qty, avg, realized, estimated, first_date, last_date}
+    - 每个资金账号的「股份余额」只对该账号权威；先分组重放，避免 A 账户余额覆盖
+      B 账户持仓（多账户合并时曾把总持仓直接抹掉）；
+    - 期初已有持仓成本优先用 portfolio 现成本（仅单账号可信），否则用首行前收盘价；
+    - 多账号现金 = 各账号最新资金余额之和；任一账号缺余额则返回 None（不虚报）。
+    """
+    if not rows:
+        return {}, None
+    if until:
+        rows = [r for r in rows if r["trade_date"] < until]
+        if not rows:
+            return {}, None
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(str(r.get("account_no") or ""), []).append(r)
+    if len(groups) <= 1:
+        return _replay_single_account(db, rows, until=None,
+                                      portfolio_costs=portfolio_costs)
+
+    merged: dict[str, dict] = {}
+    cash_vals: list[float | None] = []
+    for acct, arows in groups.items():
+        st, cash = _replay_single_account(db, arows, until=None,
+                                          portfolio_costs={})
+        cash_vals.append(cash)
+        for code, s in st.items():
+            m = merged.setdefault(code, {
+                "qty": 0.0, "avg": 0.0, "realized": 0.0,
+                "estimated": False, "seed_qty": 0.0,
+                "first_date": s.get("first_date"), "last_date": s.get("last_date"),
+            })
+            q, aq = float(s.get("qty") or 0), float(m.get("qty") or 0)
+            if q > 0:
+                m["avg"] = ((float(m.get("avg") or 0) * aq) + (float(s.get("avg") or 0) * q)) / (aq + q)
+            m["qty"] = aq + q
+            m["realized"] = float(m.get("realized") or 0) + float(s.get("realized") or 0)
+            m["seed_qty"] = float(m.get("seed_qty") or 0) + float(s.get("seed_qty") or 0)
+            m["estimated"] = bool(m.get("estimated")) or bool(s.get("estimated"))
+            for k in ("first_date", "last_date"):
+                v = s.get(k)
+                if not v:
+                    continue
+                if not m.get(k) or (v < m[k] if k == "first_date" else v > m[k]):
+                    m[k] = v
+    cash = None if any(v is None for v in cash_vals) else float(sum(cash_vals))
+    return merged, cash
 
 
 # ── 持仓预览 / 同步 ──
