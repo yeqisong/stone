@@ -44,6 +44,8 @@ def _extract_principal(request: Request,
         payload = decode_token(credentials.credentials)
     except JWTError:
         raise HTTPException(status_code=401, detail="无效或过期的 Token")
+    if payload.get("scope") != "access":
+        raise HTTPException(status_code=401, detail="Token 类型无效")
 
     raw_uid = payload.get("uid", payload.get("sub"))
     try:

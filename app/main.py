@@ -48,13 +48,12 @@ async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化数据库，关闭时释放连接。"""
     logger.info(f"Starting Stock Monitor in {settings.APP_ENV} mode...")
 
-    # JWT secret 强度校验：prod 强制，dev 警告
-    if len(settings.APP_SECRET_KEY) < 16:
-        if settings.APP_ENV == "prod":
-            logger.error("APP_SECRET_KEY 长度不足（需要至少16字符），拒绝启动")
-            raise RuntimeError("APP_SECRET_KEY must be at least 16 characters")
-        else:
-            logger.warning("APP_SECRET_KEY 长度不足，请在生产环境设置至少16字符的密钥")
+    # JWT secret 强度校验：缺失/公开默认值/过短一律拒绝启动（dev 也不例外）
+    _weak = {"", "kdao-dev-secret-key-change-in-production"}
+    if settings.APP_SECRET_KEY.strip() in _weak or len(settings.APP_SECRET_KEY) < 32:
+        logger.error("APP_SECRET_KEY 未配置、使用公开默认值或长度不足 32 字符，拒绝启动；"
+                     "请用 python -c \"import secrets;print(secrets.token_urlsafe(48))\" 生成")
+        raise RuntimeError("APP_SECRET_KEY must be a private random string of at least 32 chars")
 
     # 初始化数据库（同步执行，因为是启动时一次性操作）
     from app.db.connection import SyncSessionLocal

@@ -445,6 +445,8 @@ async def ws_dag(websocket: WebSocket):
     try:
         from app.auth.service import decode_token, load_principal
         payload = decode_token(token)
+        if payload.get("scope") != "access":
+            raise ValueError("invalid token scope")
         uid = int(payload.get("uid", payload.get("sub")))
         principal = load_principal(uid)
         if principal is None or int(payload.get("token_version", 0)) != principal.token_version:
