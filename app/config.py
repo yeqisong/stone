@@ -6,7 +6,10 @@ from pathlib import Path
 class Settings(BaseSettings):
     # ── 应用 ──
     APP_ENV: str = "dev"  # dev | prod
-    APP_SECRET_KEY: str = "kdao-dev-secret-key-change-in-production"  # prod 必须通过环境变量覆盖
+    # 必须由 .env / 环境变量注入；启动时校验，禁止使用仓库内公开默认值
+    APP_SECRET_KEY: str = ""
+    # Agent 工作区文件签名独立密钥；留空时从 APP_SECRET_KEY 做域分离派生
+    AGENT_FILE_SECRET: str = ""
     JWT_EXPIRE_HOURS: int = 24
 
     # ── 数据库 ──

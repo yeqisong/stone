@@ -85,12 +85,18 @@ def safe_ip(value: str | None) -> str | None:
         return None
 
 
+JWT_SCOPE = "access"
+JWT_AUDIENCE = "stone-api"
+JWT_ISSUER = "stone"
+
+
 def create_token(
     user_id: int,
     username: str = "",
     token_version: int = 0,
     perm_version: int = 0,
     expires_hours: int | None = None,
+    scope: str = JWT_SCOPE,
 ) -> str:
     now = datetime.utcnow()
     payload = {
@@ -99,6 +105,9 @@ def create_token(
         "username": username,
         "token_version": int(token_version),
         "perm_version": int(perm_version),
+        "scope": scope,
+        "aud": JWT_AUDIENCE,
+        "iss": JWT_ISSUER,
         "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + timedelta(hours=expires_hours or settings.JWT_EXPIRE_HOURS),
@@ -107,7 +116,11 @@ def create_token(
 
 
 def decode_token(token: str) -> dict[str, Any]:
-    return jwt.decode(token, settings.APP_SECRET_KEY, algorithms=["HS256"])
+    return jwt.decode(
+        token, settings.APP_SECRET_KEY, algorithms=["HS256"],
+        audience=JWT_AUDIENCE, issuer=JWT_ISSUER,
+        options={"require_aud": True, "require_iss": True},
+    )
 
 
 def _effective_grants(db, user_id: int) -> tuple[dict[str, Grant], frozenset[str]]:
