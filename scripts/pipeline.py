@@ -11,6 +11,7 @@ import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
+from sqlalchemy import text
 from scripts.dag import DagNode, DagExecutor
 
 
