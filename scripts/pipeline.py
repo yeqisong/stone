@@ -2182,7 +2182,7 @@ def ic_health_status(rolling_mean):
     return 'DEGRADED'
 
 
-_SEVERITY = {'HEALTHY': 0, 'CAUTION': 1, 'WARNING': 2, 'CRITICAL': 3}
+_SEVERITY = {'HEALTHY': 0, 'CAUTION': 1, 'WARNING': 2, 'DEGRADED': 2, 'CRITICAL': 3}
 
 
 def _send_feishu_alert(text: str):
