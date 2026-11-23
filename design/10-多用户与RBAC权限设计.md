@@ -332,7 +332,7 @@ Request
 | AUTH-07 | 生产环境必须显式设置 `APP_SECRET_KEY`；默认值/长度不足拒绝启动 |
 | AUTH-08 | 登出：前端清 token + 断开 WS；后端可选 `jti` 黑名单（本期不做，靠短过期 + token_version） |
 | AUTH-09 | WS 鉴权使用短期 ticket（推荐）或 `Sec-WebSocket-Protocol`；不再把 JWT 放 URL query |
-| AUTH-10 | 飞书 webhook 必须校验签名；未配置 secret 时生产拒绝接收 |
+| AUTH-10 | 飞书 webhook 必须校验 Encrypt Key 签名或 Verification Token；两者都未配置时生产拒绝接收；拒绝超时重放并按事件去重 |
 
 ### 5.3 用户生命周期操作
 
@@ -1661,7 +1661,7 @@ SELECT count(*) FROM permissions WHERE parent_id IS NULL AND code NOT IN
 | AUTH-06 | 生产必须显式设置 `APP_SECRET_KEY`，默认值拒绝启动 | 启动测试 |
 | AUTH-07 | JWT 不含权限列表；只含 uid/username/token_version/perm_version | 解码断言 |
 | AUTH-08 | WS 使用短期 ticket 或子协议；JWT 不进 URL query | 抓包/日志检查 |
-| AUTH-09 | 飞书 webhook 生产必须校验签名；未配置 secret 拒绝 | 伪造请求测试 |
+| AUTH-09 | 飞书 webhook 生产必须校验签名/事件 token；未配置时拒绝；已用事件去重 | 伪造/重放请求测试 |
 | AUTH-10 | 用户只能修改自己的密码；管理员重置走独立接口并审计 | 越权测试 |
 | AUTH-11 | `/health` 只返回 ok/degraded、数据库状态、版本；不返回 `env`、路径、内部地址 | 响应字段断言 |
 
@@ -1781,7 +1781,7 @@ SELECT count(*) FROM permissions WHERE parent_id IS NULL AND code NOT IN
 | WB-23 | `news/health` 的 `focus_n` 用 `v_focus_pool_all` / `DISTINCT stock_code` | 多用户共持同一股票时数量虚高 | 统计测试 |
 | WB-24 | `GET /api/version` 改为 public（只返回构建哈希）；前端 version.js 无 token 轮询 | 加权限后所有普通用户版本自检 401 | 前端自检 |
 | WB-25 | WS 消息按类型过滤：告警→owner；DAG→`dag.view`；补数/指标→`system.status.view`；AI→owner | 普通用户收到 DAG/主机指标/他人 AI | 双客户端 |
-| WB-26 | 飞书生产必须验签；未配置 secret 拒绝；解析 `open_id` 绑定；卡片按底层权限 | 伪造事件写持仓/改全局偏好 | 飞书签名/绑定测试 |
+| WB-26 | 飞书生产必须验签/校验事件 token；未配置拒绝；解析 `open_id` 绑定；卡片按底层权限；消息走回复 API | 伪造事件写持仓/改全局偏好 | 飞书签名/绑定/重放测试 |
 | WB-27 | `xueqiu_status.user_id` 不是应用 owner，迁移时排除 | 机械迁移把雪球用户 ID 当应用用户 | 迁移脚本审查 |
 | WB-28 | `app/api/market.py` 只读共享表，不做 owner 改造；只加权限码 | 误加 user 过滤导致市场数据为空 | 代码审查 |
 | WB-29 | 迁移 DDL 幂等：索引 `IF NOT EXISTS`、PK 切换用 `DO` 块、种子 `ON CONFLICT` | 重跑在已建索引/主键处失败 | M10 |

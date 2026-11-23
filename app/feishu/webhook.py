@@ -1,19 +1,27 @@
-"""飞书 Webhook 路由。"""
+"""飞书 Webhook 路由。
+
+安全要点：
+- 按飞书事件订阅规范做 sha256(timestamp+nonce+encrypt_key+body) 签名校验；
+- Encrypt Key 配置时解密 `encrypt` 事件；拒绝超过 10 分钟的回调（防重放）；
+- 事件按 event_id/message_id 去重，避免飞书重试导致重复回复或重复写持仓；
+- 消息事件先返回 200，再在后台调用 LLM 并通过「回复消息」API 发回结果（3 秒回调时限）。
+"""
 import asyncio
 import json
-import hashlib
-import hmac
 import re
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.config import settings
-from app.db.connection import get_db
+from app.db.connection import get_db, AsyncSessionLocal
 from app.feishu.handler import handle_message
 from app.feishu.identity import (bind_by_code, extract_open_id,
                                  extract_union_id, history_key, resolve_user)
 from app.feishu.history import save_history
+from app.feishu import client as feishu_client
+from app.feishu.security import (claim_once, decrypt_payload, rate_ok,
+                                 verify_signature)
 
 router = APIRouter(tags=["feishu"])
 
@@ -34,107 +42,200 @@ async def _resolve_principal(db, open_id: str):
     return await asyncio.to_thread(load_principal, int(u["id"]))
 
 
-@router.post("/webhook/feishu")
-async def feishu_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """飞书事件回调接口（按 open_id 绑定系统用户，未绑定拒绝）。"""
-    body = await request.body()
-    body_json = await request.json()
+def _message_text(payload: dict) -> str:
+    event = payload.get("event") or {}
+    content = (event.get("message") or {}).get("content", "{}")
+    try:
+        content_json = json.loads(content)
+        return str(content_json.get("text", "") or "")
+    except (json.JSONDecodeError, TypeError):
+        return str(content or "")
 
-    # 1. URL 验证（飞书配置回调地址时发送）
+
+async def _process_text(payload: dict, db: AsyncSession) -> str:
+    """处理文本消息并返回回复文本/卡片 JSON。绑定命令不进入 LLM。"""
+    open_id = extract_open_id(payload)
+    user_text = _message_text(payload).strip()
+    if not user_text:
+        return ""
+    if not rate_ok(f"u:{open_id}", limit=20, window=60):
+        return "⏳ 操作过于频繁，请稍后再试。"
+    logger.info(f"收到飞书消息 open_id={open_id[:12]}...: {user_text[:100]}")
+
+    m = _BIND_RE.match(user_text)
+    principal = await _resolve_principal(db, open_id)
+    if m:
+        if principal is not None:
+            return "当前飞书账号已绑定，如需换绑请先在 Web 端「绑定飞书」里解绑。"
+        await db.rollback()
+        r = await bind_by_code(db, m.group(1), open_id, extract_union_id(payload))
+        if r.get("error"):
+            return f"❌ {r['error']}"
+        logger.info(f"飞书账号已绑定用户 {r['username']}")
+        return f"✅ 绑定成功，欢迎 {r['username']}。现在可以问我持仓、信号和行情了。"
+
+    if principal is None:
+        return _unbound_hint()
+    try:
+        return await handle_message(user_text, db, principal)
+    except Exception as e:
+        logger.error(f"处理飞书消息失败: {e}")
+        return f"处理失败，请稍候重试。错误：{str(e)[:200]}"
+
+
+async def _process_text_event(payload: dict) -> None:
+    """后台任务：独立 DB 会话处理消息，再通过回复 API 发回。"""
+    message_id = str(((payload.get("event") or {}).get("message") or {})
+                     .get("message_id") or "")
+    try:
+        async with AsyncSessionLocal() as db:
+            try:
+                reply = await _process_text(payload, db)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        if reply and message_id:
+            await feishu_client.reply_message(message_id,
+                                              feishu_client.normalize_reply(reply))
+    except Exception as e:
+        logger.error(f"[feishu] 后台处理失败 message={message_id[:20]}: {str(e)[:200]}")
+
+
+def _payload_text(payload: dict) -> str:
+    """从 _handle_card_action 的返回体里提取纯文本，供 toast/回复使用。"""
+    if not isinstance(payload, dict):
+        return str(payload or "")
+    content = payload.get("content")
+    if isinstance(content, dict):
+        return str(content.get("text") or "")
+    if isinstance(content, str):
+        try:
+            obj = json.loads(content)
+            if isinstance(obj, dict):
+                return str(obj.get("text") or content)
+        except (json.JSONDecodeError, TypeError):
+            return content
+    return str(payload)
+
+
+async def _reply_report(open_message_id: str, result: dict) -> None:
+    """卡片操作完成后异步回复结果，不阻塞卡片回调。"""
+    text = _payload_text(result)
+    if open_message_id and text:
+        await feishu_client.reply_message(
+            open_message_id, feishu_client.normalize_reply(text))
+
+
+def _card_key(payload: dict, action: str, value: dict) -> str:
+    header = payload.get("header") or {}
+    eid = header.get("event_id")
+    if eid:
+        return f"card:{eid}"
+    oid = str(payload.get("open_message_id") or "")
+    raw = json.dumps(value or {}, ensure_ascii=False, sort_keys=True, default=str)
+    return f"card:{oid}:{action}:{raw}" if oid else ""
+
+
+@router.post("/webhook/feishu")
+async def feishu_webhook(request: Request, background: BackgroundTasks,
+                         db: AsyncSession = Depends(get_db)):
+    """飞书事件回调接口（按 open_id 绑定系统用户，未绑定拒绝）。"""
+    raw = await request.body()
+
+    # 1. 签名校验：Encrypt Key 用官方 SHA-256 规范；未配置时退回事件 token 校验
+    sign_key = settings.FEISHU_ENCRYPT_KEY
+    if settings.APP_ENV == "prod" and not sign_key and not settings.FEISHU_VERIFY_TOKEN:
+        raise HTTPException(status_code=503, detail="飞书回调未配置签名密钥/校验 token，已拒绝")
+    if sign_key:
+        ok, reason = verify_signature(
+            raw,
+            request.headers.get("X-Lark-Request-Timestamp", ""),
+            request.headers.get("X-Lark-Request-Nonce", ""),
+            request.headers.get("X-Lark-Signature", ""),
+            sign_key)
+        if not ok:
+            logger.warning(f"[feishu] 签名校验失败: {reason}")
+            raise HTTPException(status_code=403, detail="签名校验失败")
+
+    # 2. 解析（加密事件先解密）
+    try:
+        body_json = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="请求体不是合法 JSON")
+    if isinstance(body_json, dict) and body_json.get("encrypt"):
+        if not settings.FEISHU_ENCRYPT_KEY:
+            raise HTTPException(status_code=503, detail="收到加密事件但未配置 Encrypt Key")
+        try:
+            body_json = decrypt_payload(body_json["encrypt"],
+                                        settings.FEISHU_ENCRYPT_KEY)
+        except ValueError as e:
+            logger.warning(f"[feishu] {e}")
+            raise HTTPException(status_code=400, detail="事件解密失败")
+
+    # 2.1 未启用加密时用事件 token 兜底验真（v2 在 header.token，v1/卡片在顶层 token）
+    if not sign_key and settings.FEISHU_VERIFY_TOKEN:
+        evt_token = str((body_json.get("header") or {}).get("token")
+                        or body_json.get("token") or "")
+        if evt_token != settings.FEISHU_VERIFY_TOKEN:
+            logger.warning("[feishu] 事件 token 校验失败")
+            raise HTTPException(status_code=403, detail="事件 token 校验失败")
+
+    # 3. URL 验证（飞书配置回调地址时发送）
     if body_json.get("type") == "url_verification":
         token = body_json.get("token", "")
         challenge = body_json.get("challenge", "")
-        # 可选：校验 verify_token
         if settings.FEISHU_VERIFY_TOKEN and token != settings.FEISHU_VERIFY_TOKEN:
             raise HTTPException(status_code=403, detail="Invalid verify token")
         return {"challenge": challenge}
 
-    # 生产环境必须配置签名密钥，否则任何人都能伪造事件写持仓
-    if settings.APP_ENV == "prod" and not settings.FEISHU_APP_SECRET:
-        raise HTTPException(status_code=503, detail="飞书回调未配置签名密钥，已拒绝")
-
-    # 2. 校验签名（FEISHU_APP_SECRET 配置时始终校验）
-    if settings.FEISHU_APP_SECRET:
-        timestamp = request.headers.get("X-Lark-Request-Timestamp", "")
-        nonce = request.headers.get("X-Lark-Request-Nonce", "")
-        signature = request.headers.get("X-Lark-Signature", "")
-        # 飞书签名校验：HMAC-SHA256(secret, timestamp + nonce + body)
-        body_str = body.decode("utf-8") if isinstance(body, bytes) else str(body)
-        sign_str = f"{timestamp}{nonce}{body_str}"
-        expected = hmac.new(
-            settings.FEISHU_APP_SECRET.encode("utf-8"),
-            sign_str.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-        if signature != expected:
-            logger.warning(f"飞书签名校验失败: expected={expected[:16]}... received={signature[:16]}...")
-            raise HTTPException(status_code=403, detail="签名校验失败")
-
-    # 3. 身份解析：open_id → 系统用户
-    open_id = extract_open_id(body_json)
-
-    # 4. 处理消息
-    event = body_json.get("event", {})
-    msg_type = event.get("message", {}).get("message_type", "")
+    # 4. 文本消息
+    event = body_json.get("event") or {}
+    message = event.get("message") or {}
+    msg_type = message.get("message_type", "")
+    message_id = str(message.get("message_id") or "")
 
     if msg_type == "text":
-        content = event.get("message", {}).get("content", "{}")
-        try:
-            content_json = json.loads(content)
-            user_text = content_json.get("text", "")
-        except (json.JSONDecodeError, TypeError):
-            user_text = content
+        if not _message_text(body_json).strip():
+            return {"code": 0}
+        # 绑定命令需要在回调内快速返回；其余消息统一后台处理并通过回复 API 发送
+        event_id = str((body_json.get("header") or {}).get("event_id") or "")
+        dedup_key = f"msg:{event_id or message_id}"
+        if not message_id:
+            # 兼容本地/测试回调：无 message_id 时同步返回，不调用外部 API
+            reply = await _process_text(body_json, db)
+            return feishu_client.normalize_reply(reply)
+        if not claim_once(dedup_key):
+            logger.info(f"[feishu] 重复投递已忽略: {dedup_key}")
+            return {"code": 0}
+        background.add_task(_process_text_event, body_json)
+        return {"code": 0}
 
-        if user_text.strip():
-            logger.info(f"收到飞书消息 open_id={open_id[:12]}...: {user_text[:100]}")
-            # 绑定命令单独处理：未绑定→绑定；已绑定→提示先解绑，绝不进 LLM
-            m = _BIND_RE.match(user_text.strip())
-            principal = await _resolve_principal(db, open_id)
-            if m:
-                if principal is not None:
-                    return {"msg_type": "text",
-                            "content": {"text": "当前飞书账号已绑定，如需换绑请先在 Web 端「绑定飞书」里解绑。"}}
-                await db.rollback()
-                r = await bind_by_code(db, m.group(1), open_id,
-                                       extract_union_id(body_json))
-                if r.get("error"):
-                    return {"msg_type": "text",
-                            "content": {"text": f"❌ {r['error']}"}}
-                logger.info(f"飞书账号已绑定用户 {r['username']}")
-                return {"msg_type": "text",
-                        "content": {"text": f"✅ 绑定成功，欢迎 {r['username']}。现在可以问我持仓、信号和行情了。"}}
-            if principal is None:
-                return {"msg_type": "text", "content": {"text": _unbound_hint()}}
-            try:
-                reply = await handle_message(user_text, db, principal)
-                return {
-                    "msg_type": "text",
-                    "content": {"text": reply},
-                }
-            except Exception as e:
-                logger.error(f"处理飞书消息失败: {e}")
-                return {
-                    "msg_type": "text",
-                    "content": {"text": f"处理失败，请稍候重试。错误：{str(e)[:200]}"},
-                }
-
-    # 5. 卡片按钮回调（同样按 open_id 解析用户，不信任卡片 value 里的身份）
+    # 5. 卡片按钮回调（身份只认 open_id，不信任卡片 value 里的用户字段）
     if body_json.get("type") == "card_action":
-        principal = await _resolve_principal(db, open_id)
+        principal = await _resolve_principal(db, extract_open_id(body_json))
         if principal is None:
-            return {"msg_type": "text", "content": {"text": _unbound_hint()}}
-        action_value = body_json.get("action", {}).get("value", {})
+            return {"toast": {"type": "error", "content": _unbound_hint()[:100]}}
+        action_value = (body_json.get("action") or {}).get("value", {})
         if isinstance(action_value, str):
             try:
                 action_value = json.loads(action_value)
             except (json.JSONDecodeError, TypeError):
-                pass
-
+                action_value = {}
         action = action_value.get("action", "") if isinstance(action_value, dict) else ""
-        return await _handle_card_action(action, action_value, db, principal)
+        dedup_key = _card_key(body_json, action, action_value)
+        if dedup_key and not claim_once(dedup_key):
+            return {"toast": {"type": "info", "content": "该操作已处理，请勿重复提交"}}
+        result = await _handle_card_action(action, action_value, db, principal)
+        text = _payload_text(result)
+        open_message_id = str(body_json.get("open_message_id") or "")
+        if open_message_id:
+            background.add_task(_reply_report, open_message_id, result)
+        toast_type = "error" if "❌" in text else "success"
+        return {"toast": {"type": toast_type, "content": (text or "操作已完成")[:120]}}
 
     # 非文本消息
-    return {"msg_type": "text", "content": {"text": "暂不支持此类消息。请发送文字与我交流。"}}
+    return {"code": 0}
 
 
 async def _handle_card_action(action: str, value: dict, db: AsyncSession, principal):
@@ -155,10 +256,8 @@ async def _handle_card_action(action: str, value: dict, db: AsyncSession, princi
             return {"msg_type": "text", "content": {"text": "❌ 参数错误"}}
         if not re.fullmatch(r"\d{6}", code) or qty <= 0 or cost <= 0:
             return {"msg_type": "text", "content": {"text": "❌ 参数错误：代码/数量/成本无效"}}
-        # 使用同步 session 确保写入可靠
         sdb = get_sync_db()
         try:
-            # 查股票名称与交易所
             row = sdb.execute(text(
                 "SELECT stock_name, COALESCE(exchange, 'SSE') FROM stock_master "
                 "WHERE stock_code = :c AND stock_type = 'stock' LIMIT 1"
@@ -166,7 +265,6 @@ async def _handle_card_action(action: str, value: dict, db: AsyncSession, princi
             name = row[0] if row else code
             exchange = row[1] if row else "SSE"
 
-            # 检查当前用户是否已有同一活跃持仓
             existing = sdb.execute(text(
                 "SELECT id, quantity, cost_price FROM portfolio "
                 "WHERE user_id = :u AND stock_code = :c AND is_active = true"

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
     FEISHU_VERIFY_TOKEN: str = ""
+    # 事件订阅 Encrypt Key：同时用于回调签名校验与 encrypt 字段解密。
+    # 未配置时只能依赖 FEISHU_VERIFY_TOKEN 校验事件 token，且无法接收加密事件。
+    FEISHU_ENCRYPT_KEY: str = ""
     # 出站告警自定义机器人 webhook（可选；配置后模型 IC 衰减 DEGRADED 时推送）
     FEISHU_ALERT_WEBHOOK: str = ""
 
