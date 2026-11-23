@@ -828,7 +828,8 @@ def _est_tokens(messages: list) -> int:
 
 
 def stream_agent(sid: int, user_content: str, attachments=None,
-                 user_id: int | None = None, is_admin: bool = False):
+                 user_id: int | None = None, is_admin: bool = False,
+                 permissions=None):
     """生成事件字典（API 层包装为 SSE）。同会话串行，支持中断。"""
     sess0 = get_session(sid, user_id)
     if not sess0:
@@ -892,7 +893,7 @@ def stream_agent(sid: int, user_content: str, attachments=None,
                 def _call(msgs):
                     return client.chat.completions.create(
                         model=model, messages=msgs,
-                        tools=tool_specs_for(is_admin),
+                        tools=tool_specs_for(is_admin, permissions=permissions),
                         tool_choice="auto", temperature=0.3, max_tokens=4096,
                         stream=True,
                     )
@@ -1009,7 +1010,7 @@ def stream_agent(sid: int, user_content: str, attachments=None,
                 _img_before = (workspace_images(sid, user_id)
                                if name in ('run_python', 'run_node') else None)
                 result = execute_tool(sid, name, args, user_id=user_id,
-                                      is_admin=is_admin)
+                                      is_admin=is_admin, permissions=permissions)
                 elapsed = int((time.time() - tt) * 1000)
                 ok = not (isinstance(result, dict) and (result.get("error") or result.get("ok") is False))
                 images = []

@@ -34,6 +34,37 @@ class TestQuerySqlGuard(unittest.TestCase):
         self.assertNotEqual(r.get("error", "")[:20], "只允许 SELECT 或 WITH 开头"[:20])
 
 
+class TestToolPermissionGate(unittest.TestCase):
+    def test_dag_tool_requires_dag_view(self):
+        r = execute_tool(0, "list_dag_flows", {}, permissions={"agent.use"})
+        self.assertIn("无权限", r.get("error", ""))
+        r = execute_tool(0, "list_dag_flows", {}, permissions={"dag.view"})
+        self.assertNotIn("无权限", r.get("error", ""))
+
+    def test_admin_exec_deny_override(self):
+        r = execute_tool(0, "run_python", {"code": "print(1)"},
+                         is_admin=True, permissions={"research.stock.view"})
+        self.assertIn("无权限", r.get("error", ""))
+
+    def test_save_skill_requires_edit(self):
+        r = execute_tool(0, "save_skill", {"name": "x", "description": "desc",
+                                           "content": "body"},
+                         permissions={"agent.use"})
+        self.assertIn("无权限", r.get("error", ""))
+
+    def test_tool_specs_filter(self):
+        names = {t["function"]["name"] for t in
+                 __import__("app.agent.tools", fromlist=["tool_specs_for"]).tool_specs_for(
+                     False, permissions={"agent.use"})}
+        self.assertIn("list_skills", names)
+        self.assertNotIn("list_dag_flows", names)
+        self.assertNotIn("run_python", names)
+        self.assertEqual(
+            __import__("app.agent.tools", fromlist=["tool_specs_for"]).tool_specs_for(
+                False, permissions={"dag.view"}),
+            [], "无 agent.use 时不应下发任何工具")
+
+
 class TestToolArgs(unittest.TestCase):
     def test_stock_overview_code_format(self):
         r = execute_tool(0, "stock_overview", {"stock_code": "60051"})

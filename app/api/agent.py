@@ -213,7 +213,8 @@ def info(principal: Principal = Depends(get_principal)):
     from app.agent.tools import tool_specs_for
     from app.llm_runtime import get_llm_settings
     llm = get_llm_settings()
-    tools = tool_specs_for("admin" in principal.role_codes)
+    tools = tool_specs_for("admin" in principal.role_codes,
+                            permissions=principal.permission_codes())
     return {
         "configured": bool(llm["api_key"]),
         "model": llm["model"],
@@ -280,7 +281,8 @@ def chat(sid: int, body: ChatBody, principal: Principal = Depends(get_principal)
     return StreamingResponse(
         _sse(stream_agent(sid, content, attachments=atts,
                           user_id=principal.data_user_id,
-                          is_admin="admin" in principal.role_codes)),
+                          is_admin="admin" in principal.role_codes,
+                          permissions=principal.permission_codes())),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )

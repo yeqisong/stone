@@ -79,6 +79,11 @@ class TestReactLoop(unittest.TestCase):
     def setUp(self):
         self.saved = []
         self.patches = [
+            # 不依赖库里的真实会话：会话存在性由假数据提供
+            patch.object(runtime, "get_session", return_value={
+                "id": 1, "user_id": 1, "title": "单测会话", "status": "active",
+                "model": "", "memo": "", "memo_until": 0, "pinned": False,
+                "created_at": "", "updated_at": ""}),
             patch.object(runtime, "_save", side_effect=self._save),
             patch.object(runtime, "_history_for_model", return_value=[]),
             patch.object(runtime, "_auto_title", return_value=None),
@@ -124,6 +129,20 @@ class TestReactLoop(unittest.TestCase):
         # 第二次调用模型时，上下文里应包含工具结果
         msgs = fake.chat.completions.calls[1]["messages"]
         self.assertTrue(any(m.get("role") == "tool" for m in msgs))
+
+    def test_tool_permission_enforced_in_loop(self):
+        """低权限角色即使诱导模型调用高权限工具，也会被工具层拒绝。"""
+        script = [
+            _FakeMessage(content="", tool_calls=[_tc("c1", "query_sql", '{"sql":"SELECT 1"}')]),
+            _FakeMessage(content="没有权限，改用业务工具。"),
+        ]
+        fake = _FakeClient(script)
+        with patch.object(runtime, "_client", return_value=(fake, {"model": "m", "base_url": "", "api_key": "x"})):
+            events = list(runtime.stream_agent(4, "直接查库", permissions={"agent.use"}))
+        tr = next(e for e in events if e["type"] == "tool_result")
+        self.assertFalse(tr["ok"])
+        self.assertIn("无权限", tr["preview"])
+        self.assertEqual(events[-1]["type"], "done")
 
     def test_max_steps_guard(self):
         """显式配置上限（MAX_STEPS>0）时，模型反复调工具也不超过该次数。"""
