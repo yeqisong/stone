@@ -88,6 +88,7 @@ ROUTE_RULES: list[RouteRule] = [
     _r("GET", r"/api/risk/intraday-rules", "risk.rules.view"),
     _r("POST", r"/api/risk/intraday-rules", "risk.rules.edit"),
     _r("POST", r"/api/risk/evaluate", "model.risk.evaluate"),
+    _r("POST", r"/api/risk/evaluate-personal", "risk.rules.edit"),
     _r("GET", r"/api/risk/signal-stats", "research.signal.view"),
     _r("GET", r"/api/risk/signal-outcomes", "research.signal.view"),
     _r("GET", r"/api/risk/alerts", "risk.alerts.view"),

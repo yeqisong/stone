@@ -1720,11 +1720,12 @@ def dag_task_paper_portfolio(trade_date=None, start_date=None, **kw):
 
         # ── 风控规则评估（step3）：规则启用了才产出告警（risk_alerts 表 + WS 推送）──
         try:
-            from app.risk import evaluate_risk_rules
+            from app.risk import evaluate_all_user_risk_rules, evaluate_risk_rules
             _alerts = evaluate_risk_rules(db, td)
-            if _alerts:
-                logger.info(f"[paper_portfolio] 风控告警 {len(_alerts)} 条: "
-                            + '; '.join(a['title'] for a in _alerts))
+            _user_alerts = evaluate_all_user_risk_rules(db, td)
+            if _alerts or _user_alerts:
+                logger.info(f"[paper_portfolio] 风控告警 {len(_alerts) + len(_user_alerts)} 条: "
+                            + '; '.join(a['title'] for a in (_alerts + _user_alerts)))
         except Exception as _re:
             logger.warning(f"[paper_portfolio] 风控评估失败（不影响组合步进）: {_re}")
 

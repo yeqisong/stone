@@ -410,7 +410,7 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 | `portfolio.discipline.view` | 纪律闸门查看 | action | `portfolio.trades.view` | 今日纪律卡片 | `GET /api/portfolio/trades/discipline/rules`、`GET /api/portfolio/trades/discipline/today` | T | self | 读取个人配置 |
 | `portfolio.discipline.edit` | 纪律规则编辑 | action | `portfolio.discipline.view` | 纪律设置 | `PUT /api/portfolio/trades/discipline/rules` | T | self | 写入 `user_config` |
 | `risk.rules.view` | 个人风控/盘中规则查看 | action | — | 风控设置/状态 | `GET /api/risk/rules`、`GET /api/risk/intraday-rules` | T | self | 只读个人规则；模型统计见 `research.signal.view` |
-| `risk.rules.edit` | 个人风控/盘中规则编辑 | action | `risk.rules.view` | 规则表单 | `POST /api/risk/rules`、`POST /api/risk/intraday-rules` | T | self | 写 `user_config`；只影响自己 |
+| `risk.rules.edit` | 个人风控/盘中规则编辑 | action | `risk.rules.view` | 规则表单 | `POST /api/risk/rules`、`POST /api/risk/intraday-rules`、`POST /api/risk/evaluate-personal` | T | self | 写 `user_config`；手动评估只影响自己 |
 | `risk.alerts.view` | 个人告警查看 | action | — | 顶栏/详情页 | `GET /api/risk/alerts`（`ack=false`） | A/T/S | self | 只返回自己的告警；模型告警另见 `model.alerts.view` |
 | `risk.alerts.ack` | 个人告警确认 | action | `risk.alerts.view` | 确认按钮 | `POST /api/risk/alerts/ack`（新增；旧 `GET ?ack=true` 仅兼容） | T | self | 只确认自己的告警；支持模式禁止 |
 | `watch.group.view` | 自选分组查看 | menu | — | 持仓页 tab/详情页标签 | `GET /api/watch/groups`、`GET /api/watch/groups/{id}/stocks`、`GET /api/watch/stock-groups` | A/T/N/S | self | 分组名按用户唯一 |
@@ -2042,7 +2042,7 @@ class WSClient:
 | `portfolio.discipline.view` | `GET /api/portfolio/trades/discipline/rules`、`GET /api/portfolio/trades/discipline/today` |
 | `portfolio.discipline.edit` | `PUT /api/portfolio/trades/discipline/rules` |
 | `risk.rules.view` | `GET /api/risk/rules`、`GET /api/risk/intraday-rules` |
-| `risk.rules.edit` | `POST /api/risk/rules`、`POST /api/risk/intraday-rules` |
+| `risk.rules.edit` | `POST /api/risk/rules`、`POST /api/risk/intraday-rules`、`POST /api/risk/evaluate-personal` |
 | `risk.alerts.view` | `GET /api/risk/alerts`（`ack=false`） |
 | `risk.alerts.ack` | `POST /api/risk/alerts/ack`（旧 `GET ?ack=true` 仅兼容） |
 | `watch.group.view` | `GET /api/watch/groups`、`/watch/groups/{id}/stocks`、`/watch/stock-groups` |
