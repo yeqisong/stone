@@ -1163,7 +1163,7 @@ def get_intraday_radar(principal: Principal = Depends(get_principal)):
         equity = 0.0
         try:
             from app.trade_intraday import state as intraday_state
-            _st = intraday_state(db, uid)
+            _st = intraday_state(db, uid, persist=not principal.support_mode)
             equity = float(_st.get("equity") or 0)
             positions = {
                 p["stock_code"]: {"qty": int(p["quantity"] or 0),

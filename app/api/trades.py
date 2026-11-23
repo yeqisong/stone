@@ -175,7 +175,8 @@ def intraday_guard_state(principal: Principal = Depends(optional_auth)):
     """当前用户实时仓位护栏状态：交割单 + 今日临时记录 + 实时价。"""
     db = get_sync_db()
     try:
-        return {"ok": True, "state": intraday_state(db, principal.data_user_id)}
+        return {"ok": True, "state": intraday_state(db, principal.data_user_id,
+                                                    persist=not principal.support_mode)}
     finally:
         db.close()
 
@@ -274,7 +275,8 @@ def reduction_plan(target: Optional[float] = Query(None, ge=0.1, le=1.0),
     """精确减仓清单：同时满足目标仓位与单票上限，按100股整手。"""
     db = get_sync_db()
     try:
-        st = intraday_state(db, principal.data_user_id)
+        st = intraday_state(db, principal.data_user_id,
+                            persist=not principal.support_mode)
         disc = get_discipline(db, principal.data_user_id)
         t = target if target is not None else float(disc.get("target_position_ratio") or 0.70)
         cap = max_single if max_single is not None else float(disc.get("max_single_weight") or 0.20)

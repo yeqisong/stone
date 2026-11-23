@@ -211,7 +211,8 @@ def list_alerts(limit: int = Query(50, ge=1, le=500), ack: bool = False,
     db = get_sync_db()
     try:
         if ack:
-            _ack_alerts(db, principal, scope)
+            # GET 不得产生写入（支持模式只读承诺）；确认必须走 POST /api/risk/alerts/ack
+            raise HTTPException(400, "请使用 POST /api/risk/alerts/ack 确认告警")
         where, params = ["1=1"], {"n": limit}
         if scope == "model":
             if not principal.can("model.alerts.view"):
