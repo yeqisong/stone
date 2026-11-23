@@ -42,6 +42,8 @@ def workspace(session_id: int, user_id: int | None = None) -> Path:
     (ws / "pylibs").mkdir(exist_ok=True)
     (ws / "node").mkdir(exist_ok=True)
     (ws / "uploads").mkdir(exist_ok=True)
+    (ws / ".tmp").mkdir(exist_ok=True)
+    (ws / ".cache").mkdir(exist_ok=True)
     return ws
 
 
@@ -71,14 +73,25 @@ def save_upload(session_id: int, filename: str, data: bytes,
 
 
 def _env(ws: Path) -> dict:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(ws / "pylibs") + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env["NODE_PATH"] = str(ws / "node" / "node_modules")
-    env["PATH"] = str(ws / "node" / "node_modules" / ".bin") + os.pathsep + env.get("PATH", "")
-    env["HOME"] = str(ws)          # 沙箱内脚本的临时/缓存目录也落会话工作区
-    env["MPLBACKEND"] = "Agg"      # 无显示环境，避免 matplotlib 报错
-    env["PYTHONIOENCODING"] = "utf-8"
-    return env
+    """最小环境变量 allowlist：绝不继承数据库/LLM/Tushare/JWT 等密钥。"""
+    py_bin = str(Path(_PY).parent)
+    return {
+        "PATH": os.pathsep.join([
+            str(ws / "node" / "node_modules" / ".bin"), py_bin,
+            "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+        ]),
+        "HOME": str(ws),              # 缓存/临时文件也落会话工作区
+        "TMPDIR": str(ws / ".tmp"),
+        "XDG_CACHE_HOME": str(ws / ".cache"),
+        "PYTHONPATH": str(ws / "pylibs"),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "NODE_PATH": str(ws / "node" / "node_modules"),
+        "MPLBACKEND": "Agg",         # 无显示环境，避免 matplotlib 报错
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "Asia/Shanghai",
+    }
 
 
 _CHILD = str(Path(__file__).resolve().parent / "_child.py")
@@ -92,16 +105,19 @@ def sandbox_enabled() -> bool:
 
 
 def _wrap_cmd(cmd: list, ws: Path) -> list:
-    """用 bwrap 包一层：根只读、网络隔离、仅会话工作区可写。"""
-    if not sandbox_enabled():
-        return cmd
+    """用 bwrap 包一层：根只读、项目根隐藏、网络隔离、仅会话工作区可写。"""
+    venv_root = str(Path(_PY).parent.parent)
     return [
         _BWRAP,
         "--ro-bind", "/", "/",
+        # 隐藏项目根（.env / 源码 / 其他用户工作区），只恢复 venv 和本会话工作区
+        "--tmpfs", str(ROOT),
+        "--ro-bind", venv_root, venv_root,
+        "--ro-bind", _CHILD, _CHILD,
+        "--bind", str(ws), str(ws),
         "--dev", "/dev",
         "--proc", "/proc",
         "--tmpfs", "/tmp",
-        "--bind", str(ws), str(ws),
         "--chdir", str(ws),
         "--unshare-all",          # 独立 user/net/pid/ipc/uts/cgroup 命名空间
         "--die-with-parent",
@@ -135,8 +151,11 @@ def _run(cmd: list, ws: Path, timeout: int, kind: str = "python",
     """执行子进程。经 _child.py 启动器设 rlimit（preexec_fn 在多线程 uvicorn 下
     fork 会 SIGSEGV，实测 exit_code=-11；start_new_session 可安全使用 posix_spawn）。"""
     t0 = time.time()
+    if use_sandbox and _SANDBOX_MODE != "none" and not sandbox_enabled():
+        return {"ok": False, "stdout": "", "stderr": "bubblewrap 不可用，代码执行已禁用（fail-closed）",
+                "elapsed_ms": 0}
     full = [_PY, _CHILD, kind, *cmd]
-    if use_sandbox:
+    if use_sandbox and sandbox_enabled():
         full = _wrap_cmd(full, ws)
     try:
         p = subprocess.Popen(
@@ -197,28 +216,44 @@ def run_node(session_id: int, code: str, timeout: int = DEFAULT_TIMEOUT,
     return r
 
 
+_PKG_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9_.@/+\-\[\]<>=!~,]*$")
+
+
+def _safe_packages(packages: list) -> list:
+    """包名/版本约束 allowlist；拒绝 -r/--index-url/--registry 等命令行选项注入。"""
+    raw = [str(p).strip() for p in (packages or [])]
+    if any(s.startswith("-") for s in raw if s):
+        return []
+    out = []
+    for s in raw:
+        if not s or len(s) >= 80 or s.startswith("-") or not _PKG_RE.fullmatch(s):
+            continue
+        out.append(s)
+    return out
+
+
 def pip_install(session_id: int, packages: list, timeout: int = 180,
                 user_id: int | None = None) -> dict:
-    pkgs = [p for p in (packages or []) if p and len(p) < 80]
+    pkgs = _safe_packages(packages)
     if not pkgs:
-        return {"ok": False, "stdout": "", "stderr": "未指定包名"}
+        return {"ok": False, "stdout": "", "stderr": "未指定合法包名（拒绝命令行选项）"}
     ws = workspace(session_id, user_id)
     cmd = ["-m", "pip", "install", "--quiet", "--disable-pip-version-check",
-           "--target", str(ws / "pylibs"), *pkgs]
+           "--target", str(ws / "pylibs"), "--", *pkgs]
     return _run(cmd, ws, timeout, kind="python", session_id=session_id, use_sandbox=False)
 
 
 def npm_install(session_id: int, packages: list, timeout: int = 240,
                 user_id: int | None = None) -> dict:
-    pkgs = [p for p in (packages or []) if p and len(p) < 80]
+    pkgs = _safe_packages(packages)
     if not pkgs:
-        return {"ok": False, "stdout": "", "stderr": "未指定包名"}
+        return {"ok": False, "stdout": "", "stderr": "未指定合法包名（拒绝命令行选项）"}
     ws = workspace(session_id, user_id)
     npm = shutil.which("npm") or "/usr/bin/npm"
     if not os.path.exists(npm):
         return {"ok": False, "stdout": "", "stderr": "npm 不可用"}
     return _run([npm, "install", "--silent", "--no-audit", "--no-fund",
-                 "--prefix", str(ws / "node"), *pkgs], ws, timeout, kind="node",
+                 "--prefix", str(ws / "node"), "--", *pkgs], ws, timeout, kind="node",
                 session_id=session_id, use_sandbox=False)
 
 
