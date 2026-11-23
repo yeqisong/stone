@@ -325,6 +325,15 @@ const allBackendTabs = [
   { key: 'o', label: '系统设置', icon: 'sliders', perm: 'system.settings.view' },
   { key: 'j', label: '支持', icon: 'shield', perm: 'admin.support.view' },
 ]
+// 二级/详情页没有左侧一级 tab，直链也必须校验底层权限，避免深链绕过菜单隐藏
+const subTabPerms = {
+  d: 'research.stock.view',   // 个股详情
+  c: 'research.cb.view',      // 可转债详情
+  v: 'feature.view',          // 特征详情
+  q: 'dag.view',              // DAG 运行日志
+  r: 'dag.view',              // DAG 流程查看
+  t: 'portfolio.trades.view', // 交易复盘
+}
 const primaryTabs = computed(() => allPrimaryTabs.filter(t => auth.can(t.perm)))
 const adminTabs = computed(() => allAdminTabs.filter(t => auth.can(t.perm)))
 const backendTabs = computed(() => allBackendTabs.filter(t => auth.can(t.perm)))
@@ -332,7 +341,9 @@ const isAdminTab = computed(() => [...allAdminTabs, ...allBackendTabs].some(t =>
 
 function canAccessTab(key) {
   const t = [...allPrimaryTabs, ...allAdminTabs, ...allBackendTabs].find(x => x.key === key)
-  return !t || auth.can(t.perm)
+  if (t) return auth.can(t.perm)
+  const subPerm = subTabPerms[key]
+  return !subPerm || auth.can(subPerm)
 }
 function firstAllowedTab() {
   const t = [...allPrimaryTabs, ...allAdminTabs, ...allBackendTabs].find(x => auth.can(x.perm))
