@@ -548,6 +548,17 @@ class TestPersist:
         assert iw._persist(cands, _rules(max_per_tick=2), NOW) == 2
         assert [i['k'] for i in fake.inserts] == ['it_stop', 'it_surge']
 
+    def test_tick_cap_does_not_drop_candidates_when_top_in_cooldown(self, monkeypatch):
+        # 前两条（it_stop / it_surge）在冷却中，不能因此让本轮直接空转
+        fake = _FakeDB(count=0, existing={('600000', 'it_stop'), ('600001', 'it_surge')})
+        monkeypatch.setattr(iw, 'get_sync_db', lambda: fake)
+        cands = [self._cand('600000', 'it_stop'),
+                 self._cand('600001', 'it_surge'),
+                 self._cand('600002', 'it_high'),
+                 self._cand('600003', 'it_vol')]
+        assert iw._persist(cands, _rules(max_per_tick=2), NOW) == 2
+        assert [i['k'] for i in fake.inserts] == ['it_high', 'it_vol']
+
     def test_stop_cooldown_uses_240_minutes(self, monkeypatch):
         fake = _FakeDB(count=0)
         monkeypatch.setattr(iw, 'get_sync_db', lambda: fake)

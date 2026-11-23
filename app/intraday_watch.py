@@ -740,7 +740,9 @@ def _persist(candidates: list, rules: dict, now: datetime,
     cooldown_default = max(1, _num(rules.get('cooldown_min'), 30, int))
     stock_cd = max(0, _num(rules.get('stock_cooldown_min'), 5, int))
     family_cd = max(0, _num(rules.get('family_cooldown_min'), 15, int))
-    candidates = sorted(candidates, key=lambda c: PRIORITY.get(c['kind'], 9))[:max_tick]
+    # 先按优先级排序，但不能在冷却过滤前截断：若前 N 条都在冷却中，
+    # 旧实现会直接丢弃本轮，后面的有效候选永远轮不到。
+    candidates = sorted(candidates, key=lambda c: PRIORITY.get(c['kind'], 9))
     ai_enabled = bool(rules.get('ai_event_enabled', True))
     ai_kinds = set(rules.get('ai_event_kinds') or [])
     to_enqueue = []
@@ -753,6 +755,8 @@ def _persist(candidates: list, rules: dict, now: datetime,
             "WHERE user_id=:uid AND trade_date=:d AND kind LIKE 'it%'"
         ), {"uid": uid, "d": now.date()}).scalar() or 0
         for c in candidates:
+            if inserted >= max_tick:
+                break
             # 单日上限用于压噪声，不压止损/跌停/急跌等 critical 告警
             if count >= max_day and not (max_day > 0 and c['level'] == 'critical'):
                 continue
