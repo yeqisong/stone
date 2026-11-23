@@ -35,6 +35,24 @@ class TestReductionPlan:
         assert plan["after"]["top_weight"] <= 0.20 + 1e-6
         assert plan["after"]["position_ratio"] < 0.60
 
+    def test_t1_today_buy_is_not_sellable(self):
+        positions = [{"code": "600000", "name": "浦发银行", "qty": 1000,
+                      "price": 10.0, "sellable_qty": 200}]
+        plan = build_reduction_plan(positions, 0.0, 0.50, 1.0)
+        row = plan["rows"][0]
+        assert row["sell_qty"] == 200
+        assert row["t1_qty"] == 800
+        assert plan["t1_deferred"] == 8000
+        assert plan["after"]["position_ratio"] == 0.80
+        assert "T+1" in plan["note"]
+
+    def test_today_buy_qty_argument(self):
+        positions = [_pos("600000", "浦发银行", 1000, 10.0)]
+        plan = build_reduction_plan(positions, 0.0, 0.50, 1.0,
+                                    today_buy_qty={"600000": 900})
+        assert plan["rows"][0]["sell_qty"] == 100
+        assert plan["t1_deferred"] == 9000
+
     def test_already_compliant(self):
         positions = [_pos("600000", "浦发银行", 100, 10.0)]
         plan = build_reduction_plan(positions, 9000.0, 0.70, 0.20)
