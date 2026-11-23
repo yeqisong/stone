@@ -23,8 +23,17 @@ axios.interceptors.response.use(
     const isLogin = error.config?.url?.includes('/api/login')
     if (error.response?.status === 401 && !_401Reloading && !isLogin) {
       _401Reloading = true
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
+      // 支持会话是叠加在主账号 token 上的只读上下文：它失效时只清 support_token，
+      // 不能把管理员/用户本人登录态一起清掉（否则每次进支持模式都像被登出）。
+      if (localStorage.getItem('support_token')) {
+        localStorage.removeItem('support_token')
+      } else {
+        localStorage.removeItem('token')
+        localStorage.removeItem('username')
+        localStorage.removeItem('auth_user')
+        localStorage.removeItem('auth_roles')
+        localStorage.removeItem('auth_permissions')
+      }
       window.location.reload()
     }
     return Promise.reject(error)
