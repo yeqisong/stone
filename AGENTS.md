@@ -181,22 +181,17 @@ cd web-v2 && npm run dev
 # 或直接（无需 npm 包装）：node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3000
 ```
 
-### 分支策略（2026-09-14 起强制）
+### 分支与环境策略（2026-11-23 起强制）
 
-**禁止直接在 `main` 上改动。** 每项工作开独立分支（`feat/xxx`、`fix/xxx`），完成后合回 `main`；`main` 只接受合并与用户明确要求的收口提交。
+完整规范见 `design/12-开发分支与测试环境规范.md`。核心：
 
-```bash
-git checkout -b fix/factor-heal      # 开工先建分支
-git add <只列自己改的文件> && git commit -m "..."
-git push -u origin fix/factor-heal   # 远程：git@github.com:yeqisong/stone.git
-```
-
-**多会话并行是本仓库的常态**（曾出现两个会话同时改 `scripts/pipeline.py`）。因此：
-
-1. 动手前必查 `git status` + `git log --oneline -3`：确认工作区有没有他人在途改动、有没有不是自己的新提交。
-2. **只 `git add` 自己改的文件**，禁止 `git add -A` / `git commit -a` 扫入他人未提交的工作。
-3. 高冲突文件（`scripts/pipeline.py`、`scripts/feature_compute.py`、`web-v2/src/components/*.vue`、`AGENTS.md`）改动前先看 `git status`；Edit 报"文件已被修改"时必须重新 Read 再改，不可用旧快照回写。
-4. 发现工作区有他人改动时：不要提交、不要回滚，在回复里说明并继续自己的部分。
+1. **主仓库永远停在 `main`**：`/home/bnbnyu/projects/stone` 只用于 3000/8000 验收，禁止在主仓库 checkout 功能分支。
+2. **一任务一分支一工作树**：从最新 `main` 建 `feat/<slug>` / `fix/<slug>`，工作树放 `/home/bnbnyu/projects/stone-worktrees/<slug>`；任务合并后立即删除，不复用旧分支/旧 worktree。
+3. **一任务一端口对**：主环境 `8000/3000`；任务从 `8100/3100`、`8101/3101` 顺延，禁止 kill 他人端口进程。
+4. **测试库**：非 schema 任务用共享 `stone_test`；涉及 `app/db/schema.py` / `init_db` 迁移的任务从 `stone_test` 克隆 `stone_t_<slug>`，任务结束 drop。自动化测试禁止连生产库 `stock_monitor`；生产库只用于人工验收，迁移前先备份。
+5. **收尾必须回收**：测试/构建通过 → 合并 `main` → `git worktree remove` → 删除分支 → drop 任务库 → 停止进程。分支生命周期 ≤ 3 天。
+6. 开工先 `git fetch --prune && git switch main && git pull --ff-only && git status`，并查 `git worktree list`；新会话不复用旧分支。
+7. **只 `git add` 自己改的文件**，禁止 `git add -A` / `git commit -a`；高冲突文件改动前先看 `git status`，发现他人改动不回滚、不提交，在回复中说明。
 
 ### 版本管理（现行）
 
