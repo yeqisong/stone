@@ -715,7 +715,8 @@ def live_positions(db, user_id: int | None = None,
 
 
 def _build_state(db, user_id: int | None = None,
-                 cash_override: Optional[float] = None) -> dict:
+                 cash_override: Optional[float] = None,
+                 persist: bool = True) -> dict:
     now = _now()
     live = live_snapshot(db, user_id, cash_override)
     today = live["today"]
@@ -887,10 +888,12 @@ def _build_state(db, user_id: int | None = None,
         },
     }
     plan = None
-    try:
-        plan = _call_user(get_or_create_plan, db, user_id, state, today)
-    except Exception as e:
-        logger.warning(f"[intraday] 计划生成失败: {str(e)[:120]}")
+    # 支持模式/只读查看不落计划：GET 请求不得产生 INSERT/UPDATE
+    if persist:
+        try:
+            plan = _call_user(get_or_create_plan, db, user_id, state, today)
+        except Exception as e:
+            logger.warning(f"[intraday] 计划生成失败: {str(e)[:120]}")
     try:
         profile = _call_user(_get_profile, db, user_id)
         sectors = _top_sectors(db, positions)
@@ -905,8 +908,8 @@ def _build_state(db, user_id: int | None = None,
     return state
 
 
-def state(db, user_id: int | None = None) -> dict:
-    return _build_state(db, user_id)
+def state(db, user_id: int | None = None, persist: bool = True) -> dict:
+    return _build_state(db, user_id, persist=persist)
 
 
 def journal_get(db, user_id: int, day: Optional[_date] = None) -> dict:
