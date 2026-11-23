@@ -44,7 +44,7 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
-import { ref, watch, onMounted, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useThemeStore } from '../stores/theme'
 import { chartColors as T } from '../utils/chart'
 import { NSpin, NDataTable, NButton, NSpace, NSelect } from 'naive-ui'
@@ -117,15 +117,24 @@ async function load() {
   } catch(e) { loadError.value = true; loading.value = false }
 }
 
+const chartEls = new Set()
 function makeChart(id, opt) {
   const el = document.getElementById(id)
   if (!el) return null
   if (el._echart) el._echart.dispose()
   const c = echarts.init(el)
   el._echart = c
+  chartEls.add(el)
   c.setOption(opt)
   return c
 }
+onUnmounted(() => {
+  for (const el of chartEls) {
+    try { el._echart?.dispose() } catch (_) {}
+    el._echart = null
+  }
+  chartEls.clear()
+})
 
 function drawTrend() {
   const t = stats.value.daily_trend

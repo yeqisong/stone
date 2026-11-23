@@ -126,7 +126,7 @@
 
 <script setup>
 import AppIcon from './AppIcon.vue'
-import { computed, ref, watch, onMounted, nextTick } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useThemeStore } from '../stores/theme'
 import { chartColors as T } from '../utils/chart'
 import axios from 'axios'
@@ -174,6 +174,11 @@ async function loadPaper() {
     if (paper.value?.equity?.length) nextTick(() => renderPaper())
   } catch(e) { console.error(e) }
 }
+
+onUnmounted(() => {
+  try { paperChartInst?.dispose() } catch (_) {}
+  paperChartInst = null
+})
 
 function renderPaper() {
   if (!paperChart.value) return
