@@ -2002,6 +2002,14 @@ def _ensure_readonly_role(sync_session) -> None:
         logger.warning(f"[schema] stone_ro 创建/授权失败（Agent SQL 将拒绝执行）: {str(e)[:200]}")
 
 
+def _strip_leading_comments(stmt: str) -> str:
+    """去掉分段开头的纯注释行，避免带注释的 DDL（如 feature_values 分区 DO 块）被跳过。"""
+    lines = stmt.splitlines()
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith("--")):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 def init_db(sync_session) -> None:
     """初始化数据库：建表 + 默认数据。幂等，可重复执行。"""
     # DDL 锁超时：避免长事务（如特征计算）持锁时启动被无限阻塞；超时后本会话失败可重试
@@ -2011,8 +2019,8 @@ def init_db(sync_session) -> None:
         pass
     for name, sql in ALL_TABLES:
         for stmt in _split_statements(sql.strip()):
-            stmt = stmt.strip()
-            if stmt and not stmt.startswith("--"):
+            stmt = _strip_leading_comments(stmt)
+            if stmt:
                 try:
                     sync_session.execute(text(stmt))
                     sync_session.commit()
