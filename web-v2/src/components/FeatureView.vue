@@ -625,6 +625,7 @@ function authHeaders() {
 // ── 依赖图 ──
 const showDepGraph = ref(false)
 const depGraphContainer = ref(null)
+let depChartInst = null
 
 async function openDepGraph() {
   showDepGraph.value = true
@@ -633,7 +634,9 @@ async function openDepGraph() {
   try {
     const r = await axios.get(API + '/api/features/dependency-graph')
     const { nodes, edges } = r.data
+    try { depChartInst?.dispose() } catch (_) {}
     const chart = echarts.init(depGraphContainer.value)
+    depChartInst = chart
     const colors = {0:T.faint,1:T.up,2:T.warn,3:T.up}
     chart.setOption({
       tooltip: { formatter(p) { return p.data.name + (p.data.display_name?'<br/>'+p.data.display_name:'') } },
@@ -857,6 +860,10 @@ function onPopstate() {
 onUnmounted(() => {
   if (computeWsUnwatch) computeWsUnwatch()
   window.removeEventListener('popstate', onPopstate)
+  try { dedupHeatInst?.dispose() } catch (_) {}
+  dedupHeatInst = null
+  try { depChartInst?.dispose() } catch (_) {}
+  depChartInst = null
 })
 window.addEventListener('popstate', onPopstate)
 </script>

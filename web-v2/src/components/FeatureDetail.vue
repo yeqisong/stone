@@ -634,7 +634,15 @@ const previewTotalPages = computed(() => Math.max(1, Math.ceil(previewTotal.valu
 import { h } from 'vue'
 const _theme = useThemeStore()
 let icPollTimer = null
-onUnmounted(() => { if (icPollTimer) clearInterval(icPollTimer) })
+onUnmounted(() => {
+  if (icPollTimer) clearInterval(icPollTimer)
+  for (const inst of [icChartInst, layerChartInst, decayChartInst,
+                      pieInstance, heatmapInstance]) {
+    try { inst?.dispose() } catch (_) {}
+  }
+  icChartInst = layerChartInst = decayChartInst = null
+  pieInstance = heatmapInstance = null
+})
 
 async function loadDetail() {
   loading.value = true
