@@ -230,7 +230,12 @@ addWsListener(data => {
 
 onMounted(async () => {
   if (auth.token) {
-    try { await auth.refreshMe() } catch (_) { auth.logout() }
+    try {
+      await auth.refreshMe()
+    } catch (e) {
+      // 只有明确的鉴权失败才登出；网络抖动/5xx 保留本地登录态，避免刷新即被踢
+      if ([401, 403].includes(e.response?.status)) auth.logout()
+    }
   }
   if (auth.token) connectWebSocket()
   theme.startAutoTimer()
