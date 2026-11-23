@@ -148,6 +148,8 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **Docker**: Python 3.11-slim，阿里云镜像加速；docker-compose (app + PostgreSQL + Redis)
 - **环境变量**: `.env` + pydantic-settings；`APP_ENV=dev|prod`；TUSHARE_TOKEN 必须配置
 - **前端**: Axios 拦截器自动带 JWT Token；401 排除 /api/login 的 reload；日期一律北京时间；WS 监听器务必清理
+- **新功能必须判定权限节点（强制）**: 任何新增/修改的页面、菜单、子 tab、按钮、API、Agent 工具、敏感动作，开发前先判定是否抽象为功能节点。属于用户可授权能力 → 同一提交内更新 `app/auth/definitions.py`（权限码/名称/父子/route/API 映射）、`app/auth/route_permissions.py`、角色默认矩阵、前端导航/`v-perm`、`design/10-多用户与RBAC权限设计.md` 与多角色测试矩阵；纯共享只读且无需单独授权的能力，也要在权限表中标注归属父节点或 `public`。**禁止只加后端路由/按钮而不登记权限节点**。
+- **权限节点变更审查**: 新增/调整权限码时，必须同时说明：默认授予哪些角色、是否 personal scope / support_only、支持模式是否禁止、旧数据/旧角色如何迁移；至少补一条"有权通过 + 无权 403/隐藏"的双角色测试。内部定时任务、DAG 节点等不暴露 HTTP 的后台能力可不单独建节点，但若提供页面/API 操作入口，入口本身必须有节点。
 
 ## Deployment（已下线，历史存档）
 
