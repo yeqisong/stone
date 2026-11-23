@@ -1,4 +1,5 @@
 """飞书消息处理主逻辑。"""
+import asyncio
 import json
 from loguru import logger
 
@@ -7,6 +8,14 @@ from app.ai.tools import TOOL_PERMISSIONS, TOOL_REGISTRY, get_tools_for_deepseek
 from app.feishu.context import build_system_context
 from app.feishu.history import get_history, save_history
 from app.feishu.identity import history_key
+
+
+async def _release_db(db) -> None:
+    """及时结束只读事务，避免长 LLM 调用期间占着连接池连接。"""
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
 
 
 async def handle_message(user_text: str, db, principal) -> str:
@@ -29,6 +38,7 @@ async def handle_message(user_text: str, db, principal) -> str:
 
     # 2. 组装消息
     system_ctx = await build_system_context(db, user_id)
+    await _release_db(db)
     history_msgs, summary = get_history(history_key(user_id))
 
     messages = []
@@ -42,7 +52,8 @@ async def handle_message(user_text: str, db, principal) -> str:
     tools = get_tools_for_deepseek(principal.permission_codes(), is_admin=is_admin)
 
     # 3. 第一轮：DeepSeek 理解意图
-    response = chat(messages, tools)
+    # OpenAI SDK 是同步阻塞调用，放线程池避免卡住 FastAPI 事件循环
+    response = await asyncio.to_thread(chat, messages, tools)
     if not response["ok"]:
         # API 失败，如果是连续失败超过阈值，返回菜单
         if not is_available():
@@ -123,8 +134,11 @@ async def handle_message(user_text: str, db, principal) -> str:
         # 不保存对话历史（等用户确认后才算完成一轮）
         return card_json
 
+    # 至少执行完一轮工具后释放连接，再进行可能较慢的第二轮 LLM 调用
+    await _release_db(db)
+
     # 6. 第二轮：DeepSeek 基于执行结果生成回复
-    response2 = chat(messages)  # 无需再传 tools
+    response2 = await asyncio.to_thread(chat, messages)  # 无需再传 tools
     reply = response2.get("content") or "操作已完成。"
     save_history(history_key(user_id), user_text, reply)
     return reply
