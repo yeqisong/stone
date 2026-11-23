@@ -154,6 +154,19 @@ class TestAgentSqlWhitelist(unittest.TestCase):
         self.assertIsNotNone(_sql_table_error("SELECT * FROM pg_catalog.pg_class"))
         self.assertIsNotNone(_sql_table_error("SELECT pg_read_file('/etc/passwd')"))
 
+    def test_file_advisory_and_backend_functions_rejected(self):
+        for expr in (
+            "pg_read_binary_file('/etc/passwd')",
+            "pg_ls_logdir()", "pg_ls_waldir()", "pg_ls_tmpdir()",
+            "pg_advisory_lock(1)", "pg_advisory_xact_lock_shared(1)",
+            "pg_try_advisory_lock(1)", "pg_advisory_unlock_all()",
+            "pg_terminate_backend(123)", "pg_cancel_backend(123)",
+            "pg_sleep_for('1s')", "pg_sleep_until(now())",
+            "lo_get(1)", "lo_put(1, 'x')", "dblink_connect('x')",
+            "pg_switch_wal()", "pg_create_restore_point('x')",
+        ):
+            self.assertIsNotNone(_sql_table_error(f"SELECT {expr}"), expr)
+
 
 class TestAgentToolGate(unittest.TestCase):
     def test_admin_only_tools_filtered(self):

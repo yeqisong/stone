@@ -1962,6 +1962,46 @@ def _split_statements(sql: str) -> list:
     return stmts
 
 
+def _ensure_readonly_role(sync_session) -> None:
+    """为 Agent 原始 SQL 准备最小权限只读角色 stone_ro。
+
+    仅授予 SHARED_TABLES 的 SELECT；个人/身份/审计表无任何权限，即使 SQL
+    表白名单被绕过，数据库层仍会拒绝。非超级用户部署无法创建角色时只告警。
+    """
+    from app.data_scope import SHARED_TABLES
+    try:
+        is_super = sync_session.execute(text(
+            "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")).scalar()
+        if not is_super:
+            logger.warning("[schema] 当前数据库用户非超级用户，跳过 stone_ro 创建")
+            return
+        exists = sync_session.execute(text(
+            "SELECT 1 FROM pg_roles WHERE rolname = 'stone_ro'")).scalar()
+        if not exists:
+            sync_session.execute(text("CREATE ROLE stone_ro NOLOGIN"))
+        sync_session.execute(text("GRANT USAGE ON SCHEMA public TO stone_ro"))
+        sync_session.execute(text("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM stone_ro"))
+        rows = sync_session.execute(text("""
+            SELECT c.relname FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind IN ('r','v','p','m')
+              AND c.relname = ANY(:names)
+        """), {"names": list(SHARED_TABLES)}).scalars().all()
+        if rows:
+            names = ", ".join(f'public."{str(n).replace(chr(34), chr(34) * 2)}"' for n in rows)
+            sync_session.execute(text(f"GRANT SELECT ON TABLE {names} TO stone_ro"))
+        sync_session.execute(text(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+            "GRANT SELECT ON TABLES TO stone_ro"))
+        sync_session.execute(text(
+            "ALTER ROLE stone_ro SET default_transaction_read_only = on"))
+        sync_session.commit()
+        logger.info(f"[schema] stone_ro 只读角色就绪，授权表 {len(rows)} 张")
+    except Exception as e:
+        sync_session.rollback()
+        logger.warning(f"[schema] stone_ro 创建/授权失败（Agent SQL 将拒绝执行）: {str(e)[:200]}")
+
+
 def init_db(sync_session) -> None:
     """初始化数据库：建表 + 默认数据。幂等，可重复执行。"""
     # DDL 锁超时：避免长事务（如特征计算）持锁时启动被无限阻塞；超时后本会话失败可重试
@@ -3072,3 +3112,6 @@ def init_db(sync_session) -> None:
         sync_session.commit()
     except Exception:
         sync_session.rollback()
+
+    # Agent 原始 SQL 最小权限角色（共享表只读；个人/身份表无权限）
+    _ensure_readonly_role(sync_session)

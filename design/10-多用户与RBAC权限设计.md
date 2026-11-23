@@ -530,7 +530,7 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 6. 沙箱只挂载 `data/agent_ws/<user_id>/<session_id>/` 与必要只读系统库路径；**不得挂载项目根目录/`.env`/源码目录**；pip/npm 默认禁用，如开启必须在容器内且限制网络。
 7. `agent.exec` 默认仅 admin；即使 admin 使用也审计。bwrap 不可用时 fail-closed，不能退化为无隔离执行。
 8. `agent.exec` 沙箱**禁用网络、禁用本地 PostgreSQL socket、禁用 DB 驱动**（或使用独立只读数据服务）；否则 admin 可通过代码连接数据库，绕过 A7/表白名单。
-9. `agent.sql.raw` 必须用 SQL AST 解析所有表引用（CTE/子查询/JOIN），拒绝白名单外表与 `pg_catalog/information_schema`；正则只做初筛，不能作为唯一防线。
+9. `agent.sql.raw` 必须用 SQL AST 解析所有表引用（CTE/子查询/JOIN），拒绝白名单外表与 `pg_catalog/information_schema`；正则只做初筛。数据库层再用 `stone_ro` 最小权限角色兜底：仅 `SHARED_TABLES` 的 SELECT、默认只读事务，个人/身份表即使绕过解析器也无权限。
 
 ### 6.3 角色定义
 

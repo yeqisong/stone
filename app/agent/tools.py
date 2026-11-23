@@ -157,8 +157,20 @@ _CTE_RE = re.compile(
     r'\b(?:with(?:\s+recursive)?|,)\s*"?([A-Za-z_][\w$]*)"?\s+as\s*\(', re.I)
 _SQL_FROM_KEYWORDS = {"lateral", "only", "select"}
 _SQL_DANGER_RE = re.compile(
-    r'\b(pg_read_file|pg_ls_dir|pg_stat_file|dblink|lo_import|lo_export|'
-    r'current_setting|set_config|pg_sleep)\b', re.I)
+    r'\b('
+    r'pg_read_file|pg_read_binary_file|pg_stat_file|'
+    r'pg_ls_dir|pg_ls_logdir|pg_ls_waldir|pg_ls_tmpdir|pg_logdir_ls|'
+    r'pg_file_write|pg_file_rename|pg_file_unlink|'
+    r'dblink(?:_connect|_exec|_disconnect)?|'
+    r'lo_import|lo_export|lo_create|lo_unlink|lo_open|lo_get|lo_put|loread|lowrite|'
+    r'pg_advisory_(?:xact_)?(?:un)?lock(?:_shared|_all)?|'
+    r'pg_try_advisory_(?:xact_)?lock(?:_shared)?|'
+    r'pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|'
+    r'pg_switch_wal|pg_create_restore_point|pg_start_backup|pg_stop_backup|'
+    r'pg_promote|pg_wal_replay_pause|pg_wal_replay_resume|'
+    r'pg_export_snapshot|pg_logical_emit_message|pg_notify|'
+    r'current_setting|set_config|pg_sleep|pg_sleep_for|pg_sleep_until'
+    r')\b', re.I)
 
 
 def _sql_table_error(q: str) -> str | None:
@@ -210,6 +222,12 @@ def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> d
     db = get_sync_db()
     try:
         db.execute(text("SET TRANSACTION READ ONLY"))
+        # 最小权限角色：只有共享表 SELECT；个人/身份表即使白名单被绕过也读不到
+        try:
+            db.execute(text("SET LOCAL ROLE stone_ro"))
+        except Exception:
+            db.rollback()
+            return {"error": "只读数据库角色 stone_ro 不可用，已拒绝执行原始 SQL"}
         db.execute(text("SET LOCAL statement_timeout = '25s'"))
         rows = db.execute(text(q)).fetchall()
         cols = list(rows[0]._mapping.keys()) if rows else []
