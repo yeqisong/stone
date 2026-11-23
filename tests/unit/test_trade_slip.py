@@ -3,6 +3,7 @@ import datetime
 
 from app.trade_slip import (
     _apply_row,
+    _normalize_code,
     _normalize_side,
     _pre_balance,
     _row_hash,
@@ -33,6 +34,18 @@ class TestFieldParsing:
         assert _to_float("") is None
         assert _to_float("−8.5") == -8.5
 
+    def test_stock_code_numeric_excel(self):
+        assert _normalize_code(600000.0) == "600000"
+        assert _normalize_code(1.0) == "000001"
+        assert _normalize_code(1) == "000001"
+        assert _normalize_code("600000.0") == "600000"
+        assert _normalize_code("000001.0") == "000001"
+        assert _normalize_code("000001") == "000001"
+        assert _normalize_code("600000.SH") == "600000"
+        assert _normalize_code("1.5") == ""
+        assert _normalize_code(1234567.0) == ""
+        assert _normalize_code(0) == "000000"
+
     def test_side(self):
         assert _normalize_side("证券买入", "")[0] == "buy"
         assert _normalize_side("证券卖出", "")[0] == "sell"
@@ -42,6 +55,23 @@ class TestFieldParsing:
 
 
 class TestParse:
+    def test_xlsx_numeric_codes(self):
+        """Excel 数值单元格不能把 000001 解析成 000010 / 600000 解析成 700 万。"""
+        import io
+        from openpyxl import Workbook
+        wb = Workbook(); ws = wb.active
+        ws.append(["成交日期", "成交时间", "证券代码", "证券名称", "买卖标志",
+                   "成交数量", "成交编号", "成交价格", "成交金额", "股份余额",
+                   "清算金额", "手续费", "印花税", "附加费", "资金本次余额",
+                   "业务名称", "资金帐号"])
+        ws.append([20260105, "09:30:00", 1.0, "平安银行", "买入", 100, "B1",
+                   10.0, 1000.0, 100, -1005.0, 5.0, 0.0, 0.0, 8995.0, "证券买入", "A1"])
+        ws.append([20260105, "09:31:00", 600000.0, "浦发银行", "买入", 100, "B2",
+                   10.0, 1000.0, 100, -1005.0, 5.0, 0.0, 0.0, 7990.0, "证券买入", "A1"])
+        buf = io.BytesIO(); wb.save(buf)
+        r = parse_slip_bytes(buf.getvalue())
+        assert [x["stock_code"] for x in r["rows"]] == ["000001", "600000"]
+
     def test_gbk_tsv(self):
         data = _tsv([
             "20260105\t09:30:00\t600000\t浦发银行\t买入\t100\tB1\t10.00\t1000\t100\t-1005\t5\t0\t0\t8995\t证券买入\tA1",
