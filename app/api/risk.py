@@ -73,7 +73,8 @@ def write_intraday_rules(rules: dict, enabled: bool = True,
 
 
 @router.get("/signal-stats")
-def signal_stats(days: int = Query(30, ge=1, le=365)):
+def signal_stats(days: int = Query(30, ge=1, le=365),
+                 principal: Principal = Depends(get_principal)):
     """盘中信号记分卡：按 kind 汇总方向调整后的胜率/收益/MFE/MAE。"""
     from app.db.connection import get_sync_db
     db = get_sync_db()
@@ -84,19 +85,21 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
                    AVG(ret_5m), AVG(ret_15m), AVG(ret_30m), AVG(ret_60m),
                    AVG(mfe), AVG(mae), MIN(trade_date), MAX(trade_date), MAX(direction)
             FROM intraday_signal_outcome
-            WHERE trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
+            WHERE user_id = :uid
+              AND trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
               AND status IN ('done', 'partial')
             GROUP BY kind
             ORDER BY COUNT(*) DESC, kind
-        """), {'d': days}).fetchall()
+        """), {'d': days, 'uid': principal.data_user_id}).fetchall()
         # 实际样本区间：卡片写「近 30 日」但系统可能只积累了几天，
         # 不标出来会被误读成 30 天的统计结论。
         span = db.execute(text("""
             SELECT MIN(trade_date), MAX(trade_date), COUNT(DISTINCT trade_date)
             FROM intraday_signal_outcome
-            WHERE trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
+            WHERE user_id = :uid
+              AND trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
               AND status IN ('done', 'partial')
-        """), {'d': days}).fetchone()
+        """), {'d': days, 'uid': principal.data_user_id}).fetchone()
         def f(v):
             return round(float(v), 6) if v is not None else None
         # 事件 AI 观点验证：把 stance 与 30m「原始方向收益」对齐
@@ -114,12 +117,13 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
                 FROM intraday_ai_event e
                 JOIN intraday_signal_outcome o ON o.alert_id = e.alert_id
                 WHERE e.status='done' AND o.ret_30m IS NOT NULL
+                  AND o.user_id = :uid AND e.user_id = :uid
                   AND o.trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'
                   AND e.result->>'stance' IS NOT NULL
             ) t
             GROUP BY stance
             ORDER BY COUNT(*) DESC
-        """), {'d': days}).fetchall()
+        """), {'d': days, 'uid': principal.data_user_id}).fetchall()
         return {
             'days': days,
             'sample_from': str(span[0]) if span and span[0] else None,
@@ -145,13 +149,15 @@ def signal_stats(days: int = Query(30, ge=1, le=365)):
 
 @router.get("/signal-outcomes")
 def signal_outcomes(code: str = Query(''), days: int = Query(30, ge=1, le=365),
-                    limit: int = Query(50, ge=1, le=500)):
+                    limit: int = Query(50, ge=1, le=500),
+                    principal: Principal = Depends(get_principal)):
     """逐条信号结果（详情页/复盘用）；code 为空时返回全池。"""
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
-        where = ["trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'"]
-        params = {'d': days, 'n': limit}
+        where = ["user_id = :uid",
+                 "trade_date >= CURRENT_DATE - :d * INTERVAL '1 day'"]
+        params = {'d': days, 'n': limit, 'uid': principal.data_user_id}
         if code:
             where.append("stock_code = :c")
             params['c'] = code
