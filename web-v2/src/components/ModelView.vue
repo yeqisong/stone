@@ -435,16 +435,27 @@ function startEditConfig() {
   createForm.train_end = cfg.train_end || '2025-12-31'
   createForm.test_start = cfg.test_start || '2026-01-01'
   createForm.test_end = cfg.test_end || null
-  createForm.feature_names = cfg.feature_names || cfg.features || []
+  createForm.feature_names = [...(cfg.feature_names || cfg.features || [])]
+  // 深拷贝：取消编辑时不能把未保存的改动留在 store/配置对象里
+  const tr = JSON.parse(JSON.stringify(cfg.trading_rules || createForm.trading_rules || {}))
+  // 训练/回测真正消费的是顶层 stamp_tax/commission/slippage 与 risk.*；
+  // 编辑界面绑定 trading_rules，进入编辑时把生效值同步过去，避免两套口径分叉。
+  tr.cost_model = tr.cost_model || {}
+  tr.risk_management = tr.risk_management || {}
+  if (cfg.stamp_tax != null) tr.cost_model.stamp_duty = Number(cfg.stamp_tax)
+  if (cfg.commission != null) tr.cost_model.commission_rate = Number(cfg.commission)
+  if (cfg.slippage != null) tr.cost_model.slippage_rate = Number(cfg.slippage)
+  if (cfg.risk?.stop_loss_pct != null) tr.risk_management.stop_loss = Number(cfg.risk.stop_loss_pct) / 100
+  if (cfg.risk?.signal_timeout_days != null) tr.risk_management.max_holding_days = Number(cfg.risk.signal_timeout_days)
+  createForm.trading_rules = tr
   createForm.optuna_trials = cfg.optuna_trials || 50
   createForm.initial_cash = cfg.initial_cash || 1000000
   createForm.max_positions = cfg.max_positions || 5
-  createForm.trading_rules = cfg.trading_rules || createForm.trading_rules
-  createForm.stamp_tax = cfg.trading_rules?.cost_model?.stamp_duty ?? 0.0005
-  createForm.commission = cfg.trading_rules?.cost_model?.commission_rate ?? 0.0015
-  createForm.slippage = cfg.trading_rules?.cost_model?.slippage_rate ?? 0.001
-  createForm.stop_loss_pct = Math.round((cfg.trading_rules?.risk_management?.stop_loss ?? 0.05) * 100)
-  createForm.signal_timeout_days = cfg.trading_rules?.risk_management?.max_holding_days ?? 20
+  createForm.stamp_tax = cfg.stamp_tax ?? tr.cost_model?.stamp_duty ?? 0.0005
+  createForm.commission = cfg.commission ?? tr.cost_model?.commission_rate ?? 0.0015
+  createForm.slippage = cfg.slippage ?? tr.cost_model?.slippage_rate ?? 0.001
+  createForm.stop_loss_pct = Math.round((cfg.risk?.stop_loss_pct ?? (tr.risk_management?.stop_loss ?? 0.05) * 100))
+  createForm.signal_timeout_days = cfg.risk?.signal_timeout_days ?? tr.risk_management?.max_holding_days ?? 20
   const sigCfg = cfg.signal || {}
   createForm.signal_threshold_mode = sigCfg.threshold_mode || 'quantile'
   createForm.buy_top_pct = sigCfg.buy_top_pct ?? 0.05
@@ -463,9 +474,27 @@ function startEditConfig() {
   showCreate.value = true
 }
 
+function tradingPayload() {
+  const tr = createForm.trading_rules || {}
+  const cost = tr.cost_model || {}
+  const rm = tr.risk_management || {}
+  const stopPct = Math.round(Number(rm.stop_loss ?? (createForm.stop_loss_pct / 100)) * 100)
+  const holdDays = Number(rm.max_holding_days ?? createForm.signal_timeout_days)
+  return {
+    trading_rules: tr,
+    stamp_tax: Number(cost.stamp_duty ?? createForm.stamp_tax),
+    commission: Number(cost.commission_rate ?? createForm.commission),
+    slippage: Number(cost.slippage_rate ?? createForm.slippage),
+    stop_loss_pct: stopPct,
+    signal_timeout_days: holdDays,
+    risk: { stop_loss_pct: stopPct, signal_timeout_days: holdDays },
+  }
+}
+
 async function doSaveConfig() {
   creating.value = true
   try {
+    const tp = tradingPayload()
     await axios.put(window.location.origin + `/api/v1/models/${store.selectedId}/config`, {
       model_name: createName.value.trim(),
       train_start: createForm.train_start,
@@ -482,7 +511,11 @@ async function doSaveConfig() {
       feature_neut: createForm.feature_neut,
       selection_cv: { enabled: createForm.selection_cv, folds: createForm.cv_folds, embargo_days: 25 },
       ensemble: { seeds: createForm.ensemble_seeds },
-      risk: { stop_loss_pct: createForm.stop_loss_pct, signal_timeout_days: createForm.signal_timeout_days },
+      risk: tp.risk,
+      trading_rules: tp.trading_rules,
+      stamp_tax: tp.stamp_tax,
+      commission: tp.commission,
+      slippage: tp.slippage,
       signal: {
         threshold_mode: createForm.signal_threshold_mode,
         buy_top_pct: createForm.buy_top_pct,
@@ -502,6 +535,7 @@ async function doCreate() {
   if (!createName.value.trim()) return
   creating.value = true
   try {
+    const tp = tradingPayload()
     await axios.post(window.location.origin + '/api/v1/models', {
       model_name: createName.value.trim(),
       train_start: createForm.train_start,
@@ -510,15 +544,15 @@ async function doCreate() {
       test_end: createForm.test_end || '',
       features: createForm.feature_names,
       feature_names: createForm.feature_names,
-      trading_rules: createForm.trading_rules,
+      trading_rules: tp.trading_rules,
       optuna_trials: createForm.optuna_trials,
       initial_cash: createForm.initial_cash,
       max_positions: createForm.max_positions,
-      stamp_tax: createForm.stamp_tax,
-      commission: createForm.commission,
-      slippage: createForm.slippage,
-      stop_loss_pct: createForm.stop_loss_pct,
-      signal_timeout_days: createForm.signal_timeout_days,
+      stamp_tax: tp.stamp_tax,
+      commission: tp.commission,
+      slippage: tp.slippage,
+      stop_loss_pct: tp.stop_loss_pct,
+      signal_timeout_days: tp.signal_timeout_days,
       signal_threshold_mode: createForm.signal_threshold_mode,
       buy_top_pct: createForm.buy_top_pct,
       sell_threshold: createForm.sell_threshold,
