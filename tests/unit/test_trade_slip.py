@@ -10,6 +10,7 @@ from app.trade_slip import (
     _to_date,
     _to_float,
     parse_slip_bytes,
+    replay_positions,
 )
 
 
@@ -130,6 +131,14 @@ class TestParse:
         assert _row_hash(d) == _row_hash(e)
 
 
+class _NoCloseDB:
+    def execute(self, *_a, **_k):
+        class R:
+            def fetchall(self):
+                return []
+        return R()
+
+
 class TestPositionReplay:
     def test_buy_sell_moving_average(self):
         st = {}
@@ -163,6 +172,27 @@ class TestPositionReplay:
     def test_pre_balance(self):
         assert _pre_balance(dict(side="buy", quantity=100, balance_qty=300)) == 200
         assert _pre_balance(dict(side="sell", quantity=100, balance_qty=200)) == 300
+
+    def test_multi_account_replays_separately_then_merges(self):
+        d1, d2 = datetime.date(2026, 1, 5), datetime.date(2026, 1, 6)
+        rows = [
+            dict(account_no="A", trade_date=d1, stock_code="600000", side="buy",
+                 quantity=100, price=10, amount=1000, commission=0, stamp_tax=0,
+                 transfer_fee=0, extra_fee=0, balance_qty=100, cash_balance=9000),
+            dict(account_no="B", trade_date=d1, stock_code="600000", side="buy",
+                 quantity=200, price=20, amount=4000, commission=0, stamp_tax=0,
+                 transfer_fee=0, extra_fee=0, balance_qty=200, cash_balance=16000),
+            dict(account_no="A", trade_date=d2, stock_code="600000", side="sell",
+                 quantity=50, price=12, amount=600, commission=0, stamp_tax=0,
+                 transfer_fee=0, extra_fee=0, balance_qty=50, cash_balance=9600),
+        ]
+        state, cash = replay_positions(_NoCloseDB(), rows)
+        st = state["600000"]
+        # A 账户 sell 后的余额 50 不能覆盖 B 账户的 200 股
+        assert st["qty"] == 250
+        assert abs(st["avg"] - 18.0) < 1e-9
+        assert abs(st["realized"] - 100.0) < 1e-9
+        assert cash == 25600
 
     def test_estimated_flag_clears_when_seed_shares_exhausted(self):
         st = {"600000": {"qty": 100, "avg": 10, "realized": 0,
