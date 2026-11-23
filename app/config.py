@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     # Agent 工作区文件签名独立密钥；留空时从 APP_SECRET_KEY 做域分离派生
     AGENT_FILE_SECRET: str = ""
     JWT_EXPIRE_HOURS: int = 24
+    # 特征是否使用后复权 OHLCV。默认 false 保持历史行为；完成全量特征重建并重训后置 true
+    FEATURE_PRICE_ADJUST: bool = False
 
     # ── 数据库 ──
     DATABASE_URL: str = "postgresql+asyncpg://stock:stock123@localhost:5432/stock_monitor"

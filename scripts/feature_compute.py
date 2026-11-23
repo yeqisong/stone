@@ -19,6 +19,7 @@ from typing import List, Optional, Dict
 from sqlalchemy import text
 from loguru import logger
 from strategy.indicators import sma, ema, rsi, macd, atr, bollinger_bands
+from app.config import settings
 
 
 # ── SQL 拉取 OHLCV 数据（供共享复用）──
@@ -51,8 +52,37 @@ EXTRA_TABLE_FIELDS = {
 _ALL_EXTRA_TABLE_COLS = {alias: tbl for tbl, m in EXTRA_TABLE_FIELDS.items() for alias in m}
 _FIELD_RE = '|'.join(EXTRA_FIELD_SOURCES)
 
+def _adjust_ohlcv(df: pd.DataFrame, target_entity: str,
+                  requested: list) -> pd.DataFrame:
+    """把 stock/ETF 的 OHLCV 统一到后复权口径。
+
+    特征与标签/回测必须同基：daily_quote 的 open/high/low/close/volume 是原始价，
+    送转/分红日会产生几十个百分点的假跳变；close_hfq 是后复权价。这里按
+    `close_hfq / close` 求当日复权比例，同步调整 OHLC 与成交量，close 直接用
+    close_hfq；close_hfq 缺失/为 0 时退回原始价（比例 1）。
+    """
+    if target_entity == "index" or df.empty:
+        return df
+    if "close" not in df.columns or "close_hfq" not in df.columns:
+        return df
+    raw = pd.to_numeric(df["close"], errors="coerce")
+    hfq = pd.to_numeric(df["close_hfq"], errors="coerce")
+    valid = (raw > 0) & (hfq > 0)
+    ratio = np.where(valid, hfq / raw, 1.0)
+    if "close" in requested:
+        df["close"] = np.where(valid, hfq, raw)
+    for col in ("open", "high", "low"):
+        if col in requested and col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce") * ratio
+    if "volume" in requested and "volume" in df.columns:
+        df["volume"] = (pd.to_numeric(df["volume"], errors="coerce")
+                        / np.where(ratio > 0, ratio, 1.0))
+    return df
+
+
 def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str = None,
-                 stock_codes: list = None, columns: list = None) -> pd.DataFrame:
+                 stock_codes: list = None, columns: list = None,
+                 adjust_prices: Optional[bool] = None) -> pd.DataFrame:
     """拉取 daily_quote / index_daily_quote → pandas DataFrame。
 
     columns: 指定拉取列（默认全部 OHLCV），如 ["close"] 只拉 close。
@@ -97,7 +127,17 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
         st_filter = "stock" if target_entity == "stock" else "etf"
         join_clause = f"JOIN stock_master sm ON {table}.stock_code = sm.stock_code AND sm.stock_type = '{st_filter}'"
 
-    col_str = ", ".join(sel_cols)
+    query_cols = list(sel_cols)
+    if adjust_prices is None:
+        adjust_prices = bool(getattr(settings, "FEATURE_PRICE_ADJUST", False))
+    needs_adjust = (adjust_prices and target_entity in ("stock", "etf")
+                    and any(c in sel_cols for c in ("open", "high", "low", "close", "volume")))
+    if needs_adjust:
+        for c in ("close", "close_hfq"):
+            if c not in query_cols:
+                query_cols.append(c)
+
+    col_str = ", ".join(query_cols)
     if target_entity == "index":
         sql = f"SELECT {code_col} as stock_code, trade_date, {col_str} FROM {table} {join_clause} WHERE {where} ORDER BY {code_col}, trade_date"
     else:
@@ -107,9 +147,13 @@ def _fetch_ohlcv(db, target_entity: str, start_date: str = None, end_date: str =
     if not rows:
         return pd.DataFrame()
 
-    cols = ["stock_code", "trade_date"] + sel_cols
+    cols = ["stock_code", "trade_date"] + query_cols
     df = pd.DataFrame(rows, columns=cols)
     df["trade_date"] = pd.to_datetime(df["trade_date"])
+    if needs_adjust:
+        df = _adjust_ohlcv(df, target_entity, sel_cols)
+        df = df.drop(columns=[c for c in ("close", "close_hfq")
+                              if c not in sel_cols and c in df.columns])
 
     # 瘦身：OHLCV 精度 float32 完全够用
     for col in sel_cols:
@@ -295,6 +339,7 @@ def compute_feature(
     df: Optional[pd.DataFrame] = None,
     chunk_days: int = 30,
     progress_cb = None,
+    adjust_prices: Optional[bool] = None,
 ) -> Dict:
     """计算单个特征值并写入 feature_values 表。
 
@@ -368,7 +413,8 @@ def compute_feature(
                         )
 
                     # fetch → compute → filter → write
-                    df_chunk = _fetch_ohlcv(db, target_entity, fetch_sd, ce, stock_codes, columns=needed_cols)
+                    df_chunk = _fetch_ohlcv(db, target_entity, fetch_sd, ce, stock_codes, columns=needed_cols,
+                                            adjust_prices=adjust_prices)
                     if df_chunk.empty:
                         if progress_cb:
                             progress_cb(i + 1, len(chunks), cs, ce, 0)
@@ -404,7 +450,8 @@ def compute_feature(
             )
 
         if df is None or df.empty:
-            df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, stock_codes, columns=needed_cols)
+            df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, stock_codes, columns=needed_cols,
+                              adjust_prices=adjust_prices)
 
         if df.empty:
             return {"ok": True, "rows": 0, "message": "无数据"}
@@ -1063,6 +1110,7 @@ def compute_all_features(
     end_date: Optional[str] = None,
     feature_names: Optional[List[str]] = None,
     progress_cb=None,
+    adjust_prices: Optional[bool] = None,
 ) -> Dict:
     """批量计算所有已启用特征（或指定特征列表）并写入 feature_values。
 
@@ -1100,14 +1148,16 @@ def compute_all_features(
             _union |= {"high", "low"}
         if _re0.search(r'\bneut\b', f):
             _union |= {"circ_mv"}
-    df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, columns=sorted(_union))
+    df = _fetch_ohlcv(db, target_entity, fetch_start, end_date, columns=sorted(_union),
+                      adjust_prices=adjust_prices)
 
     results = []
     total_features = len(rows)
     for i, r in enumerate(rows, 1):
         fn, formula = r[0], r[1]
         # 跳过 DB commit（每特征单独 commit），由 compute_feature 内部处理
-        res = compute_feature(db, fn, formula, target_entity, start_date, end_date, df=df)
+        res = compute_feature(db, fn, formula, target_entity, start_date, end_date, df=df,
+                              adjust_prices=adjust_prices)
         results.append({"feature": fn, **res})
         if progress_cb:
             try:
