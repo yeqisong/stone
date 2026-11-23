@@ -12,6 +12,7 @@ status.py 的 WS 广播循环轮询新告警推给前端，前端以 Chrome 通�
 import json
 from datetime import date
 
+from loguru import logger
 from sqlalchemy import text
 
 from app.api.pricing import raw_price
@@ -217,3 +218,102 @@ def evaluate_risk_rules(db, trade_date=None) -> list:
 
     db.commit()
     return new_alerts
+
+def evaluate_user_risk_rules(db, user_id: int, trade_date=None) -> list:
+    """评估单个用户的实盘风控规则（portfolio + 个人 user_config.risk_rules）。
+
+    - 止损：最新收盘（不复权）较持仓成本回撤；
+    - 行业上限：按最新市值聚合 industry_l1 占比；
+    - 个人没有纸面净值序列，组合回撤规则不在此评估（由纸面模型规则负责）。
+    告警写入 risk_alerts(user_id=该用户)，WS 按 owner 推送。
+    """
+    td = str(trade_date or date.today())[:10]
+    uid = int(user_id)
+    rules = get_user_risk_rules(db, uid)
+    if not rules.get('enabled'):
+        return []
+    new_alerts = []
+    max_per_day = int(rules.get('max_alerts_per_day', 5))
+    day_count = db.execute(text(
+        "SELECT count(*) FROM risk_alerts WHERE user_id=:uid AND trade_date=:d"),
+        {"uid": uid, "d": td}).scalar() or 0
+
+    def emit(kind, level, title, body):
+        nonlocal day_count
+        if kind == 'stop_loss' and day_count >= max_per_day:
+            return
+        if _insert_alert(db, td, kind, level, title, body, user_id=uid):
+            new_alerts.append({'trade_date': td, 'kind': kind, 'level': level,
+                               'title': title, 'body': body, 'user_id': uid})
+            day_count += 1
+
+    stop_pct = float(rules.get('stop_loss_pct') or 0)
+    if stop_pct > 0:
+        rows = db.execute(text("""
+            SELECT p.stock_code, p.stock_name, p.quantity, p.cost_price, q.close
+            FROM portfolio p
+            LEFT JOIN LATERAL (
+                SELECT close FROM daily_quote q
+                WHERE q.stock_code=p.stock_code AND q.close > 0
+                ORDER BY q.trade_date DESC LIMIT 1
+            ) q ON true
+            WHERE p.user_id=:uid AND p.is_active=true
+              AND p.cost_price > 0 AND q.close > 0
+        """), {"uid": uid}).fetchall()
+        for code, name, _qty, cost, cur in rows:
+            chg = float(cur) / float(cost) - 1
+            if chg <= -abs(stop_pct):
+                emit('stop_loss', 'warn', f'个人止损 {code}',
+                     f'{name or code} 现价 {float(cur):.2f} 较成本 {float(cost):.2f} '
+                     f'回撤 {chg * 100:.1f}%（阈值 {stop_pct * 100:.0f}%）')
+
+    cap_pct = float(rules.get('industry_cap_pct') or 0)
+    if cap_pct > 0:
+        rows = db.execute(text("""
+            SELECT COALESCE(sm.industry_l1, '未知') AS ind,
+                   SUM(p.quantity * q.close) AS mv
+            FROM portfolio p
+            LEFT JOIN stock_master sm
+              ON sm.stock_code=p.stock_code AND sm.stock_type='stock'
+            LEFT JOIN LATERAL (
+                SELECT close FROM daily_quote q
+                WHERE q.stock_code=p.stock_code AND q.close > 0
+                ORDER BY q.trade_date DESC LIMIT 1
+            ) q ON true
+            WHERE p.user_id=:uid AND p.is_active=true AND q.close > 0
+            GROUP BY 1
+        """), {"uid": uid}).fetchall()
+        total_mv = sum(float(r[1] or 0) for r in rows)
+        if total_mv > 0:
+            for ind, mv in rows:
+                ratio = float(mv or 0) / total_mv
+                if ratio >= cap_pct:
+                    emit('industry_cap', 'warn', f'个人行业上限 {ind}',
+                         f'{ind} 持仓市值占比 {ratio * 100:.1f}% '
+                         f'（上限 {cap_pct * 100:.0f}%），建议分散')
+    return new_alerts
+
+
+def evaluate_all_user_risk_rules(db, trade_date=None) -> list:
+    """DAG 每日评估：遍历所有启用了个人风控规则的用户。"""
+    rows = db.execute(text("""
+        SELECT u.id FROM users u
+        JOIN user_config c ON c.user_id=u.id AND c.config_key=:k AND c.enabled=true
+        WHERE u.status='active' ORDER BY u.id
+    """), {"k": RULES_CONFIG_KEY}).fetchall()
+    out = []
+    for (uid,) in rows:
+        db.execute(text("SAVEPOINT sp_user_risk"))
+        try:
+            out.extend(evaluate_user_risk_rules(db, int(uid), trade_date))
+            db.execute(text("RELEASE SAVEPOINT sp_user_risk"))
+        except Exception as e:
+            # 单用户失败只回滚该用户，不能连带丢掉前面用户的告警
+            try:
+                db.execute(text("ROLLBACK TO SAVEPOINT sp_user_risk"))
+                db.execute(text("RELEASE SAVEPOINT sp_user_risk"))
+            except Exception:
+                pass
+            logger.warning(f"[risk] 用户 {uid} 风控评估失败: {str(e)[:160]}")
+    return out
+

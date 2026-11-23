@@ -11,6 +11,7 @@ from app.risk import (
     get_user_risk_rules,
     save_user_risk_rules,
     evaluate_risk_rules,
+    evaluate_user_risk_rules,
 )
 from app.intraday_watch import get_intraday_rules, save_intraday_rules, KIND_LABEL
 
@@ -45,6 +46,23 @@ def run_evaluate(trade_date: str = None):
     db = get_sync_db()
     try:
         return {"alerts": evaluate_risk_rules(db, trade_date)}
+    finally:
+        db.close()
+
+
+@router.post("/evaluate-personal")
+def run_evaluate_personal(trade_date: str = None,
+                          principal: Principal = Depends(get_principal)):
+    """手动评估当前用户的实盘风控规则（止损/行业上限）。"""
+    from app.db.connection import get_sync_db
+    db = get_sync_db()
+    try:
+        alerts = evaluate_user_risk_rules(db, principal.data_user_id, trade_date)
+        db.commit()
+        return {"alerts": alerts}
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
