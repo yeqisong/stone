@@ -3255,6 +3255,42 @@ def _purged_time_folds(dates_sorted, folds=4, embargo=25):
     return out
 
 
+MAX_LABEL_DAYS = 20
+
+
+def time_split_purged(df, label_horizon: int = MAX_LABEL_DAYS) -> dict:
+    """60/20/20 时间切分 + 标签前瞻 purge（训练与 eval_version 共用）。
+
+    标签是未来 N 个交易日收益（最长 20 日）。若 train 的最后几行标签跨过
+    train_cut，模型会看到 val 区间收益；val 尾部同理污染 test。这里在
+    train/val 尾部各剔除 label_horizon 个交易日，形成两段 purge gap：
+        train [.., train_stop) | gap | val [train_cut, val_stop) | gap | test [test_cut, ..]
+    返回的 mask 只使用切分日，**不**把 gap 行放进任何集合。
+    """
+    import pandas as pd
+    dates = sorted(df['trade_date'].unique())
+    n = len(dates)
+    if n < 3:
+        empty = pd.Series(False, index=df.index)
+        return {'dates': dates, 'train_cut': None, 'test_cut': None,
+                'train_stop': None, 'val_stop': None,
+                'train_mask': empty, 'val_mask': empty, 'test_mask': empty,
+                'label_horizon': int(label_horizon)}
+    i_train, i_test = int(n * 0.6), int(n * 0.8)
+    train_cut, test_cut = dates[i_train], dates[i_test]
+    train_stop = dates[max(0, i_train - int(label_horizon))]
+    val_stop = dates[max(i_train, i_test - int(label_horizon))]
+    return {
+        'dates': dates,
+        'train_cut': train_cut, 'test_cut': test_cut,
+        'train_stop': train_stop, 'val_stop': val_stop,
+        'train_mask': df['trade_date'] < train_stop,
+        'val_mask': (df['trade_date'] >= train_cut) & (df['trade_date'] < val_stop),
+        'test_mask': df['trade_date'] >= test_cut,
+        'label_horizon': int(label_horizon),
+    }
+
+
 def build_targets(db, df, cfg):
     """构建 5/10/20 日前瞻标签（winsorize + label_transform）。
 
@@ -3861,13 +3897,17 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
         update_node_progress(log_id=log_id, rows=3, detail='步骤3:标签计算')
 
         # ── 4. 三重时间切分: train(60%) / val(20%) / test(20%) ──
-        dates = sorted(df['trade_date'].unique())
-        n = len(dates)
-        train_cut = dates[int(n * 0.6)]
-        test_cut  = dates[int(n * 0.8)]
-        train_mask = df['trade_date'] < train_cut
-        val_mask   = (df['trade_date'] >= train_cut) & (df['trade_date'] < test_cut)
-        test_mask  = df['trade_date'] >= test_cut
+        # 切分点前各 purge 最长标签前瞻（20 交易日），防 train 标签伸进 val、
+        # val 标签伸进 test；训练与 eval_version 共用同一个纯函数。
+        _split = time_split_purged(df)
+        dates = _split['dates']
+        train_cut, test_cut = _split['train_cut'], _split['test_cut']
+        train_stop, val_stop = _split['train_stop'], _split['val_stop']
+        train_mask, val_mask, test_mask = (_split['train_mask'], _split['val_mask'],
+                                           _split['test_mask'])
+        logger.info(f'[train] 切分 train<{str(train_stop)[:10]} | '
+                    f'val {str(train_cut)[:10]}~{str(val_stop)[:10]} | '
+                    f'test>{str(test_cut)[:10]}（purge {MAX_LABEL_DAYS} 日）')
 
         X_train, Y10_train = df[train_mask][FEATURES], df[train_mask]['target_10d']
         X_val,   Y10_val   = df[val_mask][FEATURES],   df[val_mask]['target_10d']
@@ -4189,8 +4229,8 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
                     'test': cross_sectional_rank_ic(_p_full[test_mask.values], df[test_mask][tname].values, df[test_mask]['trade_date'].values),
                 }
         _bench = benchmark_window_stats(db, {
-            'train': (str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]),
-            'val': (str(train_cut)[:10], str(test_cut)[:10]),
+            'train': (str(cfg.get('train_start', ''))[:10], str(train_stop)[:10]),
+            'val': (str(train_cut)[:10], str(val_stop)[:10]),
             'test': (str(test_cut)[:10], str(dates[-1])[:10]),
         })
         _gap = compute_gap_decomposition(val_results, test_results, test_results_t1,
@@ -4297,9 +4337,12 @@ def dag_task_model_train(trade_date=None, version=None, **kw):
             'overfit_gap_t1': _gap.get('sharpe_gap_val_test_t1'),
             'sample_domain': {
                 'entity': cfg.get('entity', 'stock'),
-                'windows': {'train': [str(cfg.get('train_start', ''))[:10], str(train_cut)[:10]],
-                            'val': [str(train_cut)[:10], str(test_cut)[:10]],
+                'windows': {'train': [str(cfg.get('train_start', ''))[:10], str(train_stop)[:10]],
+                            'val': [str(train_cut)[:10], str(val_stop)[:10]],
                             'test': [str(test_cut)[:10], str(test_dates[-1])[:10] if len(test_dates) else None]},
+                'purge_days': MAX_LABEL_DAYS,
+                'purged': [[str(train_stop)[:10], str(train_cut)[:10]],
+                           [str(val_stop)[:10], str(test_cut)[:10]]],
                 'exec_timing': '收盘 T+0（信号日收盘成交）',
                 'costs': {'commission': commission, 'stamp_tax': stamp_tax, 'slippage': slippage},
             },

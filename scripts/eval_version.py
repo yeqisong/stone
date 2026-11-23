@@ -32,10 +32,11 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.db.connection import get_sync_db
-from scripts.pipeline import (benchmark_window_stats, build_feature_wide_table,
-                              compute_gap_decomposition, compute_regime_gates,
-                              cross_sectional_rank_ic, pred_score, prepare_model_frame,
-                              run_training_backtest, val_score)
+from scripts.pipeline import (MAX_LABEL_DAYS, benchmark_window_stats,
+                              build_feature_wide_table, compute_gap_decomposition,
+                              compute_regime_gates, cross_sectional_rank_ic, pred_score,
+                              prepare_model_frame, run_training_backtest,
+                              time_split_purged, val_score)
 
 TARGETS = [('5d', 'target_5d', 5), ('10d', 'target_10d', 10), ('20d', 'target_20d', 20)]
 
@@ -79,13 +80,15 @@ def evaluate(db, ver, apply=False, end_date=None):
     df, FEATURES = prepare_model_frame(db, df, cfg, feature_names, data_start, end_date)
     logger.info(f'[eval] 面板 {len(df):,} 行 / {len(FEATURES)} 特征 → 标签构建完成')
 
-    dates = sorted(df['trade_date'].unique())
-    n = len(dates)
-    train_cut, test_cut = dates[int(n * 0.6)], dates[int(n * 0.8)]
-    train_mask = df['trade_date'] < train_cut
-    val_mask = (df['trade_date'] >= train_cut) & (df['trade_date'] < test_cut)
-    test_mask = df['trade_date'] >= test_cut
-    logger.info(f'[eval] val {str(train_cut)[:10]}~{str(test_cut)[:10]} / test {str(test_cut)[:10]}~')
+    _split = time_split_purged(df)
+    dates = _split['dates']
+    train_cut, test_cut = _split['train_cut'], _split['test_cut']
+    train_stop, val_stop = _split['train_stop'], _split['val_stop']
+    train_mask, val_mask, test_mask = (_split['train_mask'], _split['val_mask'],
+                                       _split['test_mask'])
+    logger.info(f'[eval] train<{str(train_stop)[:10]} / val {str(train_cut)[:10]}~'
+                f'{str(val_stop)[:10]} / test {str(test_cut)[:10]}~'
+                f'（purge {MAX_LABEL_DAYS} 日）')
 
     # 空仓闸门 + 组合熔断 + 移动止盈（与训练评估、实盘信号同一规则）
     regime_cfg = cfg.get('regime') or {}
@@ -144,8 +147,8 @@ def evaluate(db, ver, apply=False, end_date=None):
         logger.info(f'[eval] RankIC {label}: train={rank_ic[label]["train"]} '
                     f'val={rank_ic[label]["val"]} test={rank_ic[label]["test"]}')
     bench = benchmark_window_stats(db, {
-        'train': (data_start, str(train_cut)[:10]),
-        'val': (str(train_cut)[:10], str(test_cut)[:10]),
+        'train': (data_start, str(train_stop)[:10]),
+        'val': (str(train_cut)[:10], str(val_stop)[:10]),
         'test': (str(test_cut)[:10], str(dates[-1])[:10]),
     })
     gap = compute_gap_decomposition(val_results, test_results, test_results_t1,
@@ -210,9 +213,12 @@ def evaluate(db, ver, apply=False, end_date=None):
         'sample_domain': {
             'entity': cfg.get('entity', 'stock'),
             'data_start': data_start, 'data_end': end_date,
-            'windows': {'train': [data_start, str(train_cut)[:10]],
-                        'val': [str(train_cut)[:10], str(test_cut)[:10]],
+            'windows': {'train': [data_start, str(train_stop)[:10]],
+                        'val': [str(train_cut)[:10], str(val_stop)[:10]],
                         'test': [str(test_cut)[:10], str(dates[-1])[:10]]},
+            'purge_days': MAX_LABEL_DAYS,
+            'purged': [[str(train_stop)[:10], str(train_cut)[:10]],
+                       [str(val_stop)[:10], str(test_cut)[:10]]],
             'exec_timing': '收盘 T+0（信号日收盘成交）',
             'costs': {'commission': common['commission'], 'stamp_tax': common['stamp_tax'],
                       'slippage': common['slippage']},
