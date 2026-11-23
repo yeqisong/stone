@@ -10,6 +10,7 @@ import json
 import re
 from datetime import date, timedelta
 
+from loguru import logger
 from sqlalchemy import text
 
 from app.agent import sandbox
@@ -91,8 +92,8 @@ def _json_safe(v):
 # ══════════════════════════════════════════════
 
 def tool_list_tables(_session_id: int, **kw) -> dict:
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：数据表结构仅管理员可查看"}
+    if not _perm_ok(kw, 'agent.sql.raw'):
+        return _tool_perm_error('agent.sql.raw', kw)
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
@@ -110,8 +111,8 @@ def tool_list_tables(_session_id: int, **kw) -> dict:
 
 
 def tool_describe_table(_session_id: int, table: str = "", **kw) -> dict:
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：表结构仅管理员可查看"}
+    if not _perm_ok(kw, 'agent.sql.raw'):
+        return _tool_perm_error('agent.sql.raw', kw)
     if table in PERSONAL_TABLES:
         return {"error": "个人/敏感表不允许通过原始 SQL 查看；个人数据请用业务 API"}
     if table not in SHARED_TABLES:
@@ -188,8 +189,8 @@ def _sql_table_error(q: str) -> str | None:
 
 def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> dict:
     """只读 SQL：单条 SELECT/WITH，只读事务 + 25s 超时 + 行数上限。"""
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：原始 SQL 仅管理员可用"}
+    if not _perm_ok(kw, 'agent.sql.raw'):
+        return _tool_perm_error('agent.sql.raw', kw)
     q = (sql or "").strip().rstrip(";").strip()
     if not q:
         return {"error": "SQL 为空"}
@@ -237,6 +238,8 @@ def tool_query_sql(_session_id: int, sql: str = "", limit: int = 100, **kw) -> d
 
 def tool_stock_overview(_session_id: int, stock_code: str = "", **kw) -> dict:
     """个股全景快照：行情、基本面、行业、最近信号、所属分组、雪球情绪。"""
+    if not _perm_ok(kw, 'research.stock.view'):
+        return _tool_perm_error('research.stock.view', kw)
     code = (stock_code or "").strip()
     if not re.match(r"^\d{6}$", code):
         return {"error": "stock_code 需为 6 位数字"}
@@ -302,6 +305,8 @@ def tool_stock_overview(_session_id: int, stock_code: str = "", **kw) -> dict:
 
 def tool_search_news(_session_id: int, keyword: str = "", days: int = 30, limit: int = 15, **kw) -> dict:
     """资讯检索（标题/正文/摘要），返回重要度与情绪。"""
+    if not _perm_ok(kw, 'research.news.view'):
+        return _tool_perm_error('research.news.view', kw)
     kw_ = (keyword or "").strip()
     if not kw_:
         return {"error": "keyword 不能为空"}
@@ -336,8 +341,8 @@ def tool_search_news(_session_id: int, keyword: str = "", days: int = 30, limit:
 # ══════════════════════════════════════════════
 
 def tool_run_python(session_id: int, code: str = "", timeout: int = 60, **kw) -> dict:
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：代码执行仅管理员可用"}
+    if not _perm_ok(kw, 'agent.exec'):
+        return _tool_perm_error('agent.exec', kw)
     r = sandbox.run_python(session_id, code or "", timeout=max(5, min(int(timeout or 60), 180)),
                            user_id=kw.get('_user_id'))
     r["hint"] = "工作区文件跨调用保留；pip_install 装的包在 PYTHONPATH 内可直接 import"
@@ -345,8 +350,8 @@ def tool_run_python(session_id: int, code: str = "", timeout: int = 60, **kw) ->
 
 
 def tool_run_node(session_id: int, code: str = "", timeout: int = 60, **kw) -> dict:
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：代码执行仅管理员可用"}
+    if not _perm_ok(kw, 'agent.exec'):
+        return _tool_perm_error('agent.exec', kw)
     r = sandbox.run_node(session_id, code or "", timeout=max(5, min(int(timeout or 60), 180)),
                          user_id=kw.get('_user_id'))
     r["hint"] = "npm_install 装的包在 NODE_PATH 内可直接 import"
@@ -354,20 +359,22 @@ def tool_run_node(session_id: int, code: str = "", timeout: int = 60, **kw) -> d
 
 
 def tool_pip_install(session_id: int, packages: list = None, **kw) -> dict:
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：依赖安装仅管理员可用"}
+    if not _perm_ok(kw, 'agent.exec'):
+        return _tool_perm_error('agent.exec', kw)
     pkgs = packages if isinstance(packages, list) else [str(packages or "")]
     return sandbox.pip_install(session_id, pkgs, user_id=kw.get('_user_id'))
 
 
 def tool_npm_install(session_id: int, packages: list = None, **kw) -> dict:
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：依赖安装仅管理员可用"}
+    if not _perm_ok(kw, 'agent.exec'):
+        return _tool_perm_error('agent.exec', kw)
     pkgs = packages if isinstance(packages, list) else [str(packages or "")]
     return sandbox.npm_install(session_id, pkgs, user_id=kw.get('_user_id'))
 
 
 def tool_list_workspace(session_id: int, **kw) -> dict:
+    if not _perm_ok(kw, 'agent.use'):
+        return _tool_perm_error('agent.use', kw)
     return sandbox.list_workspace(session_id, user_id=kw.get('_user_id'))
 
 
@@ -376,6 +383,8 @@ def tool_list_workspace(session_id: int, **kw) -> dict:
 # ══════════════════════════════════════════════
 
 def tool_list_dag_flows(_session_id: int, **kw) -> dict:
+    if not _perm_ok(kw, 'dag.view'):
+        return _tool_perm_error('dag.view', kw)
     from app.db.connection import get_sync_db
     db = get_sync_db()
     try:
@@ -393,8 +402,8 @@ def tool_list_dag_flows(_session_id: int, **kw) -> dict:
 def tool_create_dag_flow(_session_id: int, flow_name: str = "", description: str = "",
                          nodes: list = None, cron_expr: str = "", **kw) -> dict:
     """创建 DAG 流程（draft，不自动发布）。nodes: [{"node_name":"kline","deps":[]}, ...]"""
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：DAG 创建仅管理员可用"}
+    if not _perm_ok(kw, 'dag.edit'):
+        return _tool_perm_error('dag.edit', kw)
     from app.api.dag_flows import FlowNode, _validate_flow
     from app.db.connection import get_sync_db
     name = (flow_name or "").strip()
@@ -440,8 +449,8 @@ def tool_create_dag_flow(_session_id: int, flow_name: str = "", description: str
 
 def tool_run_dag_flow(_session_id: int, flow_id: int = 0, trade_date: str = "", **kw) -> dict:
     """触发已发布流程执行（后台任务，受同流程互斥约束）。"""
-    if not kw.get('_is_admin'):
-        return {"error": "无权限：DAG 执行仅管理员可用"}
+    if not _perm_ok(kw, 'dag.execute'):
+        return _tool_perm_error('dag.execute', kw)
     from app.api.dag_flows import _execute_flow_internal
     if not flow_id:
         return {"error": "flow_id 必填（先用 list_dag_flows 查）"}
@@ -457,6 +466,8 @@ def tool_run_dag_flow(_session_id: int, flow_id: int = 0, trade_date: str = "", 
 def tool_get_dag_run_status(_session_id: int, task_id: str = "", run_id: str = "",
                             limit: int = 20, **kw) -> dict:
     """查 DAG 任务/运行状态：给 task_id 看任务与节点；给 run_id 看节点日志；都不给看最近运行。"""
+    if not _perm_ok(kw, 'dag.view'):
+        return _tool_perm_error('dag.view', kw)
     from app.db.connection import get_sync_db
     lim = max(1, min(int(limit or 20), 100))
     out = {"task": None, "run_id": run_id or None, "nodes": [], "recent_runs": []}
@@ -518,6 +529,8 @@ def tool_get_dag_run_status(_session_id: int, task_id: str = "", run_id: str = "
 
 def tool_model_performance(_session_id: int, version: str = "", limit: int = 5, **kw) -> dict:
     """模型版本指标 + 最近回测汇总（回答「模型最近表现如何」）。"""
+    if not _perm_ok(kw, 'model.view'):
+        return _tool_perm_error('model.view', kw)
     from app.db.connection import get_sync_db
     lim = max(1, min(int(limit or 5), 20))
     db = get_sync_db()
@@ -565,6 +578,8 @@ def tool_model_performance(_session_id: int, version: str = "", limit: int = 5, 
 
 def tool_portfolio_summary(_session_id: int, **kw) -> dict:
     """当前用户实盘持仓 + 模型纸面组合现状（市值按最新收盘价，收益按成本价）。"""
+    if not _perm_ok(kw, 'portfolio.position.view'):
+        return _tool_perm_error('portfolio.position.view', kw)
     uid = kw.get('_user_id')
     if not uid:
         return {"error": "缺少用户上下文"}
@@ -618,6 +633,8 @@ def tool_portfolio_summary(_session_id: int, **kw) -> dict:
 def tool_recent_signals(_session_id: int, days: int = 5, direction: str = "",
                         limit: int = 50, **kw) -> dict:
     """最近信号（可按 buy/sell 过滤），含强度与模型预测分。"""
+    if not _perm_ok(kw, 'research.signal.view'):
+        return _tool_perm_error('research.signal.view', kw)
     from app.db.connection import get_sync_db
     d = max(1, min(int(days or 5), 120))
     lim = max(1, min(int(limit or 50), 200))
@@ -657,6 +674,8 @@ def tool_recent_signals(_session_id: int, days: int = 5, direction: str = "",
 
 def tool_list_skills(_session_id: int, **kw) -> dict:
     """可用技能清单（内置 + 全局 + 当前用户个人）。"""
+    if not _perm_ok(kw, 'agent.use'):
+        return _tool_perm_error('agent.use', kw)
     from app.agent.skills import list_skills
     return {"skills": [{"name": s["name"], "title": s["display_name"],
                         "description": s["description"], "builtin": s["builtin"],
@@ -668,6 +687,8 @@ def tool_list_skills(_session_id: int, **kw) -> dict:
 
 def tool_read_skill(_session_id: int, name: str = "", file: str = "", **kw) -> dict:
     """读技能全文（先 list_skills 看清单，命中再读）。file 可读技能目录下的附加文件。"""
+    if not _perm_ok(kw, 'agent.use'):
+        return _tool_perm_error('agent.use', kw)
     from app.agent.skills import read_skill
     return read_skill(name, file, user_id=kw.get('_user_id'))
 
@@ -675,6 +696,8 @@ def tool_read_skill(_session_id: int, name: str = "", file: str = "", **kw) -> d
 def tool_save_skill(_session_id: int, name: str = "", description: str = "",
                     content: str = "", title: str = "", **kw) -> dict:
     """把一套分析方法沉淀为当前用户的个人技能，供该用户以后所有会话复用。"""
+    if not _perm_ok(kw, 'agent.skill.edit'):
+        return _tool_perm_error('agent.skill.edit', kw)
     from app.agent.skills import save_skill
     return save_skill(name, description, content, title, user_id=kw.get('_user_id'))
 
@@ -770,14 +793,65 @@ ADMIN_ONLY_TOOLS = frozenset({
 })
 
 
-def tool_specs_for(is_admin: bool = False) -> list:
-    """按角色返回可下发给模型的工具清单（不改变执行时的权限校验）。"""
-    return [t for t in TOOL_SPECS
-            if is_admin or t["function"]["name"] not in ADMIN_ONLY_TOOLS]
+TOOL_PERMISSIONS = {
+    "list_tables": "agent.sql.raw", "describe_table": "agent.sql.raw",
+    "query_sql": "agent.sql.raw",
+    "run_python": "agent.exec", "run_node": "agent.exec",
+    "pip_install": "agent.exec", "npm_install": "agent.exec",
+    "list_dag_flows": "dag.view", "get_dag_run_status": "dag.view",
+    "create_dag_flow": "dag.edit", "run_dag_flow": "dag.execute",
+    "stock_overview": "research.stock.view",
+    "search_news": "research.news.view",
+    "model_performance": "model.view",
+    "portfolio_summary": "portfolio.position.view",
+    "recent_signals": "research.signal.view",
+    "list_skills": "agent.use", "read_skill": "agent.use",
+    "save_skill": "agent.skill.edit",
+}
+
+_LEGACY_ADMIN_CODES = {"agent.sql.raw", "agent.exec", "dag.edit", "dag.execute"}
+
+
+def _perm_ok(kw: dict, code: str | None) -> bool:
+    """工具级权限校验；permissions=None 仅兼容单测/旧调用。"""
+    if not code:
+        return True
+    perms = kw.get("_permissions")
+    if perms is None:
+        return True if code not in _LEGACY_ADMIN_CODES else bool(kw.get("_is_admin"))
+    return code in set(perms)
+
+
+def _tool_perm_error(code: str | None, kw: dict | None = None) -> dict:
+    kw = kw or {}
+    logger.warning(
+        "[agent] 工具权限拒绝 user={} tool_need={}",
+        kw.get("_user_id"), code)
+    return {"error": f"无权限：需要 {code}"}
+
+
+def tool_specs_for(is_admin: bool = False, permissions=None) -> list:
+    """按权限返回可下发给模型的工具清单（执行时仍会二次校验）。"""
+    allowed = set(permissions) if permissions is not None else None
+    if allowed is not None and "agent.use" not in allowed:
+        return []
+    out = []
+    for t in TOOL_SPECS:
+        name = t["function"]["name"]
+        if allowed is None:
+            if not is_admin and name in ADMIN_ONLY_TOOLS:
+                continue
+        else:
+            need = TOOL_PERMISSIONS.get(name)
+            if need and need not in allowed:
+                continue
+        out.append(t)
+    return out
 
 
 def execute_tool(session_id: int, name: str, args: dict,
-                 user_id: int | None = None, is_admin: bool = False) -> dict:
+                 user_id: int | None = None, is_admin: bool = False,
+                 permissions=None) -> dict:
     """执行工具并统一截断（返回给模型的内容不超过 12KB）。
 
     超限时优先裁剪列表字段而不是把整个结构换成 preview 字符串——否则前端
@@ -787,7 +861,8 @@ def execute_tool(session_id: int, name: str, args: dict,
     if not fn:
         return {"error": f"未知工具 {name}"}
     try:
-        r = fn(session_id, _user_id=user_id, _is_admin=is_admin, **(args or {}))
+        r = fn(session_id, _user_id=user_id, _is_admin=is_admin,
+               _permissions=permissions, **(args or {}))
     except TypeError as e:
         return {"error": f"参数错误: {e}"}
     except Exception as e:
