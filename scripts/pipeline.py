@@ -509,6 +509,16 @@ def _terminate_node(log_id, reason='用户手动终止'):
     """原子节点终止自身：更新日志状态为 failed。"""
     write_node_log(log_id=log_id, status='failed', detail=reason)
 
+def _is_trade_day(db, td) -> bool:
+    """查询交易日历；缺失视为未知（False，不阻断非交易日/测试环境）。"""
+    try:
+        return bool(db.execute(text(
+            "SELECT is_trade_day FROM trade_calendar WHERE cal_date=:d LIMIT 1"),
+            {"d": str(td)[:10]}).scalar())
+    except Exception:
+        return False
+
+
 def dag_task_kline(trade_date=None, **kw):
     from datetime import date; td = trade_date or str(date.today()); rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('kline')
@@ -524,8 +534,9 @@ def dag_task_kline(trade_date=None, **kw):
         db = get_sync_db()
         rows = source.fetch_stock_kline([], td, td)
         saved = batch_upsert_kline(db, rows)
+        is_td = _is_trade_day(db, td)
         db.close()
-        return {'rows': saved, '_source': source.name}
+        return {'rows': saved, '_source': source.name, '_is_trade_day': is_td}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
@@ -533,6 +544,10 @@ def dag_task_kline(trade_date=None, **kw):
         src = r.get('_source', '?')
         if fatal:
             write_node_log(log_id=log_id, status='failed', detail=f'失败: {fatal}')
+        elif rows == 0 and r.get('_is_trade_day'):
+            msg = f'交易日 {td} 无K线数据（数据源异常或尚未发布）'
+            write_node_log(log_id=log_id, status='failed', detail=msg)
+            raise RuntimeError(msg)
         else:
             write_node_log(log_id=log_id, status='success', rows=rows, detail=f'完成 {rows} 行 (来源:{src})')
         return r
@@ -555,12 +570,17 @@ def dag_task_index(trade_date=None, **kw):
         db = get_sync_db()
         rows = source.fetch_index_kline([], td, td)
         saved = batch_upsert_index_kline(db, rows)
+        is_td = _is_trade_day(db, td)
         db.close()
-        return {'rows': saved, '_source': source.name}
+        return {'rows': saved, '_source': source.name, '_is_trade_day': is_td}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0) if isinstance(r, dict) else r
         src = r.get('_source', '?') if isinstance(r, dict) else '?'
+        if rows == 0 and isinstance(r, dict) and r.get('_is_trade_day'):
+            msg = f'交易日 {td} 无基本面数据（数据源异常或尚未发布）'
+            write_node_log(log_id=log_id, status='failed', detail=msg)
+            raise RuntimeError(msg)
         if rows == 0:
             write_node_log(log_id=log_id, status='success', detail='无数据(跳过)')
             return 0
@@ -591,12 +611,17 @@ def dag_task_etf(trade_date=None, **kw):
         if rows:
             logger.info("[etf] close_hfq=close（ETF 复权请在补数场景触发 baostock 补充）")
         saved = batch_upsert_kline(db, rows)
+        is_td = _is_trade_day(db, td)
         db.close()
-        return {'rows': saved, '_source': source.name}
+        return {'rows': saved, '_source': source.name, '_is_trade_day': is_td}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0)
         src = r.get('_source', '?')
+        if rows == 0 and r.get('_is_trade_day'):
+            msg = f'交易日 {td} 无ETF数据（数据源异常或尚未发布）'
+            write_node_log(log_id=log_id, status='failed', detail=msg)
+            raise RuntimeError(msg)
         if rows == 0:
             write_node_log(log_id=log_id, status='success', detail='无数据(跳过)')
             return 0
@@ -650,12 +675,17 @@ def dag_task_fund(trade_date=None, **kw):
             synced = 0
         if rows:
             logger.info(f"[fund] DAG 节点写 tushare 主字段+日度PE({hist}行)，roe前向填充{synced}行")
+        is_td = _is_trade_day(db, td)
         db.close()
-        return {'rows': saved, '_source': source.name}
+        return {'rows': saved, '_source': source.name, '_is_trade_day': is_td}
     try:
         r = _with_hb(log_id, rid, _run)
         rows = r.get('rows', 0) if isinstance(r, dict) else r
         src = r.get('_source', '?') if isinstance(r, dict) else '?'
+        if rows == 0 and isinstance(r, dict) and r.get('_is_trade_day'):
+            msg = f'交易日 {td} 无基本面数据（数据源异常或尚未发布）'
+            write_node_log(log_id=log_id, status='failed', detail=msg)
+            raise RuntimeError(msg)
         if rows == 0:
             write_node_log(log_id=log_id, status='success', detail='无数据(跳过)')
             return 0

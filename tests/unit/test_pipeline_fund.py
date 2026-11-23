@@ -13,6 +13,7 @@ class TestDagTaskFund(unittest.TestCase):
         src = SimpleNamespace(name="fake", fetch_fundamentals=lambda _codes: [])
         manager = SimpleNamespace(get_source=lambda: src)
         with patch.object(pipeline, "write_node_log"), \
+                patch.object(pipeline, "_is_trade_day", return_value=False), \
                 patch.object(pipeline, "_with_hb",
                              side_effect=lambda log_id, rid, fn, *a, **k: fn()), \
                 patch("crawler.adapters.get_data_source_manager", return_value=manager), \
