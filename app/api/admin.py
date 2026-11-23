@@ -65,6 +65,26 @@ def _assert_can_grant_codes(actor: Principal, codes: list[str]) -> None:
         raise HTTPException(403, f"不能授予自己没有的权限: {sorted(missing)[:5]}")
 
 
+def _target_is_admin(db, user_id: int) -> bool:
+    return bool(db.execute(text("""
+        SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id=:u AND r.code='admin'
+          AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+        LIMIT 1
+    """), {"u": user_id}).fetchone())
+
+
+def _assert_can_manage_target(actor: Principal, db, target_user_id: int,
+                              *, allow_self_admin: bool = False) -> None:
+    """非 admin 不得管理 admin 目标；默认也不得通过管理接口操作自己。"""
+    if "admin" in actor.role_codes:
+        return
+    if target_user_id == actor.user_id and not allow_self_admin:
+        raise HTTPException(403, "不能通过管理接口操作自己")
+    if _target_is_admin(db, target_user_id):
+        raise HTTPException(403, "不能管理管理员账号")
+
+
 def _active_admin_count(db, exclude_user_id: int | None = None) -> int:
     sql = """
         SELECT count(DISTINCT u.id)
@@ -181,6 +201,8 @@ def create_user(body: UserCreate, request: Request, principal: Principal = Depen
     try:
         if db.execute(text("SELECT 1 FROM users WHERE username=:u"), {"u": body.username}).fetchone():
             raise HTTPException(409, "用户名已存在")
+        if "admin" in body.role_codes and "admin" not in principal.role_codes:
+            raise HTTPException(403, "只有管理员可以创建 admin 用户")
         _assert_can_grant(principal, body.role_codes, db)
         role_ids = db.execute(text(
             "SELECT id FROM roles WHERE code = ANY(:codes) AND status='active'"
@@ -227,6 +249,7 @@ def set_user_status(user_id: int, body: StatusBody, request: Request,
         row = db.execute(text("SELECT id, username FROM users WHERE id=:id"), {"id": user_id}).fetchone()
         if not row:
             raise HTTPException(404, "用户不存在")
+        _assert_can_manage_target(principal, db, user_id)
         if body.status == "disabled" and user_id != principal.user_id:
             if _active_admin_count(db, exclude_user_id=user_id) == 0:
                 raise HTTPException(409, "不能禁用最后一个管理员")
@@ -253,6 +276,7 @@ def reset_password(user_id: int, request: Request, principal: Principal = Depend
     try:
         if not db.execute(text("SELECT 1 FROM users WHERE id=:id"), {"id": user_id}).fetchone():
             raise HTTPException(404, "用户不存在")
+        _assert_can_manage_target(principal, db, user_id)
         one_time = secrets.token_urlsafe(12)
         db.execute(text("""
             UPDATE users SET password_hash=:p, must_change_password=true,
@@ -275,6 +299,9 @@ def set_user_roles(user_id: int, body: RolesBody, request: Request,
     try:
         if not db.execute(text("SELECT 1 FROM users WHERE id=:id"), {"id": user_id}).fetchone():
             raise HTTPException(404, "用户不存在")
+        _assert_can_manage_target(principal, db, user_id)
+        if "admin" in body.role_codes and "admin" not in principal.role_codes:
+            raise HTTPException(403, "只有管理员可以授予 admin 角色")
         _assert_can_grant(principal, body.role_codes, db)
         rows = db.execute(text(
             "SELECT id, code FROM roles WHERE code = ANY(:codes) AND status='active'"
@@ -333,6 +360,7 @@ def set_user_override_by_code(user_id: int, permission_code: str, body: Override
                           {"c": permission_code}).fetchone()
         if not perm:
             raise HTTPException(404, "权限不存在")
+        _assert_can_manage_target(principal, db, user_id)
         scope = body.scope
         if perm[1] in PERSONAL_PERMISSION_CODES:
             scope = "self"
@@ -370,6 +398,9 @@ def delete_user_override(user_id: int, permission_code: str, request: Request,
                           {"c": permission_code}).fetchone()
         if not perm:
             raise HTTPException(404, "权限不存在")
+        _assert_can_manage_target(principal, db, user_id)
+        if "admin" not in principal.role_codes and not principal.can(permission_code):
+            raise HTTPException(403, "不能操作自己没有的权限")
         db.execute(text(
             "DELETE FROM user_permission_overrides WHERE user_id=:u AND permission_id=:p"
         ), {"u": user_id, "p": perm[0]})
