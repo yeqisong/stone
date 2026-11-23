@@ -14,6 +14,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -144,10 +145,39 @@ def _to_time(v: Any) -> str:
 
 
 def _normalize_code(v: Any) -> str:
-    s = re.sub(r"\D", "", str(v or ""))
-    if not s:
+    """证券代码规范化：兼容 Excel 数值单元格（600000.0 / 1.0）。
+
+    xls/xlsx 的数值列会被读成 float；直接 re.sub 会把 600000.0 变成 6000000、
+    1.0 变成 000010（另一只有效股票）。这里先按数值语义还原整数，再做 6 位补零。
+    非整数 float 或超过 6 位的非前导零串视为无效，返回空串由调用方跳过。
+    """
+    if v is None:
         return ""
-    return s[-6:].zfill(6) if len(s) <= 6 else s
+    if isinstance(v, bool):
+        return ""
+    if isinstance(v, float):
+        if not math.isfinite(v) or not v.is_integer():
+            return ""
+        s = str(int(v))
+    else:
+        s = str(v).strip()
+        # 字符串形式的 Excel 数值："600000.0" / "000001.0"；非零小数视为非法
+        m = re.fullmatch(r"(\d+)\.(\d+)", s)
+        if m:
+            if set(m.group(2)) <= {"0"}:
+                s = m.group(1)
+            else:
+                return ""
+    digits = re.sub(r"\D", "", s)
+    if not digits:
+        return ""
+    if len(digits) > 6:
+        # 仅容忍前导零造成的超长（如 "0000001"），其余视为非法，避免静默映射到别的股票
+        if digits.startswith("0"):
+            digits = digits[-6:]
+        else:
+            return ""
+    return digits.zfill(6)
 
 
 def _normalize_side(raw: Any, biz: Any = "") -> tuple[str, str]:
