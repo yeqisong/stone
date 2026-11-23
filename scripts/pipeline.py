@@ -893,12 +893,13 @@ def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
     cost_total = 0.0
     comm = 0.00025; st_tax = 0.001; slip = 0.001
 
-    for d in dates_unique:
+    for di, d in enumerate(dates_unique):
         day = vdf[vdf['trade_date'] == d]
         if day.empty: continue
         day_turn = 0.0  # 当日成交额（M4 换手率）
+        sold_today = set()
 
-        # ── 卖出检查（先卖后买；只检查隔夜仓 → T+1 天然成立）──
+        # ── 卖出检查（先卖后买；当日卖出的代码禁止同日回补）──
         surviving = []
         for h in holdings:
             hday = day[day['stock_code'] == h['code']]
@@ -912,7 +913,7 @@ def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
                 sell_p = h['buy_price'] * (1 + take_profit)     # 止盈按触发价成交
             elif trailing > 0 and cur_p <= h['peak'] * (1 - trailing):
                 sell_p = cur_p                                  # 峰值回撤卖出
-            elif (d - h['buy_date']).days >= hold_days:
+            elif di - int(h.get('buy_idx', di)) >= hold_days:
                 sell_p = cur_p
             if sell_p is None or bool(hday['_limit_down'].iloc[0]):
                 surviving.append(h); continue                   # 跌停不可卖
@@ -921,11 +922,12 @@ def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
             cost_total += cost
             cash += max(gross - cost, 0); trade_count += 1
             day_turn += gross
+            sold_today.add(h['code'])
             if sell_p > h['buy_price']: win_count += 1
         holdings = surviving
 
         # ── 买入：候选剔除已持/涨停，按得分取 top slots ──
-        held = {h['code'] for h in holdings}
+        held = {h['code'] for h in holdings} | sold_today
         candidates = day[~day['stock_code'].isin(held) & (day['close'] > 0) & (~day['_limit_up'])]
         slots = max_pos - len(holdings)
         picks = []
@@ -950,7 +952,7 @@ def _simple_backtest(df, pred=None, val_start='', val_end='', hold_days=10,
             cost_total += gross2 * comm
             day_turn += gross2
             holdings.append({'code': r['stock_code'], 'buy_price': price,
-                             'buy_date': d, 'shares': shares, 'peak': price})
+                             'buy_date': d, 'buy_idx': di, 'shares': shares, 'peak': price})
 
         # ── 收盘估值（无候选/无空位也要记账，保证净值曲线逐日连续）──
         pos_val = 0.0
@@ -3504,9 +3506,11 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
     for di, d in enumerate(sorted_dates):
         # ── 1. 平仓：到期或止损 ──
         surviving = []
+        sold_today = set()
         tr_val = trailing if trailing is not None else 0
         for h in holdings:
-            hold_dur = (d - h['buy_date']).days
+            # 持有期按交易日计：自然日会把周末/假期算进去，10 日持仓实际只剩 7 个交易日
+            hold_dur = di - int(h.get('buy_idx', di))
             # 获取当前价（用最近一日价格近似）
             day_data = val_df[(val_df['date'] == d) & (val_df['code'] == h['code'])]
             if day_data.empty:
@@ -3588,10 +3592,11 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
   else 'hold_expire',
                     'model_version': bt_ver,
                     'signal_label': bt_label,
-                    'hold_days': (d - h['buy_date']).days,
+                    'hold_days': int(di - h.get('buy_idx', di)),
                     'buy_trade_id': trade_id,
                 })
                 trade_count += 1
+                sold_today.add(h['code'])
                 if sell_price > h['buy_price']:
                     win_count += 1
             else:
@@ -3608,8 +3613,8 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
             equity = _snap(d)
             continue
         day = val_df[val_df['date'] == d].copy()
-        # 排除已持仓
-        held_codes = {h['code'] for h in holdings}
+        # 排除已持仓与当日卖出（防止卖出后同日回补，制造虚假换手）
+        held_codes = {h['code'] for h in holdings} | sold_today
         day = day[~day['code'].isin(held_codes)]
         # 涨停不可买：候选剔除并计数（执行约束，方向性虚高的主要来源）
         lu_mask = day['limit_up'].astype(bool)
@@ -3689,6 +3694,7 @@ def run_training_backtest(y_true, y_pred, dates, codes, close_prices, volumes, h
                 'code': r['code'],
                 'buy_price': price,
                 'buy_date': d,
+                'buy_idx': di,
                 'shares': shares,
                 'last_price': price,
                 'trade_id': trade_id,

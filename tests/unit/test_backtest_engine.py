@@ -34,6 +34,7 @@ class TestPredMode:
         """逐日对齐：第 1 天预测 A 最优、之后 B 最优，引擎必须从第 2 天起切换买 B。
 
         旧实现 y_pred[:len(candidates)] 永远读验证期头几行的预测，会一直买 A。
+        卖出当日禁止同代码回补，因此 A/B 会隔日轮动；只要收益显著高于一直持 A 即证明切换生效。
         """
         n = 10
         a = [10.0] * n
@@ -47,8 +48,8 @@ class TestPredMode:
             index=df.index)
         bt = _simple_backtest(df, pred, *_val_range(df),
                               hold_days=1, stop_loss=0.5, take_profit=0.5, max_pos=1)
-        assert bt['total_return'] > 0.10, f"未按日对齐预测选股: {bt}"
-        assert bt['win_rate'] >= 0.8, f"B 段卖出应为几乎全胜: {bt}"
+        assert bt['total_return'] > 0.05, f"未按日对齐预测选股: {bt}"
+        assert bt['total_trades'] >= 4, f"轮动交易数不足: {bt}"
 
     def test_nonpositive_pred_never_buys(self):
         """预测全部 ≤0 时不买入（min_ret 门槛语义保留）。"""
