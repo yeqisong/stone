@@ -16,14 +16,27 @@ let ws = null
 let reconnectTimer = null
 let listeners = []
 let reconnectAttempts = 0
+let manualClose = false
 const MAX_RECONNECT_ATTEMPTS = 20
 const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30000
 
 export const wsState = { connected: false }
 
-export function connectWebSocket() {
+export function connectWebSocket(reset = true) {
+  if (reset) {
+    // 显式连接（登录/手动重连/切 token）必须重置退避，否则登出时
+    // disconnect 把 attempts 拉到上限后，再登录将永远不再重连。
+    manualClose = false
+    reconnectAttempts = 0
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+  // 丢弃已关闭/半关闭的旧连接，避免旧 onclose 再安排一次重连
+  if (ws) {
+    try { ws.onclose = null; ws.onerror = null; ws.close() } catch (_) {}
+    ws = null
+  }
 
   ws = new WebSocket(getWsUrl())
 
@@ -45,7 +58,7 @@ export function connectWebSocket() {
   ws.onclose = () => {
     wsState.connected = false
     notifyListeners({ type: 'connection', connected: false })
-    scheduleReconnect()
+    if (!manualClose) scheduleReconnect()
   }
 
   ws.onerror = () => {
@@ -55,7 +68,7 @@ export function connectWebSocket() {
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer) return
+  if (manualClose || reconnectTimer) return
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.warn('[WS] 已达最大重试次数，停止重连')
     return
@@ -65,14 +78,17 @@ function scheduleReconnect() {
   console.log(`[WS] ${delay}ms 后重连 (第 ${reconnectAttempts} 次)`)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
-    connectWebSocket()
+    connectWebSocket(false)
   }, delay)
 }
 
 export function disconnectWebSocket() {
-  reconnectAttempts = MAX_RECONNECT_ATTEMPTS  // 阻止重连
+  manualClose = true
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
-  if (ws) { ws.close(); ws = null }
+  if (ws) {
+    try { ws.onclose = null; ws.onerror = null; ws.close() } catch (_) {}
+    ws = null
+  }
   wsState.connected = false
 }
 
@@ -82,5 +98,7 @@ export function addWsListener(fn) {
 }
 
 function notifyListeners(data) {
-  listeners.forEach(fn => fn(data))
+  listeners.slice().forEach(fn => {
+    try { fn(data) } catch (e) { console.error('[WS] listener error', e) }
+  })
 }
