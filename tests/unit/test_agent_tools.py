@@ -3,7 +3,9 @@
 覆盖：只读 SQL 的写入/多语句拦截、参数校验、沙箱 Python/Node 执行与依赖隔离。
 DB 相关用例在无库时跳过。
 """
+import os
 import unittest
+from pathlib import Path
 
 from app.agent import sandbox
 from app.agent.tools import execute_tool
@@ -66,6 +68,49 @@ class TestSandbox(unittest.TestCase):
         sandbox.run_python(self.SID, "open('keep.txt','w').write('x')")
         names = [f["name"] for f in sandbox.list_workspace(self.SID)["files"]]
         self.assertIn("keep.txt", names)
+
+
+class TestSandboxHardening(unittest.TestCase):
+    SID = 990002
+
+    def test_env_does_not_inherit_secrets(self):
+        old = {k: os.environ.get(k) for k in ("TUSHARE_TOKEN", "DATABASE_URL", "APP_SECRET_KEY")}
+        try:
+            for k in old:
+                os.environ[k] = "should-not-leak"
+            ws = sandbox.workspace(self.SID)
+            env = sandbox._env(ws)
+            for k in old:
+                self.assertNotIn(k, env, k)
+                self.assertNotIn("should-not-leak", str(env))
+        finally:
+            for k, v in old.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
+
+    def test_package_option_injection_rejected(self):
+        self.assertEqual(sandbox._safe_packages(["--index-url=http://x", "-r", "a.txt"]), [])
+        self.assertEqual(sandbox._safe_packages(["pandas==2.2.3", "requests"]),
+                         ["pandas==2.2.3", "requests"])
+        self.assertEqual(sandbox._safe_packages(["foo --registry=http://x"]), [])
+
+    def test_bwrap_missing_fails_closed(self):
+        old_bwrap, old_mode = sandbox._BWRAP, sandbox._SANDBOX_MODE
+        try:
+            sandbox._BWRAP = None
+            sandbox._SANDBOX_MODE = "auto"
+            r = sandbox.run_python(self.SID, "print('should not run')")
+            self.assertFalse(r["ok"])
+            self.assertIn("fail-closed", r["stderr"])
+        finally:
+            sandbox._BWRAP, sandbox._SANDBOX_MODE = old_bwrap, old_mode
+
+    def test_cannot_read_project_env(self):
+        if not sandbox.sandbox_enabled():
+            self.skipTest("bwrap 不可用")
+        r = sandbox.run_python(self.SID, f"import os; print(os.path.exists('{sandbox.ROOT}/.env'))")
+        self.assertTrue(r["ok"], r.get("stderr"))
+        self.assertIn("False", r["stdout"])
 
 
 if __name__ == "__main__":
