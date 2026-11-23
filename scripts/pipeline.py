@@ -1925,6 +1925,9 @@ def dag_task_model_signal(trade_date=None, **kw):
         sell_count = 0
         limit_skipped = 0  # 涨停拦截的买入信号数
 
+        pred_by_h = {}       # 周期 -> {stock_code: 预测值}；规则模式为空
+        preds_map = {}       # stock_code -> 可用周期预测均值
+
         def _rule_score(row):
             """规则评分（ML 回退 / 无模型时使用）。"""
             score = 0
@@ -1942,7 +1945,8 @@ def dag_task_model_signal(trade_date=None, **kw):
             p5 = pred_by_h.get('5d', {}).get(row.stock_code)
             p10 = pred_by_h.get('10d', {}).get(row.stock_code)
             p20 = pred_by_h.get('20d', {}).get(row.stock_code)
-            score = round((p5 + p10 + p20) / 3.0, 4) if None not in (p5, p10, p20) else None
+            _vals = [v for v in (p5, p10, p20) if v is not None]
+            score = round(sum(_vals) / len(_vals), 4) if _vals else None
             db.execute(text("""
                 INSERT INTO signal_history (signal_date, stock_code, stock_name, direction, strength, price, strategy_name, reason, combined_signal, model_version, params_snapshot, preference,
                     predict_5d_return, predict_10d_return, predict_20d_return, predict_score,
@@ -1960,7 +1964,8 @@ def dag_task_model_signal(trade_date=None, **kw):
             p5 = pred_by_h.get('5d', {}).get(row.stock_code)
             p10 = pred_by_h.get('10d', {}).get(row.stock_code)
             p20 = pred_by_h.get('20d', {}).get(row.stock_code)
-            score = round((p5 + p10 + p20) / 3.0, 4) if None not in (p5, p10, p20) else None
+            _vals = [v for v in (p5, p10, p20) if v is not None]
+            score = round(sum(_vals) / len(_vals), 4) if _vals else None
             db.execute(text("""
                 INSERT INTO user_signal_history
                     (user_id, signal_date, stock_code, stock_name, direction, strength, price,
@@ -1990,26 +1995,35 @@ def dag_task_model_signal(trade_date=None, **kw):
             # M2：预测统一走 predict_for_version（特征派生/标准化/模型加载共享唯一入口，消除内联漂移）
             # 分周期各调一次：均值做截面排序（predict_score），同时落库 predict_{5,10,20}d_return
             # （2026-09-06 审计修复：四列建表以来从未写入，信号页预测列恒空、纸面组合无分可用）
-            _p5, _e5 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=5)
-            _p10, _e10 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=10)
-            _p20, _e20 = predict_for_version(db, ver, df_today, today_str, today_str, horizon=20)
-            preds_map = {}      # stock_code -> 预测收益率均值（排序依据）
-            pred_by_h = {}      # 周期 -> {stock_code: 预测值}
-            if _p5 is not None and _p10 is not None and _p20 is not None:
-                for h, p in (('5d', _p5), ('10d', _p10), ('20d', _p20)):
-                    pred_by_h[h] = {df_today.loc[i, 'stock_code']: float(v) for i, v in p.items()}
-                preds_map = {c: (v5 + pred_by_h['10d'][c] + pred_by_h['20d'][c]) / 3.0
-                             for c, v5 in pred_by_h['5d'].items()
-                             if c in pred_by_h['10d'] and c in pred_by_h['20d']}
-            else:
+            # 只对实际存在的周期模型做预测：允许 5d/10d/20d 中任意 ≥2 个
+            # （旧实现硬要求三件套齐全，缺 20d 时整个 ML 链回退，已废弃）
+            pred_by_h = {}
+            _errs = []
+            for _h in (5, 10, 20):
+                _key = f'{_h}d'
+                if _key not in xgb_models:
+                    continue
+                _p, _e = predict_for_version(db, ver, df_today, today_str, today_str, horizon=_h)
+                if _p is None:
+                    _errs.append(f'{_key}:{_e}')
+                    continue
+                pred_by_h[_key] = {df_today.loc[i, 'stock_code']: float(v) for i, v in _p.items()}
+            if len(pred_by_h) < 2:
                 # 模型存在但预测失败时，绝不能回退“规则评分买全市场”——
                 # 曾导致 v20.0 一天写入 5,217 条买入信号，详情页满屏买入三角。
-                err = _e5 or _e10 or _e20
+                err = '; '.join(_errs)[:180] or '可用周期模型不足 2 个'
                 logger.error(f"[model_signal] {ver} 统一预测入口失败: {err}；不生成信号")
                 write_node_log(log_id=log_id, status='failed',
-                               detail=f'ML 预测失败，未生成信号: {str(err)[:150]}')
+                               detail=f'ML 预测失败，未生成信号: {err}')
                 db.close()
                 return 0
+            # 截面均值：每个代码只对有预测的周期求平均（缺某周期不拖累其余）
+            _codes = set().union(*(set(d) for d in pred_by_h.values()))
+            preds_map = {}
+            for _c in _codes:
+                _vs = [d[_c] for d in pred_by_h.values() if _c in d]
+                if _vs:
+                    preds_map[_c] = sum(_vs) / len(_vs)
 
             # 阈值：quantile=当日预测 top N%（精确截断，模型无区分度时比例依然固定）；absolute=绝对预测收益率
             if preds_map:
