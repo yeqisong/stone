@@ -1,7 +1,8 @@
 """集中度减仓计算器：同时满足目标仓位与单票上限，按 100 股整手。
 
 纯函数，便于单测。输入当前持仓/现金，输出每只票建议卖出股数、卖后仓位与单票占比。
-不含手续费、印花税，也不处理 T+1（今天买入部分不可卖，由调用方提示）。
+买入 T+1 约束：position 可带 ``sellable_qty``（今日可卖股数）；未提供时默认全仓可卖。
+不含手续费、印花税。
 """
 from __future__ import annotations
 
@@ -32,19 +33,26 @@ def _metrics(pos: list[dict], cash: float) -> dict:
 
 
 def build_reduction_plan(positions: list[dict], cash: float,
-                         target: float = 0.70, max_single: float = 0.20) -> dict:
+                         target: float = 0.70, max_single: float = 0.20,
+                         today_buy_qty: dict[str, float] | None = None) -> dict:
     target = max(0.0, min(1.0, _f(target) or 0.70))
     max_single = max(0.0, min(1.0, _f(max_single) or 0.20))
+    today_buy_qty = today_buy_qty or {}
     pos = []
     for p in positions or []:
         qty = _f(p.get("qty", p.get("quantity")))
         price = _f(p.get("price"))
         if qty <= 0 or price <= 0:
             continue
+        code = p.get("code") or p.get("stock_code")
+        if p.get("sellable_qty") is not None:
+            sellable = max(0.0, _f(p.get("sellable_qty")))
+        else:
+            sellable = max(0.0, qty - _f(today_buy_qty.get(code)))
         pos.append({
-            "code": p.get("code") or p.get("stock_code"),
-            "name": p.get("name") or p.get("stock_name") or p.get("code"),
-            "qty": qty, "price": price, "mv": qty * price,
+            "code": code,
+            "name": p.get("name") or p.get("stock_name") or code,
+            "qty": qty, "sellable": sellable, "price": price, "mv": qty * price,
         })
     cash = max(0.0, _f(cash))
     equity = cash + sum(p["mv"] for p in pos)
@@ -59,7 +67,8 @@ def build_reduction_plan(positions: list[dict], cash: float,
         pos_ratio = mv / equity
         weights = {p["code"]: p["mv"] / equity for p in pos if p["mv"] > 0}
         over = [(p, weights[p["code"]] - max_single) for p in pos
-                if weights.get(p["code"], 0) > max_single + 1e-9]
+                if p.get("sellable", p["qty"]) > 0.5
+                and weights.get(p["code"], 0) > max_single + 1e-9]
         if pos_ratio <= target + 1e-9 and not over:
             break
         if over:
@@ -67,16 +76,22 @@ def build_reduction_plan(positions: list[dict], cash: float,
             need = max(0.0, (weights[p["code"]] - max_single) * equity)
             single_driven = True
         else:
-            p = max((x for x in pos if x["mv"] > 0), key=lambda x: x["mv"])
+            p = max((x for x in pos if x["mv"] > 0
+                     and x.get("sellable", x["qty"]) > 0.5),
+                    key=lambda x: x["mv"], default=None)
+            if p is None:
+                break
             need = max(0.0, mv - target * equity)
         if need <= 0 or p["price"] <= 0:
             break
         # A 股 100 股整手；向上取整到整手，宁可多卖 <100 股也要真正落到上限内
-        qty = min(p["qty"], ceil(need / p["price"] / 100) * 100)
+        qty = min(p.get("sellable", p["qty"]), p["qty"],
+                  ceil(need / p["price"] / 100) * 100)
         if qty <= 0:
             break
         amount = qty * p["price"]
         p["qty"] -= qty
+        p["sellable"] = max(0.0, p.get("sellable", qty) - qty)
         p["mv"] -= amount
         cash += amount
         sells[p["code"]] = sells.get(p["code"], 0.0) + qty
@@ -84,18 +99,25 @@ def build_reduction_plan(positions: list[dict], cash: float,
 
     after = _metrics(pos, cash)
     rows = []
+    t1_deferred = 0.0
     for code, qty in sells.items():
         o = original.get(code)
         if not o:
             continue
         left = max(0.0, o["qty"] - qty)
         after_p = next((x for x in pos if x["code"] == code), None)
+        t1_qty = max(0.0, o["qty"] - float(o.get("sellable", o["qty"])))
+        t1_deferred += t1_qty * o["price"]
         rows.append({
             "code": code, "name": o["name"], "price": round(o["price"], 4),
             "qty_before": int(o["qty"]) if abs(o["qty"] - round(o["qty"])) < 1e-6 else round(o["qty"], 2),
+            "sellable_qty": int(o.get("sellable", o["qty"]))
+            if abs(o.get("sellable", o["qty"]) - round(o.get("sellable", o["qty"]))) < 1e-6
+            else round(o.get("sellable", o["qty"]), 2),
             "sell_qty": int(qty) if abs(qty - round(qty)) < 1e-6 else round(qty, 2),
             "sell_amount": round(qty * o["price"], 2),
             "qty_after": int(left) if abs(left - round(left)) < 1e-6 else round(left, 2),
+            "t1_qty": int(t1_qty) if abs(t1_qty - round(t1_qty)) < 1e-6 else round(t1_qty, 2),
             "after_weight": round((after_p["mv"] / equity) if after_p and equity > 0 else 0.0, 6),
         })
     rows.sort(key=lambda x: -x["sell_amount"])
@@ -106,5 +128,7 @@ def build_reduction_plan(positions: list[dict], cash: float,
         "ok": True, "target": target, "max_single": max_single,
         "equity": round(equity, 2), "before": before, "after": after,
         "rows": rows, "need": need, "binding": binding,
-        "note": "按100股整手估算、不含费用；今天买入的部分 T+1 不可卖。",
+        "t1_deferred": round(t1_deferred, 2),
+        "note": ("按100股整手估算、不含费用；今天买入的部分 T+1 不可卖"
+                 + (f"，本次顺延 ¥{t1_deferred:,.0f}" if t1_deferred > 0 else "。")),
     }

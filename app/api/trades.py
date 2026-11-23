@@ -280,9 +280,15 @@ def reduction_plan(target: Optional[float] = Query(None, ge=0.1, le=1.0),
         disc = get_discipline(db, principal.data_user_id)
         t = target if target is not None else float(disc.get("target_position_ratio") or 0.70)
         cap = max_single if max_single is not None else float(disc.get("max_single_weight") or 0.20)
+        today_buy: dict[str, float] = {}
+        for a in st.get("today_actions") or []:
+            if a.get("side") == "buy":
+                code = a.get("stock_code")
+                today_buy[code] = today_buy.get(code, 0.0) + float(a.get("quantity") or 0)
         positions = [{
             "code": p["stock_code"], "name": p["stock_name"],
             "qty": p["quantity"], "price": p["price"],
+            "sellable_qty": max(0.0, float(p["quantity"]) - today_buy.get(p["stock_code"], 0.0)),
         } for p in (st.get("positions") or [])]
         return build_reduction_plan(positions, st.get("cash") or 0.0, t, cap)
     finally:

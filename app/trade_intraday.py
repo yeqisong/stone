@@ -377,9 +377,17 @@ def _plan_from_state(st: dict) -> Optional[dict]:
         # 用集中度计算器同时处理「仓位目标 + 所有超标的单票」，
         # 避免只减最大单票后，第二只票仍超 20% 却没进计划。
         from app.reduction_plan import build_reduction_plan
+        today_buy: dict[str, float] = {}
+        for a in st.get("today_actions") or []:
+            if a.get("side") == "buy":
+                code = a.get("stock_code")
+                today_buy[code] = today_buy.get(code, 0.0) + float(a.get("quantity") or 0)
         rp = build_reduction_plan(
             [{"code": p.get("stock_code"), "name": p.get("stock_name"),
-              "qty": p.get("quantity"), "price": p.get("price")} for p in positions],
+              "qty": p.get("quantity"), "price": p.get("price"),
+              "sellable_qty": max(0.0, float(p.get("quantity") or 0)
+                                  - today_buy.get(p.get("stock_code"), 0.0))}
+             for p in positions],
             st.get("cash") or 0.0, target, max_single,
         )
         need = _f(rp.get("need"))
