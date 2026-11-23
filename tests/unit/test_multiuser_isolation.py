@@ -11,10 +11,14 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from fastapi import HTTPException
+
 from app.agent import skills as S
 from app.agent.tools import ADMIN_ONLY_TOOLS, _sql_table_error, tool_specs_for
+from app.api.admin import _assert_can_grant_codes
 from app.auth.definitions import PERMISSION_CODES, PUBLIC_PERMISSION_CODES, ROLE_PERMISSIONS
 from app.auth.route_permissions import resolve_rule
+from app.auth.service import Grant, Principal
 from app.feishu.identity import extract_open_id, history_key
 
 
@@ -47,6 +51,36 @@ class TestAdminPermissions(unittest.TestCase):
                          "portfolio.position.edit")
         # 未知路由没有规则 → authorize_request 默认拒绝
         self.assertIsNone(resolve_rule("GET", "/api/no-such-endpoint"))
+
+
+class TestRoleGrantGuard(unittest.TestCase):
+    def _principal(self, codes, *, admin=False):
+        perms = {c: Grant(c) for c in codes}
+        return Principal(user_id=2, username="ops", permissions=perms,
+                         role_codes=frozenset({"admin"} if admin else {"ops"}))
+
+    def test_cannot_grant_new_permission(self):
+        actor = self._principal({"system.role.manage"})
+        with self.assertRaises(HTTPException) as ctx:
+            _assert_can_grant_codes(actor, ["system.role.manage", "system.user.manage"])
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_can_grant_own_permission(self):
+        actor = self._principal({"system.role.manage"})
+        _assert_can_grant_codes(actor, ["system.role.manage"])
+
+    def test_admin_bypass(self):
+        actor = self._principal(set(), admin=True)
+        _assert_can_grant_codes(actor, ["system.user.manage", "model.approve"])
+
+    def test_support_only_not_effective_outside_support(self):
+        actor = Principal(
+            user_id=2, username="support", role_codes=frozenset({"support"}),
+            permissions={"portfolio.position.view": Grant("portfolio.position.view",
+                                                          support_only=True)},
+        )
+        with self.assertRaises(HTTPException):
+            _assert_can_grant_codes(actor, ["portfolio.position.view"])
 
 
 class TestSkillNamespace(unittest.TestCase):
