@@ -745,7 +745,8 @@ def _builtin_ts_corr(data: pd.Series, df: pd.DataFrame, other, n: int) -> pd.Ser
         av = a.iloc[pos].to_numpy(dtype=float)
         bv = b.iloc[pos].to_numpy(dtype=float)
         r = pd.Series(av).rolling(win, min_periods=win).corr(pd.Series(bv))
-        out.iloc[pos] = r.to_numpy()
+        # 巨量 volume 下浮点协方差可能给出 ±1.00x，数学上相关系数必须落在 [-1,1]
+        out.iloc[pos] = r.clip(-1.0, 1.0).to_numpy()
     return out
 
 
