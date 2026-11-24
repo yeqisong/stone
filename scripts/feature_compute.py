@@ -725,22 +725,28 @@ def _builtin_imin(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
 
 
 def _builtin_ts_corr(data: pd.Series, df: pd.DataFrame, other, n: int) -> pd.Series:
-    """ts_corr(x, y, n)：两序列滚动相关（x=data 求值结果，y=第二参数序列）。"""
-    other = other.astype(float)
+    """ts_corr(x, y, n)：两序列滚动相关（x=data 求值结果，y=第二参数序列）。
 
-    def _corr(a, b):
-        if len(a) < 2:
-            return np.nan
-        sa, sb = a.std(), b.std()  # 样本标准差（ddof=1）
-        if sa < 1e-12 or sb < 1e-12:
-            return np.nan
-        cov = float(((a - a.mean()) * (b - b.mean())).sum() / (len(a) - 1))
-        return cov / (sa * sb)
-
+    旧实现用 ``rolling.apply`` 逐窗口调 Python，10M 行 × 窗口 10 约需 1 小时；
+    改用 pandas Cython 的 ``rolling.corr``（按股票分组），同口径快 ~100 倍。
+    零方差窗口返回 NaN（与旧实现一致）。
+    """
     a = data.astype(float)
-    return a.groupby(df["stock_code"], observed=True).transform(
-        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
-            lambda w: _corr(w, other.loc[w.index]), raw=False))
+    b = other.astype(float)
+    if a.empty:
+        return a
+    out = pd.Series(np.nan, index=a.index, dtype=float)
+    groups = df.groupby("stock_code", observed=True, sort=False).indices
+    win = int(n)
+    for idx in groups.values():
+        if len(idx) < win:
+            continue
+        pos = np.asarray(idx)
+        av = a.iloc[pos].to_numpy(dtype=float)
+        bv = b.iloc[pos].to_numpy(dtype=float)
+        r = pd.Series(av).rolling(win, min_periods=win).corr(pd.Series(bv))
+        out.iloc[pos] = r.to_numpy()
+    return out
 
 
 _BUILTIN_REGISTRY = {
