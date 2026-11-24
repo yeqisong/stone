@@ -1878,9 +1878,9 @@ function drawCharts(kd){
     dataZoom:dz,
     series:[
       {name:'K线',type:'candlestick',data:ohlc,itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}},
-      {name:'上轨',type:'line',data:bup,lineStyle:{color:T.warn,width:2},symbol:'none',smooth:true},
-      {name:'中轨',type:'line',data:bmid,lineStyle:{color:T.series[3],width:2},symbol:'none',smooth:true},
-      {name:'下轨',type:'line',data:blo,lineStyle:{color:T.warn,width:2},symbol:'none',smooth:true}
+      {name:'上轨',type:'line',data:bup,lineStyle:{color:T.warn,width:2}, itemStyle: { color: T.warn },symbol:'none',smooth:true},
+      {name:'中轨',type:'line',data:bmid,lineStyle:{color:T.series[3],width:2}, itemStyle: { color: T.series[3] },symbol:'none',smooth:true},
+      {name:'下轨',type:'line',data:blo,lineStyle:{color:T.warn,width:2}, itemStyle: { color: T.warn },symbol:'none',smooth:true}
     ]
   })
   try{ applyKlineLayers(kd, c1) }
@@ -1936,15 +1936,15 @@ function drawCharts(kd){
     dataZoom:dz,
     series:[
       {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]}},
-      {name:'DIF',type:'line',data:di,lineStyle:{color:T.warn,width:1},symbol:'none',smooth:true},
-      {name:'DEA',type:'line',data:de,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true}
+      {name:'DIF',type:'line',data:di,lineStyle:{color:T.warn,width:1}, itemStyle: { color: T.warn },symbol:'none',smooth:true},
+      {name:'DEA',type:'line',data:de,lineStyle:{color:'#06b6d4',width:1}, itemStyle: { color: '#06b6d4' },symbol:'none',smooth:true}
     ]
   })
   const c4 = make('c4', {
     tooltip:tt, grid:{...GRID_STD, top:8},
     xAxis:xA, yAxis:{min:0,max:100,splitLine:gl},
     dataZoom:dz,
-    series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:T.series[4],width:1.5},symbol:'none',smooth:true,areaStyle:{color:T.series[4],opacity:.12},
+    series:[{name:'RSI',type:'line',data:rs,lineStyle:{color:T.series[4],width:1.5}, itemStyle: { color: T.series[4] },symbol:'none',smooth:true,areaStyle:{color:T.series[4],opacity:.12},
       markLine:{silent:true,symbol:'none',data:[{yAxis:70,label:{formatter:'超买'},lineStyle:{color:T.up,type:'dashed'}},{yAxis:30,label:{formatter:'超卖'},lineStyle:{color:T.down,type:'dashed'}}]}}
     ]
   })
@@ -1971,13 +1971,13 @@ function drawCharts(kd){
     yAxis:{scale:true,splitLine:gl},
     dataZoom:dz,
     series:[
-      {name:'MA5',type:'line',data:ma5,lineStyle:{color:T.up,width:1},symbol:'none',smooth:true},
-      {name:'MA10',type:'line',data:ma10,lineStyle:{color:T.warn,width:1},symbol:'none',smooth:true},
-      {name:'MA20',type:'line',data:ma20,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true},
-      {name:'MA30',type:'line',data:ma30,lineStyle:{color:T.down,width:1},symbol:'none',smooth:true},
-      {name:'MA60',type:'line',data:ma60,lineStyle:{color:T.series[4],width:1},symbol:'none',smooth:true},
-      {name:'MA120',type:'line',data:ma120,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
-      {name:'MA180',type:'line',data:ma180,lineStyle:{color:'#64748b',width:1},symbol:'none',smooth:true},
+      {name:'MA5',type:'line',data:ma5,lineStyle:{color:T.up,width:1}, itemStyle: { color: T.up },symbol:'none',smooth:true},
+      {name:'MA10',type:'line',data:ma10,lineStyle:{color:T.warn,width:1}, itemStyle: { color: T.warn },symbol:'none',smooth:true},
+      {name:'MA20',type:'line',data:ma20,lineStyle:{color:'#06b6d4',width:1}, itemStyle: { color: '#06b6d4' },symbol:'none',smooth:true},
+      {name:'MA30',type:'line',data:ma30,lineStyle:{color:T.down,width:1}, itemStyle: { color: T.down },symbol:'none',smooth:true},
+      {name:'MA60',type:'line',data:ma60,lineStyle:{color:T.series[4],width:1}, itemStyle: { color: T.series[4] },symbol:'none',smooth:true},
+      {name:'MA120',type:'line',data:ma120,lineStyle:{color:'#ec4899',width:1}, itemStyle: { color: '#ec4899' },symbol:'none',smooth:true},
+      {name:'MA180',type:'line',data:ma180,lineStyle:{color:'#64748b',width:1}, itemStyle: { color: '#64748b' },symbol:'none',smooth:true},
     ]
   })
   const charts = [c1,c2,c3,c4,c6].filter(Boolean)
@@ -2034,7 +2034,7 @@ function drawAuxCharts(kd){
       dataZoom:dz,
       series:[
         {name:'主力净流入',type:'bar',data:nm,itemStyle:{color:p=>(nm[p.dataIndex]??0)>=0?T.up:T.down}},
-        {name:'累计(右轴)',type:'line',yAxisIndex:1,data:cum,lineStyle:{color:T.series[3],width:1.5},symbol:'none'}
+        {name:'累计(右轴)',type:'line',yAxisIndex:1,data:cum,lineStyle:{color:T.series[3],width:1.5}, itemStyle: { color: T.series[3] },symbol:'none'}
       ]
     })
     if(c7) newCharts.push(c7)
@@ -2059,9 +2059,9 @@ function drawAuxCharts(kd){
         xAxis:xA, yAxis:{scale:true,splitLine:gl,axisLabel:{fontSize: 11}},
         dataZoom:dz,
         series:[
-          {name:'个股',type:'line',data:rel,lineStyle:{color:T.series[3],width:1.5},symbol:'none'},
-          {name:'沪深300',type:'line',data:ben,lineStyle:{color:T.faint,width:1},symbol:'none'},
-          {name:'超额',type:'line',data:exc,lineStyle:{color:T.warn,width:1,type:'dashed'},symbol:'none'}
+          {name:'个股',type:'line',data:rel,lineStyle:{color:T.series[3],width:1.5}, itemStyle: { color: T.series[3] },symbol:'none'},
+          {name:'沪深300',type:'line',data:ben,lineStyle:{color:T.faint,width:1}, itemStyle: { color: T.faint },symbol:'none'},
+          {name:'超额',type:'line',data:exc,lineStyle:{color:T.warn,width:1,type:'dashed'}, itemStyle: { color: T.warn },symbol:'none'}
         ]
       })
       if(c8) newCharts.push(c8)
@@ -2107,8 +2107,8 @@ function drawAuxCharts(kd){
       xAxis:xA, yAxis:{axisLabel:{fontSize: 11,formatter:v=>(v/1e8).toFixed(0)+'亿'},splitLine:gl},
       dataZoom:dz,
       series:[
-        {name:'融资余额',type:'line',data:fin,lineStyle:{color:T.warn,width:1.5},symbol:'none',connect:'none'},
-        {name:'两融合计',type:'line',data:tot,lineStyle:{color:T.series[4],width:1},symbol:'none',connect:'none'}
+        {name:'融资余额',type:'line',data:fin,lineStyle:{color:T.warn,width:1.5}, itemStyle: { color: T.warn },symbol:'none',connect:'none'},
+        {name:'两融合计',type:'line',data:tot,lineStyle:{color:T.series[4],width:1}, itemStyle: { color: T.series[4] },symbol:'none',connect:'none'}
       ]
     })
     if(c10) newCharts.push(c10)
@@ -2130,8 +2130,8 @@ function drawAuxCharts(kd){
         {axisLabel:{fontSize: 11,formatter:'{value}%'},splitLine:{show:false}}],
       dataZoom:dz,
       series:[
-        {name:'ATR14',type:'line',data:atr,lineStyle:{color:T.series[4],width:1.5},symbol:'none'},
-        {name:'占价比(右轴)',type:'line',yAxisIndex:1,data:atrPct,lineStyle:{color:T.warn,width:1,type:'dashed'},symbol:'none'}
+        {name:'ATR14',type:'line',data:atr,lineStyle:{color:T.series[4],width:1.5}, itemStyle: { color: T.series[4] },symbol:'none'},
+        {name:'占价比(右轴)',type:'line',yAxisIndex:1,data:atrPct,lineStyle:{color:T.warn,width:1,type:'dashed'}, itemStyle: { color: T.warn },symbol:'none'}
       ]
     })
     if(c11) newCharts.push(c11)
@@ -2233,9 +2233,9 @@ function drawPeChart(){
       {type:'slider',start:0,end:100,...dzSlider()}
     ],
     series:[
-      {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:T.series[3],width:1.5},symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
-      {name:'PB',type:'line',data:pbVals,lineStyle:{color:'#ec4899',width:1},symbol:'none',smooth:true},
-      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:T.warn,width:1,type:'dashed'},symbol:'none',smooth:true,
+      {name:'PE(TTM)',type:'line',data:peVals,lineStyle:{color:T.series[3],width:1.5}, itemStyle: { color: T.series[3] },symbol:'none',smooth:true,areaStyle:{color:'rgba(96,165,250,0.1)'}},
+      {name:'PB',type:'line',data:pbVals,lineStyle:{color:'#ec4899',width:1}, itemStyle: { color: '#ec4899' },symbol:'none',smooth:true},
+      {name:'分位%',type:'line',yAxisIndex:1,data:pctl,lineStyle:{color:T.warn,width:1,type:'dashed'}, itemStyle: { color: T.warn },symbol:'none',smooth:true,
         markLine:{silent:true,symbol:'none',data:[
           {yAxis:30,label:{formatter:'低估30',fontSize: 11,position:'insideEndTop',color:T.down},lineStyle:{color:T.down,type:'dashed',width:1}},
           {yAxis:70,label:{formatter:'高估70',fontSize: 11,position:'insideEndBottom',color:T.up},lineStyle:{color:T.up,type:'dashed',width:1}}]}}
@@ -3268,10 +3268,10 @@ function drawRsChart(){
     yAxis:{scale:true,splitLine:{lineStyle:{color:T.line,type:'dashed'}},
       axisLabel:{fontSize:10,color:T.faint,formatter:v=>v.toFixed(2)+'%'}},
     series:[
-      {name:'个股',type:'line',data:rel,symbol:'none',lineStyle:{color:T.series[3],width:1.2}},
-      {name:'沪深300',type:'line',data:ben,symbol:'none',lineStyle:{color:T.faint,width:1}},
+      {name:'个股',type:'line',data:rel,symbol:'none',lineStyle:{color:T.series[3],width:1.2}, itemStyle: { color: T.series[3] }},
+      {name:'沪深300',type:'line',data:ben,symbol:'none',lineStyle:{color:T.faint,width:1}, itemStyle: { color: T.faint }},
       {name:'超额(pp)',type:'line',data:exc,symbol:'none',
-        lineStyle:{color:T.warn,width:1,type:'dashed'}},
+        lineStyle:{color:T.warn,width:1,type:'dashed'}, itemStyle: { color: T.warn }},
     ]
   }, true)
 }
@@ -3538,7 +3538,7 @@ function drawCompare(){
     return {
       name: r.name, type: 'line', symbol: 'none',
       data: r.raw.map((v, i) => i >= i0 && v != null ? +((v / base - 1) * 100).toFixed(3) : null),
-      lineStyle: {color: colors[idx] || T.series[5], width: idx === 0 ? 1.4 : 1.1},
+      lineStyle: {color: colors[idx] || T.series[5], width: idx === 0 ? 1.4 : 1.1}, itemStyle: { color: colors[idx] || T.series[5] },
       connectNulls: false,
     }
   })
@@ -3838,7 +3838,7 @@ function drawFsPanel(p){
     if (!data || !data.some(v => v != null)) return
     core.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
       symbol:'none', connectNulls:false,
-      lineStyle:{color, width, type}, tooltip:{show:false}})
+      lineStyle:{color, width, type}, itemStyle: { color: color }, tooltip:{show:false}})
   }
   pushCore('昨收', line(q?.prev_close), T.faint)
   pushCore('均价', vw.vw, T.warn, 1.2, 'solid')
@@ -3849,7 +3849,7 @@ function drawFsPanel(p){
     if (!data || !data.some(v => v != null)) return
     extra.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
       symbol:'none', connectNulls:false, tooltip:{show:false},
-      lineStyle:{color, width, type}})
+      lineStyle:{color, width, type}, itemStyle: { color: color }})
   }
   if (showBands.value) {
     pushExtra('+1σ', vw.u1, T.warn, 'dashed')
@@ -3890,15 +3890,15 @@ function drawFsPanel(p){
   }
   const priceSeries = minkType.value === 'line'
     ? {name:'分时', type:'line', data:closes, symbol:'none',
-       lineStyle:{color:T.series[5], width:1.3},
+       lineStyle:{color:T.series[5], width:1.3}, itemStyle: { color: T.series[5] },
        areaStyle:{color:T.series[5], opacity:0.05}, ...priceExtras}
     : {name:'分钟K', type:'candlestick', data:ohlc,
        itemStyle:{color:T.up, color0:T.down, borderColor:T.up, borderColor0:T.down}, ...priceExtras}
   const maSeries = minkMaMode.value === 'ema'
-    ? [{name:'EMA9', type:'line', data:ema(9), symbol:'none', lineStyle:{color:T.warn, width:1}},
-       {name:'EMA21', type:'line', data:ema(21), symbol:'none', lineStyle:{color:T.series[3], width:1}}]
-    : [{name:'MA5', type:'line', data:ma(5), symbol:'none', lineStyle:{color:T.warn, width:1}},
-       {name:'MA10', type:'line', data:ma(10), symbol:'none', lineStyle:{color:T.series[3], width:1}}]
+    ? [{name:'EMA9', type:'line', data:ema(9), symbol:'none', lineStyle:{color:T.warn, width:1}, itemStyle: { color: T.warn }},
+       {name:'EMA21', type:'line', data:ema(21), symbol:'none', lineStyle:{color:T.series[3], width:1}, itemStyle: { color: T.series[3] }}]
+    : [{name:'MA5', type:'line', data:ma(5), symbol:'none', lineStyle:{color:T.warn, width:1}, itemStyle: { color: T.warn }},
+       {name:'MA10', type:'line', data:ma(10), symbol:'none', lineStyle:{color:T.series[3], width:1}, itemStyle: { color: T.series[3] }}]
   const coreNames = core.map(o => o.name)
 
   c.setOption({
@@ -3986,10 +3986,10 @@ function drawFsRs(p){
     yAxis:{scale:true,splitLine:{lineStyle:{color:T.line,type:'dashed'}},
       axisLabel:{fontSize:9,color:T.faint,formatter:v=>v.toFixed(1)+'%'}},
     series:[
-      {name:'个股',type:'line',data:rel,symbol:'none',lineStyle:{color:T.series[3],width:1.2}},
-      {name:'沪深300',type:'line',data:ben,symbol:'none',lineStyle:{color:T.faint,width:1}},
+      {name:'个股',type:'line',data:rel,symbol:'none',lineStyle:{color:T.series[3],width:1.2}, itemStyle: { color: T.series[3] }},
+      {name:'沪深300',type:'line',data:ben,symbol:'none',lineStyle:{color:T.faint,width:1}, itemStyle: { color: T.faint }},
       {name:'超额(pp)',type:'line',data:exc,symbol:'none',
-        lineStyle:{color:T.warn,width:1,type:'dashed'}},
+        lineStyle:{color:T.warn,width:1,type:'dashed'}, itemStyle: { color: T.warn }},
     ]
   }, true)
   c.resize()
@@ -4166,7 +4166,7 @@ function drawMink(){
     if (!data || !data.some(v => v != null)) return
     core.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
       symbol:'none', connectNulls:false,
-      lineStyle:{color, width, type}, tooltip:{show:false}})
+      lineStyle:{color, width, type}, itemStyle: { color: color }, tooltip:{show:false}})
   }
   // VWAP + 标准差带：按当日已加载 bar 逐根计算；末值应接近腾讯 avg_price
   let vwapData = null
@@ -4197,7 +4197,7 @@ function drawMink(){
     // 不在右轴叠 endLabel：价位条在图表下方统一列名称+数值，图内只画线
     extra.push({name, type:'line', xAxisIndex:0, yAxisIndex:0, data,
       symbol:'none', connectNulls:false, tooltip:{show:false},
-      lineStyle:{color, width, type}})
+      lineStyle:{color, width, type}, itemStyle: { color: color }})
   }
   if (showBands.value && vwapData) {
     pushExtra('+1σ', padDay(vwapData.u1), T.warn, 'dashed', 1, false)
@@ -4279,19 +4279,19 @@ function drawMink(){
   }
   const priceSeries = minkType.value === 'line'
     ? {name:'分时', type:'line', xAxisIndex:0, yAxisIndex:0, data:closes,
-       symbol:'none', lineStyle:{color:T.series[5],width:1.4},
+       symbol:'none', lineStyle:{color:T.series[5],width:1.4}, itemStyle: { color: T.series[5] },
        areaStyle:{color:T.series[5],opacity:0.06}, ...priceExtras}
     : {name:'分钟K', type:'candlestick', xAxisIndex:0, yAxisIndex:0, data:ohlc,
        itemStyle:{color:T.up,color0:T.down,borderColor:T.up,borderColor0:T.down}, ...priceExtras}
   const maSeries = minkMaMode.value === 'ema'
     ? [{name:'EMA9',type:'line',xAxisIndex:0,yAxisIndex:0,data:ema(9),
-        lineStyle:{color:T.warn,width:1},symbol:'none'},
+        lineStyle:{color:T.warn,width:1}, itemStyle: { color: T.warn },symbol:'none'},
        {name:'EMA21',type:'line',xAxisIndex:0,yAxisIndex:0,data:ema(21),
-        lineStyle:{color:T.series[3],width:1},symbol:'none'}]
+        lineStyle:{color:T.series[3],width:1}, itemStyle: { color: T.series[3] },symbol:'none'}]
     : [{name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(5),
-        lineStyle:{color:T.warn,width:1},symbol:'none'},
+        lineStyle:{color:T.warn,width:1}, itemStyle: { color: T.warn },symbol:'none'},
        {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma(10),
-        lineStyle:{color:T.series[3],width:1},symbol:'none'}]
+        lineStyle:{color:T.series[3],width:1}, itemStyle: { color: T.series[3] },symbol:'none'}]
   makeChart('c0', {
     axisPointer:{link:[{xAxisIndex:'all'}]},
     ...(coreNames.length ? {legend:{top:0,left:72,itemWidth:10,itemHeight:6,

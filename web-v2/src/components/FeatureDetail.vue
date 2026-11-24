@@ -426,7 +426,7 @@ function renderIcCharts() {
       yAxis: [{ type: 'value', scale: true, axisLabel: { fontSize: 8 } }, { type: 'value', axisLabel: { fontSize: 8 } }],
       series: [
         { type: 'bar', name: 'RankIC', data: (s.rank_ic || []).map(v => ({ value: v, itemStyle: { color: v >= 0 ? T.down : T.up } })), barWidth: '60%' },
-        { type: 'line', name: '累计IC', data: s.cum_ic || [], yAxisIndex: 1, showSymbol: false, lineStyle: { width: 1.5, color: T.up } },
+        { type: 'line', name: '累计IC', data: s.cum_ic || [], yAxisIndex: 1, showSymbol: false, lineStyle: { width: 1.5, color: T.up }, itemStyle: { color: T.up } },
       ],
     })
   }
@@ -445,9 +445,9 @@ function renderIcCharts() {
       series: [
         ...(q.navs ? Object.keys(q.navs).sort((a, b) => a - b).map((k, i) => ({
           type: 'line', name: i === 0 ? `Q1最低` : i === Object.keys(q.navs).length - 1 ? `Q${i + 1}最高` : `Q${i + 1}`,
-          data: q.navs[k], showSymbol: false, lineStyle: { width: 1.2, color: colors[i % 5] },
+          data: q.navs[k], showSymbol: false, lineStyle: { width: 1.2, color: colors[i % 5] }, itemStyle: { color: colors[i % 5] },
         })) : []),
-        { type: 'line', name: '多空Q高-Q低', data: q.ls_nav || [], showSymbol: false, lineStyle: { width: 2, type: 'dashed', color: '#a855f7' } },
+        { type: 'line', name: '多空Q高-Q低', data: q.ls_nav || [], showSymbol: false, lineStyle: { width: 2, type: 'dashed', color: '#a855f7' }, itemStyle: { color: '#a855f7' } },
       ],
     })
   }
