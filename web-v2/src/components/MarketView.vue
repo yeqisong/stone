@@ -251,6 +251,14 @@ function fmtYi(v) {
   const y = v / 1e8
   return (Math.abs(y) >= 100 ? y.toFixed(0) : y.toFixed(1)) + '亿'
 }
+// 序列数据已经换算成“亿”时用这个（资金流/两融/行业累计）。
+// fmtYi 只接受原始“元”，混用会再除 1e8，轴刻度会全变成 0.0亿。
+function fmtYiValue(v) {
+  if (v == null) return '—'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(1)) + '亿'
+}
 function pctTxt(v) { return v == null ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%') }
 function peCls(p) { return p == null ? '' : (p >= 70 ? 'up' : (p <= 30 ? 'down' : '')) }
 
@@ -443,13 +451,13 @@ function drawMarketCharts() {
     const nm = m.map(x => x.net_main == null ? null : +(x.net_main / 1e8).toFixed(2))
     const cum = m.map(x => x.cum_main == null ? null : +(x.cum_main / 1e8).toFixed(0))
     make('mv-mf', {
-      tooltip: { trigger: 'axis' },
+      tooltip: { trigger: 'axis', valueFormatter: v => fmtYiValue(v) },
       legend: { top: 0, right: 4, itemWidth: 12, itemHeight: 6, textStyle: { fontSize: 10, color: T.dim } },
       grid: GRID_STD,
       xAxis: xOpt(dates),
       yAxis: [
-        { type: 'value', name: '亿/日', nameTextStyle: { fontSize: 10, color: T.faint }, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYi(v) }, splitLine: gl2 },
-        { type: 'value', name: '累计亿', nameTextStyle: { fontSize: 10, color: T.faint }, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYi(v) }, splitLine: { show: false } },
+        { type: 'value', name: '亿/日', nameTextStyle: { fontSize: 10, color: T.faint }, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYiValue(v) }, splitLine: gl2 },
+        { type: 'value', name: '累计亿', nameTextStyle: { fontSize: 10, color: T.faint }, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYiValue(v) }, splitLine: { show: false } },
       ],
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
       series: [
@@ -465,11 +473,11 @@ function drawMarketCharts() {
     const fin = g.map(x => x.fin == null ? null : +(x.fin / 1e8).toFixed(0))
     const tot = g.map(x => x.total == null ? null : +(x.total / 1e8).toFixed(0))
     make('mv-margin', {
-      tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : v + '亿' },
+      tooltip: { trigger: 'axis', valueFormatter: v => fmtYiValue(v) },
       legend: { top: 0, right: 4, itemWidth: 12, itemHeight: 6, textStyle: { fontSize: 10, color: T.dim } },
       grid: GRID_STD,
       xAxis: xOpt(dates),
-      yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYi(v) }, splitLine: gl2 },
+      yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYiValue(v) }, splitLine: gl2 },
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
       series: [
         { name: '融资余额', type: 'line', data: fin, symbol: 'none', lineStyle: { color: T.up, width: 1.4 } },
@@ -484,11 +492,11 @@ function drawMarketCharts() {
     const dates = sd.dates
     const totals = [...sd.sectors].sort((a, b2) => (b2.sum20 || 0) - (a.sum20 || 0)).slice(0, 8)
     make('mv-sector', {
-      tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '—' : fmtYi(v) },
+      tooltip: { trigger: 'axis', valueFormatter: v => fmtYiValue(v) },
       legend: { top: 0, type: 'scroll', itemWidth: 12, itemHeight: 6, textStyle: { fontSize: 10, color: T.dim }, pageTextStyle: { color: T.dim } },
       grid: GRID_STD,
       xAxis: xOpt(dates),
-      yAxis: { type: 'value', axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYi(v) }, splitLine: gl2 },
+      yAxis: { type: 'value', axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYiValue(v) }, splitLine: gl2 },
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
       series: totals.map((t, i) => ({
         name: t.name || t.id, type: 'line',
