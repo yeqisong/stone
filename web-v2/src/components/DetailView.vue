@@ -300,7 +300,10 @@
           <div :id="'c2'" style="width:100%;height:160px"></div>
         </div>
         <div :style="{ marginBottom:'12px', order: chartOrderIndex('macd') }">
-          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="zap" :size="13" />  MACD</h4>
+          <h4 style="margin-bottom:4px;font-size:14px;color:var(--c-text)"><AppIcon name="zap" :size="13" />  MACD
+            <n-checkbox v-model:checked="showMacdDivergence" size="small" style="margin-left:8px;font-weight:400"
+              title="标注最近 120 根内的顶/底背离；待确认的标签带 ?，只作观察提示">背离画线</n-checkbox>
+          </h4>
           <div :id="'c3'" style="width:100%;height:160px"></div>
         </div>
         <div :style="{ marginBottom:'12px', order: chartOrderIndex('rsi') }">
@@ -1027,7 +1030,7 @@ import { useThemeStore } from '../stores/theme'
 import { useViewport } from '../utils/viewport'
 import { addWsListener } from '../utils/ws'
 import { chartColors as T } from '../utils/chart'
-import { analyzeKline } from '../utils/klineSignals'
+import { analyzeKline, detectMacdDivergence, buildDivergenceHints } from '../utils/klineSignals'
 import StatStrip from './StatStrip.vue'
 import CbLinkageDrawer from './CbLinkageDrawer.vue'
 
@@ -1222,6 +1225,7 @@ async function saveGroups(){
 const adj = ref(localStorage.getItem('detail_adj') || 'none')
 // K 线周期与区间（方案1：区间快捷选择 + 日/周/月切换；days 上限 7000 ≈ 全部历史）
 const PERIODS = [{v:'day',t:'日'},{v:'week',t:'周'},{v:'month',t:'月'}]
+const PERIOD_LABEL = { day:'日线', week:'周线', month:'月线' }
 const RANGES = [{t:'1月',d:30},{t:'1年',d:250},{t:'2年',d:500},{t:'5年',d:1250},{t:'10年',d:2500},{t:'20年',d:4900},{t:'全部',d:7000}]
 const period = ref('day')
 const range = ref(500)
@@ -1236,6 +1240,7 @@ const klineAnalysis = ref(null)
 const showAutoLines = ref(true)
 const showKlinePatterns = ref(true)
 const showKlineTipDetail = ref(false)
+const showMacdDivergence = ref(true)
 const klinePatterns = computed(() => klineAnalysis.value?.patterns || [])
 const klineHints = computed(() => klineAnalysis.value?.hints || [])
 const klineTrendText = computed(() => {
@@ -1258,6 +1263,7 @@ function loadKlineTipPrefs(){
       showAutoLines.value = raw.lines !== false
       showKlinePatterns.value = raw.patterns !== false
       showKlineTipDetail.value = !!raw.detail
+      showMacdDivergence.value = raw.divergence !== false
     }
   }catch(e){ /* 本地存储损坏 → 默认开启 */ }
 }
@@ -1267,6 +1273,7 @@ function saveKlineTipPrefs(){
       lines: showAutoLines.value,
       patterns: showKlinePatterns.value,
       detail: showKlineTipDetail.value,
+      divergence: showMacdDivergence.value,
     }))
   }catch(e){}
 }
@@ -1274,10 +1281,37 @@ function refreshKlineOverlays(){
   if(!lastKline?.kline?.length) return
   try{ applyKlineLayers(lastKline, document.getElementById('c1')?._echart) }
   catch(e){ console.warn('[kline] 图层刷新失败:', e) }
+  applyMacdLayers()
+}
+// MACD 背离画线：独立在 c3 上合并 markLine，避免重绘整组图表。
+// 待确认的背离标签带 ?，只作为观察提示，不当作买卖信号。
+function macdDivergenceMarkLines(divs, dates){
+  return (divs || []).map(d => {
+    if(dates[d.p1.difIdx] == null || dates[d.p2.difIdx] == null) return null
+    const isTop = d.kind === 'top'
+    const color = isTop ? T.down : T.up
+    return [
+      { coord: [dates[d.p1.difIdx], d.p1.dif] },
+      { coord: [dates[d.p2.difIdx], d.p2.dif] },
+      { lineStyle: { color, type:'dashed', width:1.5, opacity:0.9 },
+        label: { show:true, formatter:`${d.levelLabel}${d.label}${d.confirmed?'':'?'}`,
+                 position:'end', fontSize:10, color, distance:2 } },
+    ]
+  }).filter(Boolean)
+}
+function applyMacdLayers(){
+  const c = document.getElementById('c3')?._echart
+  if(!c) return
+  const divs = showMacdDivergence.value ? (klineAnalysis.value?.divergences || []) : []
+  try{
+    c.setOption({ series: [{ markLine: { silent:true, symbol:['none','none'], animation:false,
+      data: macdDivergenceMarkLines(divs, klineDates) } }] })
+  }catch(e){ console.warn('[macd] 背离图层刷新失败:', e) }
 }
 loadKlineTipPrefs()
-watch([showAutoLines, showKlinePatterns, showKlineTipDetail], saveKlineTipPrefs)
+watch([showAutoLines, showKlinePatterns, showKlineTipDetail, showMacdDivergence], saveKlineTipPrefs)
 watch([showAutoLines, showKlinePatterns], refreshKlineOverlays)
+watch(showMacdDivergence, applyMacdLayers)
 watch(() => authStore.username, () => { loadKlineTipPrefs(); refreshKlineOverlays() })
 const mtfBars = ref({ m5: [], m15: [], m60: [] })
 let mtfCode = ''
@@ -1714,6 +1748,29 @@ function applyKlineLayers(kd, chart){
   let analysis
   try{
     analysis = analyzeKline(bars)
+    // MACD 背离是独立提示层：检测失败不能拖垮形态/支撑压力分析
+    try{
+      const divs = detectMacdDivergence(bars, { levelLabel: PERIOD_LABEL[period.value] || '日线' })
+      // 图上保留最近 120 根内的背离；提示卡每个方向只提示最近一个较新的，
+      // 避免半年前的背离或同向重复提示干扰当下决策
+      const maxAge = period.value === 'week' ? 26 : (period.value === 'month' ? 12 : 60)
+      const seenKind = new Set()
+      const recentDivs = []
+      for(const d of divs){
+        if(d.age > maxAge || seenKind.has(d.kind)) continue
+        seenKind.add(d.kind)
+        recentDivs.push(d)
+      }
+      analysis = {
+        ...analysis,
+        divergences: divs,
+        hints: [...buildDivergenceHints(recentDivs), ...analysis.hints]
+          .sort((a, b)=>b.score-a.score).slice(0, 6),
+      }
+    }catch(e){
+      console.warn('[macd] 背离检测失败:', e)
+      analysis = { ...analysis, divergences: [] }
+    }
   }catch(e){
     // 自动分析是增强层，异常不能拖垮 K 线主图
     console.warn('[kline] 自动分析失败:', e)
@@ -1930,12 +1987,30 @@ function drawCharts(kd){
       } catch (e) { /* 分位线是增强信息，异常静默不影响主图 */ }
     })
   }
+  const macdDivs = showMacdDivergence.value ? (klineAnalysis.value?.divergences || []) : []
+  const macdTipFmt = ps => {
+    if(!ps?.length) return ''
+    const idx = ps[0].dataIndex
+    const d = showMacdDivergence.value
+      ? (klineAnalysis.value?.divergences || []).find(x => x.p1.idx === idx || x.p2.idx === idx)
+      : null
+    const fmtV = v => v == null ? '—' : Number(v).toFixed(3)
+    const extra = d
+      ? `<br/><span style="color:${d.kind==='top'?T.down:T.up}">${d.levelLabel}${d.label} · ${d.confirmed?'已确认':'待确认'}</span>`
+      : ''
+    return `<div style="font-size:12px"><b>${dates[idx]}</b><br/>`
+      + `<span style="color:${T.warn}">DIF ${fmtV(di[idx])}</span> `
+      + `<span style="color:#06b6d4">DEA ${fmtV(de[idx])}</span> · 柱 ${fmtV(ba[idx])}${extra}</div>`
+  }
   const c3 = make('c3', {
-    tooltip:tt, grid:{...GRID_STD, top:8},
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'},formatter:macdTipFmt},
+    grid:{...GRID_STD, top:8},
     xAxis:xA, yAxis:{splitLine:gl},
     dataZoom:dz,
     series:[
-      {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]}},
+      {name:'柱',type:'bar',data:ba,itemStyle:{color:p=>bc[p.dataIndex]},
+       markLine:{silent:true,symbol:['none','none'],animation:false,
+                 data:macdDivergenceMarkLines(macdDivs, dates)}},
       {name:'DIF',type:'line',data:di,lineStyle:{color:T.warn,width:1},symbol:'none',smooth:true},
       {name:'DEA',type:'line',data:de,lineStyle:{color:'#06b6d4',width:1},symbol:'none',smooth:true}
     ]

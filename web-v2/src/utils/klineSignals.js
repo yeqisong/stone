@@ -1,11 +1,14 @@
 /**
  * K 线自动分析（纯函数，无 Vue / ECharts 依赖）。
  *
- * 输出四类结果，详情页 K 线图直接消费：
+ * 输出四类 K 线分析结果，详情页 K 线图直接消费：
  * - levels：枢轴点聚类得到最近支撑/压力位（下穿/上破提醒）
  * - trend：近 60 根收盘线性回归趋势线（斜率 + R²，弱趋势不画线）
  * - patterns：常见 K 线形态（锤子/吞没/星线/三兵/缺口/突破等）
  * - hints：基于最新一根 K 线的规则化操作提示（接近压力、跌破支撑、均线排列、超买超卖等）
+ *
+ * 另有独立的 MACD 背离检测 detectMacdDivergence()/buildDivergenceHints()，
+ * 按当前周期（日/周/月）价格摆动点与 DIF 极值比较，供详情页 MACD 画线与提示卡消费。
  *
  * 注意：这是规则提醒，不是预测；所有提示都必须配合仓位/止损使用。
  */
@@ -455,6 +458,159 @@ function buildHints(bars, levels, trend, patterns) {
       return true
     })
     .slice(0, 6)
+}
+
+// ── MACD 背离（规则检测，纯函数）──────────────────────────────
+// 口径：价格摆动点与同窗口 DIF 极值比较。
+//   底背离 = 价格创新低、DIF 抬高（下跌动能衰减）
+//   顶背离 = 价格创新高、DIF 走低（上涨动能衰减）
+// 只标最近 lookback 根内、每方向最多 2 个；confirmed 表示背离之后已经出现
+// DIF 金叉/死叉或价格反包，未确认的只作为观察提示，不当作买卖信号。
+function nearExtreme(bars, idx, field, dir, radius = 2) {
+  let best = null
+  let bestIdx = idx
+  for (let j = Math.max(0, idx - radius); j <= Math.min(bars.length - 1, idx + radius); j++) {
+    const v = fin(bars[j]?.[field])
+    if (v == null) continue
+    if (best == null || (dir === 'max' ? v > best : v < best)) {
+      best = v
+      bestIdx = j
+    }
+  }
+  return { value: best, idx: bestIdx }
+}
+
+function hasCrossAfter(bars, fromIdx, direction) {
+  for (let j = Math.max(1, fromIdx + 1); j < bars.length; j++) {
+    const d0 = fin(bars[j - 1]?.dif), e0 = fin(bars[j - 1]?.dea)
+    const d1 = fin(bars[j]?.dif), e1 = fin(bars[j]?.dea)
+    if (d0 == null || e0 == null || d1 == null || e1 == null) continue
+    if (direction === 'bull' ? (d0 <= e0 && d1 > e1) : (d0 >= e0 && d1 < e1)) return true
+  }
+  return false
+}
+
+function priceConfirmedAfter(bars, p2, direction) {
+  for (let j = p2.idx + 1; j < bars.length; j++) {
+    const c = fin(bars[j]?.close)
+    if (c == null) continue
+    if (direction === 'bull' ? c > p2.high : c < p2.low) return true
+  }
+  return false
+}
+
+export function detectMacdDivergence(bars, opts = {}) {
+  const src = Array.isArray(bars) ? bars : []
+  const n = src.length
+  if (n < 40) return []
+  const levelLabel = opts.levelLabel || '当前周期'
+  const lookback = Math.max(30, Math.min(opts.lookback || 120, n - 1))
+  const pivotK = opts.pivotK || 2
+  const minGap = opts.minGap || 5
+  const maxGap = opts.maxGap || 60
+  const start = Math.max(0, n - 1 - lookback)
+  const end = n - 1
+  if (end - start < 30) return []
+
+  const atr = atrAt(src, end, 14) || fin(src[end]?.close) * 0.02 || 1
+  const { highs, lows } = findPivots(src, start, end, pivotK)
+  const out = []
+
+  const scan = (pivots, direction) => {
+    const isTop = direction === 'bear'
+    const difDir = isTop ? 'max' : 'min'
+    const picked = []
+    for (let k = pivots.length - 1; k >= 0; k--) {
+      const p2 = pivots[k]
+      if (p2.idx > end - 1) continue          // 最后一根没有右侧确认，不标
+      const d2 = nearExtreme(src, p2.idx, 'dif', difDir)
+      if (d2.value == null) continue
+      let best = null
+      for (let j = k - 1; j >= 0; j--) {
+        const p1 = pivots[j]
+        const gap = p2.idx - p1.idx
+        if (gap < minGap) continue
+        if (gap > maxGap) break
+        const priceMove = isTop ? (p2.price / p1.price - 1) : (1 - p2.price / p1.price)
+        if (priceMove <= 0.001) continue
+        // p2 必须是 p1 之后的新高/新低，避免拿更早的摆动点硬凑背离
+        // （中间已经出现更高高点时，顶背离应从那个高点算起）
+        let between = null
+        for (let m = p1.idx + 1; m < p2.idx; m++) {
+          const v = fin(isTop ? src[m]?.high : src[m]?.low)
+          if (v == null) continue
+          if (between == null || (isTop ? v > between : v < between)) between = v
+        }
+        if (between != null && (isTop ? p2.price < between : p2.price > between)) continue
+        const d1 = nearExtreme(src, p1.idx, 'dif', difDir)
+        if (d1.value == null) continue
+        const difGap = isTop ? (d1.value - d2.value) : (d2.value - d1.value)
+        const eps = Math.max(0.01, atr * 0.005)
+        if (difGap <= eps) continue
+
+        const zeroAligned = isTop ? (d1.value > 0 && d2.value > 0) : (d1.value < 0 && d2.value < 0)
+        const confirmed = hasCrossAfter(src, p2.idx, direction) ||
+          priceConfirmedAfter(src, { idx: p2.idx, high: fin(src[p2.idx]?.high) ?? p2.price,
+                                      low: fin(src[p2.idx]?.low) ?? p2.price }, direction)
+        const age = end - p2.idx
+        let score = 3
+        score += Math.min(3, priceMove * 50)       // 价格新高低 6% 记满 3 分
+        score += Math.min(3, (difGap / atr) * 10)  // DIF 落差 0.3 ATR 记满 3 分
+        score += zeroAligned ? 1 : 0
+        score += confirmed ? 1 : 0
+        if (age > 60) score -= 1
+        score = Math.max(1, Math.min(10, Math.round(score)))
+
+        const cand = {
+          direction, kind: isTop ? 'top' : 'bottom',
+          label: isTop ? '顶背离' : '底背离', levelLabel, score, confirmed, age,
+          priceMovePct: +(priceMove * 100).toFixed(2),
+          difGap: +difGap.toFixed(3),
+          zeroAligned,
+          p1: {
+            idx: p1.idx, difIdx: d1.idx,
+            date: src[p1.idx]?.trade_date || src[p1.idx]?.date || '',
+            price: +p1.price.toFixed(2), dif: +d1.value.toFixed(3),
+          },
+          p2: {
+            idx: p2.idx, difIdx: d2.idx,
+            date: src[p2.idx]?.trade_date || src[p2.idx]?.date || '',
+            price: +p2.price.toFixed(2), dif: +d2.value.toFixed(3),
+            high: fin(src[p2.idx]?.high) ?? p2.price,
+            low: fin(src[p2.idx]?.low) ?? p2.price,
+          },
+        }
+        if (!best || cand.score > best.score) best = cand
+      }
+      if (best && !picked.some(x => x.p2.idx === best.p2.idx)) {
+        picked.push(best)
+        if (picked.length >= 2) break
+      }
+    }
+    out.push(...picked)
+  }
+
+  scan(highs, 'bear')
+  scan(lows, 'bull')
+  return out.sort((a, b) => b.p2.idx - a.p2.idx).slice(0, 4)
+}
+
+export function buildDivergenceHints(divs) {
+  return (Array.isArray(divs) ? divs : []).map(d => {
+    const date = String(d.p2?.date || '').slice(5)
+    const isTop = d.kind === 'top'
+    const stage = d.confirmed ? '已确认' : '待确认'
+    const action = isTop
+      ? (d.confirmed ? '持仓注意止盈/跌破 DEA 减仓，不追高' : `待确认：等 DIF 死叉或收盘跌破 ${d.p2.low.toFixed(2)} 再减，不追高`)
+      : (d.confirmed ? '止跌信号增强，但仍需止损保护，不重仓抄底' : `待确认：等 DIF 金叉或收盘站上 ${d.p2.high.toFixed(2)}，不直接抄底`)
+    return {
+      key: `macd_div_${d.kind}_${d.p2.idx}`,
+      text: `${d.levelLabel}${d.label}（${date}，${stage}）`,
+      detail: `价格${isTop ? '高点抬高' : '低点降低'} ${d.priceMovePct}%，DIF ${isTop ? '走低' : '抬高'} ${Math.abs(d.difGap).toFixed(3)}；${action}`,
+      tone: isTop ? (d.confirmed ? 'danger' : 'warn') : (d.confirmed ? 'positive' : 'info'),
+      score: d.confirmed ? (isTop ? 9 : 7) : 6,
+    }
+  })
 }
 
 export function analyzeKline(bars, opts = {}) {
