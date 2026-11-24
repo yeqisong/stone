@@ -670,33 +670,61 @@ def _builtin_ts_quantile(data: pd.Series, df: pd.DataFrame, n: int, q: float) ->
 
 
 def _builtin_ts_rank(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
-    """当前值在窗口内的分位（0~1），Qlib Rank 口径。"""
+    """当前值在窗口内的分位（0~1），Qlib Rank 口径。
+
+    旧实现逐窗口 Python；pandas Rolling.rank(method='max') 与
+    ``(a <= a[-1]).mean()`` 的并列值语义一致且由 Cython 执行。
+    """
     return data.groupby(df["stock_code"], observed=True).transform(
-        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
-            lambda a: float((a <= a[-1]).mean()), raw=True))
+        lambda x: x.rolling(window=int(n), min_periods=int(n)).rank(
+            method='max', pct=True))
+
+
+def _rolling_window_matrix(arr: np.ndarray, win: int):
+    """返回 (窗口起点, 窗口矩阵, 有效掩码)；NaN 窗口由调用方剔除。"""
+    mat = np.lib.stride_tricks.sliding_window_view(arr, win)
+    valid = ~np.isnan(mat).any(axis=1)
+    return mat, valid
 
 
 def _roll_reg(data: pd.Series, df: pd.DataFrame, n: int, which: str) -> pd.Series:
-    """窗口线性回归（时间轴 0..n-1）：slope 斜率 / rsquare R² / resi 当日残差。"""
-    def _apply(a):
-        t = np.arange(len(a), dtype=float)
-        tm = t.mean()
-        var_t = ((t - tm) ** 2).sum()
-        if var_t < 1e-12:
-            return 0.0
-        ym = a.mean()
-        beta = ((t - tm) * (a - ym)).sum() / var_t
-        if which == 'slope':
-            return beta
-        pred = beta * (t - tm) + ym
-        if which == 'resi':
-            return float(a[-1] - pred[-1])
-        ss_res = float(((a - pred) ** 2).sum())
-        ss_tot = float(((a - ym) ** 2).sum())
-        return 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+    """窗口线性回归（时间轴 0..n-1）：slope 斜率 / rsquare R² / resi 当日残差。
 
-    return data.groupby(df["stock_code"], observed=True).transform(
-        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(_apply, raw=True))
+    逐窗口 Python apply 在千万行级极慢；改为按股票切滑动窗口矩阵，用 numpy
+    一次性算完（语义与旧实现一致：NaN 窗口、常数序列、var_t=0 均保持原值）。
+    """
+    win = int(n)
+    out = np.full(len(data), np.nan, dtype=float)
+    groups = df.groupby("stock_code", observed=True, sort=False).indices
+    t = np.arange(win, dtype=float)
+    tm = t.mean()
+    var_t = ((t - tm) ** 2).sum()
+    for idx in groups.values():
+        if len(idx) < win:
+            continue
+        pos = np.asarray(idx)
+        arr = data.iloc[pos].to_numpy(dtype=float)
+        mat, valid = _rolling_window_matrix(arr, win)
+        if not valid.any():
+            continue
+        mv = mat[valid]
+        ym = mv.mean(axis=1)
+        beta = ((mv - ym[:, None]) * (t - tm)).sum(axis=1) / var_t
+        if which == 'slope':
+            res = beta
+        else:
+            pred = beta[:, None] * (t - tm) + ym[:, None]
+            if which == 'resi':
+                res = arr[win - 1:][valid] - pred[:, -1]
+            else:
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    ss_res = ((mv - pred) ** 2).sum(axis=1)
+                    ss_tot = ((mv - ym[:, None]) ** 2).sum(axis=1)
+                    res = np.where(ss_tot > 1e-12, 1.0 - ss_res / ss_tot, 0.0)
+        res_full = np.full(len(mat), np.nan, dtype=float)
+        res_full[valid] = np.asarray(res, dtype=float)
+        out[pos[win - 1:]] = res_full
+    return pd.Series(out, index=data.index)
 
 
 def _builtin_slope(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
@@ -711,17 +739,31 @@ def _builtin_resi(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
     return _roll_reg(data, df, int(n), 'resi')
 
 
+def _rolling_extreme_pos(data: pd.Series, df: pd.DataFrame, n: int, is_max: bool) -> pd.Series:
+    """距窗口极值的天数（0=当日即极值），Qlib IdxMax/IdxMin 口径。"""
+    win = int(n)
+    out = np.full(len(data), np.nan, dtype=float)
+    groups = df.groupby("stock_code", observed=True, sort=False).indices
+    for idx in groups.values():
+        if len(idx) < win:
+            continue
+        pos = np.asarray(idx)
+        arr = data.iloc[pos].to_numpy(dtype=float)
+        mat, valid = _rolling_window_matrix(arr, win)
+        filled = np.where(np.isnan(mat), -np.inf if is_max else np.inf, mat)
+        arg = np.argmax(filled, axis=1) if is_max else np.argmin(filled, axis=1)
+        res = (win - 1) - arg.astype(float)
+        res[~valid] = np.nan
+        out[pos[win - 1:]] = res
+    return pd.Series(out, index=data.index)
+
+
 def _builtin_imax(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
-    """距窗口最高值的天数（0=当日即最高），Qlib IdxMax 口径。"""
-    return data.groupby(df["stock_code"], observed=True).transform(
-        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
-            lambda a: float(len(a) - 1 - int(np.argmax(a))), raw=True))
+    return _rolling_extreme_pos(data, df, int(n), True)
 
 
 def _builtin_imin(data: pd.Series, df: pd.DataFrame, n: int) -> pd.Series:
-    return data.groupby(df["stock_code"], observed=True).transform(
-        lambda x: x.rolling(window=int(n), min_periods=int(n)).apply(
-            lambda a: float(len(a) - 1 - int(np.argmin(a))), raw=True))
+    return _rolling_extreme_pos(data, df, int(n), False)
 
 
 def _builtin_ts_corr(data: pd.Series, df: pd.DataFrame, other, n: int) -> pd.Series:
