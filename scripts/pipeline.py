@@ -2903,7 +2903,9 @@ def dag_task_feature_backfill(trade_date=None, **kw):
     write_node_log(log_id=log_id, status='running', detail='启动历史特征补数')
     db = get_sync_db()
     try:
-        result = compute_all_features(db, target_entity="stock", start_date="2020-01-01")
+        # 特征统一按后复权 OHLCV 计算（与 FEATURE_PRICE_ADJUST 一致，显式固定口径）
+        result = compute_all_features(db, target_entity="stock", start_date="2020-01-01",
+                                      adjust_prices=True)
         msg = f"全量补数完成: {result['features']}个特征, {result['rows']}行"
         if result.get("errors"):
             msg += f", {len(result['errors'])}个失败"
@@ -2939,7 +2941,7 @@ def dag_task_feature_compute(trade_date=None, **kw):
                 detail=f'特征计算 {done}/{total}: {fname}')
 
         result = compute_all_features(db, target_entity="stock", start_date=start, end_date=today,
-                                      progress_cb=_hb)
+                                      progress_cb=_hb, adjust_prices=True)
         # 计算完成后回写特征统计（完整度/总格子/缺失格），与 API 触发的计算路径
         # 保持一致；否则 features 表诊断列停留在 0，页面完整度显示不准确
         from app.api.features import _update_feature_stats_after_compute
