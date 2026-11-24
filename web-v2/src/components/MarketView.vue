@@ -333,13 +333,13 @@ function drawIdxCharts() {
     dataZoom: dz,
     series: [
       { name: 'K线', type: 'candlestick', data: ohlc, itemStyle: { color: T.up, color0: T.down, borderColor: T.up, borderColor0: T.down } },
-      { name: 'MA5', type: 'line', data: ma5, lineStyle: { color: T.series[0], width: 1 }, symbol: 'none' },
-      { name: 'MA10', type: 'line', data: ma10, lineStyle: { color: T.series[1], width: 1 }, symbol: 'none' },
-      { name: 'MA20', type: 'line', data: ma20, lineStyle: { color: T.series[2], width: 1 }, symbol: 'none' },
-      { name: 'MA60', type: 'line', data: ma60, lineStyle: { color: T.warn, width: 1 }, symbol: 'none' },
-      { name: 'MA120', type: 'line', data: ma120, lineStyle: { color: T.series[4], width: 1 }, symbol: 'none' },
-      { name: 'BOLL上', type: 'line', data: bup, lineStyle: { color: T.faint, width: 1, type: 'dashed' }, symbol: 'none' },
-      { name: 'BOLL下', type: 'line', data: blo, lineStyle: { color: T.faint, width: 1, type: 'dashed' }, symbol: 'none' },
+      { name: 'MA5', type: 'line', data: ma5, lineStyle: { color: T.series[0], width: 1 }, itemStyle: { color: T.series[0] }, symbol: 'none' },
+      { name: 'MA10', type: 'line', data: ma10, lineStyle: { color: T.series[1], width: 1 }, itemStyle: { color: T.series[1] }, symbol: 'none' },
+      { name: 'MA20', type: 'line', data: ma20, lineStyle: { color: T.series[2], width: 1 }, itemStyle: { color: T.series[2] }, symbol: 'none' },
+      { name: 'MA60', type: 'line', data: ma60, lineStyle: { color: T.warn, width: 1 }, itemStyle: { color: T.warn }, symbol: 'none' },
+      { name: 'MA120', type: 'line', data: ma120, lineStyle: { color: T.series[4], width: 1 }, itemStyle: { color: T.series[4] }, symbol: 'none' },
+      { name: 'BOLL上', type: 'line', data: bup, lineStyle: { color: T.faint, width: 1, type: 'dashed' }, itemStyle: { color: T.faint }, symbol: 'none' },
+      { name: 'BOLL下', type: 'line', data: blo, lineStyle: { color: T.faint, width: 1, type: 'dashed' }, itemStyle: { color: T.faint }, symbol: 'none' },
     ],
   })
   const cV = make('mv-vol', {
@@ -354,8 +354,8 @@ function drawIdxCharts() {
     dataZoom: dz,
     series: [
       { name: '柱', type: 'bar', data: ba, itemStyle: { color: p => (ba[p.dataIndex] >= 0 ? T.up : T.down) } },
-      { name: 'DIF', type: 'line', data: di, lineStyle: { color: T.warn, width: 1 }, symbol: 'none' },
-      { name: 'DEA', type: 'line', data: de, lineStyle: { color: '#06b6d4', width: 1 }, symbol: 'none' },
+      { name: 'DIF', type: 'line', data: di, lineStyle: { color: T.warn, width: 1 }, itemStyle: { color: T.warn }, symbol: 'none' },
+      { name: 'DEA', type: 'line', data: de, lineStyle: { color: '#06b6d4', width: 1 }, itemStyle: { color: '#06b6d4' }, symbol: 'none' },
     ],
   })
   const cR = make('mv-rsi', {
@@ -363,7 +363,7 @@ function drawIdxCharts() {
     xAxis: xA, yAxis: { min: 0, max: 100, splitLine: gl },
     dataZoom: dz,
     series: [{
-      name: 'RSI', type: 'line', data: rs, lineStyle: { color: T.series[4], width: 1.5 },
+      name: 'RSI', type: 'line', data: rs, lineStyle: { color: T.series[4], width: 1.5 }, itemStyle: { color: T.series[4] },
       symbol: 'none', areaStyle: { color: T.series[4], opacity: .12 },
       markLine: { silent: true, symbol: 'none', data: [
         { yAxis: 70, label: { formatter: '超买' }, lineStyle: { color: T.up, type: 'dashed' } },
@@ -405,8 +405,8 @@ function drawValCharts() {
     ],
     dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
     series: [
-      { name: 'PE-TTM', type: 'line', data: pe, symbol: 'none', lineStyle: { color: T.up, width: 1.4 }, markLine: mkPe },
-      { name: 'PB', type: 'line', yAxisIndex: 1, data: pb, symbol: 'none', lineStyle: { color: T.series[3], width: 1.2 }, markLine: mkPb },
+      { name: 'PE-TTM', type: 'line', data: pe, symbol: 'none', lineStyle: { color: T.up, width: 1.4 }, itemStyle: { color: T.up }, markLine: mkPe },
+      { name: 'PB', type: 'line', yAxisIndex: 1, data: pb, symbol: 'none', lineStyle: { color: T.series[3], width: 1.2 }, itemStyle: { color: T.series[3] }, markLine: mkPb },
     ],
   })
   make('mv-tr', {
@@ -414,7 +414,7 @@ function drawValCharts() {
     xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 10, color: T.faint, hideOverlap: true }, axisLine: { lineStyle: { color: T.line } } },
     yAxis: { axisLabel: { fontSize: 10, color: T.faint, formatter: v => v + '%' }, splitLine: gl2 },
     dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
-    series: [{ name: '换手率', type: 'line', data: tr, symbol: 'none', lineStyle: { color: T.series[2], width: 1.2 }, areaStyle: { color: T.series[2], opacity: .08 } }],
+    series: [{ name: '换手率', type: 'line', data: tr, symbol: 'none', lineStyle: { color: T.series[2], width: 1.2 }, itemStyle: { color: T.series[2] }, areaStyle: { color: T.series[2], opacity: .08 } }],
   })
 }
 
@@ -439,8 +439,8 @@ function drawMarketCharts() {
       series: [
         { name: '上涨家数', type: 'bar', stack: 'w', data: b.map(x => x.up), itemStyle: { color: T.up, opacity: .85 } },
         { name: '下跌家数', type: 'bar', stack: 'w', data: b.map(x => -x.down), itemStyle: { color: T.down, opacity: .85 } },
-        { name: '涨停', type: 'line', yAxisIndex: 1, data: b.map(x => x.limit_up), symbol: 'none', lineStyle: { color: T.up, width: 1, type: 'dashed' } },
-        { name: '跌停', type: 'line', yAxisIndex: 1, data: b.map(x => -x.limit_down), symbol: 'none', lineStyle: { color: T.down, width: 1, type: 'dashed' } },
+        { name: '涨停', type: 'line', yAxisIndex: 1, data: b.map(x => x.limit_up), symbol: 'none', lineStyle: { color: T.up, width: 1, type: 'dashed' }, itemStyle: { color: T.up } },
+        { name: '跌停', type: 'line', yAxisIndex: 1, data: b.map(x => -x.limit_down), symbol: 'none', lineStyle: { color: T.down, width: 1, type: 'dashed' }, itemStyle: { color: T.down } },
       ],
     })
   }
@@ -462,7 +462,7 @@ function drawMarketCharts() {
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
       series: [
         { name: '主力净流入', type: 'bar', data: nm, itemStyle: { color: p => ((nm[p.dataIndex] ?? 0) >= 0 ? T.up : T.down) } },
-        { name: '累计', type: 'line', yAxisIndex: 1, data: cum, symbol: 'none', lineStyle: { color: T.series[4], width: 1.2 } },
+        { name: '累计', type: 'line', yAxisIndex: 1, data: cum, symbol: 'none', lineStyle: { color: T.series[4], width: 1.2 }, itemStyle: { color: T.series[4] } },
       ],
     })
   }
@@ -480,8 +480,8 @@ function drawMarketCharts() {
       yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10, color: T.faint, formatter: v => fmtYiValue(v) }, splitLine: gl2 },
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
       series: [
-        { name: '融资余额', type: 'line', data: fin, symbol: 'none', lineStyle: { color: T.up, width: 1.4 } },
-        { name: '两融合计', type: 'line', data: tot, symbol: 'none', lineStyle: { color: T.series[3], width: 1 } },
+        { name: '融资余额', type: 'line', data: fin, symbol: 'none', lineStyle: { color: T.up, width: 1.4 }, itemStyle: { color: T.up } },
+        { name: '两融合计', type: 'line', data: tot, symbol: 'none', lineStyle: { color: T.series[3], width: 1 }, itemStyle: { color: T.series[3] } },
       ],
     })
   }
@@ -501,7 +501,7 @@ function drawMarketCharts() {
       series: totals.map((t, i) => ({
         name: t.name || t.id, type: 'line',
         data: (t.cumulative || []).map(v => v == null ? null : +(v / 1e8).toFixed(1)),
-        symbol: 'none', lineStyle: { color: T.series[i % T.series.length], width: 1.2 },
+        symbol: 'none', lineStyle: { color: T.series[i % T.series.length], width: 1.2 }, itemStyle: { color: T.series[i % T.series.length] },
       })),
     })
   }

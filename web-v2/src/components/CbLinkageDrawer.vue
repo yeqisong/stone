@@ -154,9 +154,9 @@ function drawCharts() {
         { type: 'slider', xAxisIndex: 0, height: 14, bottom: 2, borderColor: 'transparent', backgroundColor: T.line, fillerColor: T.line },
       ],
       series: [
-        { name: '正股(归一)', type: 'line', data: s.stock_idx, symbol: 'none', lineStyle: { color: T.series[3], width: 1.6 } },
-        { name: '转债(归一)', type: 'line', data: s.cb_idx, symbol: 'none', lineStyle: { color: T.up, width: 1.4 } },
-        { name: '溢价率%', type: 'line', yAxisIndex: 1, data: s.premium_rate.map(x => x == null ? null : +(x * 100).toFixed(2)), symbol: 'none', lineStyle: { color: T.warn, width: 1, type: 'dashed' } },
+        { name: '正股(归一)', type: 'line', data: s.stock_idx, symbol: 'none', lineStyle: { color: T.series[3], width: 1.6 }, itemStyle: { color: T.series[3] } },
+        { name: '转债(归一)', type: 'line', data: s.cb_idx, symbol: 'none', lineStyle: { color: T.up, width: 1.4 }, itemStyle: { color: T.up } },
+        { name: '溢价率%', type: 'line', yAxisIndex: 1, data: s.premium_rate.map(x => x == null ? null : +(x * 100).toFixed(2)), symbol: 'none', lineStyle: { color: T.warn, width: 1, type: 'dashed' }, itemStyle: { color: T.warn } },
       ],
     }, true)
     trendChart.resize()
@@ -171,7 +171,7 @@ function drawCharts() {
       yAxis: { type: 'value', min: -1, max: 1, axisLabel: { fontSize: 10, color: T.faint }, splitLine: { lineStyle: { color: T.line, type: 'dashed' } } },
       dataZoom: [{ type: 'inside', xAxisIndex: 0 }],
       series: [
-        { name: '20日滚动相关', type: 'line', data: s.rolling_corr.map(x => x == null ? null : +x.toFixed(3)), symbol: 'none', lineStyle: { color: T.series[4], width: 1.5 }, areaStyle: { color: T.series[4], opacity: .10 } },
+        { name: '20日滚动相关', type: 'line', data: s.rolling_corr.map(x => x == null ? null : +x.toFixed(3)), symbol: 'none', lineStyle: { color: T.series[4], width: 1.5 }, itemStyle: { color: T.series[4] }, areaStyle: { color: T.series[4], opacity: .10 } },
       ],
     }, true)
     corrChart.resize()

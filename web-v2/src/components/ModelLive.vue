@@ -194,9 +194,9 @@ function renderPaper() {
     yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 8, formatter: v => (v / 10000).toFixed(0) + '万' } },
     series: [
       { type: 'line', name: '纸面组合净值', data: eq.map(x => x.equity), showSymbol: false,
-        lineStyle: { width: 2, color: T.down } },
+        lineStyle: { width: 2, color: T.down }, itemStyle: { color: T.down } },
       ...(hasBm ? [{ type: 'line', name: '沪深300等额', data: eq.map(x => x.benchmark), showSymbol: false,
-        lineStyle: { width: 1.5, type: 'dashed', color: T.faint } }] : []),
+        lineStyle: { width: 1.5, type: 'dashed', color: T.faint }, itemStyle: { color: T.faint } }] : []),
     ],
   })
 }

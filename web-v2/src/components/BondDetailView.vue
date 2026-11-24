@@ -261,9 +261,9 @@ function drawChart() {
       { type: 'value', axisLabel: { fontSize: 10, color: T.faint, formatter: v => v + '%' }, splitLine: { show: false } },
     ],
     series: [
-      { name: '转债价', type: 'line', data: prices, symbol: 'none', lineStyle: { color: T.up, width: 1.6 } },
-      { name: '转股价值', type: 'line', data: cvs, symbol: 'none', lineStyle: { color: T.series[3], width: 1.2 } },
-      { name: '溢价率%', type: 'line', yAxisIndex: 1, data: prems, symbol: 'none', lineStyle: { color: T.warn, width: 1, type: 'dashed' } },
+      { name: '转债价', type: 'line', data: prices, symbol: 'none', lineStyle: { color: T.up, width: 1.6 }, itemStyle: { color: T.up } },
+      { name: '转股价值', type: 'line', data: cvs, symbol: 'none', lineStyle: { color: T.series[3], width: 1.2 }, itemStyle: { color: T.series[3] } },
+      { name: '溢价率%', type: 'line', yAxisIndex: 1, data: prems, symbol: 'none', lineStyle: { color: T.warn, width: 1, type: 'dashed' }, itemStyle: { color: T.warn } },
     ],
   }, true)
 }
@@ -288,9 +288,9 @@ function drawShareChart() {
       { type: 'value', position: 'right', offset: 48, scale: true, axisLabel: { fontSize: 10, color: T.faint, formatter: v => v.toFixed(1) }, splitLine: { show: false } },
     ],
     series: [
-      { name: '剩余规模(亿)', type: 'line', data: remain, symbol: 'none', lineStyle: { color: T.series[3], width: 1.6 }, areaStyle: { color: T.series[3], opacity: .08 } },
-      { name: '累计转股比例%', type: 'line', yAxisIndex: 1, data: acc, symbol: 'none', lineStyle: { color: T.warn, width: 1.4 } },
-      { name: '转股价', type: 'line', yAxisIndex: 2, data: convPx, symbol: 'none', lineStyle: { color: T.faint, width: 1, type: 'dashed' } },
+      { name: '剩余规模(亿)', type: 'line', data: remain, symbol: 'none', lineStyle: { color: T.series[3], width: 1.6 }, itemStyle: { color: T.series[3] }, areaStyle: { color: T.series[3], opacity: .08 } },
+      { name: '累计转股比例%', type: 'line', yAxisIndex: 1, data: acc, symbol: 'none', lineStyle: { color: T.warn, width: 1.4 }, itemStyle: { color: T.warn } },
+      { name: '转股价', type: 'line', yAxisIndex: 2, data: convPx, symbol: 'none', lineStyle: { color: T.faint, width: 1, type: 'dashed' }, itemStyle: { color: T.faint } },
     ],
   }, true)
 }
