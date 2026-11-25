@@ -2,6 +2,7 @@
 import datetime as dt
 
 from app.trade_review import (
+    _apply_twr,
     _behavior,
     _drawdown,
     _equity_curve,
@@ -108,6 +109,29 @@ class TestEquityCurve:
         assert points[1]["equity"] == 1195
         assert points[1]["n_positions"] == 0
         assert flows == []
+
+
+class TestTWR:
+    def test_deposit_does_not_create_return(self):
+        # 期初 1000；第 1 天赚 10%；第 2 天入金 1000（当天无盈亏）；
+        # 第 3 天赚 15.238%。入金不能算收益，TWR = 1.1 × 1.15238 - 1
+        eq = [
+            {"date": D0, "equity": 1100.0, "flow": 0.0, "adjusted": 0},
+            {"date": D1, "equity": 2100.0, "flow": 1000.0, "adjusted": 0},
+            {"date": D2, "equity": 2420.0, "flow": 0.0, "adjusted": 0},
+        ]
+        r = _apply_twr(eq, 1000.0)
+        assert abs(r - (1.1 * (2420 / 2100) - 1)) < 1e-6
+        # 每个点改写为净值：入金当天净值不变
+        assert abs(eq[0]["adjusted"] - 1100.0) < 1e-6
+        assert abs(eq[1]["adjusted"] - 1100.0) < 1e-6
+
+    def test_withdrawal_does_not_create_loss(self):
+        # 期初 1000；第 1 天出金 500（当天无盈亏）→ 权益 500，净值仍 1000
+        eq = [{"date": D0, "equity": 500.0, "flow": -500.0, "adjusted": 0}]
+        r = _apply_twr(eq, 1000.0)
+        assert abs(r) < 1e-9
+        assert abs(eq[0]["adjusted"] - 1000.0) < 1e-9
 
 
 class TestDrawdown:

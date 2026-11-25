@@ -278,6 +278,25 @@ def _drawdown(points: list[dict]) -> dict:
     }
 
 
+def _apply_twr(equity: list[dict], start_equity: float) -> Optional[float]:
+    """逐日链乘时间加权收益，并把每个点的 adjusted 改写为净值曲线。
+
+    日收益率 = 当日权益 / (前日权益 + 当日净流入) - 1。
+    不能拿「权益 - 累计入金」直接相除：那只是累计盈亏曲线，入金后的本金
+    基数已经变了，按它算日收益率会把后期的波动放大/缩小。
+    """
+    twr = 1.0
+    prev = start_equity
+    for p in equity:
+        flow = p.get("flow") or 0.0
+        base = prev + flow
+        if base > 0:
+            twr *= p["equity"] / base
+        prev = p["equity"]
+        p["adjusted"] = round(start_equity * twr, 2)
+    return round(twr - 1, 6) if equity else None
+
+
 # ── FIFO 配对 + 交易回合 ──
 
 def _match_rows(rows: list[dict], state0: dict, closes) -> dict:
@@ -626,8 +645,9 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
     if dd >= 0.25:
         add("critical", "drawdown",
             f"剔除入金后从峰值回撤 {dd*100:.0f}%，把浮盈全部交回去",
-            f"调整后净值 {summary.get('peak_date')} 峰值 {_money(summary.get('peak_equity'))} → "
-            f"{summary.get('trough_date')} {_money(summary.get('trough_equity'))}；"
+            f"回撤区间 {summary.get('peak_date')} → {summary.get('trough_date')}；"
+            f"净值口径（剔除入金）{_money(summary.get('peak_equity'))} → "
+            f"{_money(summary.get('trough_equity'))}；"
             f"同期基准 {summary.get('benchmark_name')} {_pct(summary.get('benchmark_return'))}。",
             "加账户级回撤闸门：回撤 -10% 仓位减半，-15% 只减不加，-20% 停手 5 个交易日。"
             "回撤期的首要目标不是赚回来，是止血。")
@@ -883,19 +903,18 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
         dates = [start, end]
     equity, flows = _equity_curve(win_rows, state0, cash0, dates, closes, index_closes)
 
-    raw_start = round(equity[0]["equity"], 2) if equity else round(cash0 + equity_start_mv, 2)
+    # 期初权益 = 期初现金 + 期初持仓（按区间前收盘价重估）。
+    # 不能取 equity[0]：那是「区间首日收盘后」的点，会把首日盈亏漏掉，
+    # 造成累计盈亏系统性偏正（尤其首日有大额卖出时）。
+    raw_start = round(cash0 + equity_start_mv, 2)
     raw_end = round(equity[-1]["equity"], 2) if equity else None
     net_deposit = round(sum(f["amount"] for f in flows), 2)
     trading_pnl = round((raw_end or 0) - raw_start - net_deposit, 2)
-    # 时间加权收益（TWR）：逐日收益链乘，剔除入金/出金的影响
-    twr = 1.0
-    for i in range(1, len(equity)):
-        prev = equity[i - 1]["adjusted"]
-        cur = equity[i]["adjusted"]
-        if prev and prev > 0:
-            twr *= cur / prev
-    twr = round(twr - 1, 6) if equity else None
-    adj_points = [{"date": p["date"], "equity": p["adjusted"]} for p in equity]
+    # 时间加权收益（TWR）：逐日链乘，剔除入金/出金的影响；adjusted 改写为净值曲线
+    twr = _apply_twr(equity, raw_start)
+    # 回撤在高水位净值上算：从期初权益起算，首日下跌也计入
+    adj_points = [{"date": start, "equity": raw_start}] + \
+                 [{"date": p["date"], "equity": p["adjusted"]} for p in equity]
     dd = _drawdown(adj_points)
 
     summary_base = {
@@ -907,7 +926,7 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
         "pnl": trading_pnl,
         "return_pct": twr,
         "realized_pnl": round(match["realized_total"], 2),
-        "adjusted_start": equity[0]["adjusted"] if equity else None,
+        "adjusted_start": raw_start,
         "adjusted_end": equity[-1]["adjusted"] if equity else None,
     }
     summary_base.update(dd)
@@ -949,28 +968,32 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
     counterfactual = {"hold_pnl": round(hold_pnl, 2),
                       "hold_return_pct": round(hold_pnl / hold_cost, 6) if hold_cost else None}
 
+    # 月度：收益按净值（TWR）算，盈亏按「期末权益 - 期初权益 - 当月净入金」算。
+    # 两者口径不同：收益回答「这月操作得好不好」，盈亏回答「账户多了/少了多少钱」。
     monthly = []
-    prev_end = None
-    for p in equity:
-        m = p["date"].strftime("%Y-%m")
-        if monthly and monthly[-1]["month"] == m:
-            monthly[-1]["end"] = p["adjusted"]
-            monthly[-1]["net_deposit"] += p["flow"]
-        else:
-            if monthly:
-                prev_end = monthly[-1]["end"]
-            monthly.append({"month": m, "start": p["adjusted"], "end": p["adjusted"],
-                            "prev_end": prev_end, "net_deposit": p["flow"]})
-    for m in monthly:
-        base = m["prev_end"] if m["prev_end"] else m["start"]
-        m["return_pct"] = round(m["end"] / base - 1, 6) if base else None
-        m["pnl"] = round(m["end"] - base, 2) if base else None
-        m["trades"] = sum(1 for r in win_rows if r["trade_date"].strftime("%Y-%m") == m["month"]
-                          and r["side"] in ("buy", "sell"))
-        m["start"] = round(m["start"], 2)
-        m["end"] = round(m["end"], 2)
-        m["net_deposit"] = round(m["net_deposit"], 2)
-        m.pop("prev_end", None)
+    idx = 0
+    while idx < len(equity):
+        m = equity[idx]["date"].strftime("%Y-%m")
+        j = idx
+        while j < len(equity) and equity[j]["date"].strftime("%Y-%m") == m:
+            j += 1
+        chunk = equity[idx:j]
+        start_equity = equity[idx - 1]["equity"] if idx > 0 else raw_start
+        start_nav = equity[idx - 1]["adjusted"] if idx > 0 else raw_start
+        end_equity = chunk[-1]["equity"]
+        end_nav = chunk[-1]["adjusted"]
+        flow_m = sum(p.get("flow") or 0.0 for p in chunk)
+        monthly.append({
+            "month": m,
+            "start": round(start_nav, 2),
+            "end": round(end_nav, 2),
+            "net_deposit": round(flow_m, 2),
+            "return_pct": round(end_nav / start_nav - 1, 6) if start_nav else None,
+            "pnl": round(end_equity - start_equity - flow_m, 2),
+            "trades": sum(1 for r in win_rows if r["trade_date"].strftime("%Y-%m") == m
+                          and r["side"] in ("buy", "sell")),
+        })
+        idx = j
 
     cfg = get_discipline(db, user_id)
     findings = _findings(summary_base, beh, cfg, counterfactual)

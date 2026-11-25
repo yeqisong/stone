@@ -670,21 +670,21 @@ def replay_positions(db, rows: list[dict], until: Optional[_date] = None,
     """
     if not rows:
         return {}, None
-    if until:
-        rows = [r for r in rows if r["trade_date"] < until]
-        if not rows:
-            return {}, None
+    # 注意：不能先按 until 过滤再重放。期初持仓是从「每只股票首个买卖行」的
+    # 股份余额反推的，先过滤会让区间起点前已持有的股票整体消失（账户曲线、
+    # FIFO 配对都会把期初持仓当成凭空出现，卖出变成无成本利润）。
+    # 这里把完整 rows 交给单账号重放，由 _replay_single_account 在 until 处截断。
     groups: dict[str, list[dict]] = {}
     for r in rows:
         groups.setdefault(str(r.get("account_no") or ""), []).append(r)
     if len(groups) <= 1:
-        return _replay_single_account(db, rows, until=None,
+        return _replay_single_account(db, rows, until=until,
                                       portfolio_costs=portfolio_costs)
 
     merged: dict[str, dict] = {}
     cash_vals: list[float | None] = []
     for acct, arows in groups.items():
-        st, cash = _replay_single_account(db, arows, until=None,
+        st, cash = _replay_single_account(db, arows, until=until,
                                           portfolio_costs={})
         cash_vals.append(cash)
         for code, s in st.items():

@@ -454,7 +454,9 @@ function renderChart(){
   const dates = eq.map(p => p.date)
   const adjusted = eq.map(p => p.adjusted)
   const raw = eq.map(p => p.equity)
-  const base = review.value.summary.adjusted_start || adjusted[0] || 1
+  // 基准线要与净值曲线第一个点对齐；adjusted_start 是首个交易日之前的期初权益，
+  // 直接用它会让基准线起点比净值线高出一截（首日盈亏的视觉错位）。
+  const base = adjusted[0] || review.value.summary.adjusted_start || 1
   const bench = eq.map(p => p.benchmark == null ? null : +(p.benchmark * base).toFixed(2))
   const textDim = cssVar('--c-text-dim', '#888')
   const border = cssVar('--c-border', 'rgba(128,128,128,.2)')
