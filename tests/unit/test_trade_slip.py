@@ -194,6 +194,35 @@ class TestPositionReplay:
         assert abs(st["realized"] - 100.0) < 1e-9
         assert cash == 25600
 
+    def test_until_keeps_seeded_initial_positions(self):
+        """区间起点前的持仓必须保留：until 过滤不能让期初持仓整体消失。
+
+        回归：复盘用 replay_positions(until=区间首日) 取期初状态时，先按日期
+        过滤再重放会丢掉「首行股份余额反推出来的期初持仓」，导致期初权益
+        少一大截、卖出变成无成本利润。
+        """
+        d1, d2 = datetime.date(2026, 1, 5), datetime.date(2026, 1, 6)
+        rows = [
+            dict(account_no="A", trade_date=d1, stock_code="600000", side="sell",
+                 quantity=100, price=12, amount=1200, clean_amount=1200,
+                 commission=0, stamp_tax=0, transfer_fee=0, extra_fee=0,
+                 balance_qty=200, cash_balance=10000),
+            dict(account_no="A", trade_date=d2, stock_code="600000", side="sell",
+                 quantity=100, price=11, amount=1100, clean_amount=1100,
+                 commission=0, stamp_tax=0, transfer_fee=0, extra_fee=0,
+                 balance_qty=100, cash_balance=11100),
+        ]
+        # until=首日：应用 0 行，但期初 300 股（200+100）和期初现金必须保留
+        state, cash = replay_positions(_NoCloseDB(), rows, until=d1)
+        assert state["600000"]["qty"] == 300
+        assert state["600000"]["estimated"] is True
+        assert cash == 8800  # 首行前现金 = 10000 - 1200
+
+        # until=次日：应用首日卖出，剩 200 股，现金变为首日后的 10000
+        state, cash = replay_positions(_NoCloseDB(), rows, until=d2)
+        assert state["600000"]["qty"] == 200
+        assert cash == 10000
+
     def test_estimated_flag_clears_when_seed_shares_exhausted(self):
         st = {"600000": {"qty": 100, "avg": 10, "realized": 0,
                          "estimated": True, "seed_qty": 100}}
