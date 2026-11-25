@@ -25,6 +25,17 @@ INDEX_NAMES = {
     '399001.SZ': '深证成指', '399006.SZ': '创业板指',
 }
 BARE = {c: c.split('.')[0] for c in MAIN_INDEXES}
+BARE_NAMES = {BARE[c]: INDEX_NAMES[c] for c in MAIN_INDEXES}
+
+# 比值中枢分母候选：默认中证红利，复现「创业板 ÷ 中证红利」风格比价。
+# 分子固定为页面当前选中指数（BARE_NAMES）；窗口 1260 日与截图口径一致（5年×252）。
+RATIO_DENOMS = {
+    '000922': '中证红利',
+    '000985': '中证全指',
+    '000300': '沪深300',
+    '000016': '上证50',
+}
+RATIO_WINDOWS = {756: '3年', 1260: '5年', 2016: '8年'}
 
 # ── 模块级 TTL 缓存（对齐 stock.py 手写缓存模式）+ 在途去重 ──
 # 本模块冷查询 3~9s（百万行级聚合），无去重时并发 miss 会重复计算；
@@ -464,3 +475,86 @@ def get_market_sentiment_history(days: int = Query(1000, ge=30, le=6500)):
             db.close()
 
     return _cached(("sentiment-history", days), 300, _load)
+
+
+# ── 8. 比值中枢（风格比价分位）──
+
+def _compute_ratio_series(rows, num: str, den: str, window: int) -> list[dict]:
+    """把 (trade_date, index_code, close) 行算成比值 + 滚动分位序列。
+
+    分位 = 当日比值在最近 window 个交易日中的百分位（含当日，pandas rank）。
+    min_periods=250：不足一年不出分位，避免早期窗口的伪极值。
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(rows, columns=['trade_date', 'index_code', 'close'])
+    if df.empty:
+        return []
+    p = df.pivot(index='trade_date', columns='index_code', values='close').dropna()
+    if p.empty or num not in p.columns or den not in p.columns:
+        return []
+    ratio = p[num] / p[den]
+    roll = ratio.rolling(window, min_periods=min(250, window))
+    pct = roll.rank(pct=True) * 100
+    mid = roll.median()
+    lo = roll.quantile(0.20)
+    hi = roll.quantile(0.80)
+    out = []
+    for dt, rv, pv, mv, lv, hv in zip(ratio.index, ratio.values, pct.values,
+                                      mid.values, lo.values, hi.values):
+        out.append({
+            'date': str(dt)[:10],
+            'ratio': _num(rv, 4),
+            'pct': _num(pv, 1),
+            'mid': _num(mv, 4),
+            'p20': _num(lv, 4),
+            'p80': _num(hv, 4),
+        })
+    return out
+
+
+@router.get("/market/ratio-percentile")
+def get_market_ratio_percentile(
+    num: str = Query(..., min_length=6, max_length=6, description='分子指数（无后缀）'),
+    den: str = Query('000922', min_length=6, max_length=6, description='分母指数'),
+    window: int = Query(1260, description='滚动窗口交易日数'),
+    days: int = Query(0, ge=0, le=10000, description='返回最近 N 日，0=全部'),
+):
+    """指数比值的滚动分位（比值中枢相对位置）。
+
+    分子=当前关注指数，分母默认中证红利；返回值同时带滚动中枢/20-80 分位带，
+    前端画「比值 + 中枢」与「滚动分位」两段图。只读聚合，TTL 600s。
+    """
+    if num not in BARE_NAMES:
+        raise HTTPException(400, f"不支持的分子指数: {num}")
+    if den not in RATIO_DENOMS:
+        raise HTTPException(400, f"不支持的分母指数: {den}")
+    if num == den:
+        raise HTTPException(400, "分子与分母不能相同")
+    if window not in RATIO_WINDOWS:
+        raise HTTPException(400, "window 仅支持 756/1260/2016")
+
+    def _load():
+        db = get_sync_db()
+        try:
+            rows = db.execute(text("""
+                SELECT trade_date, index_code, close
+                FROM index_daily_quote
+                WHERE index_code IN (:num, :den) AND close > 0
+                ORDER BY trade_date
+            """), {'num': num, 'den': den}).fetchall()
+        finally:
+            db.close()
+        data = _compute_ratio_series(rows, num, den, window)
+        if days:
+            data = data[-days:]
+        return {
+            'num': {'code': num, 'name': BARE_NAMES[num]},
+            'den': {'code': den, 'name': RATIO_DENOMS[den]},
+            'window': window,
+            'window_label': RATIO_WINDOWS[window],
+            'latest': data[-1] if data else None,
+            'data': data,
+        }
+
+    return _cached(('ratio-pct', num, den, window, days), 600, _load)

@@ -59,6 +59,30 @@
         <div id="mv-tr" class="mv-chart"></div>
       </div>
 
+      <!-- 比值中枢（风格比价分位）：分子跟随当前指数，分母/窗口可切换 -->
+      <div class="mv-panel">
+        <div class="mv-h">
+          <span><AppIcon name="percent" :size="13" /> 比值中枢：{{ idxName }} ÷ {{ ratioDenName }}</span>
+          <span class="mv-ratio-ctrl">
+            <button v-for="d in RATIO_DENS" :key="d.code" class="mv-chip mv-chip-sm"
+                    :class="{ active: ratioDen === d.code }" @click="switchDen(d.code)">{{ d.name }}</button>
+          </span>
+          <span class="mv-ratio-ctrl">
+            <button v-for="w in RATIO_WINDOWS" :key="w.value" class="mv-chip mv-chip-sm"
+                    :class="{ active: ratioWin === w.value }" @click="switchWin(w.value)">{{ w.label }}</button>
+          </span>
+          <span v-if="ratioLatest" class="mv-pct" style="margin-left:auto">
+            比值 <b>{{ ratioLatest.ratio ?? '—' }}</b> · {{ ratioWindowLabel }}分位
+            <b :class="ratioCls(ratioLatest.pct)">{{ ratioLatest.pct == null ? '—' : ratioLatest.pct + '%' }}</b>
+          </span>
+        </div>
+        <div id="mv-ratio" class="mv-chart mv-chart-ratio"></div>
+        <div class="mv-note">
+          分位 = 当日比值在最近 {{ ratioWin }} 个交易日中的百分位（≥80 偏高区 / ≤20 偏低区），
+          虚线为同窗口比值中位数（中枢）。价格指数口径（不含分红），滚动分位只描述相对位置，不构成买卖建议。
+        </div>
+      </div>
+
       <!-- 全市场角度 -->
       <div v-if="breadthData.length" class="mv-panel">
         <div class="mv-h">
@@ -188,6 +212,25 @@ const midx = computed(() => nav.midx || '000001.SH')
 const idxName = computed(() => (IDXES.find(i => i.ts === midx.value) || {}).name || midx.value)
 const idxBare = computed(() => (IDXES.find(i => i.ts === midx.value) || {}).bare || '000001')
 const rangeDays = ref(250)
+
+// 比值中枢：分母候选 + 滚动窗口（1260 日 = 5年×252，对齐参考口径）
+const RATIO_DENS = [
+  { code: '000922', name: '中证红利' },
+  { code: '000985', name: '中证全指' },
+  { code: '000300', name: '沪深300' },
+  { code: '000016', name: '上证50' },
+]
+const RATIO_WINDOWS = [
+  { value: 756, label: '3年' }, { value: 1260, label: '5年' }, { value: 2016, label: '8年' },
+]
+const ratioDen = ref('000922')
+const ratioWin = ref(1260)
+const ratioData = ref(null)
+const ratioLatest = computed(() => ratioData.value?.latest || null)
+const ratioDenName = computed(() => (RATIO_DENS.find(d => d.code === ratioDen.value) || {}).name || ratioDen.value)
+const ratioWindowLabel = computed(() => (RATIO_WINDOWS.find(w => w.value === ratioWin.value) || {}).label || ratioWin.value + '日')
+const ratioCls = p => (p == null ? '' : (p >= 80 ? 'up' : (p <= 20 ? 'down' : '')))
+let ratioSeq = 0
 
 // ── 数据 refs（theme 重绘需要全量留存）──
 const klineData = ref([])
@@ -418,6 +461,74 @@ function drawValCharts() {
   })
 }
 
+function drawRatioChart() {
+  const d = ratioData.value?.data
+  const el = document.getElementById('mv-ratio')
+  if (!el) return
+  if (!d || !d.length) {
+    if (el._echart) el._echart.clear()
+    return
+  }
+  const dates = d.map(x => x.date)
+  const ratio = d.map(x => x.ratio)
+  const mid = d.map(x => x.mid)
+  const pct = d.map(x => x.pct)
+  const lbl = ratioWindowLabel.value
+  const gl2 = { lineStyle: { color: T.line } }
+  make('mv-ratio', {
+    tooltip: { trigger: 'axis', formatter: ps => {
+      const i = ps?.[0]?.dataIndex
+      const x = i == null ? null : d[i]
+      if (!x) return ''
+      return `<div style="font-size:12px"><b>${x.date}</b><br/>` +
+        `比值: <b>${x.ratio ?? '—'}</b>　滚动中枢: ${x.mid ?? '—'}<br/>` +
+        `${lbl}分位: <b>${x.pct == null ? '—' : x.pct + '%'}</b>` +
+        (x.p20 != null && x.p80 != null ? `　20-80带: ${x.p20} ~ ${x.p80}` : '') + `</div>`
+    } },
+    legend: { top: 0, right: 4, itemWidth: 12, itemHeight: 6, textStyle: { fontSize: 10, color: T.dim } },
+    grid: [
+      { left: 64, right: 48, top: 26, height: '38%' },
+      { left: 64, right: 48, top: '58%', bottom: 34 },
+    ],
+    xAxis: [
+      { type: 'category', gridIndex: 0, data: dates, axisLabel: { show: false },
+        axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
+      { type: 'category', gridIndex: 1, data: dates,
+        axisLabel: { fontSize: 10, color: T.faint, hideOverlap: true },
+        axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
+    ],
+    yAxis: [
+      { gridIndex: 0, type: 'value', scale: true, name: '比值',
+        nameTextStyle: { fontSize: 10, color: T.faint },
+        axisLabel: { fontSize: 10, color: T.faint, formatter: v => Number(v).toFixed(2) }, splitLine: gl2 },
+      { gridIndex: 1, type: 'value', min: 0, max: 100, name: '分位%',
+        nameTextStyle: { fontSize: 10, color: T.faint },
+        axisLabel: { fontSize: 10, color: T.faint }, splitLine: gl2 },
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1] },
+      { type: 'slider', xAxisIndex: [0, 1], ...dzSlider() },
+    ],
+    series: [
+      { name: '比值', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: ratio, symbol: 'none',
+        lineStyle: { color: T.series[0], width: 1.6 }, itemStyle: { color: T.series[0] } },
+      { name: `${lbl}中枢`, type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: mid, symbol: 'none',
+        lineStyle: { color: T.warn, width: 1.1, type: 'dashed' }, itemStyle: { color: T.warn } },
+      { name: `${lbl}滚动分位`, type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: pct, symbol: 'none',
+        lineStyle: { color: T.series[3], width: 1.3 }, itemStyle: { color: T.series[3] },
+        areaStyle: { color: T.series[3], opacity: .10 },
+        markLine: { silent: true, symbol: 'none', data: [
+          { yAxis: 80, label: { formatter: '80 偏高', fontSize: 10, color: T.faint }, lineStyle: { color: T.up, type: 'dashed', width: 1 } },
+          { yAxis: 20, label: { formatter: '20 偏低', fontSize: 10, color: T.faint }, lineStyle: { color: T.down, type: 'dashed', width: 1 } },
+        ] },
+        markArea: { silent: true, data: [
+          [{ yAxis: 80, itemStyle: { color: T.up, opacity: .08 } }, { yAxis: 100 }],
+          [{ yAxis: 20, itemStyle: { color: T.down, opacity: .08 } }, { yAxis: 0 }],
+        ] } },
+    ],
+  })
+}
+
 function drawMarketCharts() {
   const gl2 = { lineStyle: { color: T.line } }
   const xOpt = dates => ({ type: 'category', data: dates, axisLabel: { fontSize: 10, color: T.faint, hideOverlap: true }, axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } })
@@ -538,6 +649,7 @@ function drawMarketCharts() {
 function redrawAll() {
   drawIdxCharts()
   drawValCharts()
+  drawRatioChart()
   drawMarketCharts()
 }
 
@@ -556,6 +668,36 @@ async function loadIdxCharts(seq) {
   if (seq !== loadSeq) return
   drawIdxCharts()
   drawValCharts()
+}
+
+async function loadRatio() {
+  // 比值中枢：分子跟随当前指数，分母/窗口切换时单独重取（有独立序号防竞态）
+  const seq = ++ratioSeq
+  try {
+    const r = await axios.get(`${API}/api/market/ratio-percentile`, {
+      params: { num: idxBare.value, den: ratioDen.value, window: ratioWin.value },
+    })
+    if (seq !== ratioSeq) return
+    ratioData.value = r.data
+  } catch (e) {
+    if (seq !== ratioSeq) return
+    ratioData.value = null
+  }
+  await nextTick()
+  if (seq !== ratioSeq) return
+  drawRatioChart()
+}
+
+function switchDen(code) {
+  if (ratioDen.value === code) return
+  ratioDen.value = code
+  loadRatio()
+}
+
+function switchWin(v) {
+  if (ratioWin.value === v) return
+  ratioWin.value = v
+  loadRatio()
 }
 
 async function loadMarketCharts(seq) {
@@ -601,11 +743,12 @@ async function load() {
   loadOverview(seq)
   loadMacro(seq)
   loadIdxCharts(seq)
+  loadRatio()
   await loadMarketCharts(seq)
 }
 
-// 指数切换：URL 同步交给 nav store watch，只重取指数相关图
-watch(midx, () => loadIdxCharts(++loadSeq))
+// 指数切换：URL 同步交给 nav store watch，只重取指数相关图（含比值分子）
+watch(midx, () => { loadIdxCharts(++loadSeq); loadRatio() })
 
 // 主题切换：全量重绘（chartColors Proxy 每次取值都读当前主题）
 const theme = useThemeStore()
@@ -659,6 +802,9 @@ onUnmounted(() => {
 .mv-pct b.down, .down { color: var(--c-down); }
 .mv-chart { height: 240px; width: 100%; }
 .mv-chart-kline { height: 320px; }
+.mv-chart-ratio { height: 380px; }
+.mv-ratio-ctrl { display: inline-flex; gap: 4px; align-items: center; }
+.mv-chip-sm { padding: 1px 6px; font-size: 11px; }
 .mv-table { width: 100%; border-collapse: collapse; font-size: var(--text-meta); }
 .mv-table th { color: var(--c-text-faint); font-weight: 500; text-align: left; padding: 4px 5px; border-bottom: 1px solid var(--c-border-light); white-space: nowrap; }
 .mv-table td { color: var(--c-text); padding: 4px 5px; border-bottom: 1px solid var(--c-border-light); white-space: nowrap; }
