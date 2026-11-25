@@ -49,19 +49,37 @@ def overview(user: str = Depends(get_current_user)):
 
 @router.get("/tables")
 def list_tables(user: str = Depends(get_current_user)):
-    """public 下全部用户表：估算行数 + 磁盘大小 + 注释。"""
+    """共享表白名单：估算行数 + 磁盘大小 + 注释。
+
+    注意 relkind 必须包含 'p'（分区父表）：feature_values / xueqiu_status 是分区表，
+    只查 'r' 会把它们漏掉，表数量与 overview 的 len(SHARED_TABLES) 对不上。
+    分区父表的 reltuples/pg_total_relation_size 常为 -1/0，需汇总子分区。
+    """
     db = get_sync_db()
     try:
         rows = db.execute(text("""
             SELECT c.relname,
-                   GREATEST(c.reltuples, 0)::bigint AS rows_est,
-                   pg_size_pretty(pg_total_relation_size(c.oid)) AS size,
-                   COALESCE(obj_description(c.oid), '') AS comment
+                   CASE WHEN c.relkind = 'p'
+                        THEN COALESCE(pp.rows_est, 0)
+                        ELSE GREATEST(c.reltuples, 0)::bigint END AS rows_est,
+                   pg_size_pretty(CASE WHEN c.relkind = 'p'
+                        THEN COALESCE(pp.size_bytes, 0)
+                        ELSE pg_total_relation_size(c.oid) END) AS size,
+                   COALESCE(obj_description(c.oid), '') AS comment,
+                   CASE WHEN c.relkind = 'p' THEN COALESCE(pp.size_bytes, 0)
+                        ELSE pg_total_relation_size(c.oid) END AS size_bytes
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public' AND c.relkind = 'r'
+            LEFT JOIN LATERAL (
+                SELECT sum(GREATEST(pc.reltuples, 0))::bigint AS rows_est,
+                       sum(pg_total_relation_size(pc.oid)) AS size_bytes
+                FROM pg_inherits i
+                JOIN pg_class pc ON pc.oid = i.inhrelid
+                WHERE i.inhparent = c.oid
+            ) pp ON c.relkind = 'p'
+            WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
               AND c.relname = ANY(:names)
-            ORDER BY pg_total_relation_size(c.oid) DESC
+            ORDER BY size_bytes DESC
         """), {"names": list(SHARED_TABLES)}).fetchall()
         db.close()
         return {"tables": [
@@ -129,13 +147,32 @@ def table_rows(table: str, offset: int = Query(0, ge=0), limit: int = Query(50, 
                 raise HTTPException(400, f"非法排序列: {order_by}")
             order_sql = f" ORDER BY {order_by} {order_dir} NULLS LAST"
 
-        total = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+        # 分区父表不能用 COUNT(*)（feature_values 15 亿行/426GB，会扫几分钟），改用子分区 reltuples 估算
+        relkind = db.execute(text("""
+            SELECT c.relkind FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = :t
+        """), {"t": table}).scalar()
+        total_estimated = relkind == "p"
+        if total_estimated:
+            total = db.execute(text("""
+                SELECT COALESCE(sum(GREATEST(pc.reltuples, 0)), 0)::bigint
+                FROM pg_inherits i
+                JOIN pg_class pc ON pc.oid = i.inhrelid
+                WHERE i.inhparent = (
+                    SELECT c.oid FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = :t)
+            """), {"t": table}).scalar() or 0
+        else:
+            total = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
         rows = db.execute(text(
             f"SELECT * FROM {table}{order_sql} LIMIT :lim OFFSET :off"
         ), {"lim": limit, "off": offset}).mappings().all()
         db.close()
         # Decimal/date/datetime/JSONB 由 FastAPI jsonable_encoder 统一序列化
-        return {"total": total, "offset": offset, "limit": limit,
+        return {"total": total, "total_estimated": total_estimated,
+                "offset": offset, "limit": limit,
                 "columns": valid_cols, "rows": [dict(r) for r in rows]}
     finally:
         try:
