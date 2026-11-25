@@ -144,3 +144,38 @@ async def test_market_sentiment_history(client):
     assert row["level"] in ("panic", "weak", "neutral", "strong")
     dates = [r["date"] for r in data]
     assert dates == sorted(dates)
+
+
+@pytest.mark.asyncio
+async def test_market_ratio_percentile(client):
+    """比值中枢：分子/分母/窗口元信息 + 比值与滚动分位序列。"""
+    response = await client.get(
+        "/api/market/ratio-percentile?num=399006&den=000922&window=1260", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["num"] == {"code": "399006", "name": "创业板指"}
+    assert body["den"] == {"code": "000922", "name": "中证红利"}
+    assert body["window"] == 1260 and body["window_label"] == "5年"
+    data = body["data"]
+    if not data:
+        pytest.skip("测试库未回补指数行情")
+    assert len(data) > 100
+    latest = body["latest"]
+    assert {"date", "ratio", "pct", "mid", "p20", "p80"} <= set(latest.keys())
+    assert latest["ratio"] > 0
+    assert 0 <= latest["pct"] <= 100
+    dates = [r["date"] for r in data]
+    assert dates == sorted(dates)
+
+
+@pytest.mark.asyncio
+async def test_market_ratio_percentile_validation(client):
+    """非法分子/分母/窗口 → 400。"""
+    for url in (
+        "/api/market/ratio-percentile?num=999999&den=000922",
+        "/api/market/ratio-percentile?num=399006&den=000001",
+        "/api/market/ratio-percentile?num=399006&den=000922&window=1000",
+        "/api/market/ratio-percentile?num=399006&den=399006",
+    ):
+        response = await client.get(url, headers=AUTH)
+        assert response.status_code == 400, url
