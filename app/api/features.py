@@ -1345,7 +1345,8 @@ def _stock_window_cells(db) -> int:
     return _stock_window_cache['cells']
 
 
-def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool = False):
+def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool = False,
+                                         actual_rows: int | None = None):
     """计算完成后更新特征的数据统计。
 
     总格子     = 十年保留窗口内理论格子（stock 实体：daily_quote 窗口内 close>0 行数，
@@ -1399,10 +1400,14 @@ def _update_feature_stats_after_compute(feature_id: int, force_recompute: bool =
                 total_cells = 1
                 stock_count = 1
 
-        # 2. 实际已计算
-        actual = db.execute(text(
-            "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
-        ), {"fn": fn}).scalar() or 0
+        # 2. 实际已计算：DAG 增量重算可传缓存值，避免对 15 亿行表逐特征 COUNT
+        #    （全量重建后 dead tuple 未回收时，151 次 COUNT 会拖垮节点心跳）
+        if actual_rows is not None:
+            actual = max(0, int(actual_rows))
+        else:
+            actual = db.execute(text(
+                "SELECT COUNT(*) FROM feature_values WHERE feature_name = :fn"
+            ), {"fn": fn}).scalar() or 0
 
         # 3. 窗口期天然缺失 = 每只股票前 lookback 天无法计算
         #    停牌格子无法精确统计（需 per-stock daily_quote），归入"未补"

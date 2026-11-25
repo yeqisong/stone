@@ -2946,12 +2946,16 @@ def dag_task_feature_compute(trade_date=None, **kw):
         # 保持一致；否则 features 表诊断列停留在 0，页面完整度显示不准确
         from app.api.features import _update_feature_stats_after_compute
         from sqlalchemy import text as _sql
-        fids = db.execute(_sql(
-            "SELECT id FROM features WHERE target_entity='stock' AND status='enabled' ORDER BY id"
+        frows = db.execute(_sql(
+            "SELECT id, actual_row_count FROM features "
+            "WHERE target_entity='stock' AND status='enabled' ORDER BY id"
         )).fetchall()
-        for (fid,) in fids:
-            _update_feature_stats_after_compute(fid, force_recompute=True)
-        msg = f"完成: {result['features']}个特征, {result['rows']}行, 统计回写{len(fids)}个"
+        for fid, cached_rows in frows:
+            # 增量重算只动最近 10 天，行数缓存足够；避免每次节点都对全表 COUNT
+            _update_feature_stats_after_compute(
+                fid, force_recompute=True,
+                actual_rows=int(cached_rows) if cached_rows else None)
+        msg = f"完成: {result['features']}个特征, {result['rows']}行, 统计回写{len(frows)}个"
         if result.get("errors"):
             msg += f", {len(result['errors'])}个失败"
         write_node_log(log_id=log_id, status='success', detail=msg, rows=result.get("rows", 0))

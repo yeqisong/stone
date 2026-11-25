@@ -154,8 +154,8 @@ function drawTrend() {
     ],
     series: [
       { name: '信号数', type: 'bar', data: signals, itemStyle: { color: T.up, opacity: .45 }, barWidth: '60%' },
-      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: T.down, width: 2 }, symbol: 'none', smooth: true, connectNulls: true },
-      { name: '浮动均%', type: 'line', yAxisIndex: 1, data: floats, lineStyle: { color: T.warn, width: 1.5, type: 'dashed' }, symbol: 'none', smooth: true, connectNulls: true }
+      { name: '胜率%', type: 'line', yAxisIndex: 1, data: winRates, lineStyle: { color: T.down, width: 2 }, itemStyle: { color: T.down }, symbol: 'none', smooth: true, connectNulls: true },
+      { name: '浮动均%', type: 'line', yAxisIndex: 1, data: floats, lineStyle: { color: T.warn, width: 1.5, type: 'dashed' }, itemStyle: { color: T.warn }, symbol: 'none', smooth: true, connectNulls: true }
     ]
   })
 }

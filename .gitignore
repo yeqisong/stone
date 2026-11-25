@@ -70,3 +70,6 @@ data/agent_ws/
 
 # 本地开发进程 pid/日志
 .dev/
+
+# 全量复权特征重算断点
+.rebuild_adjusted_progress.json

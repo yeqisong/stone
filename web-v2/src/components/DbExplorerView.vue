@@ -38,7 +38,7 @@
           <div class="dbx-title">
             <span class="dbx-table-name">{{ selected }}</span>
             <span v-if="currentComment" class="dbx-table-comment">{{ currentComment }}</span>
-            <span class="dbx-rows">{{ totalRows.toLocaleString() }} 行 / 只读</span>
+            <span class="dbx-rows">{{ totalRows.toLocaleString() }} 行{{ totalEstimated ? '(估)' : '' }} / 只读</span>
           </div>
           <div class="dbx-tools">
             <n-button size="tiny" quaternary @click="showSchema = true"><AppIcon name="folder" :size="13" />  字段 ({{ columns.length }})</n-button>
@@ -114,6 +114,7 @@ const selected = ref('')
 const columns = ref([])
 const rows = ref([])
 const totalRows = ref(0)
+const totalEstimated = ref(false)
 const page = ref(1)
 const pageSize = 50
 const loadingRows = ref(false)
@@ -202,6 +203,7 @@ async function loadData() {
     const r = await axios.get(API + `/api/dbex/tables/${selected.value}/rows`, { params, headers: authHeaders() })
     rows.value = r.data.rows
     totalRows.value = r.data.total
+    totalEstimated.value = !!r.data.total_estimated
   } catch (e) { console.error(e) }
   loadingRows.value = false
 }
@@ -277,7 +279,6 @@ onMounted(loadAll)
 /* 分页 */
 .dbx-pager { display: flex; justify-content: center; align-items: center; min-height: 28px; }
 .pager-hint { font-size: var(--text-meta); color: var(--c-text-faint); }
-</style>
 
 /* H5：左清单 300px 固定宽在窄屏挤压数据区 → 纵向布局，清单收成顶部横向列表 */
 @media (max-width: 768px) {
@@ -286,3 +287,4 @@ onMounted(loadAll)
   .dbx-table-list { flex-direction: row; flex-wrap: wrap; }
   .tbl-item { font-size: var(--text-meta); padding: 4px 8px; }
 }
+</style>
