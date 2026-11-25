@@ -13,6 +13,8 @@
       <button v-for="r in RANGES" :key="r.days" class="mv-chip mv-range" :class="{ active: rangeDays === r.days }"
               @click="switchRange(r.days)">{{ r.label }}</button>
     </div>
+    <n-button size="tiny" text class="mv-sort-btn" title="调整下方图表顺序（对当前用户全部大盘页生效）"
+      @click="openChartOrder"><AppIcon name="arrow-up-down" :size="13" /> 排序</n-button>
   </div>
 
   <MarketSentiment />
@@ -20,7 +22,7 @@
   <div class="mv-grid">
     <div class="mv-left">
       <!-- 指数 K 线（联动组） -->
-      <div class="mv-panel">
+      <div class="mv-panel" :style="{ order: chartOrderIndex('kline') }">
         <div class="mv-h">
           <span><AppIcon name="candlestick" :size="13" /> {{ idxName }} 日K</span>
           <span v-if="lastQuote" class="mv-quote" :class="(lastQuote.chg ?? 0) >= 0 ? 'up' : 'down'">
@@ -30,21 +32,21 @@
         </div>
         <div id="mv-k" class="mv-chart mv-chart-kline"></div>
       </div>
-      <div class="mv-panel">
+      <div class="mv-panel" :style="{ order: chartOrderIndex('volume') }">
         <div class="mv-h"><span><AppIcon name="monitor" :size="13" /> 成交额</span></div>
         <div id="mv-vol" class="mv-chart"></div>
       </div>
-      <div class="mv-panel">
+      <div class="mv-panel" :style="{ order: chartOrderIndex('macd') }">
         <div class="mv-h"><span><AppIcon name="zap" :size="13" /> MACD（12,26,9）</span></div>
         <div id="mv-macd" class="mv-chart"></div>
       </div>
-      <div class="mv-panel">
+      <div class="mv-panel" :style="{ order: chartOrderIndex('rsi') }">
         <div class="mv-h"><span><AppIcon name="percent" :size="13" /> RSI（14）</span></div>
         <div id="mv-rsi" class="mv-chart"></div>
       </div>
 
       <!-- 指数估值（独立日期域） -->
-      <div v-if="valData" class="mv-panel">
+      <div v-if="valData" class="mv-panel" :style="{ order: chartOrderIndex('pe') }">
         <div class="mv-h">
           <span><AppIcon name="target" :size="13" /> {{ idxName }} PE / PB</span>
           <span v-if="valPct" class="mv-pct">
@@ -54,13 +56,13 @@
         </div>
         <div id="mv-pe" class="mv-chart"></div>
       </div>
-      <div v-if="valData" class="mv-panel">
+      <div v-if="valData" class="mv-panel" :style="{ order: chartOrderIndex('turnover') }">
         <div class="mv-h"><span><AppIcon name="percent" :size="13" /> {{ idxName }} 换手率</span></div>
         <div id="mv-tr" class="mv-chart"></div>
       </div>
 
       <!-- 比值中枢（风格比价分位）：分子跟随当前指数，分母/窗口可切换 -->
-      <div class="mv-panel">
+      <div class="mv-panel" :style="{ order: chartOrderIndex('ratio') }">
         <div class="mv-h">
           <span><AppIcon name="percent" :size="13" /> 比值中枢：{{ idxName }} ÷ {{ ratioDenName }}</span>
           <span class="mv-ratio-ctrl">
@@ -84,7 +86,7 @@
       </div>
 
       <!-- 全市场角度 -->
-      <div v-if="breadthData.length" class="mv-panel">
+      <div v-if="breadthData.length" class="mv-panel" :style="{ order: chartOrderIndex('breadth') }">
         <div class="mv-h">
           <span><AppIcon name="monitor" :size="13" /> 市场宽度（全市场涨跌家数）</span>
           <span v-if="lastBreadth" class="mv-pct">
@@ -94,7 +96,7 @@
         </div>
         <div id="mv-breadth" class="mv-chart"></div>
       </div>
-      <div v-if="sentiData.length" class="mv-panel">
+      <div v-if="sentiData.length" class="mv-panel" :style="{ order: chartOrderIndex('senti') }">
         <div class="mv-h">
           <span><AppIcon name="activity" :size="13" /> 市场恐慌指数趋势（自建情绪分，2000 起）</span>
           <span v-if="lastSenti" class="mv-pct">
@@ -103,7 +105,7 @@
         </div>
         <div id="mv-senti" class="mv-chart"></div>
       </div>
-      <div v-if="mfData.length" class="mv-panel">
+      <div v-if="mfData.length" class="mv-panel" :style="{ order: chartOrderIndex('moneyflow') }">
         <div class="mv-h">
           <span><AppIcon name="download" :size="13" /> 全市场主力资金流（2010 起）</span>
           <span v-if="lastMf" class="mv-pct" :class="lastMf.net_main >= 0 ? 'up' : 'down'">
@@ -112,14 +114,14 @@
         </div>
         <div id="mv-mf" class="mv-chart"></div>
       </div>
-      <div v-if="marginData.length" class="mv-panel">
+      <div v-if="marginData.length" class="mv-panel" :style="{ order: chartOrderIndex('margin') }">
         <div class="mv-h">
           <span><AppIcon name="shield" :size="13" /> 两融余额（2014 起）</span>
           <span v-if="lastMargin" class="mv-pct">融资 {{ fmtYi(lastMargin.fin) }} · 两融合计 {{ fmtYi(lastMargin.total) }}</span>
         </div>
         <div id="mv-margin" class="mv-chart"></div>
       </div>
-      <div v-if="sectorData.dates && sectorData.dates.length" class="mv-panel">
+      <div v-if="sectorData.dates && sectorData.dates.length" class="mv-panel" :style="{ order: chartOrderIndex('sector') }">
         <div class="mv-h"><span><AppIcon name="shuffle" :size="13" /> 行业主力资金流趋势（累计，Top 8）</span></div>
         <div id="mv-sector" class="mv-chart"></div>
       </div>
@@ -175,13 +177,45 @@
       </div>
     </div>
   </div>
+
+  <!-- 图表排序：拖动或上下移动，顺序按用户保存到 localStorage，大盘页共用 -->
+  <n-modal v-model:show="showChartOrder">
+    <n-card style="width:440px;max-width:92vw" title="图表排序" role="dialog" aria-modal="true">
+      <div class="chart-order-hint">拖动行或点 ↑↓ 调整；保存后对当前用户大盘页生效。</div>
+      <div class="chart-order-list">
+        <div v-for="(sid, idx) in chartOrderDraft" :key="sid" class="chart-order-row"
+          :class="{ dragging: chartDragIdx === idx }" draggable="true"
+          @dragstart="startChartDrag(idx)" @dragend="endChartDrag"
+          @dragover.prevent @drop="dropChartOrder(idx)">
+          <span class="chart-order-grip" title="拖动排序"><AppIcon name="list" :size="13" /></span>
+          <span class="chart-order-no">{{ idx + 1 }}</span>
+          <span class="chart-order-label">{{ chartSectionLabel(sid) }}</span>
+          <button type="button" class="chart-order-move" :disabled="idx === 0"
+            title="上移" @click="moveChartOrder(idx, -1)">↑</button>
+          <button type="button" class="chart-order-move" :disabled="idx === chartOrderDraft.length - 1"
+            title="下移" @click="moveChartOrder(idx, 1)">↓</button>
+        </div>
+      </div>
+      <template #footer>
+        <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+          <n-button size="small" quaternary @click="resetChartOrder">恢复默认</n-button>
+          <n-space>
+            <n-button size="small" @click="showChartOrder = false">取消</n-button>
+            <n-button size="small" type="primary" @click="saveChartOrder">保存</n-button>
+          </n-space>
+        </div>
+      </template>
+    </n-card>
+  </n-modal>
 </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
+import { NCard, NButton, NSpace, NModal, useMessage } from 'naive-ui'
 import { useNavStore } from '../stores/nav'
 import { useThemeStore } from '../stores/theme'
+import { useAuthStore } from '../stores/auth'
 import axios from 'axios'
 import * as echarts from 'echarts'
 import { chartColors as T } from '../utils/chart'
@@ -189,6 +223,8 @@ import AppIcon from './AppIcon.vue'
 import MarketSentiment from './MarketSentiment.vue'
 
 const nav = useNavStore()
+const authStore = useAuthStore()
+const message = useMessage()
 const API = window.location.origin
 
 // 7 大指数（ts=估值表带后缀码 / bare=行情表无后缀码，与后端 MAIN_INDEXES 一致）
@@ -231,6 +267,81 @@ const ratioDenName = computed(() => (RATIO_DENS.find(d => d.code === ratioDen.va
 const ratioWindowLabel = computed(() => (RATIO_WINDOWS.find(w => w.value === ratioWin.value) || {}).label || ratioWin.value + '日')
 const ratioCls = p => (p == null ? '' : (p >= 80 ? 'up' : (p <= 20 ? 'down' : '')))
 let ratioSeq = 0
+
+// ── 图表顺序（按用户持久化到 localStorage，大盘页共用）──
+const CHART_SECTIONS = [
+  { id: 'kline', label: '指数日K' },
+  { id: 'volume', label: '成交额' },
+  { id: 'macd', label: 'MACD' },
+  { id: 'rsi', label: 'RSI' },
+  { id: 'pe', label: 'PE / PB' },
+  { id: 'turnover', label: '换手率' },
+  { id: 'ratio', label: '比值中枢（风格比价分位）' },
+  { id: 'breadth', label: '市场宽度（全市场涨跌家数）' },
+  { id: 'senti', label: '市场恐慌指数趋势' },
+  { id: 'moneyflow', label: '全市场主力资金流' },
+  { id: 'margin', label: '两融余额' },
+  { id: 'sector', label: '行业主力资金流趋势' },
+]
+const CHART_SECTION_LABEL = Object.fromEntries(CHART_SECTIONS.map(x => [x.id, x.label]))
+const DEFAULT_CHART_ORDER = CHART_SECTIONS.map(x => x.id)
+const chartOrder = ref([...DEFAULT_CHART_ORDER])
+const chartOrderDraft = ref([])
+const chartDragIdx = ref(null)
+const showChartOrder = ref(false)
+
+function _chartOrderKey() { return 'market_chart_order:' + (authStore.username || 'default') }
+function loadChartOrder() {
+  let kept = []
+  try {
+    const raw = JSON.parse(localStorage.getItem(_chartOrderKey()) || 'null')
+    if (Array.isArray(raw)) {
+      for (const id of raw) {
+        if (DEFAULT_CHART_ORDER.includes(id) && !kept.includes(id)) kept.push(id)
+      }
+    }
+  } catch (e) { /* 本地存储损坏 → 回默认顺序 */ }
+  chartOrder.value = [...kept, ...DEFAULT_CHART_ORDER.filter(id => !kept.includes(id))]
+}
+function chartSectionLabel(id) { return CHART_SECTION_LABEL[id] || id }
+function chartOrderIndex(id) {
+  const i = chartOrder.value.indexOf(id)
+  return i < 0 ? DEFAULT_CHART_ORDER.length : i
+}
+function openChartOrder() {
+  chartOrderDraft.value = [...chartOrder.value]
+  chartDragIdx.value = null
+  showChartOrder.value = true
+}
+function moveChartOrder(idx, delta) {
+  const to = idx + delta
+  const arr = [...chartOrderDraft.value]
+  if (to < 0 || to >= arr.length) return
+  const [moved] = arr.splice(idx, 1)
+  arr.splice(to, 0, moved)
+  chartOrderDraft.value = arr
+}
+function startChartDrag(idx) { chartDragIdx.value = idx }
+function endChartDrag() { chartDragIdx.value = null }
+function dropChartOrder(targetIdx) {
+  const from = chartDragIdx.value
+  if (from == null || from === targetIdx) return
+  const arr = [...chartOrderDraft.value]
+  const [moved] = arr.splice(from, 1)
+  arr.splice(targetIdx, 0, moved)
+  chartOrderDraft.value = arr
+  chartDragIdx.value = null
+}
+function resetChartOrder() { chartOrderDraft.value = [...DEFAULT_CHART_ORDER] }
+function saveChartOrder() {
+  chartOrder.value = [...chartOrderDraft.value]
+  try { localStorage.setItem(_chartOrderKey(), JSON.stringify(chartOrder.value)) } catch (e) {}
+  showChartOrder.value = false
+  message.success('图表顺序已保存（大盘页生效）')
+  nextTick(() => { try { resizeAll() } catch (e) {} })
+}
+loadChartOrder()
+watch(() => authStore.username, loadChartOrder)
 
 // ── 数据 refs（theme 重绘需要全量留存）──
 const klineData = ref([])
@@ -780,6 +891,8 @@ onUnmounted(() => {
 .mv { padding: 4px; }
 .mv-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .mv-title { font-size: 16px; font-weight: 600; color: var(--c-text); }
+.mv-sort-btn { color: var(--c-text-dim); }
+.mv-sort-btn:hover { color: var(--c-text); }
 .mv-idx-chips, .mv-ranges { display: flex; gap: 4px; flex-wrap: wrap; }
 .mv-chip {
   border: 1px solid var(--c-border); background: var(--c-card-bg); color: var(--c-text-dim);
@@ -812,4 +925,23 @@ onUnmounted(() => {
 .mv-table tbody tr.sel td { background: color-mix(in srgb, var(--c-accent) 10%, transparent); }
 .mv-note { margin-top: 6px; font-size: var(--text-meta); color: var(--c-text-faint); }
 .mv-dim { color: var(--c-text-faint); }
+
+/* 图表排序弹窗（与个股详情页同款交互） */
+.chart-order-hint { font-size: var(--text-meta); color: var(--c-text-dim); margin-bottom: 8px; }
+.chart-order-list { display: flex; flex-direction: column; gap: 4px; max-height: 52vh; overflow-y: auto; padding-right: 2px; }
+.chart-order-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-card-bg); cursor: grab;
+}
+.chart-order-row.dragging { opacity: .55; border-color: var(--c-primary, #2080f0); }
+.chart-order-grip { color: var(--c-text-faint); display: flex; align-items: center; }
+.chart-order-no { width: 20px; text-align: right; font-variant-numeric: tabular-nums; font-size: var(--text-meta); color: var(--c-text-faint); }
+.chart-order-label { flex: 1; font-size: 13px; color: var(--c-text); }
+.chart-order-move {
+  width: 24px; height: 22px; border: 1px solid var(--c-border); border-radius: 4px;
+  background: transparent; color: var(--c-text-dim); cursor: pointer; line-height: 1;
+}
+.chart-order-move:hover:not(:disabled) { color: var(--c-text); border-color: var(--c-text-dim); }
+.chart-order-move:disabled { opacity: .3; cursor: default; }
 </style>
