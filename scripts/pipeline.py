@@ -5880,11 +5880,13 @@ def dag_task_report_rc(trade_date=None, **kw):
         from sqlalchemy import text as _t9
         from app.db.connection import get_sync_db
         from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import QuotaExhausted
         db = get_sync_db()
         try:
             source = get_data_source_manager().get_source()
             base = _date.fromisoformat(td)
             saved = done = 0
+            stop = ''
             for i in range(3):
                 d = (base - _td(days=i)).isoformat()
                 if db.execute(_t9(
@@ -5897,7 +5899,14 @@ def dag_task_report_rc(trade_date=None, **kw):
                         {"d": d}).fetchone():
                     continue
                 update_node_progress(log_id=log_id, rows=saved, detail=f'拉取 {d} 券商预测…')
-                n = _ext_report_rc(source, db, d)
+                try:
+                    n = _ext_report_rc(source, db, d)
+                except QuotaExhausted as e:
+                    # 接口限 10 次/天是常态，不能把整个「一致预期」流程带崩：
+                    # income_daily / consensus_daily 仍应基于历史研报继续跑。
+                    stop = f'接口频次受限：{str(e)[:80]}'
+                    logger.warning(f'[report_rc] {stop}；跳过当日增量，下游继续')
+                    break
                 saved += n
                 done += 1
                 # 今日 0 行不登记（可能尚未发布，允许稍后手动重跑）；过去日登记空结果
@@ -5907,14 +5916,17 @@ def dag_task_report_rc(trade_date=None, **kw):
                         "VALUES ('report_rc', :d, :n) ON CONFLICT DO NOTHING"),
                         {"d": d, "n": n})
                     db.commit()
-            return {'rows': saved, 'days': done, '_source': source.name}
+            return {'rows': saved, 'days': done, 'stop': stop, '_source': source.name}
         finally:
             db.close()
 
     try:
         r = _with_hb(log_id, rid, _run, td=td, nn='report_rc')
+        note = f"券商预测 {r.get('rows', 0):,} 行（{r.get('days', 0)} 天）"
+        if r.get('stop'):
+            note += f"（{r['stop']}，下次续跑）"
         write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0),
-                       detail=f"券商预测 {r.get('rows', 0):,} 行（{r.get('days', 0)} 天）",
+                       detail=note,
                        trade_date=td, node_name='report_rc', run_id=rid)
         return r
     except Exception as e:
@@ -5944,7 +5956,7 @@ def dag_task_income_daily(trade_date=None, **kw):
         from sqlalchemy import text as _t8
         from app.db.connection import get_sync_db
         from crawler.adapters import get_data_source_manager
-        from crawler.adapters.tushare_quota import TushareQuota
+        from crawler.adapters.tushare_quota import TushareQuota, QuotaExhausted
         from crawler.writers import batch_upsert_income
         db = get_sync_db()
         try:
