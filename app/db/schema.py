@@ -2702,7 +2702,9 @@ def init_db(sync_session) -> None:
 
     # 迁移：一致预期数据链路（PEG 图数据底座，2026-11-26）——report_rc 券商预测明细
     # → income 归母净利绝对值 → consensus_daily 每日一致预期快照（纯库内聚合）。
-    # tushare report_rc 盘后约 21:15 更新，实测限 10 次/天，故独立流程 21:30 串行跑。
+    # tushare report_rc 盘后约 21:15 更新且按积分档限次（2000 积分 10 次/天），
+    # 故 23:30 串行跑：先补近 3 日，再用剩余调用补 2021 起月度抽样；抽齐后
+    # consensus_daily 节点自动重算历史快照，见 scripts/pipeline.py 水位线逻辑。
     try:
         sync_session.execute(text("""
             INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
@@ -2719,7 +2721,7 @@ def init_db(sync_session) -> None:
         sync_session.execute(text("""
             INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
             SELECT '一致预期', '券商盈利预测明细 → 利润表 → 每日一致预期快照（PEG 数据底座，幂等续跑）',
-                   :n, :e, '30 21 * * *', 'published', false
+                   :n, :e, '30 23 * * *', 'published', false
             WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='一致预期')
         """), {
             'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
@@ -2729,6 +2731,24 @@ def init_db(sync_session) -> None:
             'e': '[{"source": "cron", "target": "report_rc"}, '
                  '{"source": "report_rc", "target": "income_daily"}, '
                  '{"source": "income_daily", "target": "consensus_daily"}]',
+        })
+        # 已有库：把旧 21:30 的流程挪到 23:30，避开 report_rc 滚动 24h 配额窗口
+        sync_session.execute(text("""
+            UPDATE dag_flows SET cron_expr='30 23 * * *'
+            WHERE flow_name='一致预期' AND cron_expr='30 21 * * *'
+        """))
+        # report_rc 配额窗口重试流程：2000 积分档 10 次/天的重置时刻未公开，
+        # 23:30 主流程若恰落在滚动窗口内会空转。独立轻量流程在 22:30/00:30/
+        # 01:30/02:30 再试，命中重置后即用满 10 次；历史抽样齐后节点自动空转。
+        sync_session.execute(text("""
+            INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+            SELECT '一致预期回补', 'report_rc 配额窗口重试（22:30/00:30/01:30/02:30），历史抽样齐后自动空转',
+                   :n, :e, '30 22,0,1,2 * * *', 'published', false
+            WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='一致预期回补')
+        """), {
+            'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
+                 '{"deps": ["cron"], "position": {"x": 20, "y": 120}, "node_name": "report_rc"}]',
+            'e': '[{"source": "cron", "target": "report_rc"}]',
         })
         sync_session.commit()
     except Exception:

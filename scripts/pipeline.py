@@ -5862,14 +5862,52 @@ def dag_task_backup_qiniu(trade_date=None, **kw):
         raise
 
 
-def dag_task_report_rc(trade_date=None, **kw):
-    """DAG 节点：券商盈利预测明细（独立流程 21:30，report_rc 盘后 21:15 更新）。
+RC_HISTORY_START = '2021-01-01'
+RC_SAMPLE_STEP = 20          # 每 20 个交易日 ≈ 月度抽样
+RC_MAX_CALLS_PER_RUN = 10    # report_rc 接口 2000 积分档硬上限
 
-    实测限 10 次/天，故默认只补最近 3 个自然日（今日 + 前 2 日），兼顾
-    前一日晚发布/短暂停机；更长历史由 scripts/backfill_report_rc.py 抽样回补。
-    已入库日跳过；过去日 0 行也登记 backfill_ext_checked，避免每日重拉空日。
+
+def _rc_sample_dates(db, end_date):
+    """PEG 一致预期历史抽样日轴（2021 起每 20 个交易日）。"""
+    rows = db.execute(text("""
+        SELECT cal_date FROM trade_calendar
+        WHERE is_trade_day = true AND cal_date BETWEEN :s AND :e
+        ORDER BY cal_date
+    """), {'s': RC_HISTORY_START, 'e': str(end_date)[:10]}).fetchall()
+    return [str(r[0]) for r in rows][::RC_SAMPLE_STEP]
+
+
+def _rc_pending_samples(db, end_date):
+    """尚未入库且未登记空结果的抽样日（水位线：stock_report_rc + backfill_ext_checked）。"""
+    dates = _rc_sample_dates(db, end_date)
+    if not dates:
+        return []
+    start = dates[0]
+    have = {str(r[0]) for r in db.execute(text(
+        "SELECT DISTINCT report_date FROM stock_report_rc WHERE report_date >= :s"),
+        {'s': start}).fetchall()}
+    checked = {str(r[0]) for r in db.execute(text(
+        "SELECT checked_date FROM backfill_ext_checked "
+        "WHERE table_name='report_rc' AND checked_date >= :s"),
+        {'s': start}).fetchall()}
+    return [d for d in dates if d not in have and d not in checked]
+
+
+def _rc_has_date(db, d):
+    return bool(db.execute(text(
+        "SELECT 1 FROM stock_report_rc WHERE report_date=:d LIMIT 1"),
+        {"d": d}).fetchone())
+
+
+def dag_task_report_rc(trade_date=None, **kw):
+    """DAG 节点：券商盈利预测明细（独立流程 23:30，report_rc 盘后 21:15 更新）。
+
+    report_rc 按积分档限次（2000 积分仅 10 次/天），因此每天用满预算：
+    先补最近 3 个自然日（晚发布/停机自愈），剩余调用按 20 交易日抽样
+    从近到远补 2021 起的历史；已入库/已登记空日跳过。抽样水位线存
+    backfill_ext_checked(table_name='report_rc')，补完后自动停止。
     """
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date, datetime as _dt, timedelta as _td
     td = str(trade_date or _date.today())[:10]
     rid = _rid(kw)
     log_id = (kw.get('_node_log_ids', {}) or {}).get('report_rc')
@@ -5885,20 +5923,45 @@ def dag_task_report_rc(trade_date=None, **kw):
         try:
             source = get_data_source_manager().get_source()
             base = _date.fromisoformat(td)
-            saved = done = 0
+            now = _dt.now()
+            pending = _rc_pending_samples(db, td)
+            if not pending:
+                # 历史抽样已齐：若过去 2 个自然日（日增量窗口内）无缺口，且
+                # 当日尚未到 21:15 发布时点（或非交易日），本次调用无事可做，
+                # 直接空转。回补流程一天会触发多次，避免反复空拉当日 0 行。
+                past_missing = [
+                    d for d in ((base - _td(days=i)).isoformat() for i in (1, 2))
+                    if _is_trade_day(db, d) and not _rc_has_date(db, d)
+                ]
+                if not past_missing and (
+                        not _is_trade_day(db, td) or td != now.strftime('%Y-%m-%d')
+                        or now.hour < 21):
+                    return {'rows': 0, 'days': 0, 'calls': 0,
+                            'history_pending': 0, 'stop': '',
+                            'note': '无待补：历史抽样已齐，当日 21:15 后更新'}
+            # 最近 3 个交易日优先（跳过周末/节假日，别把 10 次配额浪费在空日），
+            # 其后是历史抽样（从近到远）；去重保持顺序
+            recent = [d for d in ((base - _td(days=i)).isoformat() for i in range(3))
+                      if _is_trade_day(db, d)]
+            history = [d for d in reversed(pending) if d not in recent]
+            candidates = list(dict.fromkeys(recent + history))
+            saved = done = calls = 0
             stop = ''
-            for i in range(3):
-                d = (base - _td(days=i)).isoformat()
-                if db.execute(_t9(
-                        "SELECT 1 FROM stock_report_rc WHERE report_date=:d LIMIT 1"),
-                        {"d": d}).fetchone():
+            for d in candidates:
+                if calls >= RC_MAX_CALLS_PER_RUN:
+                    stop = f'达单次 {RC_MAX_CALLS_PER_RUN} 次上限'
+                    break
+                if _rc_has_date(db, d):
                     continue
                 if d != td and db.execute(_t9(
                         "SELECT 1 FROM backfill_ext_checked "
                         "WHERE table_name='report_rc' AND checked_date=:d"),
                         {"d": d}).fetchone():
                     continue
-                update_node_progress(log_id=log_id, rows=saved, detail=f'拉取 {d} 券商预测…')
+                update_node_progress(log_id=log_id, rows=saved,
+                                     detail=f'拉取 {d} 券商预测（{calls + 1}/'
+                                            f'{RC_MAX_CALLS_PER_RUN}）…')
+                calls += 1
                 try:
                     n = _ext_report_rc(source, db, d)
                 except QuotaExhausted as e:
@@ -5916,15 +5979,25 @@ def dag_task_report_rc(trade_date=None, **kw):
                         "VALUES ('report_rc', :d, :n) ON CONFLICT DO NOTHING"),
                         {"d": d, "n": n})
                     db.commit()
-            return {'rows': saved, 'days': done, 'stop': stop, '_source': source.name}
+            pending_left = _rc_pending_samples(db, td)
+            return {'rows': saved, 'days': done, 'calls': calls,
+                    'history_pending': len(pending_left), 'stop': stop,
+                    '_source': source.name}
         finally:
             db.close()
 
     try:
         r = _with_hb(log_id, rid, _run, td=td, nn='report_rc')
-        note = f"券商预测 {r.get('rows', 0):,} 行（{r.get('days', 0)} 天）"
-        if r.get('stop'):
-            note += f"（{r['stop']}，下次续跑）"
+        if r.get('note'):
+            note = r['note']
+        else:
+            note = f"券商预测 {r.get('rows', 0):,} 行（{r.get('days', 0)} 天）"
+            if r.get('history_pending'):
+                note += f"；历史抽样还差 {r['history_pending']} 天"
+            else:
+                note += "；历史抽样已齐"
+            if r.get('stop'):
+                note += f"（{r['stop']}，下次续跑）"
         write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0),
                        detail=note,
                        trade_date=td, node_name='report_rc', run_id=rid)
@@ -6023,7 +6096,13 @@ def dag_task_income_daily(trade_date=None, **kw):
 
 
 def dag_task_consensus_daily(trade_date=None, **kw):
-    """DAG 节点：每日一致预期快照（纯库内聚合，不耗配额）。"""
+    """DAG 节点：每日一致预期快照 + 研报抽样齐后回填历史快照。
+
+    每日先算当日快照；若 report_rc 的 2021 起抽样日仍有缺口，历史快照
+    继续等待（避免用残缺研报算出错误分位带）。抽样补齐后一次性重算
+    2021→今的全部交易日快照（覆盖旧快照），完成后写
+    backfill_ext_checked('consensus_backfill_done') 水位线，后续只算当日。
+    """
     from datetime import date as _date
     td = str(trade_date or _date.today())[:10]
     rid = _rid(kw)
@@ -6032,14 +6111,44 @@ def dag_task_consensus_daily(trade_date=None, **kw):
                    trade_date=td, node_name='consensus_daily', run_id=rid)
 
     def _run():
+        from sqlalchemy import text as _t7
         from app.db.connection import get_sync_db
         from crawler.consensus import compute_consensus_daily
         db = get_sync_db()
         try:
-            if not _is_trade_day(db, td):
-                return {'rows': 0, 'note': '非交易日，跳过'}
-            n = compute_consensus_daily(db, td)
-            return {'rows': n}
+            today = (compute_consensus_daily(db, td)
+                     if _is_trade_day(db, td) else 0)
+            pending = _rc_pending_samples(db, td)
+            if pending:
+                return {'rows': today,
+                        'note': f"一致预期 {today} 只；研报抽样还差 {len(pending)} 天，"
+                                f"历史快照待补"}
+            done = db.execute(_t7(
+                "SELECT 1 FROM backfill_ext_checked "
+                "WHERE table_name='consensus_backfill_done' LIMIT 1")).fetchone()
+            if done:
+                return {'rows': today, 'note': f"一致预期 {today} 只；历史快照已完成"}
+            dates = [str(r[0]) for r in db.execute(_t7("""
+                SELECT cal_date FROM trade_calendar
+                WHERE is_trade_day = true AND cal_date BETWEEN :s AND :e
+                ORDER BY cal_date
+            """), {'s': RC_HISTORY_START, 'e': td}).fetchall()]
+            hist = 0
+            for i, d in enumerate(dates):
+                hist += compute_consensus_daily(db, d)
+                if i % 10 == 0:
+                    update_node_progress(
+                        log_id=log_id, rows=today + hist,
+                        detail=f'历史快照回填 {i + 1}/{len(dates)}…')
+            db.execute(_t7(
+                "INSERT INTO backfill_ext_checked (table_name, checked_date, rows_found) "
+                "VALUES ('consensus_backfill_done', :d, :n) ON CONFLICT DO NOTHING"),
+                {'d': td, 'n': hist})
+            db.commit()
+            return {'rows': today + hist, 'today': today,
+                    'history_days': len(dates),
+                    'note': f"一致预期 {today} 只；历史快照回填 "
+                            f"{len(dates)} 天 / {hist} 条"}
         finally:
             db.close()
 
