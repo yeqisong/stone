@@ -32,6 +32,22 @@ NODE_SUB_STEPS = {
         {'name': '最旧优先补数', 'desc': 'tushare margin_detail 按日全市场 1 次调用，断点续跑'},
         {'name': '配额护栏', 'desc': '余量 ≤ reserve 即收工；单次上限 max_days_per_run'},
     ],
+    'report_rc': [
+        {'name': '盘后拉取', 'desc': 'tushare report_rc 按 report_date 全市场（实测限 10 次/天，61s 闸门）'},
+        {'name': '单位换算', 'desc': 'np / op_rt 万元 → 元，stock_code 截 6 位，fiscal_year 取自 quarter'},
+        {'name': '幂等入库', 'desc': '(stock_code, report_date, org, author, quarter, title) 唯一键去重'},
+    ],
+    'income_daily': [
+        {'name': '按公告日拉取', 'desc': 'tushare income 取 report_type=1 合并报表，优先 ann_date 全市场模式'},
+        {'name': '缺口回退', 'desc': 'ann_date 模式缺票时按代码轮换补拉（配额护栏）'},
+        {'name': '幂等入库', 'desc': '(stock_code, end_date, ann_date, report_type) 主键覆盖'},
+    ],
+    'consensus_daily': [
+        {'name': '确定基期', 'desc': 'fina_indicator 最新年报（end_date=12 月，ann_date ≤ asof）'},
+        {'name': '机构去重', 'desc': '近 180 天 Q4 预测按 (stock, org, author, fy) 取最新一份'},
+        {'name': '中位数聚合', 'desc': 'PERCENTILE_CONT(0.5) 汇总 np/eps，记录机构数/离散度'},
+        {'name': '快照落库', 'desc': 'fy1/2/3 = base_fy+1/2/3，UPSERT stock_consensus_daily'},
+    ],
     'index': [
         {'name': '拉取指数K线', 'desc': '从上证/深证/创业板等指数源下载日K线'},
         {'name': '写入 index_daily_quote', 'desc': '批量写入指数行情表'},

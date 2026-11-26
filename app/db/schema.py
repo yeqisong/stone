@@ -915,6 +915,78 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ex ON stock_express (stock_code, end_date, 
 CREATE INDEX IF NOT EXISTS idx_ex_ann ON stock_express (ann_date);
 """
 
+CREATE_REPORT_RC = """
+CREATE TABLE IF NOT EXISTS stock_report_rc (
+    id           BIGSERIAL PRIMARY KEY,
+    stock_code   VARCHAR(6) NOT NULL,
+    stock_name   VARCHAR(30),
+    report_date  DATE NOT NULL,
+    report_title VARCHAR(200) NOT NULL DEFAULT '',
+    report_type  VARCHAR(30),
+    classify     VARCHAR(30),
+    org_name     VARCHAR(100) NOT NULL DEFAULT '',
+    author_name  VARCHAR(100) NOT NULL DEFAULT '',
+    quarter      VARCHAR(10) NOT NULL DEFAULT '',   -- 预测年度季度，如 2026Q4
+    fiscal_year  SMALLINT,
+    op_rt        FLOAT,          -- 营收预测，元（源万元 ×1e4）
+    np           FLOAT,          -- 归母净利预测，元（源万元 ×1e4）
+    eps          FLOAT,
+    pe           FLOAT,
+    roe          FLOAT,
+    rating       VARCHAR(30),
+    target_price FLOAT,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rc ON stock_report_rc
+    (stock_code, report_date, org_name, author_name, quarter, report_title);
+CREATE INDEX IF NOT EXISTS idx_rc_date ON stock_report_rc (report_date);
+CREATE INDEX IF NOT EXISTS idx_rc_code_q ON stock_report_rc (stock_code, fiscal_year, report_date DESC);
+"""
+
+CREATE_CONSENSUS_DAILY = """
+CREATE TABLE IF NOT EXISTS stock_consensus_daily (
+    stock_code    VARCHAR(6) NOT NULL,
+    asof_date     DATE NOT NULL,
+    base_fy       SMALLINT,
+    fy1           SMALLINT,
+    fy2           SMALLINT,
+    fy3           SMALLINT,
+    np_fy1        FLOAT,      -- 一致预期归母净利，元
+    np_fy2        FLOAT,
+    np_fy3        FLOAT,
+    eps_fy1       FLOAT,
+    eps_fy2       FLOAT,
+    eps_fy3       FLOAT,
+    org_count     SMALLINT,   -- 参与预测的机构数（按机构去重后）
+    report_count  SMALLINT,   -- 去重后保留的研报条数
+    np_dispersion FLOAT,      -- FY1 预测离散度 std/|median|
+    flags         SMALLINT DEFAULT 0,
+    calc_ver      VARCHAR(8) DEFAULT 'c1',
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, asof_date)
+);
+CREATE INDEX IF NOT EXISTS idx_cd_date ON stock_consensus_daily (asof_date);
+"""
+
+CREATE_INCOME = """
+CREATE TABLE IF NOT EXISTS stock_income (
+    stock_code      VARCHAR(6) NOT NULL,
+    end_date        DATE NOT NULL,
+    ann_date        DATE NOT NULL,
+    report_type     VARCHAR(4) NOT NULL DEFAULT '1',  -- 1=合并报表
+    total_revenue   FLOAT,
+    revenue         FLOAT,
+    n_income_attr_p FLOAT,   -- 归母净利，元（PEG 实际增长口径）
+    n_income        FLOAT,
+    basic_eps       FLOAT,
+    diluted_eps     FLOAT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_code, end_date, ann_date, report_type)
+);
+CREATE INDEX IF NOT EXISTS idx_inc_ann ON stock_income (ann_date);
+CREATE INDEX IF NOT EXISTS idx_inc_code_end ON stock_income (stock_code, end_date DESC);
+"""
+
 CREATE_FINA_INDICATOR = """
 CREATE TABLE IF NOT EXISTS fina_indicator (
     stock_code  VARCHAR(6) NOT NULL,
@@ -1899,6 +1971,9 @@ ALL_TABLES = [
     ("stock_dividend", CREATE_DIVIDEND),
     ("stock_forecast", CREATE_FORECAST),
     ("stock_express", CREATE_EXPRESS),
+    ("stock_report_rc", CREATE_REPORT_RC),
+    ("stock_consensus_daily", CREATE_CONSENSUS_DAILY),
+    ("stock_income", CREATE_INCOME),
     ("fina_indicator", CREATE_FINA_INDICATOR),
     ("index_weight", CREATE_INDEX_WEIGHT),
     ("paper_trades", CREATE_PAPER_TRADES),
@@ -2621,6 +2696,40 @@ def init_db(sync_session) -> None:
                     "UPDATE dag_flows SET nodes=:n, edges=:e WHERE id=1"),
                     {"n": _json.dumps(nodes, ensure_ascii=False),
                      "e": _json.dumps(edges, ensure_ascii=False)})
+        sync_session.commit()
+    except Exception:
+        sync_session.rollback()
+
+    # 迁移：一致预期数据链路（PEG 图数据底座，2026-11-26）——report_rc 券商预测明细
+    # → income 归母净利绝对值 → consensus_daily 每日一致预期快照（纯库内聚合）。
+    # tushare report_rc 盘后约 21:15 更新，实测限 10 次/天，故独立流程 21:30 串行跑。
+    try:
+        sync_session.execute(text("""
+            INSERT INTO dag_config (node_name, deps, label, sort_order) VALUES
+                ('report_rc', 'cron', '📈 券商盈利预测', 99),
+                ('income_daily', 'report_rc', '📊 利润表采集', 100),
+                ('consensus_daily', 'income_daily', '🧮 一致预期快照', 101)
+            ON CONFLICT (node_name) DO NOTHING
+        """))
+        sync_session.execute(text("""
+            INSERT INTO strategy_config (strategy_name, display_name, enabled, params)
+            SELECT 'income_collect', '利润表采集', true, '{"reserve": 500}'
+            WHERE NOT EXISTS (SELECT 1 FROM strategy_config WHERE strategy_name='income_collect')
+        """))
+        sync_session.execute(text("""
+            INSERT INTO dag_flows (flow_name, description, nodes, edges, cron_expr, status, is_active)
+            SELECT '一致预期', '券商盈利预测明细 → 利润表 → 每日一致预期快照（PEG 数据底座，幂等续跑）',
+                   :n, :e, '30 21 * * *', 'published', false
+            WHERE NOT EXISTS (SELECT 1 FROM dag_flows WHERE flow_name='一致预期')
+        """), {
+            'n': '[{"deps": [], "position": {"x": 20, "y": 20}, "node_name": "cron"}, '
+                 '{"deps": ["cron"], "position": {"x": 20, "y": 120}, "node_name": "report_rc"}, '
+                 '{"deps": ["report_rc"], "position": {"x": 20, "y": 220}, "node_name": "income_daily"}, '
+                 '{"deps": ["income_daily"], "position": {"x": 20, "y": 320}, "node_name": "consensus_daily"}]',
+            'e': '[{"source": "cron", "target": "report_rc"}, '
+                 '{"source": "report_rc", "target": "income_daily"}, '
+                 '{"source": "income_daily", "target": "consensus_daily"}]',
+        })
         sync_session.commit()
     except Exception:
         sync_session.rollback()

@@ -85,6 +85,9 @@
         </div>
       </div>
 
+      <!-- PEG：指数成分散点 + 个股历史分位带 -->
+      <MarketPeg :idx="midx" :idx-name="idxName" :order="chartOrderIndex('peg')" />
+
       <!-- 全市场角度 -->
       <div v-if="breadthData.length" class="mv-panel" :style="{ order: chartOrderIndex('breadth') }">
         <div class="mv-h">
@@ -221,6 +224,7 @@ import * as echarts from 'echarts'
 import { chartColors as T } from '../utils/chart'
 import AppIcon from './AppIcon.vue'
 import MarketSentiment from './MarketSentiment.vue'
+import MarketPeg from './MarketPeg.vue'
 
 const nav = useNavStore()
 const authStore = useAuthStore()
@@ -277,6 +281,7 @@ const CHART_SECTIONS = [
   { id: 'pe', label: 'PE / PB' },
   { id: 'turnover', label: '换手率' },
   { id: 'ratio', label: '比值中枢（风格比价分位）' },
+  { id: 'peg', label: 'PEG（散点/历史带/分位）' },
   { id: 'breadth', label: '市场宽度（全市场涨跌家数）' },
   { id: 'senti', label: '市场恐慌指数趋势' },
   { id: 'moneyflow', label: '全市场主力资金流' },

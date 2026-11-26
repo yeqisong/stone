@@ -37,6 +37,9 @@ TABLE_DOCS = {
     "stock_margin_detail": "两融明细。列 trade_date/stock_code/fin_amount/sec_amount/total_amount",
     "stock_top_list": "龙虎榜。列 trade_date/stock_code/reason/net",
     "stock_holder_number": "股东户数。列 trade_date/stock_code/holder_num/holder_num_chg",
+    "stock_report_rc": "券商盈利预测明细（report_rc）。列 stock_code/report_date/org_name/author_name/quarter/fiscal_year/np/op_rt/eps/pe/rating/target_price；np/op_rt 单位元（源万元已 ×1e4）",
+    "stock_consensus_daily": "每日一致预期快照（归母净利中位数）。列 stock_code/asof_date/base_fy/fy1/fy2/fy3/np_fy1/np_fy2/np_fy3/eps_fy1/org_count/np_dispersion/flags；np_* 单位元",
+    "stock_income": "利润表（合并报表，保留修订）。列 stock_code/end_date/ann_date/report_type/total_revenue/revenue/n_income_attr_p(归母净利,元)/n_income/basic_eps/diluted_eps",
     "dag_flows": "DAG 流程定义。列 id/flow_name/nodes/edges/cron_expr/status(published/draft)/last_run_at",
     "dag_flow_versions": "DAG 流程版本。列 flow_id/version/nodes/edges/change_log/created_at",
     "dag_run_log": "DAG 节点执行日志。列 run_id/trade_date/node_name/status/rows/detail/started_at/finished_at",
@@ -69,6 +72,7 @@ PERSONAL_TABLES = frozenset({
 SHARED_TABLES = frozenset(TABLE_DOCS) - PERSONAL_TABLES
 
 DAG_NODE_HINT = ("常用节点：cron(定时触发)、kline(个股日K)、index、etf、fund、moneyflow、margin_daily、"
+                 "report_rc(券商预测)、income_daily(利润表)、consensus_daily(一致预期快照)、"
                  "top_list、feature_compute(特征计算)、model_signal(信号)、model_health、paper_portfolio、"
                  "news_crawl、news_summary、xueqiu_sentiment、stats、analyze、backup_qiniu")
 

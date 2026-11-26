@@ -13,6 +13,7 @@ SHARED_TABLES = frozenset({
     "stock_holder_number", "stock_hk_hold", "block_trade", "moneyflow_hsgt",
     "index_weight", "stock_dividend", "stock_express", "stock_forecast",
     "stock_repurchase", "stock_share_float", "stock_minute_bar",
+    "stock_report_rc", "stock_consensus_daily", "stock_income",
     "sector_flow_daily", "index_valuation", "macro_indicator",
     "market_sentiment_daily", "trade_calendar", "daily_completeness",
     "stock_treemap_cache", "stock_treemap_intraday",

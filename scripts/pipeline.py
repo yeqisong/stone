@@ -5455,6 +5455,22 @@ def _ext_express(source, db, td):
                                ['stock_code', 'ann_date', 'end_date', 'revenue', 'or_yoy',
                                 'netprofit', 'yoy_net_profit', 'bps', 'total_assets'])
 
+def _ext_report_rc(source, db, td):
+    """券商盈利预测明细（report_rc，按报告日全市场，实测限 10 次/天）。"""
+    from crawler.writers import batch_insert_events
+    return batch_insert_events(db, 'stock_report_rc', source.fetch_report_rc(td),
+                               ['stock_code', 'report_date', 'org_name', 'author_name',
+                                'quarter', 'report_title'],
+                               ['stock_code', 'stock_name', 'report_date', 'report_title',
+                                'report_type', 'classify', 'org_name', 'author_name',
+                                'quarter', 'fiscal_year', 'op_rt', 'np', 'eps', 'pe',
+                                'roe', 'rating', 'target_price'])
+
+def _ext_income(source, db, td):
+    """利润表（income，按公告日全市场，合并报表）。"""
+    from crawler.writers import batch_upsert_income
+    return batch_upsert_income(db, source.fetch_income_ann_full(td))
+
 def _ext_index_weight(source, db, td):
     from crawler.writers import batch_upsert_index_weight
     from datetime import date as _d, timedelta as _td
@@ -5462,7 +5478,9 @@ def _ext_index_weight(source, db, td):
     # 月度快照发布在月末交易日：窗口跨上月+本月，PK 去重幂等
     d = _d.fromisoformat(td)
     start = (_d(d.year, d.month, 1) - _td(days=1)).replace(day=1).isoformat() if (d.month > 1) else f'{d.year - 1}-12-01'
-    for idx in ('000300.SH', '000905.SH'):
+    # 7 大指数都要维护成分（PEG 散点的股票池；上证 000001 约 2,233 只）
+    for idx in ('000001.SH', '399001.SZ', '399006.SZ', '000300.SH',
+                '000016.SH', '000905.SH', '000852.SH'):
         total += batch_upsert_index_weight(db, source.fetch_index_weight(idx, start, td))
     return total
 
@@ -5501,6 +5519,8 @@ _EXT_COLLECTORS = {
     'dividend':        (_ext_dividend,        "SELECT 1 FROM stock_dividend WHERE ex_date=:d LIMIT 1"),
     'forecast':        (_ext_forecast,        "SELECT 1 FROM stock_forecast WHERE ann_date=:d LIMIT 1"),
     'express':         (_ext_express,         "SELECT 1 FROM stock_express WHERE ann_date=:d LIMIT 1"),
+    'report_rc':       (_ext_report_rc,       "SELECT 1 FROM stock_report_rc WHERE report_date=:d LIMIT 1"),
+    'income':          (_ext_income,          "SELECT 1 FROM stock_income WHERE ann_date=:d LIMIT 1"),
     'index_weight':    (_ext_index_weight,    None),
     'cb_daily':        (_ext_cb_daily,        "SELECT 1 FROM cb_daily WHERE trade_date=:d AND close > 0 LIMIT 1"),
 }
@@ -5561,7 +5581,10 @@ def dag_task_data_backfill(trade_date=None, **kw):
         row = db.execute(text("SELECT params FROM strategy_config WHERE strategy_name='backfill_ext' "
                               "ORDER BY id DESC LIMIT 1")).fetchone()
         cfg = _json.loads(row[0]) if row and isinstance(row[0], str) else (row[0] if row else {})
-        tables = [t for t in cfg.get('tables', []) if t != 'fina_indicator']
+        # report_rc 实测限 10 次/天、income 报告季峰值千余次调用，均不能进日期轴回补
+        # 循环（report_rc 会跑成数周；income 单日可超看门狗窗口）——走独立流程/回补脚本
+        tables = [t for t in cfg.get('tables', [])
+                  if t not in ('fina_indicator', 'report_rc', 'income')]
         start, end = cfg.get('start_date', '2014-01-01'), cfg.get('end_date') or str(_d.today())
         reserve = int(cfg.get('reserve', 1000))
         days = [str(r[0]) for r in db.execute(text(
@@ -5839,6 +5862,187 @@ def dag_task_backup_qiniu(trade_date=None, **kw):
         raise
 
 
+def dag_task_report_rc(trade_date=None, **kw):
+    """DAG 节点：券商盈利预测明细（独立流程 21:30，report_rc 盘后 21:15 更新）。
+
+    实测限 10 次/天，故默认只补最近 3 个自然日（今日 + 前 2 日），兼顾
+    前一日晚发布/短暂停机；更长历史由 scripts/backfill_report_rc.py 抽样回补。
+    已入库日跳过；过去日 0 行也登记 backfill_ext_checked，避免每日重拉空日。
+    """
+    from datetime import date as _date, timedelta as _td
+    td = str(trade_date or _date.today())[:10]
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('report_rc')
+    write_node_log(log_id=log_id, status='running', detail='拉取券商盈利预测…',
+                   trade_date=td, node_name='report_rc', run_id=rid)
+
+    def _run():
+        from sqlalchemy import text as _t9
+        from app.db.connection import get_sync_db
+        from crawler.adapters import get_data_source_manager
+        db = get_sync_db()
+        try:
+            source = get_data_source_manager().get_source()
+            base = _date.fromisoformat(td)
+            saved = done = 0
+            for i in range(3):
+                d = (base - _td(days=i)).isoformat()
+                if db.execute(_t9(
+                        "SELECT 1 FROM stock_report_rc WHERE report_date=:d LIMIT 1"),
+                        {"d": d}).fetchone():
+                    continue
+                if d != td and db.execute(_t9(
+                        "SELECT 1 FROM backfill_ext_checked "
+                        "WHERE table_name='report_rc' AND checked_date=:d"),
+                        {"d": d}).fetchone():
+                    continue
+                update_node_progress(log_id=log_id, rows=saved, detail=f'拉取 {d} 券商预测…')
+                n = _ext_report_rc(source, db, d)
+                saved += n
+                done += 1
+                # 今日 0 行不登记（可能尚未发布，允许稍后手动重跑）；过去日登记空结果
+                if d != td or n:
+                    db.execute(_t9(
+                        "INSERT INTO backfill_ext_checked (table_name, checked_date, rows_found) "
+                        "VALUES ('report_rc', :d, :n) ON CONFLICT DO NOTHING"),
+                        {"d": d, "n": n})
+                    db.commit()
+            return {'rows': saved, 'days': done, '_source': source.name}
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='report_rc')
+        write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0),
+                       detail=f"券商预测 {r.get('rows', 0):,} 行（{r.get('days', 0)} 天）",
+                       trade_date=td, node_name='report_rc', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200],
+                       trade_date=td, node_name='report_rc', run_id=rid)
+        raise
+
+
+def dag_task_income_daily(trade_date=None, **kw):
+    """DAG 节点：利润表采集（披露计划 → 逐票拉全历史，合并报表）。
+
+    tushare income 不支持 ann_date 全市场直查（必填 ts_code），故先用
+    disclosure_date(actual_date) 拿当日实际披露清单，再逐票拉全历史并幂等
+    UPSERT（顺带补齐该票此前缺失的报告期）。补最近 3 个自然日，晚披露/
+    短暂停机可自愈；已入库的 (code, ann_date) 自动跳过，天然断点续跑。
+    报告季峰值日约 1,300 只，受 50 次/分节流约 30 分钟，进度每 25 只上报。
+    """
+    from datetime import date as _date, timedelta as _td
+    td = str(trade_date or _date.today())[:10]
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('income_daily')
+    write_node_log(log_id=log_id, status='running', detail='拉取利润表…',
+                   trade_date=td, node_name='income_daily', run_id=rid)
+
+    def _run():
+        import json as _json3
+        from sqlalchemy import text as _t8
+        from app.db.connection import get_sync_db
+        from crawler.adapters import get_data_source_manager
+        from crawler.adapters.tushare_quota import TushareQuota
+        from crawler.writers import batch_upsert_income
+        db = get_sync_db()
+        try:
+            source = get_data_source_manager().get_source()
+            quota = TushareQuota.get()
+            row = db.execute(_t8(
+                "SELECT params FROM strategy_config WHERE strategy_name='income_collect' LIMIT 1"
+            )).fetchone()
+            cfg = (_json3.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})) if row else {}
+            reserve = int(cfg.get('reserve', 500))
+            base = _date.fromisoformat(td)
+            saved = codes_total = done = 0
+            stop = ''
+            for i in range(3):
+                d = (base - _td(days=i)).isoformat()
+                codes = source.fetch_disclosure_codes(d)
+                if not codes:
+                    continue
+                codes_total += len(codes)
+                # 已入库的当日披露票跳过（多报告期同日披露只需拉一次全历史）
+                have = {r[0] for r in db.execute(_t8(
+                    "SELECT DISTINCT stock_code FROM stock_income WHERE ann_date=:d"),
+                    {"d": d}).fetchall()}
+                todo = [c for c in codes if c not in have]
+                if not todo:
+                    continue
+                for ci, code in enumerate(todo):
+                    if _node_stopped(rid, log_id):
+                        raise RuntimeError('节点已终止（看门狗/用户），利润表采集中断，可续跑')
+                    if quota.remaining() <= reserve:
+                        stop = f'配额余 {quota.remaining()} ≤ 保留 {reserve}'
+                        break
+                    try:
+                        saved += batch_upsert_income(db, source.fetch_income_by_code(code))
+                        done += 1
+                    except QuotaExhausted:
+                        stop = '配额耗尽'
+                        break
+                    except Exception as e:
+                        logger.warning(f"[income_daily] {code}: {str(e)[:80]}")
+                    if ci % 25 == 0:
+                        update_node_progress(log_id=log_id, rows=saved,
+                                             detail=f'{d} 利润表 {ci}/{len(todo)} 只')
+                        db.commit()
+                if stop:
+                    break
+            return {'rows': saved, 'codes': codes_total, 'done': done,
+                    'stop': stop, '_source': source.name}
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='income_daily')
+        note = f"利润表 {r.get('rows', 0):,} 行（{r.get('done', 0)}/{r.get('codes', 0)} 只）"
+        if r.get('stop'):
+            note += f"（{r['stop']}，下次续跑）"
+        write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0), detail=note,
+                       trade_date=td, node_name='income_daily', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200],
+                       trade_date=td, node_name='income_daily', run_id=rid)
+        raise
+
+
+def dag_task_consensus_daily(trade_date=None, **kw):
+    """DAG 节点：每日一致预期快照（纯库内聚合，不耗配额）。"""
+    from datetime import date as _date
+    td = str(trade_date or _date.today())[:10]
+    rid = _rid(kw)
+    log_id = (kw.get('_node_log_ids', {}) or {}).get('consensus_daily')
+    write_node_log(log_id=log_id, status='running', detail='聚合一致预期…',
+                   trade_date=td, node_name='consensus_daily', run_id=rid)
+
+    def _run():
+        from app.db.connection import get_sync_db
+        from crawler.consensus import compute_consensus_daily
+        db = get_sync_db()
+        try:
+            if not _is_trade_day(db, td):
+                return {'rows': 0, 'note': '非交易日，跳过'}
+            n = compute_consensus_daily(db, td)
+            return {'rows': n}
+        finally:
+            db.close()
+
+    try:
+        r = _with_hb(log_id, rid, _run, td=td, nn='consensus_daily')
+        write_node_log(log_id=log_id, status='success', rows=r.get('rows', 0),
+                       detail=r.get('note') or f"一致预期 {r.get('rows', 0)} 只",
+                       trade_date=td, node_name='consensus_daily', run_id=rid)
+        return r
+    except Exception as e:
+        write_node_log(log_id=log_id, status='failed', detail=str(e)[:200],
+                       trade_date=td, node_name='consensus_daily', run_id=rid)
+        raise
+
+
 NODE_FN_MAP = {
     'stock_master':      dag_task_stock_master,    'cron':               dag_task_cron,
     'backup_qiniu':      dag_task_backup_qiniu,
@@ -5846,6 +6050,9 @@ NODE_FN_MAP = {
     'factor_heal':        dag_task_factor_heal,
     'rolling_retrain':    dag_task_rolling_retrain,
     'margin_daily':       dag_task_margin_daily,
+    'report_rc':          dag_task_report_rc,
+    'income_daily':       dag_task_income_daily,
+    'consensus_daily':    dag_task_consensus_daily,
     'macro_daily':        dag_task_macro_daily,
     'sentiment_daily':    dag_task_sentiment_daily,
     'cb_daily':           dag_task_cb_daily,
