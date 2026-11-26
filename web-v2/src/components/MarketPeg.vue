@@ -17,7 +17,7 @@
   <div v-if="loading" class="peg-state">加载成分与一致预期…</div>
   <div v-else-if="error" class="peg-state peg-err">{{ error }}</div>
   <div v-else-if="!allItems.length" class="peg-state">
-    暂无有效 PEG（需 PE_TTM &gt; 0、一致预期机构 ≥ 3、G &gt; 0）。
+    暂无有效 PEG（需 PE_TTM &gt; 0、G &gt; 0；完整口径另需一致预期机构 ≥ 3）。
     <span v-if="coverage">成分 {{ coverage.members }} 只，其中一致预期覆盖 {{ coverage.with_consensus }} 只。</span>
     <span v-if="!metaConsensusDate">一致预期数据尚未回补，请先跑 scripts/backfill_report_rc.py。</span>
   </div>
@@ -140,7 +140,7 @@ function colorOf(ind) {
 
 const industryOptions = computed(() => [
   { label: '全部行业', value: '' },
-  ...industries.value.map(x => ({ label: `${x.name}（${x.count}）`, value: x.name })),
+  ...legendIndustries.value.map(x => ({ label: `${x.name}（${x.count}）`, value: x.name })),
 ])
 const filteredItems = computed(() => {
   const arr = industry.value
