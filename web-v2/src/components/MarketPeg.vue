@@ -75,10 +75,14 @@
         千倍离群值压平分位带）；分位线为当前 PEG 在自身历史中的位置。
         口径：G 用归母净利，历史 5 年 CAGR 打底、一致预期只向上收缩 50%；亏损/负增长显示 N/A。
         历史分位只描述相对位置，不构成买卖建议。
-        <span v-if="histMeta?.fallback_points" class="peg-warn">
+        <span v-if="histMeta?.fallback_points && histMeta?.first_consensus" class="peg-warn">
           一致预期历史回补中：{{ histMeta.fallback_points }} 个交易日早于首个快照
-          （{{ histMeta.first_consensus || '暂无' }}），该段 PEG 仅用实际增长口径（G_hist）占位，
+          （{{ histMeta.first_consensus }}），该段 PEG 仅用实际增长口径（G_hist）占位，
           回补完成后自动切换为完整口径。
+        </span>
+        <span v-else-if="histMeta?.fallback_points" class="peg-warn">
+          该股暂无一致预期快照（券商覆盖不足或尚未回补），整段 PEG 按实际增长口径
+          （G_hist）计算，不代表前瞻一致预期。
         </span>
       </div>
     </template>
