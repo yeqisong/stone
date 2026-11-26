@@ -45,11 +45,13 @@ async def test_peg_cross_section_shape(client):
             assert key in it
         assert body['default_code'] == body['items'][0]['code']
         assert it['peg'] > 0
-        # 默认选中：完整口径（一致预期+历史）中 PEG 最低者；
-        # 历史口径占位仅在没有完整口径时兜底
+        # 默认选中：完整口径且 PEG≤1 时优先；否则取全表 PEG 最低
         full = [x for x in body['items'] if x['peg_basis'] == 'full']
-        pool = full or body['items']
-        assert body['default_code'] == min(pool, key=lambda x: x['peg'])['code']
+        if full and full[0]['peg'] <= 1.0:
+            expected = full[0]['code']
+        else:
+            expected = min(body['items'], key=lambda x: x['peg'])['code']
+        assert body['default_code'] == expected
         if full:
             assert body['items'][0]['peg_basis'] == 'full'
 

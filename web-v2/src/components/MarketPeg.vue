@@ -51,7 +51,7 @@
       横轴 G（%）= 归母净利增速；纵向虚线为 PEG=0.5 / 1 / 2 等值线（PE = PEG×G）。
       点为当前指数成分中 PEG 有效者，颜色按申万一级行业；点击切换下方个股。
       一致预期历史回补期间（report_rc 限 10 次/天），未覆盖个股以「实际增长口径」
-      （仅 G_hist）占位（散点半透明），默认优先选中完整口径个股。
+      （仅 G_hist）占位（散点半透明），默认选中 PEG 最低者（完整口径且 PEG≤1 时优先）。
       坐标轴对极端增速/估值做了截断，超出者不显示。
     </div>
 
@@ -181,6 +181,14 @@ function axisNum(v) {
   const n = Number(v)
   return Number.isFinite(n) ? String(Math.round(n * 10) / 10) : ''
 }
+// 与后端 _default_code 一致：完整口径且 PEG≤1 才优先，否则全表最低
+function defaultOf(items) {
+  const full = items.filter(x => x.peg_basis === 'full')
+  if (full.length && full[0].peg <= 1) return full[0].code
+  let best = null
+  for (const it of items) if (!best || it.peg < best.peg) best = it
+  return best?.code || ''
+}
 function flagText(it) {
   const f = it.flags || 0
   const out = []
@@ -210,7 +218,7 @@ async function loadCross() {
     // 默认选中：API 已按 PEG 升序，取有效最低；行业过滤变化时同理
     const pool = filteredItems.value
     if (!pool.some(x => x.code === selectedCode.value)) {
-      selectedCode.value = pool[0]?.code || ''
+      selectedCode.value = defaultOf(pool)
     }
     // 先结束 loading，v-else 里的图表容器才会挂载；否则 drawScatter 拿到 null
     loading.value = false
@@ -268,7 +276,7 @@ function toggleIndustry(name) {
 watch(industry, async () => {
   const pool = filteredItems.value
   if (!pool.some(x => x.code === selectedCode.value)) {
-    selectedCode.value = pool[0]?.code || ''
+    selectedCode.value = defaultOf(pool)
     if (selectedCode.value) loadHistory(selectedCode.value)
     else { histData.value = []; histLatest.value = null; histMeta.value = null; bandClip.value = null }
   }

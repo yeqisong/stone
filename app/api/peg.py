@@ -51,6 +51,20 @@ def _expanding(sql: str):
     return text(sql).bindparams(bindparam('codes', expanding=True))
 
 
+def _default_code(items: list):
+    """默认选中：完整口径且 PEG≤1 时优先，否则取全表 PEG 最低。
+
+    完整口径只有 1-2 只且估值很贵时（如创业板仅迈瑞 PEG 3.6），不应压过
+    其他 PEG 0.3 的占位口径个股；PEG=1 是“增长覆盖估值”的自然分界。
+    """
+    if not items:
+        return None
+    full = [it for it in items if it['peg_basis'] == 'full']
+    if full and full[0]['peg'] <= 1.0:
+        return full[0]['code']
+    return min(items, key=lambda x: x['peg'])['code']
+
+
 def _build_cross_section(index_code: str, asof: date, lam: float) -> dict:
     """计算指数成分截面（未按行业过滤），供缓存与上层过滤复用。"""
     db = get_sync_db()
@@ -210,7 +224,7 @@ def _build_cross_section(index_code: str, asof: date, lam: float) -> dict:
         },
         'industries': [{'name': k, 'count': v}
                        for k, v in sorted(industries.items(), key=lambda kv: -kv[1])],
-        'default_code': items[0]['code'] if items else None,
+        'default_code': _default_code(items),
         'items': items,
         'valuation_date': valuation_date,
         'consensus_date': consensus_date,
@@ -234,7 +248,7 @@ def market_peg(index_code: str = Query('000300.SH'),
     else:
         items = list(items)
     return {**payload, 'items': items,
-            'default_code': items[0]['code'] if items else None,
+            'default_code': _default_code(items),
             'filter': {'industry_l1': industry_l1 or None}}
 
 
