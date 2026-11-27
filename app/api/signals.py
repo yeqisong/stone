@@ -5,6 +5,7 @@ from sqlalchemy import text
 from datetime import date
 
 from app.auth.auth import Principal, get_principal
+from app.api.pricing import hfq_to_raw_factors, raw_price
 from app.db.connection import get_sync_db
 
 router = APIRouter(tags=["signals"])
@@ -14,9 +15,18 @@ router = APIRouter(tags=["signals"])
 def get_personal_signals(
     signal_date: str = Query(None, description="日期 YYYY-MM-DD，空=最近"),
     limit: int = Query(200, ge=1, le=1000),
+    stock_code: str | None = Query(None, max_length=16,
+                                   description="按股票过滤：个股详情页 K 线叠加个人卖出信号"),
+    days: int | None = Query(None, ge=30, le=3650,
+                             description="最近 N 天信号史，与 stock_code 搭配"),
     principal: Principal = Depends(get_principal),
 ):
-    """当前用户个人卖出/个人信号（user_signal_history）。"""
+    """当前用户个人卖出/个人信号（user_signal_history）。
+
+    持仓卖出信号按用户生成、只落本表（不进全局 signal_history），所以个股详情页
+    叠加 K 线时要走本端点（受 signal.personal.view 控制），不能混进全局信号端点。
+    price 是后复权原值；real_price 是换算后的真实价（展示用），缺当日行情为 None。
+    """
     db = get_sync_db()
     try:
         params = {"uid": principal.data_user_id, "n": limit}
@@ -24,6 +34,12 @@ def get_personal_signals(
         if signal_date:
             where += " AND signal_date=:d"
             params["d"] = signal_date
+        if stock_code:
+            where += " AND stock_code=:c"
+            params["c"] = stock_code
+        if days:
+            where += " AND signal_date >= CURRENT_DATE - :days * INTERVAL '1 day'"
+            params["days"] = days
         rows = db.execute(text(f"""
             SELECT id, signal_date, stock_code, stock_name, direction, strength, price,
                    reason, model_version, predict_score, status, actual_return,
@@ -32,10 +48,13 @@ def get_personal_signals(
             WHERE {where}
             ORDER BY signal_date DESC, id DESC LIMIT :n
         """), params).fetchall()
+        fac = hfq_to_raw_factors(db, [(r[2], r[1]) for r in rows])
         return {"items": [{
             "id": r[0], "signal_date": str(r[1]), "stock_code": r[2],
             "stock_name": r[3], "direction": r[4], "strength": r[5],
             "price": float(r[6]) if r[6] is not None else None,
+            "real_price": raw_price(float(r[6]) if r[6] is not None else None,
+                                    fac.get((r[2], str(r[1])[:10]))),
             "reason": r[7], "model_version": r[8],
             "predict_score": float(r[9]) if r[9] is not None else None,
             "status": r[10],
