@@ -422,9 +422,9 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 |---|---|---|---|---|---|---|---|---|
 | `research.treemap.view` | 树图/市场情绪 | menu | — | tab `m` 选股 | `GET /api/treemap_data`、`/treemap_intraday`、`/treemap_latest_date`、`/market_sentiment`、`/sector_flow_history` | A/O/T/N/V | — | 全市场共享 |
 | `research.market.view` | 市场概览/估值/资金/宏观 | data | `research.treemap.view` | 市场卡片 + 实时盘子页 `#/kr` | `GET /api/market/*`（含 realtime、realtime/zt-history） | A/O/T/N/V | — | 全市场共享；实时大盘为子页面无独立码（design/13） |
-| `research.stock.view` | 个股研究 | menu | — | tab `l` 个股/详情 | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline` | A/O/T/N/V | — | `/quote` 的个人成本字段由 `portfolio.position.view` 二次控制 |
+| `research.stock.view` | 个股研究 | menu | — | tab `l` 个股/详情 | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline` | A/O/T/N/V | — | `/quote` 的个人成本字段由 `portfolio.position.view` 二次控制；详情页 K 线卖出标记/策略信号卡里的个人卖出由 `signal.personal.view` 二次控制（无权限不请求） |
 | `research.signal.view` | 全市场买入信号/模型统计 | data | — | tab `s` 信号 | `GET /api/buy_signals`、`GET /api/signal/stats`、`GET /api/risk/signal-stats`、`GET /api/risk/signal-outcomes` | A/O/T/N/V | — | 全局模型买入信号与共享统计；个人卖出信号另见 `signal.personal.view` |
-| `signal.personal.view` | 我的卖出/个人信号 | action | `portfolio.position.view` | 持仓页/详情页 | `GET /api/signals/personal`（新增） | A/T/S | self | 读 `user_signal_history`；与全局买入信号合并展示 |
+| `signal.personal.view` | 我的卖出/个人信号 | action | `portfolio.position.view` | 持仓页/详情页 | `GET /api/signals/personal`（支持 `stock_code`/`days` 过滤） | A/T/S | self | 读 `user_signal_history`；持仓页「今日信号」与个股详情页（K 线卖出标记/策略信号卡/信号摘要）合并展示。详情页入口在 `research.stock.view` 下、受本码二次控制——个人卖出只经本端点下发，不得并入全局 `/stock/{code}/signals` |
 | `research.cb.view` | 可转债 | menu | — | tab `b` 可转债 | `GET /api/cb/*`、`GET /api/stock/{code}/convertible-bonds`、`/cb-linkage` | A/O/T/N/V | — | 全市场共享 |
 | `research.news.view` | 资讯 | menu | — | tab `n` 资讯 | `GET /api/news`、`/news/health`、`/news/{id}`、`/stock/{code}/news` | A/O/T/N/V | — | 原文/总结全局共享；`only_focus` 按用户过滤 |
 | `research.radar.view` | 盘中雷达/买点 | action | `research.stock.view` | 个股页雷达/买点候选 | `GET /api/stock/radar`、`GET /api/buy/check`、`GET /api/buy/candidates` | A/T/N | self | 关注池/实时持仓/纪律按用户；admin 仅看自己的池 |
@@ -2660,6 +2660,7 @@ class Principal:
 | I18 | `GET /api/agent/sessions/{B_sid}/messages` | 404 |
 | I19 | `DELETE /api/agent/sessions/{B_sid}` | 404 |
 | I20 | A 的 WS 连接 | 只收到 A 的告警，不收 B 的 |
+| I21 | `GET /api/signals/personal?stock_code={B_持仓}&days=1095` | 只返回 A 在该股的个人信号；无则空（详情页 K 线不出现 B 的卖出标记） |
 
 ### 14.3 权限矩阵测试（抽样，完整由脚本覆盖）
 
@@ -2680,6 +2681,8 @@ class Principal:
 | P13 | operator | `POST /api/settings/deepseek_key` | 403 |
 | P14 | support | 无支持会话 `GET /api/portfolio`（目标用户） | 只返回自己的/403 |
 | P15 | support | 有支持会话 `GET /api/portfolio` | 返回目标用户；写 403 |
+| P16 | trader / admin | `GET /api/signals/personal?stock_code=…&days=1095` | 200；详情页 K 线叠加该股个人卖出 ▼，策略信号卡显示当日「卖出」 |
+| P17 | operator / analyst / viewer | `GET /api/signals/personal` | 403；详情页不请求该端点，K 线只有全局信号 |
 
 ### 14.4 支持模式测试
 

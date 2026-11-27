@@ -170,7 +170,7 @@ PERMISSION_NODES = [
         'parent': None,
         'route': 'l',
         'api': 'GET /api/stocks、/stocks/suggest、/stock/{code}/detail、/history、/kline、/pe_history、/moneyflow、/signals、/margin、/top_list、/chip、/xueqiu、/quote、/ai-intraday*、/tape、/sector-rs、/minkline',
-        'note': '/quote 的个人成本字段由 portfolio.position.view 二次控制',
+        'note': '/quote 的个人成本字段由 portfolio.position.view 二次控制；详情页 K 线卖出标记/策略信号卡里的个人卖出由 signal.personal.view 二次控制',
     },
     {
         'code': 'research.signal.view',
@@ -187,8 +187,8 @@ PERMISSION_NODES = [
         'type': 'action',
         'parent': 'portfolio.position.view',
         'route': '',
-        'api': 'GET /api/signals/personal（新增）',
-        'note': '读 user_signal_history；与全局买入信号合并展示',
+        'api': 'GET /api/signals/personal（支持 stock_code/days 过滤）',
+        'note': '读 user_signal_history；持仓页「今日信号」与个股详情页（K 线卖出标记/策略信号卡/信号摘要）合并展示，详情页入口在 research.stock.view 下、受本码二次控制',
     },
     {
         'code': 'research.cb.view',

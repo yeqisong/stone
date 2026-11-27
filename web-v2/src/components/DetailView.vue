@@ -1389,8 +1389,15 @@ const fundRows = computed(() => {
 // 最新策略信号 → 顶部第 5 张卡；完整理由/多策略明细放 tooltip，不再单独占一整行
 const latestSignalCard = computed(() => {
   const d = detail.value
-  const list = d?.latest_signals || []
-  const date = (d?.latest_signal_date || d?.latest_trade_date || '').slice(5)
+  // 持仓卖出信号按用户生成、只落个人表，不在全局 latest_signals 里：最近交易日有则优先展示，
+  // 与持仓页「今日信号」同口径（个人卖出优先于全局买入）
+  const td = d?.latest_trade_date || ''
+  const mine = td ? personalSigData.value.filter(x=>x.date===td).sort((a,b)=>(b.strength||0)-(a.strength||0)) : []
+  const list = mine.length
+    ? mine.map(x=>({signal_date:x.date, direction:x.direction, strength:x.strength, reason:x.reason,
+                    model_version:x.model, real_price:x.price}))
+    : (d?.latest_signals || [])
+  const date = (mine.length ? td : (d?.latest_signal_date || td)).slice(5)
   const label = `策略信号${date ? ' · ' + date : ''}`
   if (!list.length) {
     return { label, value: '暂无', color: 'var(--c-text-faint)', sub: '最近交易日无信号', title: '最近交易日无策略信号' }
@@ -1452,6 +1459,12 @@ const marginData = ref([])   // 两融余额（元）
 const toplistData = ref([])  // 龙虎榜上榜记录
 const chipData = ref(null)   // 筹码分布（现价口径）
 const sigData = ref([])      // 模型信号史（含前瞻收益）
+// 个人持仓卖出信号（user_signal_history）：持仓卖出按用户生成、只落个人表，不在全局
+// sigData 里。仅在持有 signal.personal.view 时拉取，归一化成与全局信号相同的结构后
+// 合并叠加（K 线 ▼ / tooltip / 信号摘要 / 策略信号卡）。个人端点的 price 是后复权原值，
+// 只认换算后的 real_price——缺行情宁可不显示，不能回退成后复权价（数量级不对）。
+const personalSigData = ref([])
+const allSigData = computed(() => sigData.value.concat(personalSigData.value))
 const xqData = ref(null)     // 雪球讨论聚合（design/06；mark 语义未定，仅中性展示）
 const newsData = ref(null)   // 个股相关资讯（design/07；未总结条目的等级/情绪为 null）
 const bondInfo = ref(null)   // 关联可转债（cb_basic + 最新行情/溢价/双低）
@@ -1643,6 +1656,7 @@ async function load(){
   toplistData.value = []
   chipData.value = null
   sigData.value = []
+  personalSigData.value = []
   sigStats.value = null
   peData.value = []   // 同上：新票 PE 拉空/失败时旧票 PE 图会残留（c5 图层不随 v-if 消失）
   updateNav()
@@ -1707,6 +1721,15 @@ async function load(){
     axios.get(API+'/api/stock/'+c+'/top_list?days=3650').then(r=>{ if(seq === loadSeq) toplistData.value = r.data.data||[] }),
     axios.get(API+'/api/stock/'+c+'/chip').then(r=>{ if(seq === loadSeq) chipData.value = r.data }),
     axios.get(API+'/api/stock/'+c+'/signals?days=1095').then(r=>{ if(seq === loadSeq) sigData.value = r.data.data||[] }),
+    // 个人卖出信号受 signal.personal.view 二次控制：无权限不请求；是增强信息，失败不影响主图
+    ...(authStore.can('signal.personal.view') ? [axios.get(API+'/api/signals/personal?stock_code='+c+'&days=1095&limit=1000').then(r=>{
+      if(seq !== loadSeq) return
+      personalSigData.value = (r.data.items||[]).filter(x=>x.stock_code===c).map(x=>({
+        date:x.signal_date, direction:x.direction, personal:true, strength:x.strength,
+        reason:x.reason, model:x.model_version, score:x.predict_score, price:x.real_price??null,
+        pred_10d:null, f5d:null, f10d:null, f20d:null, status:x.status, close_reason:x.close_reason,
+      }))
+    })] : []),
     axios.get(API+'/api/risk/signal-stats?days=30').then(r=>{ if(seq === loadSeq) signalScore.value = r.data }),
     axios.get(API+'/api/stock/'+c+'/convertible-bonds').then(r=>{
       if(seq !== loadSeq) return
@@ -1898,19 +1921,27 @@ function drawCharts(kd){
     const color = chg>=0?T.up:T.down
     const mid = bmid[idx], up = bup[idx], lo = blo[idx]
     // 信号/龙虎榜叠加信息（数据晚于主图到达也不怕：formatter 每次悬停现查 ref）
-    const s = sigData.value.find(x=>x.date===dates[idx])
+    // 全局信号与个人卖出可能同日并存（模型买入与持仓退出），各显示一行；同一信号多模型版本时
+    // 全局沿用取首条、个人取强度最大的一条，完整明细在策略信号卡的悬停里
+    const g = sigData.value.find(x=>x.date===dates[idx])
+    const mine = personalSigData.value.filter(x=>x.date===dates[idx]).sort((a,b)=>(b.strength||0)-(a.strength||0))[0]
     const t = toplistData.value.find(x=>x.date===dates[idx])
     let extra = ''
-    if(s){
+    for(const s of [g, mine]){
+      if(!s) continue
       const sp = s.real_price ?? s.price
       const lp = quote.value?.price ?? detail.value?.close
-      const isLatest = s.date === detail.value?.latest_signal_date
+      // 全局信号以 detail.latest_signal_date 为最新；个人信号取个人表里最近的日期
+      const isLatest = s.date === (s.personal ? personalSigData.value[0]?.date : detail.value?.latest_signal_date)
       let priceTxt = `@¥${sp!=null?Number(sp).toFixed(2):'—'}（信号日，不复权）`
       if(isLatest && lp != null){
         priceTxt = `@¥${Number(lp).toFixed(2)}（最新）`
           + (sp != null ? ` · 信号日 ¥${Number(sp).toFixed(2)}` : '')
       }
-      extra += `<br/><span style="color:${s.direction==='buy'?T.up:T.down}">${s.direction==='buy'?'▲':'▼'}模型信号 ${s.direction==='buy'?'买入':'卖出'} ${priceTxt}</span>`
+      const label = s.personal
+        ? `持仓卖出信号${s.strength ? ' 强度'+s.strength : ''}`
+        : `模型信号 ${s.direction==='buy'?'买入':'卖出'}`
+      extra += `<br/><span style="color:${s.direction==='buy'?T.up:T.down}">${s.direction==='buy'?'▲':'▼'}${label} ${priceTxt}</span>`
         + (s.f10d!=null ? ` <span style="font-size: var(--text-meta)">前瞻10d ${(s.f10d*100).toFixed(1)}%</span>` : '')
     }
     if(t) extra += `<br/><span style="color:${T.warn}">◆龙虎榜 ${t.reason||''}${t.net!=null?` 净买入${(t.net/1e4/1e4).toFixed(2)}亿`:''}</span>`
@@ -2213,13 +2244,15 @@ function drawAuxCharts(kd){
   }
 
   // c1 叠加层：模型信号（▲买/▼卖，挂当日低/高点附近——与复权口径无关）+ 龙虎榜（◆橙）
+  // 个人持仓卖出同样是 ▼，加一圈卡片底色描边与全局信号区分
   const c1El = document.getElementById('c1'); const c1 = c1El && c1El._echart
   if (c1) {
-    const sigPts = sigData.value.map(s=>{
+    const sigPts = allSigData.value.map(s=>{
       const i = idxOf.get(s.date); if(i==null) return null
-      const y = s.direction==='buy' ? ohlc[i][2]*0.985 : ohlc[i][3]*1.015
-      return {value:[i,y], symbolRotate: s.direction==='buy'?0:180,
-              itemStyle:{color: s.direction==='buy'?T.up:T.down}}
+      const buy = s.direction==='buy'
+      const y = buy ? ohlc[i][2]*0.985 : ohlc[i][3]*1.015
+      return {value:[i,y], symbolRotate: buy?0:180,
+              itemStyle:{color: buy?T.up:T.down, ...(s.personal?{borderColor:T.surface, borderWidth:1.5}:{})}}
     }).filter(Boolean)
     const topPts = toplistData.value.map(t=>{
       const i = idxOf.get(t.date); if(i==null) return null
@@ -2261,9 +2294,9 @@ function drawChip(){
   }, {notMerge:true})
 }
 
-// 侧栏信号摘要（近 3 年）
+// 侧栏信号摘要（近 3 年；含个人持仓卖出）
 function computeSigStats(){
-  const d = sigData.value
+  const d = allSigData.value
   if(!d.length){ sigStats.value=null; return }
   const avg = k=>{ const xs=d.filter(x=>x[k]!=null).map(x=>x[k]); return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0 }
   sigStats.value = { n:d.length, years:3,
