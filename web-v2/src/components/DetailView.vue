@@ -1029,7 +1029,7 @@ import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useViewport } from '../utils/viewport'
 import { addWsListener } from '../utils/ws'
-import { chartColors as T } from '../utils/chart'
+import { chartColors as T, attachChartWheelGesture } from '../utils/chart'
 import { analyzeKline, detectMacdDivergence, buildDivergenceHints } from '../utils/klineSignals'
 import StatStrip from './StatStrip.vue'
 import CbLinkageDrawer from './CbLinkageDrawer.vue'
@@ -4424,10 +4424,13 @@ watch(() => _theme.isDark, () => nextTick(() => {
   drawCharts(lastKline); drawAuxCharts(lastKline); drawChip(); drawPeChart()
 }))
 
+let unbindWheelGesture = null
 onMounted(() => {
   window.addEventListener('resize', resizeAll)
   window.addEventListener('keydown', onMinkKey)
   aiWsUnwatch = addWsListener(onWsAiEvent)
+  // 触控板双指手势定向：横滑滚 dataZoom 窗口 / 竖滑翻页 / 捏合缩放（见 utils/chart.js）
+  unbindWheelGesture = attachChartWheelGesture()
   if(code.value) load()
   minkTimer = setInterval(loadMink, 30000)
   alertTimer = setInterval(loadIntradayAlerts, 30000)
@@ -4437,6 +4440,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // ECharts 实例挂在 DOM 上，必须在 DOM 移除前 dispose（onUnmounted 时已经查不到节点）
   if (showFs.value) closeFs()
+  if (unbindWheelGesture) { unbindWheelGesture(); unbindWheelGesture = null }
   ;['c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12','c13'].forEach(id => {
     const el = document.getElementById(id)
     if (el && el._echart) { el._echart.dispose(); el._echart = null }
