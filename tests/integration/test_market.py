@@ -259,3 +259,32 @@ async def test_archive_zt_daily_idempotent(client):
         db.commit()
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_market_realtime_gate_and_alerts(client):
+    """批次三：realtime 响应含 gate（三源组合）与 alerts_today（时段无关的 shape 断言）。"""
+    response = await client.get("/api/market/realtime", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    gate = body.get("gate")
+    assert isinstance(gate, dict)
+    assert gate["level"] in ("open", "caution", "closed")
+    assert isinstance(gate["pass"], bool)
+    assert isinstance(gate["reasons"], list) and gate["reasons"]
+    assert {"market_gate", "regime", "sentiment"} <= set(gate["sources"].keys())
+    assert isinstance(body.get("alerts_today"), list)
+    if body["alerts_today"]:
+        assert {"id", "kind", "level", "title", "time"} <= set(body["alerts_today"][0].keys())
+        assert body["alerts_today"][0]["kind"].startswith("mk")
+
+
+@pytest.mark.asyncio
+async def test_market_sentiment_gate_key(client):
+    """情绪仪表附带实时空仓闸门 gate 块（批次三）。"""
+    response = await client.get("/api/market_sentiment", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert "gate" in body
+    if body["gate"] is not None:
+        assert body["gate"]["level"] in ("open", "caution", "closed")

@@ -13,6 +13,8 @@
   <span v-if="s.breadth?.median != null">中位 {{ signed(s.breadth.median) }}%</span>
   <span>涨停 {{ s.breadth?.limit_up ?? '—' }} / 跌停 {{ s.breadth?.limit_down ?? '—' }}</span>
   <span v-for="i in indices" :key="i.code">{{ i.name }} {{ signed(i.chg_pct) }}%</span>
+  <span v-if="s.gate" class="ms-gate" :class="'gate-' + s.gate.level"
+        :title="gateTip">开仓闸门 <b>{{ s.gate.label }}</b></span>
   <span class="ms-advice">{{ s.advice?.stop }}</span>
   <span class="ms-asof">{{ s.asof }}</span>
 </div>
@@ -37,6 +39,12 @@ const tip = computed(() => {
   return `0=极度恐慌，100=极度亢奋（数值越小越恐慌）${reasons ? '；' + reasons : ''}`
 })
 const gaugeTip = '恐慌 0–25 ｜ 偏弱 25–45 ｜ 中性 45–70 ｜ 偏强 70–100'
+const gateTip = computed(() => {
+  const g = s.value?.gate
+  if (!g) return ''
+  const rs = (g.reasons || []).join('；')
+  return `实时空仓闸门（市场闸门 × regime × 盘面情绪）${rs ? '：' + rs : ''}${g.advice_entry ? '｜' + g.advice_entry : ''}`
+})
 
 async function load(){
   try{
@@ -87,4 +95,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   .ms-bar { gap:8px; }
   .ms-asof { width:100%; margin-left:0; }
 }
+.ms-gate { padding:1px 8px; border-radius:4px; border:1px solid var(--c-border); color:var(--c-text-dim); }
+.ms-gate b { color:inherit; }
+.ms-gate.gate-open { color:var(--c-down); border-color:var(--c-down); }
+.ms-gate.gate-caution { color:var(--c-warning, #8a5a00); border-color:var(--c-warning, #8a5a00); }
+.ms-gate.gate-closed { color:var(--c-up); border-color:var(--c-up); }
 </style>

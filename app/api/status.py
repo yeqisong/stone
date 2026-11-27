@@ -435,6 +435,21 @@ def _ws_ops(ws) -> bool:
     return _ws_has(ws, 'dag.view') or _ws_has(ws, 'system.status.view')
 
 
+def _alert_visible(row_user_id, kind: str, ws_user_id, ws) -> bool:
+    """risk_alerts 行对某 socket 是否可见（纯函数，单测用）。
+
+    - 行有归属：仅该用户的 socket；
+    - 行无归属（系统/模型级）且 kind 以 mk 开头：盘面异动广播所有在线 socket
+      （design/13 批次三——市场事件人人相关，无需权限门槛）；
+    - 其余无归属行（模型/系统告警）：需 model.alerts.view。
+    """
+    if row_user_id is not None:
+        return row_user_id == ws_user_id
+    if str(kind or '').startswith('mk'):
+        return True
+    return _ws_has(ws, 'model.alerts.view')
+
+
 @router.websocket("/ws/dag")
 async def ws_dag(websocket: WebSocket):
     # WebSocket 认证：必须带有效 JWT（多用户后不再 dev 放行）
@@ -570,8 +585,7 @@ async def broadcast_dag_status():
                     meta = _ws_meta.get(ws) or {}
                     visible = [
                         r for r in _arows
-                        if (r[1] is not None and r[1] == meta.get('user_id'))
-                        or (r[1] is None and _ws_has(ws, 'model.alerts.view'))
+                        if _alert_visible(r[1], r[3], meta.get('user_id'), ws)
                     ]
                     if not visible:
                         continue

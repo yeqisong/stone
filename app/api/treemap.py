@@ -11,11 +11,21 @@ router = APIRouter(tags=["treemap"])
 
 @router.get("/market_sentiment")
 def get_market_sentiment():
-    """市场情绪仪表：宽度/中位数/涨跌停/指数 VWAP → 恐慌/偏弱/中性/偏强。"""
+    """市场情绪仪表：宽度/中位数/涨跌停/指数 VWAP → 恐慌/偏弱/中性/偏强。
+
+    附带实时空仓闸门 gate（design/13 批次三：市场闸门 × regime × 盘面情绪，
+    buy_check.live_gate 组合，60s 缓存）——前端情绪条在盘面分之外展示开仓闸门。
+    """
     from app.market_sentiment import get as market_sentiment
     db = get_sync_db()
     try:
-        return market_sentiment(db)
+        data = market_sentiment(db)
+        try:
+            from app.buy_check import live_gate
+            data["gate"] = live_gate(db)
+        except Exception:
+            data["gate"] = None
+        return data
     finally:
         db.close()
 

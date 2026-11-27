@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from statistics import fmean
@@ -16,6 +17,8 @@ from typing import Optional
 from loguru import logger
 from sqlalchemy import text
 
+from app import market_sentiment
+from app.regime_gate import regime_gated_today
 from app.trade_intraday import (
     _max_buy_qty,
     check as intraday_check,
@@ -163,6 +166,70 @@ def market_gate(db) -> dict:
         "reason": reason, "summary": summary,
         "details": {"indexes": indexes, "breadth": breadth},
     }
+
+
+# ── 实时空仓闸门（design/13 批次三：三源组合，当前仅展示联动）────────────────
+# 三源现状：market_gate=日频 EOD（MA20+宽度）；regime=日频收盘（与信号 DAG 同一
+# compute_regime_gates）；market_sentiment=盘中实时（60s 自带缓存）。
+# 买入候选 actionable 仍是日频口径——若要接入行为，把 candidates() 里
+# `market_ok = bool(market.get("pass"))` 换成叠加 self['pass'] 即可（design/13 记录）。
+
+_GATE_TTL_S = 60
+_gate_cache: dict = {"ts": 0.0, "data": None}
+
+
+def live_gate(db, use_cache: bool = True) -> dict:
+    """实时空仓闸门：市场闸门 × regime 禁买 × 盘面情绪，取最严级别。
+
+    level: closed（禁买） / caution（警戒） / open（放行）。
+    """
+    now = time.time()
+    if use_cache and _gate_cache["data"] is not None and now - _gate_cache["ts"] < _GATE_TTL_S:
+        return _gate_cache["data"]
+    mg = market_gate(db)
+    gated, regime_cfg = regime_gated_today(db)
+    try:
+        senti = market_sentiment.get(db)
+    except Exception as e:
+        logger.warning(f"[live-gate] 实时情绪失败: {str(e)[:120]}")
+        senti = {}
+    s_level = senti.get("level")
+    level = "open"
+    reasons: list[str] = []
+    if mg.get("level") == "closed":
+        level = "closed"
+        reasons.append(f"市场闸门关闭：{mg.get('reason')}")
+    elif mg.get("level") == "caution":
+        level = "caution"
+        reasons.append(f"市场闸门警戒：{mg.get('reason')}")
+    if gated:
+        level = "closed"
+        skip = int(regime_cfg.get("max_skip_days", 2) or 2)
+        win = int(regime_cfg.get("ma_window", 20) or 20)
+        reasons.append(f"regime 空仓闸门：指数连续低于 MA{win} 风险期禁买（连续 {skip} 天后放行）")
+    if s_level == "panic":
+        level = "closed"
+        reasons.append(f"盘面恐慌（情绪分 {senti.get('score')}）：禁止新开仓")
+    elif s_level == "weak" and level != "closed":
+        level = "caution"
+        reasons.append(f"盘面偏弱（情绪分 {senti.get('score')}）：只减不加")
+    if not reasons:
+        reasons.append("市场闸门、regime 与盘面情绪均未触发限制")
+    out = {
+        "level": level,
+        "pass": level != "closed",
+        "label": {"closed": "闸门关闭", "caution": "警戒", "open": "放行"}[level],
+        "reasons": reasons,
+        "advice_entry": (senti.get("advice") or {}).get("entry"),
+        "sources": {
+            "market_gate": {"level": mg.get("level"), "pass": mg.get("pass")},
+            "regime": {"enabled": bool(regime_cfg.get("enabled")), "gated": gated},
+            "sentiment": {"level": s_level, "score": senti.get("score"),
+                          "stale": senti.get("stale")},
+        },
+    }
+    _gate_cache.update(ts=now, data=out)
+    return out
 
 
 # ── 板块闸门 ──────────────────────────────────────────────────────────────

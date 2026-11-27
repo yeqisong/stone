@@ -14,6 +14,15 @@
 
   <MarketSentiment />
 
+  <!-- 实时空仓闸门横幅（design/13 批次三：市场闸门 × regime × 盘面情绪，仅展示） -->
+  <div v-if="d && d.gate" class="mr-gate" :class="'gate-' + d.gate.level"
+       :title="(d.gate.reasons || []).join('；')">
+    <span class="mr-gate-label">开仓闸门</span>
+    <b class="mr-gate-state">{{ d.gate.label }}</b>
+    <span class="mr-gate-reason">{{ (d.gate.reasons || [])[0] || '' }}</span>
+    <span v-if="d.gate.advice_entry" class="mr-gate-advice">{{ d.gate.advice_entry }}</span>
+  </div>
+
   <div v-if="!d" class="mr-empty">等待数据…（后台每 60s 采集一次，开盘后约 1 分钟出数）</div>
 
   <template v-else>
@@ -150,6 +159,25 @@
         </div>
       </div>
     </div>
+
+    <!-- 今日盘面异动（mk% 告警，WS 同步推送 + 此列表回看） -->
+    <div class="mr-panel">
+      <div class="mr-h">
+        <span><AppIcon name="bell" :size="13" /> 今日盘面异动</span>
+        <span class="mr-meta">指数急变 / 宽度反转 / 连板高度 / 情绪跨级 · 阈值在 strategy_config.market_alerts</span>
+      </div>
+      <table v-if="(d.alerts_today || []).length" class="mr-table">
+        <thead><tr><th style="width:74px">时间</th><th style="width:130px">类型</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr v-for="a in d.alerts_today" :key="a.id">
+            <td>{{ a.time || '—' }}</td>
+            <td><span class="mr-mk" :class="a.level === 'critical' ? 'crit' : ''">{{ mkLabel(a.kind) }}</span></td>
+            <td><b>{{ a.title }}</b> <span class="mr-meta">{{ a.body }}</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="mr-empty2">今日暂无异动告警</div>
+    </div>
   </template>
 </div>
 </template>
@@ -192,6 +220,10 @@ function pctW(n) {
   return (Number(n) / t * 100).toFixed(2) + '%'
 }
 const sentiLabel = lv => ({ panic: '恐慌', weak: '偏弱', neutral: '中性', strong: '强势' }[lv] || lv || '—')
+// mk% 告警类型中文标签（后端 title 已含详情，此处仅分类徽标）
+const MK_LABELS = { mk_idx_surge: '指数急涨', mk_idx_drop: '指数急跌', mk_breadth_up: '宽度转强',
+                    mk_breadth_dn: '宽度转弱', mk_height: '连板新高', mk_panic: '盘面恐慌', mk_strong: '盘面亢奋' }
+const mkLabel = k => MK_LABELS[k] || k
 
 const idxList = computed(() => d.value?.indices_trend || [])
 const bigData = computed(() => idxList.value.find(x => x.code === bigIdx.value) || idxList.value[0] || null)
@@ -507,4 +539,17 @@ watch(() => theme.isDark, () => nextTick(drawAll))
 .up { color: var(--c-up); }
 .down { color: var(--c-down); }
 .warn { color: var(--c-warning, #8a5a00); }
+
+.mr-gate { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; background: var(--c-card-bg); border: 1px solid var(--c-border); border-left: 3px solid var(--c-text-dim); border-radius: var(--radius, 6px); font-size: 13px; }
+.mr-gate-label { color: var(--c-text-dim); }
+.mr-gate-reason { color: var(--c-text-dim); }
+.mr-gate-advice { color: var(--c-text-faint); font-size: var(--text-meta); }
+.mr-gate.gate-open { border-left-color: var(--c-down); }
+.mr-gate.gate-open .mr-gate-state { color: var(--c-down); }
+.mr-gate.gate-caution { border-left-color: var(--c-warning, #8a5a00); }
+.mr-gate.gate-caution .mr-gate-state { color: var(--c-warning, #8a5a00); }
+.mr-gate.gate-closed { border-left-color: var(--c-up); }
+.mr-gate.gate-closed .mr-gate-state { color: var(--c-up); }
+.mr-mk { font-size: var(--text-meta); padding: 1px 6px; border-radius: 3px; border: 1px solid var(--c-border); color: var(--c-text-dim); }
+.mr-mk.crit { color: var(--c-up); border-color: var(--c-up); }
 </style>

@@ -200,12 +200,16 @@ addWsListener(data => {
   if (data && data.type === 'risk_alert' && notifEnabled.value
       && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     for (const a of (data.alerts || [])) {
-      const isIntraday = String(a.kind || '').startsWith('it')
-      const n = new Notification(`${isIntraday ? '盘中提醒' : '风控告警'}：${a.title}`,
+      const kind = String(a.kind || '')
+      const isMarket = kind.startsWith('mk')          // 盘面异动（design/13 批次三）
+      const isIntraday = kind.startsWith('it')
+      const n = new Notification(
+        `${isMarket ? '盘面异动' : isIntraday ? '盘中提醒' : '风控告警'}：${a.title}`,
         { body: a.body || '', tag: 'risk-' + a.id })
       n.onclick = () => {
         window.focus()
-        if (isIntraday && a.stock_code) nav.showDetail(a.stock_code)
+        if (isMarket) nav.switchTab('kr')
+        else if (isIntraday && a.stock_code) nav.showDetail(a.stock_code)
         else nav.switchTab('x')
         n.close()
       }

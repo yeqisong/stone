@@ -30,7 +30,7 @@ import json
 import statistics
 import threading
 import time
-from datetime import date as _date, datetime, time as _time
+from datetime import date as _date, datetime, time as _time, timedelta
 from typing import Optional
 
 import requests
@@ -422,8 +422,230 @@ def refresh_all() -> list[str]:
     return ok
 
 
+# ── 盘面异动告警（design/13 批次三）────────────────────────────────────────
+# 指标全部来自内存缓存（refresh_all 产物），评估零新增外部请求；
+# 冷却/上限 DB-backed（risk_alerts user_id IS NULL + kind mk_%），重启不重发。
+# kind 预算 VARCHAR(20)：mk_idx_surge/mk_idx_drop/mk_breadth_up/mk_breadth_dn/
+# mk_height/mk_panic/mk_strong。
+
+DEFAULT_MARKET_ALERTS = {
+    "enabled": True,
+    "index_window_min": 15,    # 指数急变回看窗口（分钟）
+    "index_move_pct": 1.2,     # 窗口涨跌触发阈值 %
+    "index_buffer_pct": 0.4,   # 回到 ±buffer 内复位（滞回，允许同向重复触发）
+    "breadth_high": 0.65,      # 涨占比上穿
+    "breadth_low": 0.35,       # 涨占比下穿
+    "breadth_buffer": 0.05,    # 滞回缓冲
+    "height_min": 5,           # 连板高度告警阈值（当日首次）
+    "cooldown_min": {          # per-kind 冷却（分钟）
+        "mk_idx_surge": 120, "mk_idx_drop": 120,
+        "mk_breadth_up": 180, "mk_breadth_dn": 180,
+        "mk_height": 240, "mk_panic": 240, "mk_strong": 240,
+    },
+    "family_cooldown_min": 10, # 任意 mk% 之间的最小间隔（防风暴）
+    "max_per_day": 15,
+}
+ALERT_CONFIG_KEY = "market_alerts"
+
+_MK_LABEL = {
+    "mk_idx_surge": "指数急涨", "mk_idx_drop": "指数急跌",
+    "mk_breadth_up": "宽度转强", "mk_breadth_dn": "宽度转弱",
+    "mk_height": "连板高度新高", "mk_panic": "盘面恐慌", "mk_strong": "盘面亢奋",
+}
+
+# 评估状态（单进程内存；跨重启靠 DB 冷却兜底；_cycle 串行调用无并发）
+_mstate_lock = threading.Lock()
+_mstate: dict = {"day": None, "idx_side": None, "breadth_zone": None,
+                 "height_day": None, "sent_level": None}
+
+
+def read_market_alerts(db) -> dict:
+    """strategy_config.market_alerts 读取（缺行 = 默认全开）。"""
+    row = db.execute(text(
+        "SELECT params, enabled FROM strategy_config WHERE strategy_name='market_alerts' "
+        "ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    params = {}
+    if row is not None and row[0]:
+        try:
+            params = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+        except Exception:
+            params = {}
+    enabled = bool(row[1]) if row is not None else True
+    merged = {**DEFAULT_MARKET_ALERTS, **params}
+    merged["cooldown_min"] = {**DEFAULT_MARKET_ALERTS["cooldown_min"],
+                              **(params.get("cooldown_min") or {})}
+    return {**merged, "enabled": enabled}
+
+
+def _mk_recent(db, kind: Optional[str], minutes: float, day) -> bool:
+    """近 minutes 分钟内同 kind（或任意 mk% 当 kind=None）是否已告警（DB 冷却）。"""
+    cut = _now() - timedelta(minutes=minutes)
+    if kind:
+        row = db.execute(text(
+            "SELECT 1 FROM risk_alerts WHERE user_id IS NULL AND kind=:k "
+            "AND created_at >= :cut LIMIT 1"
+        ), {"k": kind, "cut": cut}).scalar()
+    else:
+        row = db.execute(text(
+            "SELECT 1 FROM risk_alerts WHERE user_id IS NULL AND kind LIKE 'mk%' "
+            "AND created_at >= :cut LIMIT 1"
+        ), {"cut": cut}).scalar()
+    return row is not None
+
+
+def _mk_today_count(db, day) -> int:
+    return int(db.execute(text(
+        "SELECT count(*) FROM risk_alerts WHERE user_id IS NULL "
+        "AND trade_date=:d AND kind LIKE 'mk%'"
+    ), {"d": day}).scalar() or 0)
+
+
+def _mk_insert(db, now: datetime, kind: str, level: str, title: str, body: str) -> dict:
+    row = db.execute(text(
+        "INSERT INTO risk_alerts "
+        "(user_id, trade_date, kind, stock_code, level, title, body, created_at) "
+        "VALUES (NULL, :d, :k, NULL, :lv, :t, :b, :ts) RETURNING id, created_at"
+    ), {"d": now.date(), "k": kind, "lv": level, "t": title[:100], "b": body,
+        "ts": now}).fetchone()
+    return {"id": row[0], "kind": kind, "level": level, "title": title[:100],
+            "body": body, "created_at": str(row[1])[:19] if row[1] else None}
+
+
+def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
+    """盘面异动评估（交易窗口内每周期调用）；返回本次落库的告警列表。
+
+    状态机惯例照搬 intraday_watch：side 状态切换报一次 + 缓冲复位（指数），
+    one-shot + 滞回（宽度），当日一次（高度），状态始终更新（情绪）。
+    """
+    now = now or _now()
+    day = now.date()
+    cfg = read_market_alerts(db)
+    if not cfg.get("enabled", True):
+        return []
+    with _mstate_lock:
+        if _mstate.get("day") != day:   # 跨日重置状态机
+            _mstate.update(day=day, idx_side=None, breadth_zone=None,
+                           height_day=None, sent_level=None)
+
+    out: list[dict] = []
+
+    def fire(kind: str, level: str, title: str, body: str) -> None:
+        if _mk_today_count(db, day) >= int(cfg.get("max_per_day", 15)):
+            return
+        cd = int((cfg.get("cooldown_min") or {}).get(kind, 60))
+        if _mk_recent(db, kind, cd, day):
+            return
+        if _mk_recent(db, None, int(cfg.get("family_cooldown_min", 10)), day):
+            return
+        out.append(_mk_insert(db, now, kind, level, title, body))
+
+    # 1. 指数急涨/急跌（上证综指，trends 缓存分钟序列，side 切换 + 滞回）
+    trends = _cache_get("trends") or {}
+    idx_points = ((trends.get("000001") or {}).get("points")) or []
+    win = int(cfg.get("index_window_min", 15))
+    move = float(cfg.get("index_move_pct", 1.2))
+    buf = float(cfg.get("index_buffer_pct", 0.4))
+    if len(idx_points) > win:
+        cur = idx_points[-1].get("price")
+        base = idx_points[-1 - win].get("price")
+        if cur and base:
+            chg = (cur / base - 1) * 100
+            side = "up" if chg >= move else ("down" if chg <= -move else
+                                             (None if abs(chg) <= buf else _mstate.get("idx_side")))
+            with _mstate_lock:
+                prev = _mstate.get("idx_side")
+                _mstate["idx_side"] = side
+            if side in ("up", "down") and side != prev:
+                kind = "mk_idx_surge" if side == "up" else "mk_idx_drop"
+                breadth = _cache_get("breadth") or {}
+                fire(kind, "warn",
+                     f"上证指数 {win}分钟{('急涨' if side == 'up' else '急跌')} {chg:+.2f}%",
+                     f"现价 {cur:.2f}，{win} 分钟 {chg:+.2f}%（阈值 ±{move}%）；"
+                     f"两市涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
+
+    # 2. 宽度反转（涨占比 one-shot + 滞回）
+    breadth = _cache_get("breadth") or {}
+    up_ratio = breadth.get("up_ratio")
+    hi = float(cfg.get("breadth_high", 0.65))
+    lo = float(cfg.get("breadth_low", 0.35))
+    bbuf = float(cfg.get("breadth_buffer", 0.05))
+    if up_ratio is not None:
+        zone = "high" if up_ratio >= hi else ("low" if up_ratio <= lo else
+                                              (None if (lo + bbuf) < up_ratio < (hi - bbuf)
+                                               else _mstate.get("breadth_zone")))
+        with _mstate_lock:
+            prev_zone = _mstate.get("breadth_zone")
+            _mstate["breadth_zone"] = zone
+        if zone and zone != prev_zone:
+            up, dn = breadth.get("up", "—"), breadth.get("down", "—")
+            if zone == "high":
+                fire("mk_breadth_up", "warn",
+                     f"宽度转强：涨占比 {up_ratio * 100:.1f}%",
+                     f"全市场涨 {up} / 跌 {dn}，涨占比上穿 {hi * 100:.0f}%")
+            else:
+                fire("mk_breadth_dn", "warn",
+                     f"宽度转弱：涨占比 {up_ratio * 100:.1f}%",
+                     f"全市场涨 {up} / 跌 {dn}，涨占比下穿 {lo * 100:.0f}%")
+
+    # 3. 连板高度新高（当日首次）
+    zt = _cache_get("zt") or {}
+    max_lbc = zt.get("max_lbc")
+    hmin = int(cfg.get("height_min", 5))
+    if max_lbc and max_lbc >= hmin:
+        with _mstate_lock:
+            already = _mstate.get("height_day") == day
+            if not already:
+                _mstate["height_day"] = day
+        if not already:
+            ladder = zt.get("ladder") or []
+            top_names = next((x.get("names") for x in ladder if x.get("lbc") == max_lbc), [])
+            fire("mk_height", "warn",
+                 f"连板高度 {max_lbc} 板（情绪周期新高）",
+                 f"当日最高连板 {max_lbc} 板（阈值 ≥{hmin}）：{('、'.join(top_names[:4]) or '—')}；"
+                 f"涨停 {zt.get('limit_up', '—')} 家 / 炸板 {zt.get('broken', '—')} 家")
+
+    # 4. 情绪跨级（状态始终更新；进 panic=重要 / 进 strong 提示）
+    try:
+        senti = market_sentiment.get(db)
+    except Exception as e:
+        logger.warning(f"[market-rt] 告警情绪源失败: {str(e)[:120]}")
+        senti = {}
+    s_level = senti.get("level")
+    if s_level:
+        with _mstate_lock:
+            prev_level = _mstate.get("sent_level")
+            _mstate["sent_level"] = s_level
+        if s_level != prev_level and prev_level is not None:
+            score = senti.get("score")
+            if s_level == "panic":
+                fire("mk_panic", "critical", f"盘面恐慌：情绪分 {score}",
+                     f"实时情绪进入恐慌（{score}/100）；{((senti.get('advice') or {}).get('entry') or '')}"
+                     f"；涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
+            elif s_level == "strong":
+                fire("mk_strong", "warn", f"盘面亢奋：情绪分 {score}",
+                     f"实时情绪进入强势（{score}/100）；可按买点检查，不追高")
+
+    if out:
+        db.commit()
+        logger.info(f"[market-rt] 盘面异动 {len(out)} 条：{[x['title'] for x in out]}")
+    return out
+
+
+def alerts_today(db, day=None, limit: int = 20) -> list[dict]:
+    """当日盘面异动列表（mk%，端点 15s TTL 缓存内廉价）。"""
+    day = day or _now().date()
+    rows = db.execute(text(
+        "SELECT id, kind, level, title, body, created_at FROM risk_alerts "
+        "WHERE user_id IS NULL AND trade_date=:d AND kind LIKE 'mk%' "
+        "ORDER BY id DESC LIMIT :n"
+    ), {"d": day, "n": int(limit)}).fetchall()
+    return [{"id": r[0], "kind": r[1], "level": r[2], "title": r[3],
+             "body": r[4], "time": str(r[5])[-8:-3] if r[5] else None} for r in rows]
+
+
 def _cycle(now: Optional[datetime] = None) -> None:
-    """后台线程单周期：交易窗口内刷新缓存 + 幂等日终落库。"""
+    """后台线程单周期：交易窗口内刷新缓存 + 异动评估 + 幂等日终落库。"""
     now = now or _now()
     db = get_sync_db()
     try:
@@ -436,6 +658,10 @@ def _cycle(now: Optional[datetime] = None) -> None:
             return
         if _in_collect_window(now):
             refresh_all()
+            try:
+                evaluate_market_alerts(db, now)
+            except Exception as e:
+                logger.warning(f"[market-rt] 异动评估失败: {str(e)[:160]}")
         archive_zt_daily(db, now)
     finally:
         db.close()
@@ -563,7 +789,21 @@ def get_realtime(db) -> dict:
                         "big": r.get("big"), "huge": r.get("huge")} for r in fflow],
             "latest": (fflow[-1].get("main") if fflow else None),
         },
+        # 实时空仓闸门（三源组合，design/13 批次三；buy_check.live_gate 自带 60s 缓存）
+        "gate": _safe_live_gate(db),
+        "alerts_today": alerts_today(db),
     }
+
+
+def _safe_live_gate(db) -> dict:
+    try:
+        from app.buy_check import live_gate
+        return live_gate(db)
+    except Exception as e:
+        logger.warning(f"[market-rt] live_gate 失败: {str(e)[:120]}")
+        return {"level": "open", "pass": True, "label": "放行",
+                "reasons": [f"闸门不可用: {str(e)[:80]}"], "advice_entry": None,
+                "sources": {}}
 
 
 def zt_history(db, days: int = 120) -> dict:
