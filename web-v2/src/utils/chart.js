@@ -70,32 +70,65 @@ function chartFromEvent(e) {
   return null
 }
 
-function panChartWindow(chart, e) {
-  const dz = chart.getOption()?.dataZoom?.[0]
-  if (!dz) return
-  const start = dz.start ?? 0
-  const end = dz.end ?? 100
-  const span = end - start
-  if (start <= 0 && end >= 100) return          // 全宽无处可滚
-  const w = chart.getWidth() || 1
-  // deltaMode 1=行 / 2=页（Firefox 鼠标滚轮）归一成像素
-  const dx = e.deltaX * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? w : 1)
-  // 内容跟手：横移一个图宽 = 窗口滚一个窗宽
-  const ns = Math.min(Math.max(start + (dx / w) * span, 0), 100 - span)
-  chart.dispatchAction({ type: 'dataZoom', start: +ns.toFixed(2), end: +(ns + span).toFixed(2) })
-}
+// 横滑的派发节奏必须对齐 ECharts 原生 dataZoom 交互（拖滑块/滚轮）：原生先经 throttle
+// 节流才派发。逢 wheel 事件必派发会让联动组每帧走一遍完整 update（全部系列重渲染），
+// 反而比拖滑块卡得多——实测详情页 2 年区间帧率：拖滑块 56，逢事件必派发 43，本节奏 59。
+//   周期自适应 = 2.5 × 上次派发耗时，夹在 [16, 100]ms：轻页面仍每帧更新，重页面自动降频
+//   （100ms 即 ECharts 动画开启时的 throttle 默认值），让更新约占主线程四成
+//   周期内的位移先累积、到点合并成一次派发——总位移守恒，内容跟手
+//   animation.duration=0 是 ECharts 为 dataZoom 派发预留的动画覆盖口（update payload 的
+//   animation 字段）：过渡动画期间联动组每帧都要重绘，实测去掉更流畅
+const PAN_PERIOD_MIN = 16
+const PAN_PERIOD_MAX = 100
+const PAN_PERIOD_FACTOR = 2.5
+const PAN_ANIM_OFF = { duration: 0 }
 
 /** 挂载触控板手势定向，返回解绑函数（页面 onBeforeUnmount 调用） */
 export function attachChartWheelGesture() {
+  let chart = null        // 当前手势作用的图表
+  let acc = 0             // 本周期内累积的横向位移（px）
+  let timer = null        // 周期末尾的合并派发
+  let nextAt = 0          // 下一次允许派发的时间戳
+  let lastCost = 0        // 上次派发耗时，决定下一个周期的长短
+
+  const flush = () => {
+    timer = null
+    const dx = acc
+    acc = 0
+    if (!chart || chart.isDisposed()) return
+    const dz = chart.getOption()?.dataZoom?.[0]
+    const start = dz?.start ?? 0, end = dz?.end ?? 100
+    const span = end - start
+    const t0 = performance.now()
+    let period = PAN_PERIOD_MIN
+    if (dz && span > 0 && !(start <= 0 && end >= 100)) {       // 全宽无处可滚
+      // 内容跟手：横移一个图宽 = 窗口滚一个窗宽
+      const ns = Math.min(Math.max(start + dx / (chart.getWidth() || 1) * span, 0), 100 - span)
+      chart.dispatchAction({ type: 'dataZoom', start: +ns.toFixed(2), end: +(ns + span).toFixed(2), animation: PAN_ANIM_OFF })
+      lastCost = performance.now() - t0
+      period = Math.min(Math.max(lastCost * PAN_PERIOD_FACTOR, PAN_PERIOD_MIN), PAN_PERIOD_MAX)
+    }
+    nextAt = t0 + period
+  }
+  const dropPending = () => { acc = 0; if (timer) { clearTimeout(timer); timer = null } }
+
   const onWheel = (e) => {
-    if (e.ctrlKey) return                                    // 捏合 → ECharts 原生缩放
-    const chart = chartFromEvent(e)
-    if (!chart) return                                       // 不在图表上 → 页面默认行为
-    e.stopPropagation()                                      // 截停，别让 inside dataZoom 当缩放
-    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return     // 竖滑 → 页面滚动（不拦默认）
-    e.preventDefault()                                       // 横滑 → 滚动 dataZoom 窗口
-    panChartWindow(chart, e)
+    if (e.ctrlKey) { dropPending(); nextAt = 0; return }     // 捏合 → ECharts 原生缩放
+    const c = chartFromEvent(e)
+    if (!c) return                                         // 不在图表上 → 页面默认行为
+    e.stopPropagation()                                    // 截停，别让 inside dataZoom 当缩放
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return   // 竖滑 → 页面滚动（不拦默认）
+    e.preventDefault()                                     // 横滑 → 滚动 dataZoom 窗口
+    if (c !== chart) { chart = c; dropPending(); nextAt = 0 }
+    // deltaMode 1=行 / 2=页（Firefox 鼠标滚轮）归一成像素
+    acc += e.deltaX * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? c.getWidth() : 1)
+    const wait = nextAt - performance.now()
+    if (wait <= 0) { if (timer) clearTimeout(timer); flush() }
+    else if (!timer) timer = setTimeout(flush, wait)
   }
   document.addEventListener('wheel', onWheel, { capture: true, passive: false })
-  return () => document.removeEventListener('wheel', onWheel, { capture: true })
+  return () => {
+    dropPending()
+    document.removeEventListener('wheel', onWheel, { capture: true })
+  }
 }
