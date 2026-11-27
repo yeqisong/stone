@@ -12,6 +12,8 @@
     <div class="mv-ranges">
       <button v-for="r in RANGES" :key="r.days" class="mv-chip mv-range" :class="{ active: rangeDays === r.days }"
               @click="switchRange(r.days)">{{ r.label }}</button>
+      <button class="mv-chip mv-rt-btn" title="实时盘面：宽度、涨停梯队、资金分时"
+              @click="nav.switchTab('kr')">⚡ 实时盘</button>
     </div>
     <n-button size="tiny" text class="mv-sort-btn" title="调整下方图表顺序（对当前用户全部大盘页生效）"
       @click="openChartOrder"><AppIcon name="arrow-up-down" :size="13" /> 排序</n-button>
@@ -904,6 +906,8 @@ onUnmounted(() => {
 }
 .mv-chip:hover { color: var(--c-text); border-color: var(--c-text-faint); }
 .mv-chip.active { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.mv-rt-btn { color: var(--c-up); border-color: var(--c-up); }
+.mv-rt-btn:hover { color: var(--c-up); border-color: var(--c-up); opacity: 0.85; }
 .mv-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 10px; align-items: start; }
 .mv-left { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .mv-side { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 8px; }

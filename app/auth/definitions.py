@@ -160,8 +160,8 @@ PERMISSION_NODES = [
         'type': 'data',
         'parent': 'research.treemap.view',
         'route': '',
-        'api': 'GET /api/market/*',
-        'note': '全市场共享',
+        'api': 'GET /api/market/*（含 realtime 实时大盘聚合、realtime/zt-history）',
+        'note': '全市场共享；实时大盘分析页 #/kr 为本节点子页面（design/13），无独立权限码',
     },
     {
         'code': 'research.stock.view',

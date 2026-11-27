@@ -40,6 +40,7 @@ export const useNavStore = defineStore('nav', () => {
     if (hash.startsWith('/dag-flow-view/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'r'; return }
     if (hash.startsWith('/market/')) { marketDate.value = hash.split('/')[2] || ''; tab.value = 'm'; return }
     if (path === '/k') { midx.value = q('idx') || '000001.SH'; tab.value = 'k'; return }
+    if (path === '/kr') { tab.value = 'kr'; return }  // 实时大盘（design/13，大盘子页面）
     if (hash.startsWith('/stock-fund/')) { stockFundType.value = hash.split('/')[2] || 'stock'; tab.value = 'u'; return }
     if (path === '/trade-review') { tradeReviewTab.value = q('tab') || 'review'; tab.value = 't'; return }
     if (path === '/admin/users') { tab.value = 'y'; return }
@@ -91,6 +92,7 @@ export const useNavStore = defineStore('nav', () => {
         target = '/k' + (midx.value && midx.value !== '000001.SH' ? '?idx=' + midx.value : '')
         break
       }
+      case 'kr': target = '/kr'; break  // 实时大盘
       case 'l': {
         // 保留列表页 URL 上已有的查询参数（cat/kw/page/sf/sd，StocksView 维护）——
         // history.back() 回到列表时 popstate 已把地址还原成带参 URL，此时 syncHash

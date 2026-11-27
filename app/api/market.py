@@ -558,3 +558,37 @@ def get_market_ratio_percentile(
         }
 
     return _cached(('ratio-pct', num, den, window, days), 600, _load)
+
+
+# ── 9. 实时大盘（design/13：内存缓存 + slot 重放，端点不触发外部请求）──
+
+@router.get("/market/realtime")
+def get_market_realtime():
+    """实时大盘聚合：宽度/情绪/指数分时/量能/涨停梯队/板块雷达/资金分时。
+
+    数据由 app/market_realtime 后台线程周期刷新（东财+新浪公开接口），本端点只读
+    内存缓存与 stock_treemap_intraday slot 重放，15s TTL。休市时返回 stale 数据。
+    """
+    def _load():
+        from app.market_realtime import get_realtime
+        db = get_sync_db()
+        try:
+            return get_realtime(db)
+        finally:
+            db.close()
+
+    return _cached(("realtime",), 15, _load)
+
+
+@router.get("/market/realtime/zt-history")
+def get_market_zt_history(days: int = Query(120, ge=10, le=500)):
+    """连板高度/涨跌停家数/炸板率历史（zt_pool_daily 日终快照）。"""
+    def _load():
+        from app.market_realtime import zt_history
+        db = get_sync_db()
+        try:
+            return zt_history(db, days)
+        finally:
+            db.close()
+
+    return _cached(("zt-history", days), 300, _load)

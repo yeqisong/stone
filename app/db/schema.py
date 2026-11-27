@@ -277,6 +277,24 @@ CREATE TABLE IF NOT EXISTS stock_treemap_intraday (
 CREATE INDEX IF NOT EXISTS idx_sti_date_slot ON stock_treemap_intraday (trade_date, slot);
 """
 
+# ── 涨停梯队日终快照（实时大盘页；盘中实时态不落库，每日收盘后存一档）──
+# pool/broken_pool 存东财涨停池/炸板池明细 JSONB（code/name/lbc/fund/fbt/zbc/hybk…），
+# 全量重建可由东财 push2ex 历史日期重拉（scripts/backfill_zt_pool.py）
+
+CREATE_ZT_POOL_DAILY = """
+CREATE TABLE IF NOT EXISTS zt_pool_daily (
+    trade_date   DATE PRIMARY KEY,
+    limit_up     INT NOT NULL DEFAULT 0,     -- 涨停家数
+    limit_down   INT,                        -- 跌停家数（取自宽度快照，缺省 NULL）
+    broken       INT NOT NULL DEFAULT 0,     -- 炸板家数（曾触涨停未封住）
+    broken_rate  NUMERIC(6,4),               -- broken / (limit_up + broken)
+    max_lbc      INT,                        -- 连板高度
+    pool         JSONB,
+    broken_pool  JSONB,
+    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # ── 行业资金流日频明细（多日趋势分析）──
 # main_net = tushare 大单+特大单净额（收盘后，元）
 # pressure = Σ 成交额 × CLV（当日买卖压力估算，元）
@@ -1875,6 +1893,7 @@ ALL_TABLES = [
     ("stock_fundamentals_history", CREATE_FUNDAMENTALS_HISTORY),
     ("stock_treemap_cache", CREATE_TREEMAP_CACHE),
     ("stock_treemap_intraday", CREATE_TREEMAP_INTRADAY),
+    ("zt_pool_daily", CREATE_ZT_POOL_DAILY),
     ("sector_flow_daily", CREATE_SECTOR_FLOW_DAILY),
     ("daily_completeness", CREATE_DAILY_COMPLETENESS),
     ("data_stats_cache", CREATE_STATS_CACHE),

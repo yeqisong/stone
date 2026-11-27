@@ -14,6 +14,7 @@
 web.ifzq.gtimg.cn 会 302 到不存在的 web3 子域——入口顺序把可用性差的放末位。
 实测（2026-11-11 盘中）：qt.gtimg.cn / sqt.gtimg.cn 快照可用（含指数、ETF）。
 """
+import json
 import logging
 import time
 from datetime import datetime
@@ -259,3 +260,64 @@ def realtime_quote(code: str, security_type: str = 'stock') -> dict:
     if not quote:
         raise RuntimeError(f'腾讯实时快照无该代码: {symbol}')
     return quote
+
+
+# ══════════════════════════════════════════
+# 指数当日分时（web.ifzq.gtimg.cn minute/query）——实时大盘页共用
+# 实测（2026-11-27 盘后）：指数与个股可用；返回当日逐分钟
+# [HHMM, price, 累计vol(手), 累计amount(元)] + qt 块昨收/最新价。
+# 注意：无「均价线」列（成分股聚合口径，腾讯网页版黄线另有私有接口）。
+# ══════════════════════════════════════════
+
+_MINUTE_URL = 'https://web.ifzq.gtimg.cn/appstock/app/minute/query'
+
+
+def _parse_minute_payload(payload: dict, symbol: str) -> dict:
+    """minute/query 响应 → {symbol, name, date, preClose, last, points}（纯函数，单测用）。"""
+    qt = (payload.get('qt') or {}).get(symbol) or []
+    inner = payload.get('data') or {}
+    rows = inner.get('data') if isinstance(inner, dict) else None
+    points = []
+    for ln in rows or []:
+        p = str(ln).split()
+        if len(p) < 4:
+            continue
+        hh, mm = p[0][:2], p[0][2:4]
+        points.append({
+            't': f'{hh}:{mm}',
+            'price': _qnum(p[1]),
+            'cum_vol': _qnum(p[2]),      # 手（当日累计）
+            'cum_amount': _qnum(p[3]),   # 元（当日累计）
+        })
+    return {
+        'symbol': symbol,
+        'name': str(qt[1]) if len(qt) > 1 else symbol,
+        'date': str(inner.get('date') or ''),
+        'preClose': _qnum(qt[4]) if len(qt) > 4 else None,
+        'last': _qnum(qt[3]) if len(qt) > 3 else None,
+        'points': points,
+    }
+
+
+def minute_trend(code: str, security_type: str = 'index') -> dict:
+    """当日分时：{symbol, name, date, preClose, last, points: [{t, price, cum_vol, cum_amount}]}。
+
+    每次请求 1 个代码，响应 <50KB；失败抛 RuntimeError（腾讯源 host 轮换同快照）。
+    """
+    symbol = _quote_symbol(code, security_type)
+    h = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://gu.qq.com/'}
+    errors: list[str] = []
+    for host in ('https://web.ifzq.gtimg.cn', 'https://ifzq.gtimg.cn'):
+        try:
+            r = requests.get(f'{host}/appstock/app/minute/query',
+                             params={'code': symbol}, headers=h, timeout=(3, 10))
+            r.raise_for_status()
+            payload = json.loads(r.text).get('data', {}).get(symbol) or {}
+            parsed = _parse_minute_payload(payload, symbol)
+            if not parsed['points']:
+                errors.append(f'{host}: 空分时')
+                continue
+            return parsed
+        except Exception as e:
+            errors.append(f'{host}: {type(e).__name__} {str(e)[:60]}')
+    raise RuntimeError(f'腾讯分时不可用: {"; ".join(errors)}')

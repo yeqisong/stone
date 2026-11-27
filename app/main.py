@@ -138,6 +138,9 @@ async def lifespan(app: FastAPI):
     # 10 分钟分时市值快照：页面没开也连续采集，避免 d10 跨 30 分钟
     from app.treemap_intraday import intraday_collect_loop
     treemap_task = asyncio.create_task(intraday_collect_loop())
+    # 实时大盘聚合（design/13）：交易时段周期刷新内存缓存 + 日终梯队落库
+    from app.market_realtime import market_realtime_loop
+    mrt_task = asyncio.create_task(market_realtime_loop())
     # 启动 Cron 定时调度器（后台线程）
     from scripts.cron_scheduler import start_cron_scheduler
     start_cron_scheduler()
@@ -147,12 +150,17 @@ async def lifespan(app: FastAPI):
     broadcast_task.cancel()
     intraday_task.cancel()
     treemap_task.cancel()
+    mrt_task.cancel()
     try:
         await intraday_task          # 让 watcher 走完 finally（线程里的请求自行结束）
     except asyncio.CancelledError:
         pass
     try:
         await treemap_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await mrt_task
     except asyncio.CancelledError:
         pass
     from app.intraday_ai import stop_ai_event_worker
