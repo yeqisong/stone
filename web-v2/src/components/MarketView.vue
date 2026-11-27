@@ -218,7 +218,7 @@ import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
 import axios from 'axios'
 import * as echarts from 'echarts'
-import { chartColors as T } from '../utils/chart'
+import { chartColors as T, attachChartWheelGesture } from '../utils/chart'
 import AppIcon from './AppIcon.vue'
 import MarketSentiment from './MarketSentiment.vue'
 
@@ -871,13 +871,17 @@ function resizeAll() {
   }
 }
 
+let unbindWheelGesture = null
 onMounted(() => {
   load()
   window.addEventListener('resize', resizeAll)
+  // 触控板双指手势定向：横滑滚 dataZoom 窗口 / 竖滑翻页 / 捏合缩放（见 utils/chart.js）
+  unbindWheelGesture = attachChartWheelGesture()
 })
 onBeforeUnmount(() => {
   // 注意必须在 onBeforeUnmount（DOM 还在）dispose，onUnmounted 时已查不到节点
   loadSeq++
+  if (unbindWheelGesture) { unbindWheelGesture(); unbindWheelGesture = null }
   for (const el of document.querySelectorAll('.mv-chart')) {
     if (el._echart) { el._echart.dispose(); delete el._echart }
   }
