@@ -258,3 +258,27 @@ class TestFindingsCopy:
         out = _findings(summary, beh, {}, None)
         fee = [x for x in out if x["key"] == "fees"][0]
         assert fee["title"].startswith("期间手续费")
+
+
+class TestScoreSummary:
+    """纪律分 summary 必须点名扣分最多的两项，而不是固定话术。"""
+
+    def _score(self, dd=0.5, pf=0.5, mw=0.67):
+        from app.trade_review import _score
+        summary = {"max_drawdown": dd}
+        beh = {"profit_factor": pf, "disposition_ratio": 1.0, "trades_per_day": 0,
+               "same_day_roundtrips": 0, "rebuy_within_window": 0,
+               "post_loss_next_day": {}, "post_win_next_day": {},
+               "max_single_weight": mw}
+        return _score(summary, beh, {})
+
+    def test_names_worst_two_parts(self):
+        s = self._score()
+        assert "当前扣分最多的是" in s["summary"]
+        assert "回撤控制" in s["summary"]
+        assert "仓位纪律" in s["summary"] or "盈亏结构" in s["summary"]
+
+    def test_zero_penalty_says_keep(self):
+        s = self._score(dd=0.0, pf=2.0, mw=0.1)
+        assert s["summary"] == "各项纪律都没有扣分，保持。"
+        assert s["grade"] == "A"

@@ -862,8 +862,17 @@ def _score(summary: dict, beh: dict, cfg: dict) -> dict:
         grade, label = "D", "高风险"
     else:
         grade, label = "E", "失控"
+    # summary 点名扣分最多的两项（parts 已有数据，一句话落到具体项）；
+    # 全部零扣分时给保持提示而不是「先改两项」
+    worst2 = sorted(parts, key=lambda p: -p["penalty"])
+    worst2 = [p for p in worst2 if p["penalty"] > 0][:2]
+    if worst2:
+        names = "、".join(f"{p['key']}（-{p['penalty']:g}）" for p in worst2)
+        summary = f"当前扣分最多的是{names}；分数低不代表没救，先改这两项。"
+    else:
+        summary = "各项纪律都没有扣分，保持。"
     return {"score": score, "grade": grade, "label": label, "parts": parts,
-            "summary": "分数低不代表没救，代表当前操作方式在数学上必然亏钱；先改最容易的两项。"}
+            "summary": summary}
 
 
 # ── 主入口 ──
