@@ -66,22 +66,30 @@ def _default_code(items: list):
 
 
 def _build_cross_section(index_code: str, asof: date, lam: float) -> dict:
-    """计算指数成分截面（未按行业过滤），供缓存与上层过滤复用。"""
+    """计算指数成分截面（未按行业过滤），供缓存与缓存上层过滤复用。
+
+    成分股取 asof 当日已知的最新一期快照（index_weight 为月末快照）。PIT 截止日
+    必须约束成分股：PE / 一致预期 / 利润表都是 `<= asof`，成分股若取最新一期，
+    历史 as_of 就混进了未来的调入调出（幸存者偏差）。
+    """
     db = get_sync_db()
     try:
         snap = db.execute(text(
-            "SELECT MAX(trade_date) FROM index_weight WHERE index_code=:idx"),
-            {"idx": index_code}).scalar()
+            "SELECT MAX(trade_date) FROM index_weight "
+            "WHERE index_code=:idx AND trade_date <= :asof"),
+            {"idx": index_code, "asof": asof}).scalar()
         if not snap:
             return {'as_of': asof.isoformat(), 'index': {
                         'code': index_code, 'name': INDEX_NAMES[index_code],
                         'snapshot_date': None},
                     'params': {'lam': lam, 'g_hist_years': 5, 'g_cons_horizon': 3},
                     'coverage': {'members': 0, 'with_pe': 0, 'with_consensus': 0,
-                                 'with_peg': 0},
+                                 'with_peg': 0, 'with_peg_full': 0},
                     'industries': [], 'default_code': None, 'items': [],
                     'valuation_date': None, 'consensus_date': None,
-                    'note': '指数成分快照缺失（先跑 index_weight 节点）'}
+                    'note': (f'{asof.isoformat()} 之前没有指数成分快照'
+                             if asof < date.today()
+                             else '指数成分快照缺失（先跑 index_weight 节点）')}
 
         members = _rows_to_dicts(db.execute(text("""
             SELECT w.stock_code,
@@ -101,7 +109,7 @@ def _build_cross_section(index_code: str, asof: date, lam: float) -> dict:
                         'snapshot_date': str(snap)},
                     'params': {'lam': lam, 'g_hist_years': 5, 'g_cons_horizon': 3},
                     'coverage': {'members': 0, 'with_pe': 0, 'with_consensus': 0,
-                                 'with_peg': 0},
+                                 'with_peg': 0, 'with_peg_full': 0},
                     'industries': [], 'default_code': None, 'items': [],
                     'valuation_date': None, 'consensus_date': None}
 

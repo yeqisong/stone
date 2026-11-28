@@ -118,6 +118,38 @@ def test_peg_series_pit_and_rolling_band():
     assert last['peg_pct'] == pytest.approx(100.0)
 
 
+def test_cross_section_membership_is_point_in_time():
+    """as_of（PIT 截止日）必须约束成分股快照：否则历史截面混进未来的调入调出。
+
+    PE / 一致预期 / 利润表都按 `<= asof` 取，成分股却取最新一期——as_of 就名不副实。
+    这里只看查询本身（不连库）：成分股快照查询必须带 asof 上界。
+    """
+    import app.api.peg as api
+    from datetime import datetime as _dt
+
+    class Recorder:
+        def __init__(self): self.sql = []
+        def execute(self, stmt, params=None):
+            self.sql.append((str(stmt), params))
+            class _R:
+                def scalar(self): return None
+                def fetchall(self): return []
+            return _R()
+        def close(self): pass
+
+    rec = Recorder()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(api, 'get_sync_db', lambda: rec)
+        asof = _dt(2026, 9, 15).date()
+        out = api._build_cross_section('000300.SH', asof, 0.5)
+    first_sql, first_params = rec.sql[0]
+    assert 'FROM index_weight' in first_sql
+    assert 'trade_date <= :asof' in first_sql                      # 成分股按 asof 取
+    assert first_params == {'idx': '000300.SH', 'asof': asof}
+    assert out['items'] == [] and '快照' in out['note']            # asof 前没有快照 → 明说
+    assert 'with_peg_full' in out['coverage']                      # 覆盖信息同形状
+
+
 def test_peg_series_drops_thin_consensus_like_cross_section():
     """同一只股票：机构数 <3 的一致预期在截面是「占位口径」，历史序列也必须退回仅 G_hist。"""
     start = date(2026, 6, 1)                       # 2025 年报已于 04-30 公告
