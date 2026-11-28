@@ -92,10 +92,20 @@ export function newBuySummary(cand) {
   return { allow: true, brief: parts.join(' · ') || st.advice || '' }
 }
 
-/** 决策线「开仓闸门」：实时空仓闸门（市场闸门 × regime × 盘面情绪）缺失时给中性占位。 */
+/**
+ * 决策线「开仓闸门」：实时空仓闸门（市场闸门 × regime × 盘面情绪）缺失时给中性占位。
+ * partial=结论不完整：后端把「情绪源不可用 / 仍是上一交易日口径」写在 reasons 靠后的位置，
+ * 展示层不能把缺了一路的判断说成完整的「放行」，所以单独拎出来标在 chip 旁边。
+ */
 export function gateSummary(gate) {
-  if (!gate || !gate.level) return { level: 'none', label: '—', reason: '' }
-  return { level: gate.level, label: gate.label || gate.level, reason: (gate.reasons || [])[0] || '' }
+  if (!gate || !gate.level) return { level: 'none', label: '—', reason: '', partial: false }
+  const reasons = gate.reasons || []
+  return {
+    level: gate.level,
+    label: gate.label || gate.level,
+    reason: reasons[0] || '',
+    partial: reasons.some(r => /不可用|未含|上一交易日/.test(String(r))),
+  }
 }
 
 /**

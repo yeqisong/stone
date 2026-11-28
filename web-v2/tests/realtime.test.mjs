@@ -77,10 +77,16 @@ test('决策线「开新仓」：禁买给拦截原因，允许给仓位余量',
   assert.deepEqual(newBuySummary({ allowed: true, state: {} }), { allow: true, brief: '' })
 })
 
-test('决策线「开仓闸门」：缺失给中性占位，不假装开放也不假装关闭', () => {
-  assert.deepEqual(gateSummary(null), { level: 'none', label: '—', reason: '' })
+test('决策线「开仓闸门」：缺失给中性占位，不假装开放也不假装关闭；结论不完整要单独标出', () => {
+  assert.deepEqual(gateSummary(null), { level: 'none', label: '—', reason: '', partial: false })
   assert.deepEqual(gateSummary({ level: 'caution', label: '谨慎', reasons: ['市场闸门走平', 'regime 放行'] }),
-    { level: 'caution', label: '谨慎', reason: '市场闸门走平' })
+    { level: 'caution', label: '谨慎', reason: '市场闸门走平', partial: false })
+  // 后端把「缺了一路」写在 reasons 靠后位置：展示层不能把它说成完整的「放行」
+  const partial = gateSummary({ level: 'open', label: '放行', reasons: ['市场闸门、regime 与盘面情绪均未触发限制', '盘面情绪源不可用：结论未含实时盘面'] })
+  assert.equal(partial.level, 'open')
+  assert.equal(partial.reason, '市场闸门、regime 与盘面情绪均未触发限制')
+  assert.equal(partial.partial, true)
+  assert.equal(gateSummary({ level: 'open', label: '放行', reasons: ['x', '盘面情绪暂为上一交易日收盘口径（情绪分 60），今日开盘后更新'] }).partial, true)
 })
 
 test('盘面异动计数与动作元数据', () => {

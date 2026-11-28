@@ -13,6 +13,8 @@
     <div class="rds-seg rds-gate" :title="gateTip">
       <span class="rds-k">开仓闸门</span>
       <b class="rds-state" :class="gate.level !== 'none' ? 'gate-' + gate.level : ''">{{ gate.label }}</b>
+      <!-- 结论不完整（情绪源不可用/仍是上一交易日口径）：不能把缺了一路的判断说成完整的「放行」 -->
+      <span v-if="gate.partial" class="rds-partial" title="闸门结论不完整：有数据源不可用或还是上一交易日口径，详见整行提示">不完整</span>
       <span class="rds-dim rds-clip">{{ gate.reason }}</span>
       <template v-if="canRadar">
         <span class="rds-div"></span>
@@ -102,6 +104,7 @@ const gateTip = computed(() => {
 .rds-state.gate-open { color: var(--c-down); border-color: var(--c-down); }
 .rds-state.gate-caution { color: var(--c-warning); border-color: var(--c-warning); }
 .rds-state.gate-closed { color: var(--c-error); border-color: var(--c-error); }
+.rds-partial { padding: 0 5px; border-radius: 3px; font-size: var(--text-micro); color: var(--c-warning); background: var(--warn-weak, var(--c-accent-weak)); white-space: nowrap; }
 .rds-stale { color: var(--c-warning); }
 
 .rds-link {
