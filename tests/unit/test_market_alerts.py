@@ -113,13 +113,10 @@ class TestMarketAlertEvaluate(unittest.TestCase):
 
     def test_disabled(self):
         db = FakeAlertDB()
-        orig = mrt.read_market_alerts
-        mrt.read_market_alerts = lambda d: {**mrt.DEFAULT_MARKET_ALERTS, 'enabled': False}
-        try:
+        with mock.patch.object(mrt, 'read_market_alerts',
+                               lambda d: {**mrt.DEFAULT_MARKET_ALERTS, 'enabled': False}):
             self.assertEqual(self._eval(db), [])
-            self.assertEqual(db.inserted, [])
-        finally:
-            mrt.read_market_alerts = orig
+        self.assertEqual(db.inserted, [])
 
     def test_index_surge_then_no_repeat(self):
         """急涨触发一次；同向持续不重复（状态机）。"""
@@ -236,12 +233,11 @@ class TestMarketAlertEvaluate(unittest.TestCase):
 
     def test_sentiment_baseline_then_panic(self):
         """首轮只建基线；跨入 panic 报 critical。"""
-        mrt.market_sentiment.get = lambda db, use_cache=True: {'level': 'neutral', 'score': 55}
-        self._eval(FakeAlertDB())                      # 建基线 sent_level='neutral'
-        mrt.market_sentiment.get = lambda db, use_cache=True: {'level': 'panic', 'score': 18}
+        self.assertEqual(_kinds(), [])                              # 建基线 neutral
+        self.senti.update(level='panic', score=18)
         out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_panic' for x in out))
-        self.assertEqual([x for x in out if x['kind'] == 'mk_panic'][0]['level'], 'critical')
+        self.assertEqual([x['kind'] for x in out], ['mk_panic'])
+        self.assertEqual(out[0]['level'], 'critical')
 
     def test_kind_cooldown_suppresses(self):
         """per-kind 冷却命中 → 不落库。"""
@@ -461,22 +457,29 @@ class TestRefreshPoolDate(unittest.TestCase):
 
 
 class TestLiveGate(unittest.TestCase):
-    """三源组合取最严级别（mock 三源，use_cache=False 绕过缓存）。"""
+    """三源组合取最严级别（三源全部打桩，use_cache=False 绕过缓存）。"""
 
     def setUp(self):
         bc._gate_cache.update(ts=0.0, data=None)
-        self._orig = (bc.market_gate, bc.regime_gated_today, bc.market_sentiment.get)
-
-    def tearDown(self):
-        bc.market_gate, bc.regime_gated_today, bc.market_sentiment.get = self._orig
-        bc._gate_cache.update(ts=0.0, data=None)
+        self.addCleanup(bc._gate_cache.update, ts=0.0, data=None)
+        self._patch()
 
     def _patch(self, mg_level='open', gated=False, s_level='neutral', s_score=55, s_stale=False):
         self.senti = {'level': s_level, 'score': s_score, 'stale': s_stale,
                       'advice': {'entry': '按买点检查', 'stop': '止损正常执行'}}
-        bc.market_gate = lambda db: {'level': mg_level, 'pass': mg_level != 'closed', 'reason': 'mock 市场闸门'}
-        bc.regime_gated_today = lambda db, today=None: (gated, {'enabled': gated, 'ma_window': 20, 'max_skip_days': 2})
-        bc.market_sentiment.get = lambda db, use_cache=True: dict(self.senti)
+        # patch.object + addCleanup：用例中途失败也一定还原，不污染同进程后续测试
+        # （bc.market_sentiment 就是 app.market_sentiment 模块本身，裸赋值会泄漏出去）
+        stubs = (
+            (bc, 'market_gate',
+             lambda db: {'level': mg_level, 'pass': mg_level != 'closed', 'reason': 'mock 市场闸门'}),
+            (bc, 'regime_gated_today',
+             lambda db, today=None: (gated, {'enabled': gated, 'ma_window': 20, 'max_skip_days': 2})),
+            (bc.market_sentiment, 'get', lambda db, use_cache=True: dict(self.senti)),
+        )
+        for obj, name, val in stubs:
+            patcher = mock.patch.object(obj, name, val)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_all_open(self):
         self._patch()
@@ -531,8 +534,8 @@ class TestLiveGate(unittest.TestCase):
         def boom(db, use_cache=True):
             raise RuntimeError('tencent down')
 
-        bc.market_sentiment.get = boom
-        g = bc.live_gate(None, use_cache=False)
+        with mock.patch.object(bc.market_sentiment, 'get', boom):
+            g = bc.live_gate(None, use_cache=False)
         self.assertEqual(g['level'], 'open')
         self.assertTrue(any('情绪源不可用' in r for r in g['reasons']))
         self.assertIsNone(g['sources']['sentiment']['level'])

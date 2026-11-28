@@ -24,6 +24,8 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from loguru import logger
+
 from crawler.news.sources import em_get
 
 _REFERER = {"Referer": "https://quote.eastmoney.com/"}
@@ -87,37 +89,24 @@ def _hhmmss(v: Any) -> Optional[str]:
 _ZT_UT = "7eea3edcaed734bea9cbfc24409ed989"  # 东财公开页固定 token（akshare 同款）
 
 
+_ZT_PAGESIZE = 1000   # 实测上限（2026-11-27 涨停 417 家时 pagesize=300 被截断）
+
+
 def _fetch_pool(kind: str, date_yyyymmdd: str) -> list[dict]:
     """kind: ZTPool(涨停) / ZBPool(炸板)。空数据返回 []（当日无涨停是合法状态）。"""
     url = f"https://push2ex.eastmoney.com/getTopic{kind}"
     params = {
         "ut": _ZT_UT, "dpt": "wz.ztzt",
-        "Pageindex": 0, "pagesize": 1000,
+        "Pageindex": 0, "pagesize": _ZT_PAGESIZE,
         "sort": "fbt:asc", "date": str(date_yyyymmdd),
     }
     r = em_get(url, params=params, headers=_REFERER, timeout=(5, 20))
     obj = json.loads(r.text)  # push2ex 返回纯 JSON
     pool = (obj.get("data") or {}).get("pool") or []
-    out: list[dict] = []
-    for it in pool:
-        out.append({
-            "code": str(it.get("c") or "").zfill(6),
-            "name": it.get("n") or "",
-            "price": _num(it.get("p")) / 1000 if _num(it.get("p")) else None,
-            "chg_pct": _num(it.get("zdp")),
-            "amount": _num(it.get("amount")),
-            "ltsz": _num(it.get("ltsz")),
-            "turnover": _num(it.get("hs")),
-            "lbc": _int(it.get("lbc")) or 1,       # 炸板池无 lbc → 1（语义：冲击首板未封）
-            "fbt": _hhmmss(it.get("fbt")),
-            "lbt": _hhmmss(it.get("lbt")),
-            "fund": _num(it.get("fund")),          # 封单额（元），炸板池无
-            "zbc": _int(it.get("zbc")) or 0,
-            "hybk": it.get("hybk") or "",
-            "zttj": _zttj(it.get("zttj")),         # 几天几板，如 "5天3板"
-            "zt_price": _num(it.get("ztp")) / 1000 if _num(it.get("ztp")) else None,
-        })
-    return out
+    if len(pool) >= _ZT_PAGESIZE:
+        # 千股涨停级别才会碰到；接口不支持翻页，只能留痕让人知道数字偏小
+        logger.warning(f"[em-quote] {kind} {date_yyyymmdd} 返回 {len(pool)} 行，达到分页上限，可能被截断")
+    return _parse_pool_rows(pool)
 
 
 def _zttj(v: Any) -> str:
@@ -130,8 +119,42 @@ def _zttj(v: Any) -> str:
     return str(v) if v else ""
 
 
+def _parse_pool_rows(pool: list) -> list[dict]:
+    """push2ex pool 行 → 标准化 dict（纯函数：fixture 直接喂，不经网络）。
+
+    字段口径（2026-11-27 实测）：p/ztp 是价格×1000；fund 封单额（元）；fbt/lbt 是
+    HHMMSS 整数；zttj={days,ct}；炸板池没有 lbc/fund，lbc 记 1（冲击首板未封）。
+    """
+    out: list[dict] = []
+    for it in pool or []:
+        p, ztp = _num(it.get("p")), _num(it.get("ztp"))
+        out.append({
+            "code": str(it.get("c") or "").zfill(6),
+            "name": it.get("n") or "",
+            "price": p / 1000 if p else None,
+            "chg_pct": _num(it.get("zdp")),
+            "amount": _num(it.get("amount")),
+            "ltsz": _num(it.get("ltsz")),
+            "turnover": _num(it.get("hs")),
+            "lbc": _int(it.get("lbc")) or 1,       # 炸板池无 lbc → 1（语义：冲击首板未封）
+            "fbt": _hhmmss(it.get("fbt")),
+            "lbt": _hhmmss(it.get("lbt")),
+            "fund": _num(it.get("fund")),          # 封单额（元），炸板池无
+            "zbc": _int(it.get("zbc")) or 0,
+            "hybk": it.get("hybk") or "",
+            "zttj": _zttj(it.get("zttj")),         # 几天几板，如 "5天3板"
+            "zt_price": ztp / 1000 if ztp else None,
+        })
+    return out
+
+
 def fetch_zt_pools(date_yyyymmdd: str) -> dict:
-    """涨停池 + 炸板池（2 次 em_get）。返回 {pool, broken_pool, date}。"""
+    """涨停池 + 炸板池（2 次 em_get）。返回 {pool, broken_pool, date}。
+
+    date 是**请求**的日期。东财对尚无数据的日期（盘前/休市日/未来日）会静默返回
+    最近一个交易日的池，调用方必须只请求确定已有数据的日期（见
+    app/market_realtime._pool_trade_date）。
+    """
     return {
         "date": str(date_yyyymmdd),
         "pool": _fetch_pool("ZTPool", date_yyyymmdd),
