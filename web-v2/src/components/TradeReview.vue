@@ -15,7 +15,7 @@
             <n-button v-for="p in periods" :key="p.v" size="tiny" :type="period===p.v?'primary':'default'" @click="setPeriod(p.v)">{{ p.label }}</n-button>
           </n-button-group>
           <n-button v-perm="'portfolio.trades.import'" size="tiny" @click="showImport=true"><AppIcon name="upload" :size="12" />  导入交割单</n-button>
-          <n-button size="tiny" quaternary :loading="loading" @click="loadAll"><AppIcon name="refresh" :size="12" /></n-button>
+          <n-button size="tiny" quaternary :loading="loading" @click="refreshAll" title="强制重新计算"><AppIcon name="refresh" :size="12" /></n-button>
           <n-button v-if="!page" size="tiny" quaternary @click="show=false">关闭</n-button>
         </div>
       </div>
@@ -349,7 +349,19 @@ function periodRange(){
   return { start: dateStr(start), end: dateStr(end) }
 }
 
-async function loadReview(){
+// 期间缓存：每次切期间后端要全量重算 0.7~1.5s；按 period 键缓存响应，
+// 导入/撤销批次/保存阈值时失效，头部刷新按钮强制重算
+const reviewCache = new Map()
+function invalidateReviewCache(){ reviewCache.clear() }
+async function loadReview(force = false){
+  const cached = !force && reviewCache.get(period.value)
+  if (cached) {
+    review.value = cached
+    syncRuleEdits()
+    await nextTick()
+    renderChart()
+    return
+  }
   loading.value = true; error.value = ''
   try{
     const r = periodRange()
@@ -357,6 +369,7 @@ async function loadReview(){
       params: { start: r.start, end: r.end }, timeout: 120000,
     })
     review.value = res.data
+    reviewCache.set(period.value, res.data)
     syncRuleEdits()
     await nextTick()
     renderChart()
@@ -610,6 +623,7 @@ async function saveRules(){
     await axios.put(API + '/api/portfolio/trades/discipline/rules', body)
     message.success('纪律阈值已保存')
     rulesCfg.value = { ...rulesCfg.value, ...body }
+    invalidateReviewCache()
     await Promise.all([loadReview(), loadGate()])
   }catch(e){ message.error(e.response?.data?.detail || '保存失败') }
   finally{ savingRules.value = false }
@@ -640,6 +654,7 @@ async function removeBatch(id){
   try{
     await axios.delete(API + '/api/portfolio/trades/batches/' + id)
     message.success('批次已删除；请确认持仓是否需要重新同步')
+    invalidateReviewCache()
     await Promise.all([loadBatches(), loadReview()])
     emit('changed')
   }catch(e){ message.error(e.response?.data?.detail || '删除失败') }
@@ -675,6 +690,10 @@ function onTab(v){
   if (v === 'rules') loadRulesData()
   if (v === 'execution') loadExecution()
 }
+async function refreshAll(){
+  invalidateReviewCache()
+  await loadAll()
+}
 async function loadAll(){
   await loadReview()
   if (tab.value === 'trades' && !tradeRows.value.length) loadTrades()
@@ -684,7 +703,8 @@ async function loadAll(){
 function onImported(res){
   showImport.value = false
   emit('changed')
-  // 导入改变交割单与持仓：闸门/批次下次进入纪律 tab 重拉
+  // 导入改变交割单与持仓：期间缓存与闸门/批次标记全部失效
+  invalidateReviewCache()
   gateLoaded.value = false
   batchesLoaded.value = false
   loadAll()
