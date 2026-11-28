@@ -657,8 +657,10 @@ def _worst_avgdown(detail: dict) -> Optional[dict]:
 def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) -> list[dict]:
     out = []
 
-    def add(level, key, title, evidence, advice):
-        out.append({"level": level, "key": key, "title": title, "evidence": evidence, "advice": advice})
+    def add(level, key, title, evidence, advice, stock_code=None):
+        # 有具体标的的结论带 stock_code，前端可一键跳到该股交割单明细
+        out.append({"level": level, "key": key, "title": title, "evidence": evidence,
+                    "advice": advice, "stock_code": stock_code})
 
     dd = summary.get("max_drawdown") or 0
     if dd >= 0.25:
@@ -697,7 +699,8 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
             f"已有持仓上的加仓：亏损时 {beh['add_loss_count']} 笔 / {_money(add_loss_amt)}，"
             f"盈利时 {beh['add_win_count']} 笔 / {_money(add_win_amt)}。{case}",
             "机械规则：浮亏超过 -8% 的持仓禁止加仓；加仓只允许在盈利且收盘价站上 20 日线时，"
-            "单次不超过原仓位 50%。")
+            "单次不超过原仓位 50%。",
+            stock_code=(beh.get("worst_avgdown") or {}).get("code"))
 
     pf = beh.get("profit_factor")
     if pf is not None and pf < 1.0:
@@ -746,7 +749,8 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
             f"{w.get('name')} 从 {w.get('start_date')} 持有到 {w.get('end_date')}，"
             f"成本 {_num(w.get('cost_basis'), 2)}；买入合计 {_money(w.get('buy_amount'))}。",
             "单笔风险预算 ≤ 账户 2%；按止损距离反推仓位：仓位 = 2% × 账户 ÷ 止损幅度。"
-            "先定止损，再算能买多少股。")
+            "先定止损，再算能买多少股。",
+            stock_code=w.get("code"))
 
     mw = beh.get("max_single_weight")
     if mw is not None and mw > 0.35:
@@ -754,7 +758,8 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
             f"单票一度占账户 {mw*100:.0f}%，把账户压在一只下跌股上",
             f"{beh.get('max_weight_date')} 最大持仓 {beh.get('max_weight_code')} 占比 {_pct(mw, 0)}；"
             f"同时持仓最多 {beh.get('max_positions')} 只。",
-            "单票 ≤ 20%，单一行业 ≤ 35%；超过就只减不加。集中不是勇敢，是把一次判断错误放大成账户级错误。")
+            "单票 ≤ 20%，单一行业 ≤ 35%；超过就只减不加。集中不是勇敢，是把一次判断错误放大成账户级错误。",
+            stock_code=beh.get("max_weight_code"))
 
     if counterfactual:
         hold_ret = counterfactual.get("hold_return_pct")

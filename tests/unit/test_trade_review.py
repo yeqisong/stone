@@ -282,3 +282,43 @@ class TestScoreSummary:
         s = self._score(dd=0.0, pf=2.0, mw=0.1)
         assert s["summary"] == "各项纪律都没有扣分，保持。"
         assert s["grade"] == "A"
+
+
+class TestFindingsStockCode:
+    """带具体标的的结论要附 stock_code，前端才能一键跳该股明细。"""
+
+    def _mk(self):
+        from app.trade_review import _findings
+        summary = {"max_drawdown": 0.40, "peak_date": "2026-01-02", "trough_date": "2026-02-01",
+                   "peak_equity": 100.0, "trough_equity": 60.0, "benchmark_name": "沪深300",
+                   "benchmark_return": -0.1, "net_deposit": 0, "equity_start": 100.0,
+                   "equity_end": 70.0, "account_change": -30.0, "return_pct": -0.3, "pnl": -30.0}
+        beh = {
+            "add_loss_amount": 200000, "add_win_amount": 0, "add_loss_count": 12, "add_win_count": 0,
+            "worst_avgdown": {"code": "300274", "name": "阳光电源", "count": 5, "amount": 80000.0,
+                              "first_price": 90.0, "last_price": 70.0, "drop_pct": -0.22,
+                              "first_date": "2026-08-01", "last_date": "2026-09-01", "avg_cost": 85.0},
+            "profit_factor": 0.5, "win_rate": 0.3, "avg_win": 100.0, "avg_loss": -800.0,
+            "expectancy": -300.0, "top3_wins": [300.0, 200.0, 100.0],
+            "top3_losses": [-3000.0, -2000.0, -1000.0],
+            "worst_episode": {"code": "002104", "name": "兆易创新", "pnl": -20000.0,
+                              "start_date": "2026-08-21", "end_date": "2026-11-17",
+                              "cost_basis": 340.53, "buy_amount": 68000.0},
+            "worst_episode_return": -0.29,
+            "trades_per_day": 0.5, "stocks_per_week": 1.0, "trades": 10, "active_days": 20,
+            "distinct_stocks": 3, "same_day_roundtrips": 0, "rebuy_within_window": 0,
+            "rebuy_window_days": 5, "max_day_trades": 1, "max_day_buys": 1,
+            "post_loss_next_day": {"avg_buy_amount": 0}, "post_win_next_day": {"avg_buy_amount": 0},
+            "max_consecutive_loss_days": 0, "post_sell_5d": None,
+            "max_single_weight": 0.67, "max_weight_code": "300274", "max_weight_date": "2026-10-22",
+            "max_positions": 10, "fee_total": 0,
+        }
+        return _findings(summary, beh, {}, None)
+
+    def test_findings_carry_stock_code(self):
+        by_key = {f["key"]: f for f in self._mk()}
+        assert by_key["averaging_down"]["stock_code"] == "300274"
+        assert by_key["single_loss"]["stock_code"] == "002104"
+        assert by_key["concentration"]["stock_code"] == "300274"
+        # 账户级结论不带 stock_code
+        assert by_key["drawdown"]["stock_code"] is None

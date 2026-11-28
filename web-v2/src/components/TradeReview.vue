@@ -66,6 +66,8 @@
                   <div class="tr-finding-head">
                     <span class="tr-lv">{{ levelLabel[f.level] }}</span>
                     <b>{{ f.title }}</b>
+                    <n-button v-if="f.stock_code" size="tiny" quaternary type="primary"
+                      style="margin-left:auto" @click="filterByStockCode(f.stock_code)">看明细</n-button>
                   </div>
                   <div class="tr-finding-ev">{{ f.evidence }}</div>
                   <div class="tr-finding-advice"><span>怎么改</span>{{ f.advice }}</div>
@@ -426,6 +428,16 @@ const metricGroups = computed(() => {
       { label:'同日又买又卖', value:`${b.same_day_roundtrips ?? '—'} 天` },
       { label:`卖出后${b.rebuy_window_days ?? 7}日回补`, value:`${b.rebuy_within_window ?? '—'} 次` },
     ]},
+    { title:'追高', items:[
+      { label:'买入价当日位置', value: b.chase_position == null ? '—' : `${(b.chase_position*100).toFixed(0)}%`,
+        color: (b.chase_position ?? 0) > 0.7 ? 'var(--c-error)' : 'var(--c-text)' },
+      { label:'高位追入占比', value: b.chase_high_share == null ? '—' : `${(b.chase_high_share*100).toFixed(0)}%`,
+        color: (b.chase_high_share ?? 0) > 0.3 ? 'var(--c-error)' : 'var(--c-text)' },
+      { label:'追涨买入占比', value: b.buy_up_3pct_share == null ? '—' : `${(b.buy_up_3pct_share*100).toFixed(0)}%`,
+        color: (b.buy_up_3pct_share ?? 0) > 0.3 ? 'var(--c-error)' : 'var(--c-text)' },
+      { label:'结论', value: ((b.chase_position ?? 0) > 0.7 || (b.chase_high_share ?? 0) > 0.3) ? '常态追高' : '追高不频繁',
+        color: ((b.chase_position ?? 0) > 0.7 || (b.chase_high_share ?? 0) > 0.3) ? 'var(--c-error)' : 'var(--c-text)' },
+    ]},
     { title:'亏损后行为', items:[
       { label:'亏损日次日', value:`${b.post_loss_next_day?.avg_trades ?? '—'} 笔 / ${money(b.post_loss_next_day?.avg_buy_amount)}` },
       { label:'盈利日次日', value:`${b.post_win_next_day?.avg_trades ?? '—'} 笔 / ${money(b.post_win_next_day?.avg_buy_amount)}` },
@@ -581,13 +593,14 @@ const stockCols = [
   { title:'操作', width:80, render(r){ return h(NButton,{size:'tiny',quaternary:true,onClick:()=>filterByStock(r)},()=>'看明细') } },
 ]
 function stockRowProps(row){ return { style:'cursor:pointer', onClick:()=>filterByStock(row) } }
-function filterByStock(row){
-  tFilters.code = row.stock_code
+function filterByStockCode(code){
+  tFilters.code = code
   tFilters.range = null
   tPage.value = 1
   tab.value = 'trades'
   loadTrades()
 }
+function filterByStock(row){ filterByStockCode(row.stock_code) }
 
 // ── 纪律规则 ──
 const rulesCfg = ref({})
