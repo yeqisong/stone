@@ -743,11 +743,21 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
     if counterfactual:
         hold_ret = counterfactual.get("hold_return_pct")
         if hold_ret is not None and hold_ret < (summary.get("return_pct") or 0):
+            # 卖出后走势的两都要如实说：均值为负才是「卖出时点不差」，
+            # 为正说明换股后原票继续走强（卖得偏早），不能无条件下同一个结论
+            ps5 = beh.get("post_sell_5d")
+            if ps5 is None:
+                tail = ""
+            elif ps5 < 0:
+                tail = f"卖出后 5 日均值 {_pct(ps5, 1)}，卖出时点并不差。"
+            else:
+                tail = (f"卖出后 5 日均值 {_pct(ps5, 1)}（卖得偏早，原票还在走强），"
+                        "但换股整体仍好于死扛期初持仓。")
             add("ok", "strength_selection",
                 "你并不是不会选股：换股让你避开了期初持仓的深坑",
-                f"期初 6 只票原样持有约 {_pct(hold_ret)}（{_money(counterfactual.get('hold_pnl'))}）；"
-                f"实际交易（剔除入金）{_pct(summary.get('return_pct'))}（{_money(summary.get('pnl'))}）。"
-                f"卖出后 5 日均值 {_pct(beh.get('post_sell_5d'), 1)}，说明卖出时点并不差。",
+                f"期初 {counterfactual.get('n_holdings') or '—'} 只票原样持有约 {_pct(hold_ret)}"
+                f"（{_money(counterfactual.get('hold_pnl'))}）；"
+                f"实际交易（剔除入金）{_pct(summary.get('return_pct'))}（{_money(summary.get('pnl'))}）。{tail}",
                 "问题不在眼光，在仓位和手速：把选股能力留在场上，把风险控制和交易频率降下来。")
         elif hold_ret is not None:
             gap = (summary.get("return_pct") or 0) - hold_ret
@@ -762,7 +772,7 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
 
     if beh.get("fee_total"):
         add("info", "fees",
-            f"全年手续费/印花税 {_money(beh['fee_total'])}（{beh.get('fee_bps')} 个基点）",
+            f"期间手续费/印花税 {_money(beh['fee_total'])}（{beh.get('fee_bps')} 个基点）",
             f"共 {beh['trades']} 笔成交，摩擦成本占买入+卖出总额的 "
             f"{_pct((beh.get('fee_bps') or 0) / 10000, 3)}。",
             "费用不是主因，但高频会让它变成持续的负期望；按上面的频率规则降下来即可。")
@@ -957,6 +967,7 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
     # “什么都不做”的反事实：区间初持仓原样持有到期末
     hold_pnl = 0.0
     hold_cost = 0.0
+    hold_n = 0
     for code, st in state0.items():
         q = st["qty"]
         if q <= 0.5:
@@ -969,10 +980,12 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
             if d <= end:
                 px_end = cs[d]
         if px_end:
+            hold_n += 1
             hold_pnl += q * (px_end - st["avg"])
             hold_cost += q * st["avg"]
     counterfactual = {"hold_pnl": round(hold_pnl, 2),
-                      "hold_return_pct": round(hold_pnl / hold_cost, 6) if hold_cost else None}
+                      "hold_return_pct": round(hold_pnl / hold_cost, 6) if hold_cost else None,
+                      "n_holdings": hold_n}
 
     # 月度：收益按净值（TWR）算，盈亏按「期末权益 - 期初权益 - 当月净入金」算。
     # 两者口径不同：收益回答「这月操作得好不好」，盈亏回答「账户多了/少了多少钱」。

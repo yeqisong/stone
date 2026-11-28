@@ -206,3 +206,55 @@ class TestRebuyWindow:
     def test_gap4_counted_with_window5(self):
         b = self._beh(4, 5)
         assert b["rebuy_within_window"] == 1
+
+
+class TestFindingsCopy:
+    """findings 文案必须跟随数据：无条件嵌死的结论会在反例下自相矛盾。"""
+
+    def _mk(self, post_sell_5d):
+        from app.trade_review import _findings
+        summary = {"return_pct": 0.05, "pnl": 500.0, "max_drawdown": 0.0,
+                   "net_deposit": 0.0, "equity_start": 10000.0, "equity_end": 10500.0,
+                   "account_change": 500.0}
+        beh = {
+            "add_loss_amount": 0, "add_win_amount": 0, "add_loss_count": 0, "add_win_count": 0,
+            "profit_factor": 2.0, "win_rate": 0.6, "avg_win": 100.0, "avg_loss": -50.0,
+            "expectancy": 25.0, "top3_wins": [100.0, 90.0, 80.0], "top3_losses": [-50.0, -40.0, -30.0],
+            "trades_per_day": 1.0, "stocks_per_week": 1.0, "trades": 10, "active_days": 10,
+            "distinct_stocks": 3, "same_day_roundtrips": 0, "rebuy_within_window": 0,
+            "rebuy_window_days": 5, "max_day_trades": 1, "max_day_buys": 1,
+            "post_loss_next_day": {"avg_buy_amount": 0}, "post_win_next_day": {"avg_buy_amount": 0},
+            "max_consecutive_loss_days": 0, "post_sell_5d": post_sell_5d,
+            "max_single_weight": 0.1, "max_positions": 1, "fee_total": 0,
+        }
+        cf = {"hold_return_pct": -0.50, "hold_pnl": -5000.0, "n_holdings": 6}
+        return _findings(summary, beh, {}, cf)
+
+    def _strength(self, post_sell_5d):
+        f = [x for x in self._mk(post_sell_5d) if x["key"] == "strength_selection"]
+        assert f, "strength_selection finding 缺失"
+        return f[0]
+
+    def test_post_sell_negative_says_timing_ok(self):
+        ev = self._strength(-0.015)["evidence"]
+        assert "卖出时点并不差" in ev
+        assert "期初 6 只票" in ev          # 只数来自数据，不是硬编码
+
+    def test_post_sell_positive_says_sold_early(self):
+        ev = self._strength(0.03)["evidence"]
+        assert "卖出时点并不差" not in ev
+        assert "卖得偏早" in ev
+
+    def test_post_sell_none_omits_claim(self):
+        ev = self._strength(None)["evidence"]
+        assert "卖出后 5 日均值" not in ev
+
+    def test_fees_says_period_not_year(self):
+        from app.trade_review import _findings
+        summary = {"max_drawdown": 0.0, "net_deposit": 0.0}
+        beh = {"fee_total": 100.0, "fee_bps": 5.0, "trades": 10,
+               "add_loss_amount": 0, "trades_per_day": 0, "max_single_weight": 0.0,
+               "post_loss_next_day": {}, "post_win_next_day": {}}
+        out = _findings(summary, beh, {}, None)
+        fee = [x for x in out if x["key"] == "fees"][0]
+        assert fee["title"].startswith("期间手续费")
