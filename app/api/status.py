@@ -439,14 +439,15 @@ def _alert_visible(row_user_id, kind: str, ws_user_id, ws) -> bool:
     """risk_alerts 行对某 socket 是否可见（纯函数，单测用）。
 
     - 行有归属：仅该用户的 socket；
-    - 行无归属（系统/模型级）且 kind 以 mk 开头：盘面异动广播所有在线 socket
-      （design/13 批次三——市场事件人人相关，无需权限门槛）；
+    - 行无归属且 kind 以 mk 开头（盘面异动，design/13）：需 research.market.view——
+      与权限表登记一致（该页 #/kr 是它的子页面），没这个权限的角色/支持会话
+      不该收到一条点进去会被重定向的通知；
     - 其余无归属行（模型/系统告警）：需 model.alerts.view。
     """
     if row_user_id is not None:
         return row_user_id == ws_user_id
     if str(kind or '').startswith('mk'):
-        return True
+        return _ws_has(ws, 'research.market.view')
     return _ws_has(ws, 'model.alerts.view')
 
 

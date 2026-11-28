@@ -161,7 +161,7 @@ PERMISSION_NODES = [
         'parent': 'research.treemap.view',
         'route': '',
         'api': 'GET /api/market/*（含 realtime 实时大盘聚合、realtime/zt-history）+ GET /api/market_sentiment 附 gate 闸门',
-        'note': '全市场共享；实时大盘页 #/kr 为本节点子页面，盘面异动告警（mk% → WS 广播）无独立权限码（design/13）',
+        'note': '全市场共享；实时大盘页 #/kr 为本节点子页面；盘面异动告警（risk_alerts kind=mk%，无独立权限码）经 WS 只推给拥有本节点的连接（design/13 §10.4）',
     },
     {
         'code': 'research.stock.view',

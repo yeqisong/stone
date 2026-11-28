@@ -511,16 +511,12 @@ class TestLiveGate(unittest.TestCase):
 
 
 class TestAlertVisible(unittest.TestCase):
-    """WS 谓词：mk% 无归属行广播全员；其余无归属行需 model.alerts.view。"""
+    """WS 谓词：mk% 无归属行需 research.market.view；其余无归属行需 model.alerts.view。"""
 
-    class _WS:
-        def __init__(self, perms=(), roles=()):
-            self._perms, self._roles = set(perms), set(roles)
-
-    def _meta_ws(self, perms=(), roles=()):
+    def _meta_ws(self, user_id=7, perms=(), roles=()):
         import app.api.status as st
         ws = object()
-        st._ws_meta[ws] = {'user_id': 7, 'permissions': set(perms), 'roles': set(roles)}
+        st._ws_meta[ws] = {'user_id': user_id, 'permissions': set(perms), 'roles': set(roles)}
         return ws
 
     def tearDown(self):
@@ -528,21 +524,36 @@ class TestAlertVisible(unittest.TestCase):
         st._ws_meta.clear()
 
     def test_owned_row_only_owner(self):
-        import app.api.status as st
         ws = self._meta_ws()
-        other = self._meta_ws()
+        other = self._meta_ws(user_id=8)
         self.assertTrue(_alert_visible(7, 'it_stop', 7, ws))
         self.assertFalse(_alert_visible(7, 'it_stop', 8, other))
 
-    def test_market_row_broadcast_all(self):
-        ws = self._meta_ws()                # 无任何权限
-        self.assertTrue(_alert_visible(None, 'mk_idx_surge', 7, ws))
-        self.assertTrue(_alert_visible(None, 'mk_panic', 9, ws))
+    def test_market_row_needs_market_view(self):
+        """双角色：有 research.market.view 的连接收得到 mk%；没有的收不到。
+
+        实现必须和权限表登记一致——#/kr 子页、/api/market/* 都归 research.market.view，
+        没这个权限的角色/支持会话不该收到一条点进去会被重定向的通知。
+        """
+        from app.auth.route_permissions import resolve_rule
+        no_market = self._meta_ws(perms=('research.stock.view', 'risk.alerts.view'))
+        has_market = self._meta_ws(perms=('research.market.view',))
+        admin = self._meta_ws(roles=('admin',))
+        for ws, want in ((no_market, False), (has_market, True), (admin, True)):
+            self.assertEqual(_alert_visible(None, 'mk_idx_surge', 7, ws), want)
+            self.assertEqual(_alert_visible(None, 'mk_panic', 9, ws), want)
+        # 权限表登记：页面与接口同属一个节点，所以广播门槛用它才自洽
+        self.assertEqual(resolve_rule('GET', '/api/market/realtime').permission,
+                         'research.market.view')
+        self.assertEqual(resolve_rule('GET', '/api/market_sentiment').permission,
+                         'research.treemap.view')
 
     def test_model_row_needs_perm(self):
         ws_plain = self._meta_ws()
         ws_model = self._meta_ws(perms=('model.alerts.view',))
+        ws_market_only = self._meta_ws(perms=('research.market.view',))
         self.assertFalse(_alert_visible(None, 'model_stale', 7, ws_plain))
+        self.assertFalse(_alert_visible(None, 'model_stale', 7, ws_market_only))
         self.assertTrue(_alert_visible(None, 'model_stale', 7, ws_model))
 
 
