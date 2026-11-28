@@ -118,6 +118,26 @@ def test_peg_series_pit_and_rolling_band():
     assert last['peg_pct'] == pytest.approx(100.0)
 
 
+def test_peg_routes_registered_under_existing_nodes():
+    """PEG 两个端点的权限登记（v3.27 审查项 14：原先只靠前缀规则兜底、权限表里没有记录）。
+
+    归属既有节点、不新增权限码：指数成分 PEG 截面归大盘节点，个股 PEG 历史带归个股
+    研究。双角色：5 个默认角色都有这两个节点（有权通过）；没有这两个节点的自定义
+    角色/支持会话则既看不到页面、调接口也是 403（由同一条规则保证）。
+    """
+    from app.auth.definitions import ROLE_PERMISSIONS, permission_by_code
+    from app.auth.route_permissions import resolve_rule
+
+    assert resolve_rule('GET', '/api/market/peg').permission == 'research.market.view'
+    assert resolve_rule('GET', '/api/stock/600519/peg_history').permission == 'research.stock.view'
+    for role in ('admin', 'operator', 'trader', 'analyst', 'viewer'):
+        grants = {code for code, _scope, _support in ROLE_PERMISSIONS[role]}
+        assert {'research.market.view', 'research.stock.view'} <= grants, role
+    # 登记与实现一致：节点的 api 描述里必须写得下这两个端点
+    assert '/market/peg' in permission_by_code('research.market.view')['api']
+    assert '/peg_history' in permission_by_code('research.stock.view')['api']
+
+
 def test_cross_section_membership_is_point_in_time():
     """as_of（PIT 截止日）必须约束成分股快照：否则历史截面混进未来的调入调出。
 

@@ -421,8 +421,8 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 | 节点码 | 名称 | 类型 | 父节点 | 前端入口 | 后端 API | 默认角色 | 数据范围 | 说明 |
 |---|---|---|---|---|---|---|---|---|
 | `research.treemap.view` | 树图/市场情绪 | menu | — | tab `m` 选股 | `GET /api/treemap_data`、`/treemap_intraday`、`/treemap_latest_date`、`/market_sentiment`、`/sector_flow_history` | A/O/T/N/V | — | 全市场共享 |
-| `research.market.view` | 市场概览/估值/资金/宏观 | data | `research.treemap.view` | 市场卡片 + 实时盘子页 `#/kr` | `GET /api/market/*`（含 realtime、realtime/zt-history） | A/O/T/N/V | — | 全市场共享；实时大盘为子页面无独立码（design/13） |
-| `research.stock.view` | 个股研究 | menu | — | tab `l` 个股/详情 | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline` | A/O/T/N/V | — | `/quote` 的个人成本字段由 `portfolio.position.view` 二次控制；详情页 K 线卖出标记/策略信号卡里的个人卖出由 `signal.personal.view` 二次控制（无权限不请求） |
+| `research.market.view` | 市场概览/估值/资金/宏观 | data | `research.treemap.view` | 市场卡片 + 实时盘子页 `#/kr` + 大盘页 PEG 面板（成分截面） | `GET /api/market/*`（含 realtime、realtime/zt-history、/market/peg 指数成分 PEG 截面） | A/O/T/N/V | — | 全市场共享；实时大盘为子页面无独立码（design/13） |
+| `research.stock.view` | 个股研究 | menu | — | tab `l` 个股/详情；大盘页 PEG 面板里的个股历史带 | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline`、`/peg_history` | A/O/T/N/V | — | `/quote` 的个人成本字段由 `portfolio.position.view` 二次控制；详情页 K 线卖出标记/策略信号卡里的个人卖出由 `signal.personal.view` 二次控制（无权限不请求） |
 | `research.signal.view` | 全市场买入信号/模型统计 | data | — | tab `s` 信号 | `GET /api/buy_signals`、`GET /api/signal/stats`、`GET /api/risk/signal-stats`、`GET /api/risk/signal-outcomes` | A/O/T/N/V | — | 全局模型买入信号与共享统计；个人卖出信号另见 `signal.personal.view` |
 | `signal.personal.view` | 我的卖出/个人信号 | action | `portfolio.position.view` | 持仓页/详情页 | `GET /api/signals/personal`（支持 `stock_code`/`days` 过滤） | A/T/S | self | 读 `user_signal_history`；持仓页「今日信号」与个股详情页（K 线卖出标记/策略信号卡/信号摘要）合并展示。详情页入口在 `research.stock.view` 下、受本码二次控制——个人卖出只经本端点下发，不得并入全局 `/stock/{code}/signals` |
 | `research.cb.view` | 可转债 | menu | — | tab `b` 可转债 | `GET /api/cb/*`、`GET /api/stock/{code}/convertible-bonds`、`/cb-linkage` | A/O/T/N/V | — | 全市场共享 |
@@ -505,8 +505,10 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 | `recent_signals` | `research.signal.view` + `signal.personal.view` | 全局买入；个人卖出需个人信号权限 |
 | `stock_overview` | `research.stock.view` | 分组标签按 owner 过滤 |
 | `get_signal_stats` | `research.signal.view` | 全局统计 |
+| `stock_peg_history` | `research.stock.view` | 共享；只读，个股 PEG 历史带 |
 | `get_news` | `research.news.view` | `only_focus` 按 owner 过滤 |
 | `get_market` | `research.market.view` | 共享 |
+| `market_peg` | `research.market.view` | 共享；只读聚合（stock_fundamentals_history / stock_income / stock_consensus_daily / index_weight） |
 | `list_dag_flows` / `get_dag_flow` | `dag.view` | 共享定义 |
 | `get_dag_run_status` | `dag.view` | 运行状态/日志 |
 | `create_dag_flow` | `dag.edit` | 不能通过 `agent.use` 绕过 |
@@ -2048,8 +2050,8 @@ class WSClient:
 | `watch.group.view` | `GET /api/watch/groups`、`/watch/groups/{id}/stocks`、`/watch/stock-groups` |
 | `watch.group.edit` | `POST/DELETE /api/watch/groups`、`PUT /api/watch/stock-groups` |
 | `research.treemap.view` | `GET /api/treemap_data`、`/treemap_intraday`、`/treemap_latest_date`、`/market_sentiment`、`/sector_flow_history` |
-| `research.market.view` | `GET /api/market/overview`、`/valuation/{ts_code}`、`/moneyflow`、`/breadth`、`/margin`、`/macro`、`/sentiment-history`、`/ratio-percentile`、`/realtime`、`/realtime/zt-history` |
-| `research.stock.view` | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline` |
+| `research.market.view` | `GET /api/market/overview`、`/valuation/{ts_code}`、`/moneyflow`、`/breadth`、`/margin`、`/macro`、`/sentiment-history`、`/ratio-percentile`、`/realtime`、`/realtime/zt-history`、`/peg` |
+| `research.stock.view` | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline`、`/peg_history` |
 | `research.signal.view` | `GET /api/buy_signals`、`GET /api/signal/stats`、`GET /api/risk/signal-stats`、`GET /api/risk/signal-outcomes`（全局统计按 `(stock_code,kind,alert_time)` 去重） |
 | `signal.personal.view` | `GET /api/signals/personal` |
 | `model.alerts.view` | `GET /api/risk/alerts?scope=model` |
