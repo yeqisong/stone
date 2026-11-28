@@ -420,14 +420,15 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 
 | 节点码 | 名称 | 类型 | 父节点 | 前端入口 | 后端 API | 默认角色 | 数据范围 | 说明 |
 |---|---|---|---|---|---|---|---|---|
-| `research.treemap.view` | 树图/市场情绪 | menu | — | tab `m` 选股 | `GET /api/treemap_data`、`/treemap_intraday`、`/treemap_latest_date`、`/market_sentiment`、`/sector_flow_history` | A/O/T/N/V | — | 全市场共享 |
-| `research.market.view` | 市场概览/估值/资金/宏观 | data | `research.treemap.view` | 市场卡片 + 实时盘子页 `#/kr` | `GET /api/market/*`（含 realtime、realtime/zt-history） | A/O/T/N/V | — | 全市场共享；实时大盘为子页面无独立码（design/13） |
+| `research.realtime.view` | 实时（盘中作战台） | menu | — | tab `rt` 实时 | 无独立端点（容器页）；分区沿用 `GET /api/market/realtime*`、`/treemap_intraday`、`/stock/radar`、`/api/buy/*` | A/O/T/N/V | — | 全市场共享容器页；盘面区与分析带=`research.market.view`、资金地图=`research.treemap.view`、持仓/机会区=`research.radar.view`，缺节点则该分区不渲染（design/14） |
+| `research.treemap.view` | 树图/市场情绪 | menu | — | tab `m` 选股、实时页 `#/rt` 资金地图 | `GET /api/treemap_data`、`/treemap_intraday`、`/treemap_latest_date`、`/market_sentiment`、`/sector_flow_history` | A/O/T/N/V | — | 全市场共享；分时市值模式（`/treemap_intraday`）在实时页，受本码二次控制 |
+| `research.market.view` | 市场概览/估值/资金/宏观 | data | `research.treemap.view` | 市场卡片 + 实时页 `#/rt` 盘面区与分析带 | `GET /api/market/*`（含 realtime、realtime/zt-history） | A/O/T/N/V | — | 全市场共享；实时大盘聚合在实时页受本码二次控制；盘面异动告警（mk% → WS 广播）无独立权限码（design/13） |
 | `research.stock.view` | 个股研究 | menu | — | tab `l` 个股/详情 | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline` | A/O/T/N/V | — | `/quote` 的个人成本字段由 `portfolio.position.view` 二次控制；详情页 K 线卖出标记/策略信号卡里的个人卖出由 `signal.personal.view` 二次控制（无权限不请求） |
 | `research.signal.view` | 全市场买入信号/模型统计 | data | — | tab `s` 信号 | `GET /api/buy_signals`、`GET /api/signal/stats`、`GET /api/risk/signal-stats`、`GET /api/risk/signal-outcomes` | A/O/T/N/V | — | 全局模型买入信号与共享统计；个人卖出信号另见 `signal.personal.view` |
 | `signal.personal.view` | 我的卖出/个人信号 | action | `portfolio.position.view` | 持仓页/详情页 | `GET /api/signals/personal`（支持 `stock_code`/`days` 过滤） | A/T/S | self | 读 `user_signal_history`；持仓页「今日信号」与个股详情页（K 线卖出标记/策略信号卡/信号摘要）合并展示。详情页入口在 `research.stock.view` 下、受本码二次控制——个人卖出只经本端点下发，不得并入全局 `/stock/{code}/signals` |
 | `research.cb.view` | 可转债 | menu | — | tab `b` 可转债 | `GET /api/cb/*`、`GET /api/stock/{code}/convertible-bonds`、`/cb-linkage` | A/O/T/N/V | — | 全市场共享 |
 | `research.news.view` | 资讯 | menu | — | tab `n` 资讯 | `GET /api/news`、`/news/health`、`/news/{id}`、`/stock/{code}/news` | A/O/T/N/V | — | 原文/总结全局共享；`only_focus` 按用户过滤 |
-| `research.radar.view` | 盘中雷达/买点 | action | `research.stock.view` | 个股页雷达/买点候选 | `GET /api/stock/radar`、`GET /api/buy/check`、`GET /api/buy/candidates` | A/T/N | self | 关注池/实时持仓/纪律按用户；admin 仅看自己的池 |
+| `research.radar.view` | 盘中雷达/买点 | action | `research.stock.view` | 实时页 `#/rt` 持仓区 / 机会区（原个股页雷达开关已迁走） | `GET /api/stock/radar`、`GET /api/buy/check`、`GET /api/buy/candidates` | A/T/N | self | 关注池/实时持仓/纪律按用户；admin 仅看自己的池 |
 | `research.kepl.view` | KEPL 算子/解析 | data | — | 函数页/表达式提示 | `GET /api/kepl/functions`、`POST /api/kepl/parse` | A/O/T/N | — | 解析是只读计算 |
 | `research.lineage.view` | 数据血缘 | data | — | 状态页/模型页 | `GET /api/lineage`、`/lineage/model/{version}` | A/O/N | — | 元数据共享 |
 | `model.view` | 模型只读 | menu | — | tab `a` 模型 | `GET /api/v1/models`、`/{version}`、`/signals`、`/paper-portfolio`、`/paper-trades`、`/trade-rules`、`/health`、`/diagnosis`、`/delete-check`、`/feature-check`、`/quality-dashboard`、`/permutation`、`/walk-forward`、`/strategy-scan/{task_id}` | A/O/T/N/V | — | 纸面组合明确标注“模型账本” |
@@ -574,6 +575,7 @@ SupportSession（管理员 → 目标用户，限时只读，带理由）
 | `watch.group.view` | ✔ | — | ✔ | ✔ | — | S |
 | `watch.group.edit` | ✔ | — | ✔ | ✔ | — | — |
 | `research.treemap.view` | ✔ | ✔ | ✔ | ✔ | ✔ | ○ |
+| `research.realtime.view` | ✔ | ✔ | ✔ | ✔ | ✔ | — |
 | `research.market.view` | ✔ | ✔ | ✔ | ✔ | ✔ | ○ |
 | `research.stock.view` | ✔ | ✔ | ✔ | ✔ | ✔ | ○ |
 | `research.signal.view` | ✔ | ✔ | ✔ | ✔ | ✔ | ○ |
@@ -1921,6 +1923,8 @@ user_risk_eval（每日收盘后，按用户）
 - 纪律规则：`user_config(uid,'trade_discipline')`
 - 近期卖出：`trade_slip/trade_intraday WHERE user_id=:uid`
 - 输出 `is_holding/qty/cost/weight` 只属于当前用户
+- 入口：实时页 `#/rt` 的持仓区（雷达表 + 持仓动作行）与机会区（买点候选 → 买点检查弹窗），见 design/14；
+  页面入口由容器节点 `research.realtime.view` 控制，本节两个端点仍归 `research.radar.view`
 
 ### 9.6 树图与纸面组合
 
@@ -2047,6 +2051,7 @@ class WSClient:
 | `risk.alerts.ack` | `POST /api/risk/alerts/ack`（旧 `GET ?ack=true` 仅兼容） |
 | `watch.group.view` | `GET /api/watch/groups`、`/watch/groups/{id}/stocks`、`/watch/stock-groups` |
 | `watch.group.edit` | `POST/DELETE /api/watch/groups`、`PUT /api/watch/stock-groups` |
+| `research.realtime.view` | （容器页，无独立端点——分区端点见下面三行；只授本码的角色看得到空壳、拿不到任何数据） |
 | `research.treemap.view` | `GET /api/treemap_data`、`/treemap_intraday`、`/treemap_latest_date`、`/market_sentiment`、`/sector_flow_history` |
 | `research.market.view` | `GET /api/market/overview`、`/valuation/{ts_code}`、`/moneyflow`、`/breadth`、`/margin`、`/macro`、`/sentiment-history`、`/ratio-percentile`、`/realtime`、`/realtime/zt-history` |
 | `research.stock.view` | `GET /api/stocks`、`/stocks/suggest`、`/stock/{code}/detail`、`/history`、`/kline`、`/pe_history`、`/moneyflow`、`/signals`、`/margin`、`/top_list`、`/chip`、`/xueqiu`、`/quote`、`/ai-intraday*`、`/tape`、`/sector-rs`、`/minkline` |
@@ -2206,6 +2211,7 @@ class Principal:
 | 分组 | tab | 页面 | 权限码 | 默认角色 | 备注 |
 |---|---|---|---|---|---|
 | 核心 | `p` | 持仓 | `portfolio.position.view` | A/T | 一级 tab；`t` 交易复盘为二级页 |
+| 核心 | `rt` | 实时（盘中作战台） | `research.realtime.view` | A/O/T/N/V | 一级 tab（design/14）；旧 `#/kr`、`#/stocks?tab=radar`、树图 `mode=intraday` 三种链接重定向到此 |
 | 核心 | `k` | 大盘 | `research.market.view` | A/O/T/N/V | 一级 tab（当前前端已有） |
 | 核心 | `m` | 选股/树图 | `research.treemap.view` | A/O/T/N/V | 一级 tab |
 | 核心 | `s` | 信号 | `research.signal.view` | A/O/T/N/V | 一级 tab |
@@ -2228,7 +2234,7 @@ class Principal:
 **桌面导航（admin）**：
 
 ```text
-[持仓][大盘][选股][信号][个股][可转债][资讯][问答][状态][证券主档]
+[持仓][实时][大盘][选股][信号][个股][可转债][资讯][问答][状态][证券主档]
 [模型][函数][特征][DAG][数据] | [用户][角色权限][审计][系统设置]
 ```
 
@@ -2249,6 +2255,9 @@ class Principal:
 | `h` | `#/admin/audit` | 审计 - K道 | `system.audit.view` | 只读 |
 | `o` | `#/admin/settings` | 系统设置 - K道 | `system.settings.view` | 全局设置；个人设置走用户菜单 |
 - `nav.js` 解析到无权限 tab 时重定向到第一个有权限的 tab，不闪烁。
+- **容器页的二次控制**（`rt` 实时页，design/14）：一级入口只看 `research.realtime.view`；页内分区各自再看
+  `research.market.view` / `research.treemap.view` / `research.radar.view`，缺哪个分区就不渲染哪个，
+  导航与分区都遵循「不渲染而不是置灰」。
 - `/api/version` 是 public；版本自检不依赖登录权限，避免普通用户被 401 刷屏。
 - 管理端路由额外检查角色/权限，避免直接改 hash 进入。
 
