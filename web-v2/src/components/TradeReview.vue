@@ -274,7 +274,10 @@ const execution = ref(null)
 const execLoading = ref(false)
 const execDays = computed(() => period.value === 'all' ? 180 :
   Math.min(180, parseInt(period.value) || 30))
-const execTone = v => v == null ? 'var(--c-text)' : v >= 0 ? 'var(--c-info)' : 'var(--c-error)'
+// 执行 tab 的方向色：主题里 --c-info 与 --c-error 是同一个品牌红（theme.js），
+// 旧写法「正 info / 负 error」正负同色、视觉无对比；与页面其余部分的
+// tone() 一致，改用 --c-up（红=涨/卖出占优）/ --c-down（绿=跌/卖飞）方向色。
+const execTone = v => v == null ? 'var(--c-text)' : v >= 0 ? 'var(--c-up)' : 'var(--c-down)'
 const execSummary = computed(() => {
   const s = execution.value?.sell_summary || {}
   const a = execution.value?.alert_summary || {}
@@ -289,9 +292,9 @@ const execSummary = computed(() => {
   ]
 })
 const GRADE = {
-  good: { label: '好', color: 'var(--c-info)' },
+  good: { label: '好', color: 'var(--c-up)' },
   neutral: { label: '中', color: 'var(--c-text-dim)' },
-  poor: { label: '卖飞', color: 'var(--c-error)' },
+  poor: { label: '卖飞', color: 'var(--c-down)' },
   no_data: { label: '—', color: 'var(--c-text-faint)' },
 }
 const execSellCols = [
@@ -320,7 +323,8 @@ const execAlertCols = [
     render: r => r.slippage_pct == null ? '—' : h('span', { style: { color: execTone(r.slippage_pct) } }, pct(r.slippage_pct)) },
   { title: '收盘', key: 'close', width: 72, align: 'right' },
   { title: '未卖变动', key: 'missed_move_pct', width: 86, align: 'right',
-    render: r => r.missed_move_pct == null ? '—' : h('span', { style: { color: r.missed_move_pct > 0 ? 'var(--c-error)' : 'var(--c-info)' } }, pct(r.missed_move_pct)) },
+    // 未卖后收盘相对提醒价的变动方向：正=涨过提醒价（红），负=继续跌没卖多亏（绿）
+    render: r => r.missed_move_pct == null ? '—' : h('span', { style: { color: execTone(r.missed_move_pct) } }, pct(r.missed_move_pct)) },
 ]
 
 const levelLabel = { critical:'严重', warn:'注意', ok:'优势', info:'信息' }
