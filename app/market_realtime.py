@@ -910,13 +910,18 @@ def get_realtime(db) -> dict:
 
 
 def _safe_live_gate(db) -> dict:
+    """live_gate 的兜底：算不出来就是「不知道」，绝不能兜成「放行」。
+
+    现在只影响展示；design/13 记的升级路径是把它接到买入候选——到那时 fail-open
+    就是实盘风险，所以现在就返回独立的 unknown（pass=None），不给出 bool。
+    """
     try:
         from app.buy_check import live_gate
         return live_gate(db)
     except Exception as e:
         logger.warning(f"[market-rt] live_gate 失败: {str(e)[:120]}")
-        return {"level": "open", "pass": True, "label": "放行",
-                "reasons": [f"闸门不可用: {str(e)[:80]}"], "advice_entry": None,
+        return {"level": "unknown", "pass": None, "label": "不可用",
+                "reasons": [f"闸门计算失败，结论未知: {str(e)[:80]}"], "advice_entry": None,
                 "sources": {}}
 
 

@@ -182,6 +182,8 @@ def live_gate(db, use_cache: bool = True) -> dict:
     """实时空仓闸门：市场闸门 × regime 禁买 × 盘面情绪，取最严级别。
 
     level: closed（禁买） / caution（警戒） / open（放行）。
+    情绪源不可用或还是上一交易日口径时不参与定级，但会在 reasons 里明说
+    「结论不完整」——展示层不能把缺了一路的判断说成完整的「放行」。
     """
     now = time.time()
     if use_cache and _gate_cache["data"] is not None and now - _gate_cache["ts"] < _GATE_TTL_S:
@@ -194,6 +196,10 @@ def live_gate(db, use_cache: bool = True) -> dict:
         logger.warning(f"[live-gate] 实时情绪失败: {str(e)[:120]}")
         senti = {}
     s_level = senti.get("level")
+    s_stale = bool(senti.get("stale"))
+    # stale=宽度快照还是上一交易日的（盘前/重启后首个 slot 落库前）：不是今天的
+    # 盘面，不参与定级——昨天的恐慌收盘不等于今天禁止开仓
+    s_gate = None if s_stale else s_level
     level = "open"
     reasons: list[str] = []
     if mg.get("level") == "closed":
@@ -207,20 +213,25 @@ def live_gate(db, use_cache: bool = True) -> dict:
         skip = int(regime_cfg.get("max_skip_days", 2) or 2)
         win = int(regime_cfg.get("ma_window", 20) or 20)
         reasons.append(f"regime 空仓闸门：指数连续低于 MA{win} 风险期禁买（连续 {skip} 天后放行）")
-    if s_level == "panic":
+    if s_gate == "panic":
         level = "closed"
         reasons.append(f"盘面恐慌（情绪分 {senti.get('score')}）：禁止新开仓")
-    elif s_level == "weak" and level != "closed":
+    elif s_gate == "weak" and level != "closed":
         level = "caution"
         reasons.append(f"盘面偏弱（情绪分 {senti.get('score')}）：只减不加")
     if not reasons:
         reasons.append("市场闸门、regime 与盘面情绪均未触发限制")
+    if not s_level:
+        reasons.append("盘面情绪源不可用：结论未含实时盘面")
+    elif s_stale:
+        reasons.append(f"盘面情绪暂为上一交易日收盘口径（情绪分 {senti.get('score')}），今日开盘后更新")
     out = {
         "level": level,
         "pass": level != "closed",
         "label": {"closed": "闸门关闭", "caution": "警戒", "open": "放行"}[level],
         "reasons": reasons,
-        "advice_entry": (senti.get("advice") or {}).get("entry"),
+        # 上一交易日口径的建议（「禁止新开仓」）不能当成今天的开仓建议展示
+        "advice_entry": (senti.get("advice") or {}).get("entry") if not s_stale else None,
         "sources": {
             "market_gate": {"level": mg.get("level"), "pass": mg.get("pass")},
             "regime": {"enabled": bool(regime_cfg.get("enabled")), "gated": gated},

@@ -471,12 +471,12 @@ class TestLiveGate(unittest.TestCase):
         bc.market_gate, bc.regime_gated_today, bc.market_sentiment.get = self._orig
         bc._gate_cache.update(ts=0.0, data=None)
 
-    def _patch(self, mg_level='open', gated=False, s_level='neutral', s_score=55):
+    def _patch(self, mg_level='open', gated=False, s_level='neutral', s_score=55, s_stale=False):
+        self.senti = {'level': s_level, 'score': s_score, 'stale': s_stale,
+                      'advice': {'entry': '按买点检查', 'stop': '止损正常执行'}}
         bc.market_gate = lambda db: {'level': mg_level, 'pass': mg_level != 'closed', 'reason': 'mock 市场闸门'}
         bc.regime_gated_today = lambda db, today=None: (gated, {'enabled': gated, 'ma_window': 20, 'max_skip_days': 2})
-        bc.market_sentiment.get = lambda db, use_cache=True: {
-            'level': s_level, 'score': s_score, 'stale': False,
-            'advice': {'entry': '按买点检查', 'stop': '止损正常执行'}}
+        bc.market_sentiment.get = lambda db, use_cache=True: dict(self.senti)
 
     def test_all_open(self):
         self._patch()
@@ -508,6 +508,52 @@ class TestLiveGate(unittest.TestCase):
         self._patch(mg_level='closed', s_level='weak')
         g = bc.live_gate(None, use_cache=False)
         self.assertEqual(g['level'], 'closed')
+
+    # ── v3.27 审查项 5：缺一路数据不能说成完整的「放行」 ───────────────────
+
+    def test_stale_sentiment_does_not_close_gate(self):
+        """上一交易日收盘的恐慌不是今天的盘面：不参与定级，理由里说明，建议不照搬。"""
+        self._patch(mg_level='open', s_level='panic', s_score=15)
+        self.senti['stale'] = True
+        g = bc.live_gate(None, use_cache=False)
+        self.assertEqual(g['level'], 'open')
+        self.assertIsNone(g['advice_entry'])          # 「禁止新开仓」是昨天的建议
+        self.assertTrue(any('上一交易日收盘口径' in r for r in g['reasons']))
+        self.assertTrue(g['sources']['sentiment']['stale'])
+        # 同一盘面，快照切到今天后才关闸
+        self.senti['stale'] = False
+        self.assertEqual(bc.live_gate(None, use_cache=False)['level'], 'closed')
+
+    def test_sentiment_source_down_is_disclosed(self):
+        """情绪源挂了：结论照常给出，但必须写明不含实时盘面。"""
+        self._patch(mg_level='open')
+
+        def boom(db, use_cache=True):
+            raise RuntimeError('tencent down')
+
+        bc.market_sentiment.get = boom
+        g = bc.live_gate(None, use_cache=False)
+        self.assertEqual(g['level'], 'open')
+        self.assertTrue(any('情绪源不可用' in r for r in g['reasons']))
+        self.assertIsNone(g['sources']['sentiment']['level'])
+
+
+class TestSafeLiveGate(unittest.TestCase):
+    """端点兜底：闸门算不出来必须是「不知道」，不能兜成「放行」。"""
+
+    def test_failure_is_unknown_not_open(self):
+        with mock.patch.object(bc, 'live_gate', side_effect=RuntimeError('db down')):
+            g = mrt._safe_live_gate(None)
+        self.assertEqual(g['level'], 'unknown')
+        self.assertIsNone(g['pass'])                  # 不给出 bool：以后接到买入候选时不能被当成 True
+        self.assertEqual(g['label'], '不可用')
+        self.assertIn('db down', g['reasons'][0])
+
+    def test_pass_through(self):
+        ok = {'level': 'open', 'pass': True, 'label': '放行', 'reasons': ['x'],
+              'advice_entry': None, 'sources': {}}
+        with mock.patch.object(bc, 'live_gate', return_value=ok):
+            self.assertIs(mrt._safe_live_gate(None), ok)
 
 
 class TestAlertVisible(unittest.TestCase):
