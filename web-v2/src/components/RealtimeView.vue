@@ -11,6 +11,7 @@
     <div v-if="hasWork && !zoomed" class="rt-work" :style="workCols">
       <RtMarketZone v-if="canMarket" ref="marketZone" :d="marketD" @open-tab="openTab" />
       <RtHoldingsZone v-if="canRadar" :rows="radarRows" :asof="radarAt" :data-date="radarDataDate"
+                      :pool-empty="radarPoolEmpty"
                       :today="todayStr" :poll-sec="radarPollSec" :alerts="itAlerts" :alerts-on="canAlerts"
                       :loading="radarLoading" :error="radarError" :stacked="!split" @show-detail="showDetail" />
       <RtOpportunityZone v-if="canRadar" :cand="cand" :loading="candLoading" :error="candError"
@@ -105,6 +106,7 @@ const workCols = computed(() => {
 const radarRows = ref([])
 const radarAt = ref('')
 const radarDataDate = ref('')
+const radarPoolEmpty = ref(false)   // 关注池（持仓∪自选）为空：新用户的正常状态，与快照失败区分
 const radarLoading = ref(false)
 const radarError = ref(false)
 let radarTimer = null
@@ -120,6 +122,7 @@ async function loadRadar() {
     radarRows.value = r.data?.items || []
     radarAt.value = r.data?.asof || ''
     radarDataDate.value = r.data?.data_date || ''
+    radarPoolEmpty.value = !!r.data?.pool_empty
     radarError.value = false
   } catch (e) {
     // 保留上一帧并标出来：数据缺失是检查结果，不能静默当成「一切正常」
