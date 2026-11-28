@@ -118,8 +118,12 @@ defineExpose({ revealAlerts })
 }
 .rm-link:hover { color: var(--c-accent-hover, var(--c-accent)); text-decoration: underline; text-underline-offset: 2px; }
 
-/* 指数小图：四张并排，整块可点 */
+/* 指数小图：四张并排，整块可点。栏宽不足 480（单列堆叠在手机上）时改 2×2，别把指数名挤成一个字 */
+.rm-sec { container-type: inline-size; }
 .rm-idx { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+@container (max-width: 480px) {
+  .rm-idx { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .rm-idx-cell {
   display: flex; flex-direction: column; min-width: 0; padding: 4px 6px 0;
   border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: transparent;

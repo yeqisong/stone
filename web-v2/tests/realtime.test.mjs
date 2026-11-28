@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  alertCounts, asofText, buyPresetOf, chgCls, fflowDateText, fmtPrice, gateSummary, holdingCounts,
-  holdingsBySeverity, localSession, newBuySummary, pctText, pollDelay, prevDataDate, radarPct, radarRowsRiskFirst,
-  ratio0, signalMeta, signed, staleText, trackTitle, yi, ztDateText,
+  RADAR_COL_LEVELS, RADAR_FIXED_WIDTH,
+  alertCounts, asofText, blockedNextStep, buyPresetOf, chgCls, fflowDateText, fmtPrice, gateSummary, holdingCounts,
+  holdingsBySeverity, localSession, newBuySummary, pctText, pollDelay, prevDataDate, radarColumnsFor, radarPct,
+  radarRowsRiskFirst, ratio0, signalMeta, signed, staleText, trackTitle, yi, yiNum, ztDateText,
 } from '../src/utils/realtime.js'
 
 const holding = (code, action, extra = {}) => ({
@@ -134,6 +135,74 @@ test('数据所属交易日：盘前/休市日各源回退成上一交易日，�
   assert.equal(fflowDateText(fresh), '')
   assert.equal(trackTitle(stale), '2026-11-27 情绪轨迹（最近交易日）')
   assert.equal(trackTitle(fresh), '当日情绪轨迹')
+})
+
+test('被拦时的下一步：仓位/纪律类拦截 → 回持仓页处理；市场闸门拦截 → 今天只管持仓', () => {
+  const reduce = { kind: 'reduce', text: '先回持仓页处理：减仓清单 / 交易前检查 / 记录今日操作' }
+  const wait = { kind: 'wait', text: '市场闸门未过：今天只管持仓，不开新仓' }
+  assert.equal(blockedNextStep(null), null)
+  assert.equal(blockedNextStep({ allowed: true, reason: 'x' }), null)
+  // 结构化字段优先：allow_new_buy=false 一定是仓位/纪律拦的，不看文案
+  assert.deepEqual(
+    blockedNextStep({ allowed: false, reason: '连续亏损 2 天，今日只减不加', state: { allow_new_buy: false } }), reduce)
+  // 仓位纪律过了、市场闸门没过：不该把人支去减仓（哪怕文案里碰巧带「仓位」二字）
+  assert.deepEqual(
+    blockedNextStep({ allowed: false, reason: '市场闸门未通过：宽度的仓位阈值 40%', state: { allow_new_buy: true } }), wait)
+  // 字段缺失才退回文案启发式
+  assert.equal(blockedNextStep({ allowed: false, reason: '仓位 85.2% 高于目标 70.0%：先减仓', state: {} }).kind, 'reduce')
+  assert.equal(blockedNextStep({ allowed: false, reason: '今日新开仓已用完（1/1）', state: {} }).kind, 'reduce')
+  assert.equal(blockedNextStep({ allowed: false, reason: '连续亏损 2 天，今日只减不加', state: {} }).kind, 'reduce')
+  assert.equal(blockedNextStep({ allowed: false, reason: '市场闸门未通过：沪深300 收于 MA20 下方', state: {} }).kind, 'wait')
+})
+
+test('yiNum：元 → 亿，缺值按 0（曾漏掉 /1e8，资金流 y 轴直接画成了「元」）', () => {
+  assert.equal(yiNum(107_670_000_000), 1076.7)
+  assert.equal(yiNum(0), 0)
+  assert.equal(yiNum(null), 0)
+  assert.equal(yiNum(undefined), 0)
+  assert.equal(yiNum('250000000'), 2.5)
+})
+
+test('雷达表列档位：容器有多宽放开到哪一档，放不下的整列不显示；再窄也留第一档', () => {
+  const full = RADAR_COL_LEVELS.length
+  // 宽屏全量
+  const all = radarColumnsFor(1200)
+  assert.deepEqual(all.keys, RADAR_COL_LEVELS.map(c => c.key))
+  assert.equal(all.width, RADAR_FIXED_WIDTH + RADAR_COL_LEVELS.reduce((s, c) => s + c.width, 0))
+  // 恰好卡在档位边界
+  const first = radarColumnsFor(RADAR_FIXED_WIDTH + 82)
+  assert.deepEqual(first.keys, ['price'])
+  assert.equal(first.width, RADAR_FIXED_WIDTH + 82)
+  // 逐档单调：容器变宽只增不减，且总宽恒 ≤ 容器宽
+  let prev = []
+  for (const w of [200, 260, 262, 340, 342, 418, 420, 516, 518, 604, 606, 700, 1002, 1400]) {
+    const cur = radarColumnsFor(w)
+    assert.ok(cur.keys.length >= prev.length, `w=${w} 列数变少`)
+    assert.deepEqual(cur.keys.slice(0, prev.length), prev, `w=${w} 顺序被打乱`)
+    if (w >= RADAR_FIXED_WIDTH + 82) assert.ok(cur.width <= w, `w=${w} 总宽 ${cur.width} 超出容器`)
+    prev = cur.keys
+  }
+  // 再窄也保留「最新价」，此时才横向滚动
+  const tiny = radarColumnsFor(120)
+  assert.deepEqual(tiny.keys, ['price'])
+  assert.equal(radarColumnsFor(0).keys.length, 1)
+  assert.equal(radarColumnsFor(undefined).keys.length, 1)
+  assert.equal(RADAR_COL_LEVELS.length, full)
+})
+
+test('分时 x 轴刻度：整点/半点；午休两侧 11:30 与 13:00 相邻，去掉前者防重叠', async () => {
+  const { timeAxisLabel, fflowOption } = await import('../src/utils/realtimeCharts.js')
+  const ts = ['09:30', '09:31', '10:00', '10:30', '11:29', '11:30', '13:00', '13:01', '14:30', '15:00']
+  const axis = timeAxisLabel(ts)
+  assert.equal(axis.hideOverlap, true)
+  const shown = ts.filter((t, i) => axis.interval(i, t))
+  assert.deepEqual(shown, ['09:30', '10:00', '10:30', '13:00', '14:30', '15:00'])
+  // 没有午休后继（上午盘中）时 11:30 照常显示
+  const am = ['10:30', '11:00', '11:30']
+  assert.deepEqual(am.filter((t, i) => timeAxisLabel(am).interval(i, t)), ['10:30', '11:00', '11:30'])
+  // 资金流图的数值必须是亿：原始接口给的是元
+  const opt = fflowOption([{ t: '09:30', main: 100_000_000, big: 50_000_000, huge: 50_000_000 }])
+  assert.deepEqual(opt.series.map(s => s.data[0]), [1, 0.5, 0.5])
 })
 
 test('情绪轨迹 option：全空点不画；空点保留（缺口断线）；visualMap 不写 dimension（写 0 会沿横轴切段）', async () => {

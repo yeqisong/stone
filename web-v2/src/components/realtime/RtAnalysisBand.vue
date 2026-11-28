@@ -14,8 +14,10 @@
     </header>
 
     <div class="rb-body">
-      <!-- 资金地图：TreemapView 的分时市值模式（embedded） -->
-      <TreemapView v-if="tab === 'map'" embedded @show-detail="(...a) => emit('show-detail', ...a)" @pick="onPick" />
+      <!-- 资金地图：TreemapView 的分时市值模式（embedded）；日期跟盘面数据的所属交易日（休市日/盘前即最近交易日） -->
+      <TreemapView v-if="tab === 'map' && mapDate" embedded :initial-date="mapDate"
+                   @show-detail="(...a) => emit('show-detail', ...a)" @pick="onPick" />
+      <div v-else-if="tab === 'map'" class="rb-wait">等待数据…</div>
 
       <template v-else-if="!d">
         <div class="rb-wait">等待数据…（后台每 60s 采集一次，开盘后约 1 分钟出数）</div>
@@ -133,6 +135,7 @@ const props = defineProps({
   tab: { type: String, default: 'map' },
   tabs: { type: Array, default: () => [] },      // 当前用户可见的 tab（已按权限过滤，且保证含 tab）
   bigIdx: { type: String, default: '' },
+  mapDate: { type: String, default: '' },        // 资金地图日期；空 = 盘面数据未到，先不挂树图
   zoomed: { type: Boolean, default: false },
   stacked: { type: Boolean, default: false },
 })
@@ -217,12 +220,12 @@ function onPick(p) {
 .rb-chip:hover { color: var(--c-text); border-color: var(--c-text-faint); }
 .rb-chip.active { color: var(--c-accent); border-color: var(--c-accent); background: var(--c-accent-weak); }
 
-/* 涨停梯队：上图下表，各占一半 */
+/* 涨停梯队：上图下表。天梯至少 150px——再矮三行连板的标签会叠在一起 */
 .rb-zt { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 6px 12px 8px; }
 .rb-zt-stat { padding-bottom: 4px; border-bottom: 1px solid var(--c-border); }
 .rb-zt-stat b { font-weight: 600; font-variant-numeric: tabular-nums; }
-.rb-zt-charts { flex: 1 1 0; }
-.rb-pool { flex: 1 1 0; min-height: 0; overflow: auto; border-top: 1px solid var(--c-border); }
+.rb-zt-charts { flex: 3 1 0; min-height: 150px; }
+.rb-pool { flex: 2 1 0; min-height: 0; overflow: auto; border-top: 1px solid var(--c-border); }
 .rb-table { width: 100%; border-collapse: collapse; font-size: var(--text-meta); }
 .rb-table th { position: sticky; top: 0; z-index: 1; background: var(--c-card-bg); text-align: left; color: var(--c-text-faint); font-weight: 400; padding: 5px 8px; border-bottom: 1px solid var(--c-border); white-space: nowrap; }
 .rb-table td { padding: 4px 8px; border-bottom: 1px solid var(--c-border); color: var(--c-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }

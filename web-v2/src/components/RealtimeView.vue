@@ -13,11 +13,11 @@
       <RtHoldingsZone v-if="canRadar" :rows="radarRows" :asof="radarAt" :loading="radarLoading"
                       :error="radarError" :stacked="!split" @show-detail="showDetail" />
       <RtOpportunityZone v-if="canRadar" :cand="cand" :loading="candLoading" :error="candError"
-                         @check="openCheck" @go-watch="nav.switchTab('p')" />
+                         @check="openCheck" @go-watch="nav.switchTab('p')" @go-portfolio="nav.switchTab('p')" />
     </div>
 
     <RtAnalysisBand v-if="bandTabs.length" v-model:tab="bandTab" :tabs="bandTabs" :d="marketD" :zt-hist="ztHist"
-                   :big-idx="bigIdx" :zoomed="zoomed" :stacked="!split"
+                   :big-idx="bigIdx" :map-date="mapDate" :zoomed="zoomed" :stacked="!split"
                    @update:big-idx="bigIdx = $event" @update:zoom="zoomed = $event"
                    @show-detail="showDetail" @pick="onPick" />
 
@@ -43,6 +43,7 @@ import { useAuthStore } from '../stores/auth'
 import { useNavStore } from '../stores/nav'
 import { rememberDetailNavList } from '../utils/detailNav'
 import { addWsListener } from '../utils/ws'
+import { bjDateStr } from '../utils/date'
 import { buyPresetOf, localSession, pollDelay } from '../utils/realtime'
 import { useMarketRealtime, useRealtimeLayout } from '../utils/realtimePage'
 
@@ -76,12 +77,16 @@ const bandTab = computed({
 })
 const bigIdx = ref('')     // 指数分时大图：盘面区点小图带入
 const zoomed = ref(false)  // 分析带放大（收起三区）
+// 资金地图日期 = 盘面数据的真实所属交易日：休市日/盘前各源都回退成最近交易日，地图要跟着落在同一天，
+// 否则周六打开是一片「今日暂无快照」。拿不到盘面（无权限/未到）时先用今天。
+const mapDate = computed(() => (canMarket.value ? (marketD.value?.data_date || marketD.value?.date || '') : bjDateStr()))
 
 const workCols = computed(() => {
   if (!multiCol.value) return { gridTemplateColumns: 'minmax(0, 1fr)' }
   if (canMarket.value && !canRadar.value) return { gridTemplateColumns: 'minmax(0, 1fr)' }
   if (!canMarket.value && canRadar.value) return { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }
-  return { gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr)' }
+  // 盘面（四张指数小图）和持仓（雷达表要列宽）各多给一点；机会是列表，窄一些也够
+  return { gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 1fr)' }
 })
 
 // ── 盘中雷达：关注池实时排序（后端另有 10s 用户级缓存）──

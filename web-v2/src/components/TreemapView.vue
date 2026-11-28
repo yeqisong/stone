@@ -56,7 +56,7 @@
   </div>
   <div v-else class="tm-intraday-flex">
     <div class="tm-chart-col">
-      <div :id="'treemap-chart'" :class="{ 'tm-chart-intraday': intraday }" :style="embedded ? { width: '100%' } : { width: '100%', height: 'calc(100vh - 190px - var(--h5-tabbar-h, 0px))', minHeight: '400px' }"></div>
+      <div :id="'treemap-chart'" :ref="setChartEl" :class="{ 'tm-chart-intraday': intraday }" :style="embedded ? { width: '100%' } : { width: '100%', height: 'calc(100vh - 190px - var(--h5-tabbar-h, 0px))', minHeight: '400px' }"></div>
     </div>
     <!-- 行业资金流：与树图并排，按日累计/近10分钟切换 -->
     <div v-if="intraday && sectorFlows" class="tm-flow-panel">
@@ -186,7 +186,10 @@ const auth = useAuthStore()
 const theme = useThemeStore()
 // embedded：作为「实时」页资金地图嵌入——固定分时市值模式、不读写 URL（地址栏归实时页路由）、
 // 高度交给分析带；叶子点击改发 pick（页面在点击处弹「买点检查 / 个股详情」）
-const props = defineProps({ embedded: { type: Boolean, default: false } })
+const props = defineProps({
+  embedded: { type: Boolean, default: false },
+  initialDate: { type: String, default: '' },   // embedded：页面给的日期（盘面数据所属交易日）
+})
 const emit = defineEmits(['show-detail', 'pick'])
 const API = window.location.origin
 const metric = ref('mcap')
@@ -404,7 +407,9 @@ const levelLabel = computed(() => {
   return `${ns} | ${treeData.value.length} 项`
 })
 
+const datePinned = ref(false)   // 用户手动选过日期后，不再跟随盘面数据日期
 function onDateChange() {
+  datePinned.value = true
   drillStack.value = []
   flowModePinned = false
   if (intraday.value) { intradaySlot.value = 'latest'; refreshing.value = false }
@@ -750,6 +755,15 @@ const _tm_resize = () => {
   if (el && el._echart) el._echart.resize()
   trendChart?.resize()
 }
+// 容器尺寸监听：分析带放大/还原、分栏宽度变化都会改容器大小，window.resize 捕捉不到——
+// 不盯的话画布停在旧尺寸，容器变高后下方留白。函数式 ref 在节点渲染/卸载时都会被调用
+let _tm_ro = null
+function setChartEl(el) {
+  if (_tm_ro) { _tm_ro.disconnect(); _tm_ro = null }
+  if (!el || typeof ResizeObserver === 'undefined') return
+  _tm_ro = new ResizeObserver(() => { if (el._echart) el._echart.resize() })
+  _tm_ro.observe(el)
+}
 const _tm_popstate = () => {
   if (props.embedded || navStore.tab !== 'm') return   // 组件已卸载 / 实时页内嵌时不守卫
   if (applyQuery()) { drillStack.value = []; loadTree() }
@@ -759,10 +773,22 @@ window.addEventListener('resize', _tm_resize)
 onUnmounted(() => {
   clearTimeout(intradayTimer)
   disposeTrend()
+  if (_tm_ro) { _tm_ro.disconnect(); _tm_ro = null }
   window.removeEventListener('resize', _tm_resize)
   window.removeEventListener('popstate', _tm_popstate)
   const el = document.getElementById('treemap-chart')
   if (el && el._echart) { el._echart.dispose(); el._echart = null }
+})
+
+watch(() => props.initialDate, v => {
+  // 盘前 09:25 前后盘面数据从上一交易日切到今天：地图跟着切，除非用户已手动选了日期
+  if (!props.embedded || !v || datePinned.value || v === selDate.value) return
+  selDate.value = v
+  store.setDate(v)
+  drillStack.value = []
+  intradaySlot.value = 'latest'
+  refreshing.value = false
+  loadTree()
 })
 
 watch(() => theme.isDark, () => nextTick(() => { renderChart() }))
@@ -777,9 +803,11 @@ onMounted(async () => {
   const urlDate = hashDate()
   const today = bjDateStr()
   if (intraday.value) {
-    // 分时模式（实时页资金地图）：默认看今天；历史分时用日期选择器回看（保留最近 5 个交易日）
-    selDate.value = today
-    store.setDate(today)
+    // 分时模式（实时页资金地图）：日期由页面给——盘面数据的所属交易日（休市日/盘前即最近交易日）；
+    // 历史分时用日期选择器回看（保留最近 5 个交易日）
+    const d = props.initialDate || today
+    selDate.value = d
+    store.setDate(d)
   } else if (!urlDate || urlDate >= today) {
     // 日线模式：没有日期、或 URL 被路由补成“今天”但今日树图尚未生成 → 回落到最新日线日期
     await loadLatestDate()

@@ -20,6 +20,8 @@ export const axisCompact = v => (Math.abs(v) >= 10000 ? (v / 10000).toFixed(2) +
 // 类目轴用固定 interval（每 N 个点一个）会在午休后漂成 13:29 / 13:59——午休那 90 分钟在类目轴上不占位
 export function timeAxisLabel(ts) {
   const show = new Set(ts.filter(t => /:(00|30)$/.test(t)))
+  // 同理 11:30 与 13:00 在类目轴上相邻，两个标签会叠在一起：去掉上午收盘那个
+  if (show.has('11:30') && show.has('13:00')) show.delete('11:30')
   return { color: T.dim, fontSize: 10, hideOverlap: true, interval: (i, v) => i === 0 || show.has(v) }
 }
 
@@ -173,9 +175,10 @@ export function boardsOption(boards, dim) {
   // ECharts category y 轴 index 0 渲染在底部
   const rows = [...byDim.slice(-6), ...byDim.slice(0, 12)]
   const vals = rows.map(x => (isNet ? yiNum(x.main_net) : (x.chg_pct || 0)))
+  // 左边距要容得下东财细分行业名（「电子化学品Ⅱ」「集成电路制造」6–7 个字），窄了会被裁掉
   return {
     animation: false,
-    grid: { left: 76, right: 46, top: 8, bottom: 18 },
+    grid: { left: 104, right: 46, top: 8, bottom: 18 },
     tooltip: { formatter: p => {
       const x = rows[p[0]?.dataIndex]
       return `<b>${x.name}</b> ${isNet ? yi(x.main_net) : signed(x.chg_pct) + '%'}<br/>涨 ${x.up} / 跌 ${x.down}` + (x.leader ? `<br/>领涨 ${x.leader}` : '')

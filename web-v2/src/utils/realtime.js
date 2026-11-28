@@ -8,7 +8,8 @@ const num = v => (v == null || Number.isNaN(Number(v)) ? null : Number(v))
 
 export const signed = v => (num(v) == null ? '—' : (num(v) >= 0 ? '+' : '') + num(v).toFixed(2))
 export const yi = v => (num(v) == null ? '—' : (num(v) / 1e8).toFixed(1) + '亿')
-export const yiNum = v => num(v) ?? 0
+// 元 → 亿（图表数值用；缺值按 0 才不会把折线打断）
+export const yiNum = v => (num(v) == null ? 0 : num(v) / 1e8)
 export const pctText = v => (num(v) == null ? '—' : (num(v) * 100).toFixed(1) + '%')
 export const ratio0 = v => (num(v) == null ? '—' : Math.round(num(v) * 100) + '%')
 // 缺值不上色（旧实现对 null 也判成涨色，「—」配红色会误导）
@@ -97,6 +98,25 @@ export function gateSummary(gate) {
   return { level: gate.level, label: gate.label || gate.level, reason: (gate.reasons || [])[0] || '' }
 }
 
+/**
+ * 开新仓被拦时的「下一步」：按拦截原因分两类——
+ * 仓位/纪律类（仓位超目标、现金不足、开仓数用完、回补/回转、连亏冷静期）→ 回持仓页处理；
+ * 市场闸门类 → 今天只管持仓。纪律页面的价值在于被拦时告诉你该去哪，而不是留一片空白。
+ * 优先用后端给的结构化字段 state.allow_new_buy（candidates 的 state digest 自带）；
+ * 字段缺失时才退回文案启发式。
+ */
+export function blockedNextStep(cand) {
+  if (!cand || cand.allowed) return null
+  const st = cand.state || {}
+  const why = [cand.reason, st.advice].filter(Boolean).join('；')
+  const reduce = typeof st.allow_new_buy === 'boolean'
+    ? st.allow_new_buy === false
+    : /仓位|减仓|现金|额度|开仓|回转|回补|亏损|单票|冷静|只减/.test(why)
+  return reduce
+    ? { kind: 'reduce', text: '先回持仓页处理：减仓清单 / 交易前检查 / 记录今日操作' }
+    : { kind: 'wait', text: '市场闸门未过：今天只管持仓，不开新仓' }
+}
+
 /** 盘面异动计数：总数 + 严重条数（critical）。 */
 export function alertCounts(alerts) {
   const list = alerts || []
@@ -169,4 +189,34 @@ export function fflowDateText(d) {
 export function trackTitle(d) {
   const t = d?.track_date
   return t && t !== d?.date ? `${t} 情绪轨迹（最近交易日）` : '当日情绪轨迹'
+}
+
+// ── 持仓区雷达表的列档位 ──
+// 表在窄栏里放不下全量 12 列：按「盯盘必需 → 结构指标 → 次要」逐级累加，容器有多宽就放开到哪一档。
+// 放不下的整列不显示（横着截半列数字比没有更糟）；行业不在列里时挂在名称的 tooltip 上。
+export const RADAR_FIXED_WIDTH = 72 + 112   // 代码 + 名称（固定在左侧；单元格内边距 8px）
+export const RADAR_COL_LEVELS = [
+  { key: 'price', title: '最新价', width: 82 },
+  { key: 'change_pct', title: '涨跌幅', width: 80 },
+  { key: 'signal', title: '信号', width: 76 },
+  { key: 'score', title: '雷达分', width: 100 },
+  { key: 'vwap_dev_pct', title: 'VWAP偏离', width: 88 },
+  { key: 'day_position_pct', title: '日位置', width: 72 },
+  { key: 'volume_ratio', title: '量比', width: 62 },
+  { key: 'gap_pct', title: '跳空', width: 76 },
+  { key: 'amount', title: '成交额', width: 86 },
+  { key: 'industry', title: '行业', width: 110 },
+]
+/** 容器宽度 → { keys: 可见的指标列, width: 表格总宽 }。再窄也保留第一档（此时才横向滚动）。 */
+export function radarColumnsFor(containerW) {
+  const w = Number(containerW) || 0
+  let sum = RADAR_FIXED_WIDTH
+  let n = 0
+  for (const c of RADAR_COL_LEVELS) {
+    if (sum + c.width > w) break
+    sum += c.width
+    n++
+  }
+  if (n === 0) return { keys: [RADAR_COL_LEVELS[0].key], width: RADAR_FIXED_WIDTH + RADAR_COL_LEVELS[0].width }
+  return { keys: RADAR_COL_LEVELS.slice(0, n).map(c => c.key), width: sum }
 }

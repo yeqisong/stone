@@ -65,6 +65,7 @@ export function useMarketRealtime(enabled) {
 
   onMounted(() => {
     load()
+    loadHist()
     histTimer = setInterval(() => { if (active()) loadHist() }, 300000)
   })
   onUnmounted(() => { seq++; clearTimeout(timer); clearInterval(histTimer) })

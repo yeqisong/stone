@@ -50,9 +50,16 @@
         </button>
       </div>
 
-      <div v-if="cand && !items.length && !watch.length" class="ro-empty">
+      <div v-if="cand && allowed && !items.length && !watch.length" class="ro-empty">
         {{ cand.reason || '当前没有同时通过四道闸门的标的' }}
         <span v-if="String(cand.reason || '').includes('关注池')">—— 把想跟踪的票加进自选，这里会自动扫描</span>
+      </div>
+
+      <!-- 被拦时给出下一步：仓位/纪律类 → 回持仓页处理；市场闸门类 → 今天只管持仓 -->
+      <div v-if="next" class="ro-next" :class="'is-' + next.kind">
+        <span class="ro-next-k">下一步</span>
+        <span class="ro-next-t">{{ next.text }}</span>
+        <n-button v-if="next.kind === 'reduce'" size="tiny" secondary @click="emit('go-portfolio')">去持仓处理</n-button>
       </div>
 
       <div class="ro-foot">
@@ -69,18 +76,19 @@
 import { computed } from 'vue'
 import { NButton } from 'naive-ui'
 import AppIcon from '../AppIcon.vue'
-import { buyPresetOf, fmtPrice } from '../../utils/realtime'
+import { blockedNextStep, buyPresetOf, fmtPrice } from '../../utils/realtime'
 
 const props = defineProps({
   cand: { type: Object, default: null },   // /api/buy/candidates
   loading: { type: Boolean, default: false },
   error: { type: Boolean, default: false },     // 最近一次扫描失败（保留上一帧结论时标出）
 })
-const emit = defineEmits(['check', 'go-watch'])   // check(preset|null)
+const emit = defineEmits(['check', 'go-watch', 'go-portfolio'])   // check(preset|null)
 
 const allowed = computed(() => !!props.cand?.allowed)
 const items = computed(() => props.cand?.items || [])
 const watch = computed(() => props.cand?.watch || [])
+const next = computed(() => blockedNextStep(props.cand))
 </script>
 
 <style scoped>
@@ -121,6 +129,16 @@ const watch = computed(() => props.cand?.watch || [])
 
 .ro-empty { margin: 12px 10px 0; padding: 18px 10px; text-align: center; font-size: var(--text-meta); line-height: 1.7; color: var(--c-text-faint); }
 .ro-empty span { display: block; }
-.ro-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 8px 10px 10px; border-top: 1px solid var(--c-border); }
+/* 下一步：贴在底部操作栏上方，被拦时一眼看到该去哪 */
+.ro-next {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: auto 10px 0; padding: 8px 10px; font-size: var(--text-meta); color: var(--c-text-dim);
+  border: 1px dashed var(--c-border); border-radius: var(--radius-sm);
+}
+.ro-next-k { font-weight: 600; color: var(--c-text); white-space: nowrap; }
+.ro-next-t { flex: 1; min-width: 0; }
+.ro-next.is-reduce { border-color: var(--c-warning); }
+.ro-next.is-reduce .ro-next-k { color: var(--c-warning); }
+.ro-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; border-top: 1px solid var(--c-border); }
 .rt-zb { display: flex; flex-direction: column; }
 </style>
