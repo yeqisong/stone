@@ -10,9 +10,11 @@
     <!-- 三区（决策顺序） -->
     <div v-if="hasWork && !zoomed" class="rt-work" :style="workCols">
       <RtMarketZone v-if="canMarket" ref="marketZone" :d="marketD" @open-tab="openTab" />
-      <RtHoldingsZone v-if="canRadar" :rows="radarRows" :asof="radarAt" :loading="radarLoading"
-                      :error="radarError" :stacked="!split" @show-detail="showDetail" />
+      <RtHoldingsZone v-if="canRadar" :rows="radarRows" :asof="radarAt" :data-date="radarDataDate"
+                      :today="todayStr" :poll-sec="radarPollSec" :alerts="itAlerts" :alerts-on="canAlerts"
+                      :loading="radarLoading" :error="radarError" :stacked="!split" @show-detail="showDetail" />
       <RtOpportunityZone v-if="canRadar" :cand="cand" :loading="candLoading" :error="candError"
+                         :gate="marketD?.gate"
                          @check="openCheck" @go-watch="nav.switchTab('p')" @go-portfolio="nav.switchTab('p')" />
     </div>
 
@@ -30,7 +32,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
+import { computed, reactive, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { NDropdown } from 'naive-ui'
 import axios from 'axios'
 import RtDecisionStrip from './realtime/RtDecisionStrip.vue'
@@ -43,7 +45,7 @@ import { useAuthStore } from '../stores/auth'
 import { useNavStore } from '../stores/nav'
 import { rememberDetailNavList } from '../utils/detailNav'
 import { addWsListener } from '../utils/ws'
-import { buyPresetOf, latestWeekday, localSession, pollDelay } from '../utils/realtime'
+import { bjToday, buyPresetOf, latestWeekday, localSession, pollDelay } from '../utils/realtime'
 import { useMarketRealtime, useRealtimeLayout } from '../utils/realtimePage'
 
 const emit = defineEmits(['show-detail'])
@@ -55,6 +57,8 @@ const API = window.location.origin
 const canMarket = computed(() => auth.can('research.market.view'))
 const canTreemap = computed(() => auth.can('research.treemap.view'))
 const canRadar = computed(() => auth.can('research.radar.view'))
+// 今日盘中提醒块复用既有 risk.alerts.view（/api/risk/alerts?intraday=true），无新端点
+const canAlerts = computed(() => auth.can('risk.alerts.view'))
 const hasWork = computed(() => canMarket.value || canRadar.value)
 
 const { split, multiCol } = useRealtimeLayout()
@@ -62,6 +66,7 @@ const { d: marketD, ztHist, loading: marketLoading, failed: marketFailed, refres
 
 // 交易时段：盘面接口给了就用它的（含节假日），否则按客户端时钟粗判——只用来决定轮询快慢
 const session = computed(() => marketD.value?.session || localSession())
+const todayStr = computed(() => bjToday())
 
 // ── 分析带：tab 按权限过滤；URL 里的 tab 无权时回落到第一个可见 tab ──
 const BAND_TABS = [
@@ -74,8 +79,15 @@ const bandTab = computed({
   get: () => (bandTabs.value.includes(nav.rtTab) ? nav.rtTab : (bandTabs.value[0] || '')),
   set: v => { if (v && v !== nav.rtTab) nav.rtTab = v },
 })
-const bigIdx = ref('')     // 指数分时大图：盘面区点小图带入
-const zoomed = ref(false)  // 分析带放大（收起三区）
+// 指数分时大图选中项与分析带放大态都在 nav（URL ?tab=idx&idx=…&zoom=1）：刷新/分享不丢
+const bigIdx = computed({
+  get: () => nav.rtIdx,
+  set: v => { nav.rtIdx = v || '' },
+})
+const zoomed = computed({
+  get: () => nav.rtZoom,
+  set: v => { nav.rtZoom = !!v },
+})
 // 资金地图日期 = 盘面数据的真实所属交易日：休市日/盘前各源都回退成最近交易日，地图要跟着落在同一天，
 // 否则周六打开是一片「今日暂无快照」。盘面未到（后端刚重启、缓存为空）或无权限时兜底「最近工作日」
 // （周末回退到周五，不含节假日）——比直接用「今天」好，缓存变热后 watch 会自动切准。
@@ -92,52 +104,81 @@ const workCols = computed(() => {
 // ── 盘中雷达：关注池实时排序（后端另有 10s 用户级缓存）──
 const radarRows = ref([])
 const radarAt = ref('')
+const radarDataDate = ref('')
 const radarLoading = ref(false)
 const radarError = ref(false)
 let radarTimer = null
+let radarSeq = 0
 async function loadRadar() {
   clearTimeout(radarTimer)
   if (!canRadar.value) return
+  const my = ++radarSeq          // seq 守卫：手动刷新与轮询并发时旧响应不得覆盖新响应
   radarLoading.value = true
   try {
     const r = await axios.get(API + '/api/stock/radar')
+    if (my !== radarSeq) return
     radarRows.value = r.data?.items || []
     radarAt.value = r.data?.asof || ''
+    radarDataDate.value = r.data?.data_date || ''
     radarError.value = false
   } catch (e) {
     // 保留上一帧并标出来：数据缺失是检查结果，不能静默当成「一切正常」
-    radarError.value = true
+    if (my === radarSeq) radarError.value = true
   } finally {
-    radarLoading.value = false
+    if (my === radarSeq) radarLoading.value = false
   }
   radarTimer = setTimeout(loadRadar, pollDelay('radar', session.value))
 }
+// 表头标注的刷新间隔随时段变化（盘中 15s / 收盘 60s），不能写死「15s 刷新」
+const radarPollSec = computed(() => Math.round(pollDelay('radar', session.value) / 1000))
 
 // ── 买点候选：关注池四道闸门扫描 ──
 const cand = ref(null)
 const candLoading = ref(false)
 const candError = ref(false)
 let candTimer = null
+let candSeq = 0
 async function loadCandidates() {
   clearTimeout(candTimer)
   if (!canRadar.value) return
+  const my = ++candSeq
   candLoading.value = true
   try {
     const r = await axios.get(API + '/api/buy/candidates', { timeout: 30000 })
+    if (my !== candSeq) return
     cand.value = r.data || { allowed: false, items: [], watch: [] }
     candError.value = false
   } catch (e) {
-    candError.value = true   // 同上：保留上一帧结论
+    if (my === candSeq) candError.value = true   // 同上：保留上一帧结论
   } finally {
-    candLoading.value = false
+    if (my === candSeq) candLoading.value = false
   }
   candTimer = setTimeout(loadCandidates, pollDelay('cand', session.value))
+}
+
+// ── 今日盘中提醒（个人 it%）：复用 /api/risk/alerts?intraday=true。
+// Chrome 通知是瞬时的，错过即不可见；盘中提醒要能在持仓区回看（按权限渲染）。
+const itAlerts = ref([])
+let alertsTimer = null
+let alertsSeq = 0
+async function loadAlerts() {
+  clearTimeout(alertsTimer)
+  if (!canAlerts.value) return
+  const my = ++alertsSeq
+  try {
+    const r = await axios.get(API + '/api/risk/alerts', { params: { intraday: true, limit: 30 } })
+    if (my !== alertsSeq) return
+    const today = todayStr.value
+    itAlerts.value = (r.data || []).filter(a => String(a.created_at || '').slice(0, 10) === today)
+  } catch (e) { /* 保留上一帧；提醒列表失败不打扰主链路 */ }
+  alertsTimer = setTimeout(loadAlerts, pollDelay('alerts', session.value))
 }
 
 function refreshAll() {
   refreshMarket()
   loadRadar()
   loadCandidates()
+  loadAlerts()
 }
 
 // ── 联动 ──
@@ -186,18 +227,33 @@ function openCheck(preset) {
 let lastWsRefresh = 0
 const offWs = addWsListener(data => {
   if (!data || data.type !== 'risk_alert') return
-  if (!(data.alerts || []).some(a => String(a.kind || '').startsWith('it'))) return
+  const kinds = (data.alerts || []).map(a => String(a.kind || ''))
+  if (!kinds.some(k => k.startsWith('it'))) return
   const now = Date.now()
   if (now - lastWsRefresh < 5000) return
   lastWsRefresh = now
   loadRadar()
+  loadAlerts()   // WS 刚推过的提醒立即进「今日盘中提醒」列表，不等下一轮轮询
 })
 
-onMounted(() => { loadRadar(); loadCandidates() })
+// mk% Chrome 通知点击 → 进实时页并滚到「今日盘面异动」（nav.rtFocus 一次性提示）
+watch(() => nav.rtFocus, (v) => {
+  if (!v) return
+  nav.rtFocus = ''
+  if (v === 'market' && canMarket.value) nextTick(() => focusZone('market'))
+})
+
+onMounted(() => {
+  // 通知点击发生在其它页面时 rtFocus 在挂载前就已写入，watch 不会触发——挂载时消费一次
+  if (nav.rtFocus === 'market' && canMarket.value) nextTick(() => focusZone('market'))
+  nav.rtFocus = ''
+  loadRadar(); loadCandidates(); loadAlerts()
+})
 onUnmounted(() => {
   offWs()
   clearTimeout(radarTimer)
   clearTimeout(candTimer)
+  clearTimeout(alertsTimer)
 })
 </script>
 

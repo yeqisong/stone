@@ -2,9 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   RADAR_COL_LEVELS, RADAR_FIXED_WIDTH,
-  alertCounts, asofText, blockedNextStep, buyPresetOf, chgCls, fflowDateText, fmtPrice, gateSummary, holdingCounts,
-  holdingsBySeverity, localSession, newBuySummary, pctText, pollDelay, prevDataDate, radarColumnsFor, radarPct,
-  radarRowsRiskFirst, ratio0, signalMeta, signed, staleText, trackTitle, yi, yiNum, ztDateText,
+  alertCounts, asofText, bjToday, blockedNextStep, buyPresetOf, chgCls, fflowDateText, fmtPrice, gateSummary,
+  holdingCounts, holdingsBySeverity, latestWeekday, localSession, newBuySummary, opportunityGateNote, pctText, pollDelay,
+  prevDataDate, radarColumnsFor, radarDateNote, radarPct, radarRowsRiskFirst, ratio0, signalMeta, signed, staleText,
+  trackTitle, yi, yiNum, ztDateText,
 } from '../src/utils/realtime.js'
 
 const holding = (code, action, extra = {}) => ({
@@ -129,7 +130,8 @@ test('数据所属交易日：盘前/休市日各源回退成上一交易日，�
   assert.equal(prevDataDate(fresh), '')
   assert.equal(asofText(stale), '显示 2026-11-27（最近交易日）数据 · 更新 09:20:05')
   assert.equal(asofText(fresh), '更新 10:32:15')
-  assert.equal(asofText({ date: '2026-11-27' }), '2026-11-27')     // 没有更新时间就只给日期
+  // 冷缓存（后端刚重启）：明说「后台采集中…」，不能只丢一个日期让人以为数据就是今天的（v3.28）
+  assert.equal(asofText({ date: '2026-11-27' }), '后台采集中…')
   assert.equal(asofText(null), '')
   assert.equal(staleText(stale), '当前为 2026-11-27 的数据，开盘后自动更新')
   assert.equal(staleText(fresh), '数据延迟，后台采集中')
@@ -219,4 +221,36 @@ test('情绪轨迹 option：全空点不画；空点保留（缺口断线）；v
   assert.deepEqual(opt.series[0].data, [60, null, 62])
   assert.equal(opt.series[0].connectNulls, undefined)
   assert.equal('dimension' in opt.visualMap, false)
+})
+
+test('北京时间「今天」与雷达数据日期标注：快照不是今天的必须标出来（盘前/休市日回退上一交易日）', () => {
+  const today = bjToday()
+  assert.match(today, /^\d{4}-\d{2}-\d{2}$/)
+  // 最新工作日兜底：周六/周日打开时回落到周五
+  const wd = latestWeekday(new Date('2026-11-28T12:00:00+08:00'))   // 周六
+  assert.equal(wd, '2026-11-27')
+  assert.equal(radarDateNote('2026-11-27', '2026-11-28'), '显示 2026-11-27（最近交易日）数据')
+  assert.equal(radarDateNote(today, today), '')            // 当天数据不标
+  assert.equal(radarDateNote('', today), '')               // 拿不到数据日期不瞎标
+  assert.equal(radarDateNote('2026-11-27', ''), '')        // 拿不到「今天」也不标
+})
+
+test('机会区与实时闸门的口径提示：allowed 而实时闸门关闭/警戒/不可用时要注明，别同屏打架', () => {
+  assert.equal(opportunityGateNote({ level: 'closed' }), '实时闸门已关闭：候选仍按日频口径扫描，开仓前以决策线闸门结论为准')
+  assert.equal(opportunityGateNote({ level: 'caution' }), '实时闸门警戒：开仓前先看决策线闸门结论')
+  assert.equal(opportunityGateNote({ level: 'unknown' }), '实时闸门结论不完整（数据源缺失）：开仓前自行核对盘面')
+  assert.equal(opportunityGateNote({ level: 'open' }), '')
+  assert.equal(opportunityGateNote(null), '')
+  assert.equal(opportunityGateNote(undefined), '')
+})
+
+test('轮询间隔：提醒列表 30s/120s；收盘后雷达/候选/盘面放慢（省外部行情接口）', () => {
+  assert.equal(pollDelay('alerts', 'open'), 30000)
+  assert.equal(pollDelay('alerts', 'closed'), 120000)
+  assert.equal(pollDelay('alerts', undefined), 120000)
+  assert.equal(pollDelay('radar', 'open'), 15000)
+  assert.equal(pollDelay('radar', 'closed'), 60000)
+  assert.equal(pollDelay('cand', 'open'), 60000)
+  assert.equal(pollDelay('cand', 'closed'), 300000)
+  assert.equal(pollDelay('market', 'pre'), 15000)
 })

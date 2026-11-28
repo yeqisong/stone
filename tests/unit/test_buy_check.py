@@ -1,7 +1,9 @@
 """买点检查纯逻辑单测：市场/板块判定、结构识别、候选扫描门控。"""
-from datetime import date
+from datetime import datetime, timedelta, timezone
 
 from app import buy_check as bc
+
+_CST = timezone(timedelta(hours=8))
 
 
 def _bars(prices, volumes=None):
@@ -146,12 +148,12 @@ class TestDetectSetup:
 
     def test_intraday_breakout_uses_today_quote(self):
         import math
-        # 已收日线仍在 20 日箱体内；今天盘中放量突破
+        # 已收日线仍在 20 日箱体内；今天盘中放量突破（「今天」= 北京时间，不是主机时区）
         prices = [50 + math.sin(i) * 1.5 for i in range(79)] + [51.0]
         quote = {
             "price": 52.3, "high": 52.5, "low": 50.8,
             "volume_ratio": 1.8, "avg_price": 52.0,
-            "trade_date": date.today().isoformat(),
+            "trade_date": bc._bj_today().isoformat(),
         }
         s = bc.detect_setup(_bars(prices), quote)
         assert s["type"] == "breakout"
@@ -165,7 +167,7 @@ class TestDetectSetup:
         quote = {
             "price": 50.0, "high": 52.0, "low": 49.8,
             "volume_ratio": 0.8, "avg_price": 50.5,
-            "trade_date": date.today().isoformat(),
+            "trade_date": bc._bj_today().isoformat(),
         }
         s = bc.detect_setup(_breakout_bars(), quote)
         assert s["type"] == "breakout"
@@ -183,6 +185,17 @@ class TestDetectSetup:
         }
         s = bc.detect_setup(_bars(prices), quote)
         assert s["type"] != "breakout" or s["trigger_source"] != "intraday"
+
+
+class TestBjToday:
+    def test_bj_today_is_beijing_date(self):
+        """「今天」按北京时间算（v3.27.1 §10.9）：UTC 主机在北京 00:00–08:00 之间
+        date.today() 是昨天，会让今天的实时价整段判成旧价。"""
+        expected = datetime.now(_CST).date()
+        # 跨日界那一瞬间可能差一天，放行昨天/今天/明天中相邻的一个
+        assert bc._bj_today() in (expected, expected - timedelta(days=1), expected + timedelta(days=1))
+        assert bc._bj_today().isoformat() == expected.isoformat() or abs(
+            (bc._bj_today() - expected).days) <= 1
 
 
 class TestRiskGate:

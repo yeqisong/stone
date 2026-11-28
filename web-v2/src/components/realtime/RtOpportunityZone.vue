@@ -14,6 +14,8 @@
       <div class="ro-gate" :class="allowed ? 'is-open' : 'is-block'">
         <b>{{ cand ? (allowed ? '可以找买点' : '先别开新仓') : (loading ? '扫描中…' : '—') }}</b>
         <span :title="cand?.reason">{{ cand?.reason || '关注池候选扫描每 60 秒一次' }}</span>
+        <!-- 候选是日频口径、决策线是盘中口径：allowed 而实时闸门关闭/警戒时必须注明，别让同屏两个结论互相打架 -->
+        <span v-if="gateNote" class="ro-gate-note" :title="gateNote">{{ gateNote }}</span>
       </div>
 
       <div v-if="allowed && items.length" class="ro-group">
@@ -76,10 +78,11 @@
 import { computed } from 'vue'
 import { NButton } from 'naive-ui'
 import AppIcon from '../AppIcon.vue'
-import { blockedNextStep, buyPresetOf, fmtPrice } from '../../utils/realtime'
+import { blockedNextStep, buyPresetOf, fmtPrice, opportunityGateNote } from '../../utils/realtime'
 
 const props = defineProps({
   cand: { type: Object, default: null },   // /api/buy/candidates
+  gate: { type: Object, default: null },   // /api/market/realtime 的 gate（实时空仓闸门，仅展示口径）
   loading: { type: Boolean, default: false },
   error: { type: Boolean, default: false },     // 最近一次扫描失败（保留上一帧结论时标出）
 })
@@ -89,6 +92,8 @@ const allowed = computed(() => !!props.cand?.allowed)
 const items = computed(() => props.cand?.items || [])
 const watch = computed(() => props.cand?.watch || [])
 const next = computed(() => blockedNextStep(props.cand))
+// 被拦时决策线已带原因，不需要再加注；allowed 而实时闸门有结论/异常时才提示口径差异
+const gateNote = computed(() => (allowed.value ? opportunityGateNote(props.gate) : ''))
 </script>
 
 <style scoped>
@@ -100,6 +105,7 @@ const next = computed(() => blockedNextStep(props.cand))
 }
 .ro-gate b { font-size: var(--text-body); white-space: nowrap; }
 .ro-gate span { color: var(--c-text-dim); }
+.ro-gate span.ro-gate-note { color: var(--c-warning); }
 .ro-gate.is-open { border-left: 3px solid var(--c-info); }
 .ro-gate.is-open b { color: var(--c-info); }
 .ro-gate.is-block { border-left: 3px solid var(--c-error); background: color-mix(in srgb, var(--c-error) 5%, transparent); }
