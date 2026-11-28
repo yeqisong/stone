@@ -634,6 +634,41 @@ class TestSafeLiveGate(unittest.TestCase):
             self.assertIs(mrt._safe_live_gate(None), ok)
 
 
+class TestSentimentEndpointDoesNotMutateCache(unittest.TestCase):
+    """v3.27 审查项 8：/api/market_sentiment 不能往 market_sentiment 的缓存 dict 里写。
+
+    get() 返回的是模块缓存里的同一个对象，/api/market/overview 和 intraday_watch 的
+    上下文也在读它；原地加 gate 等于把本端点的附加字段塞给所有消费者。
+    """
+
+    def _call(self, senti, gate):
+        import app.api.treemap as api
+        shared = dict(senti)                           # 模拟模块缓存里的那个对象
+        fake_db = mock.Mock()
+        gate_stub = ({'side_effect': gate} if isinstance(gate, Exception)
+                     else {'return_value': gate})
+        with mock.patch.object(api, 'get_sync_db', return_value=fake_db), \
+                mock.patch.object(mrt.market_sentiment, 'get', lambda db, use_cache=True: shared), \
+                mock.patch.object(bc, 'live_gate', **gate_stub):
+            resp = api.get_market_sentiment()
+        return shared, resp, fake_db
+
+    def test_gate_is_attached_to_a_copy(self):
+        senti = {'ok': True, 'level': 'neutral', 'score': 55, 'advice': {'entry': 'x'}}
+        gate = {'level': 'caution', 'pass': True, 'label': '警戒', 'reasons': ['r'],
+                'advice_entry': None, 'sources': {}}
+        shared, resp, fake_db = self._call(senti, gate)
+        self.assertEqual(resp, {**senti, 'gate': gate})
+        self.assertIsNot(resp, shared)                 # 不是同一个对象
+        self.assertEqual(shared, senti)                # 缓存对象原样
+        fake_db.close.assert_called_once()
+
+    def test_gate_failure_is_unknown_not_silent_none(self):
+        shared, resp, _ = self._call({'ok': True}, RuntimeError('db down'))
+        self.assertEqual(resp['gate']['level'], 'unknown')
+        self.assertEqual(shared, {'ok': True})
+
+
 class TestAlertVisible(unittest.TestCase):
     """WS 谓词：mk% 无归属行需 research.market.view；其余无归属行需 model.alerts.view。"""
 
