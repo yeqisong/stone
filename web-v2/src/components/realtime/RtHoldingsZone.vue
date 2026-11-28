@@ -49,7 +49,9 @@
                     :max-height="stacked ? 520 : undefined"
                     :columns="columns" :data="tableRows" size="small" :row-props="rowProps" :loading="loading"
                     :bordered="false" :scroll-x="scrollX" />
-      <n-empty v-if="!loading && !rows.length" description="关注池暂无实时快照" style="padding:20px" />
+      <!-- 空态区分两种情况：关注池为空是新用户的正常状态（给下一步），快照失败才说稍后重试 -->
+      <n-empty v-if="!loading && !rows.length && poolEmpty" description="自选与持仓都是空——先去个股页加自选或导入持仓，这里才会扫描" style="padding:20px" />
+      <n-empty v-else-if="!loading && !rows.length" description="关注池暂无实时快照（稍后自动重试）" style="padding:20px" />
     </div>
   </section>
 </template>
@@ -66,6 +68,7 @@ const props = defineProps({
   rows: { type: Array, default: () => [] },     // /api/stock/radar items
   asof: { type: String, default: '' },
   dataDate: { type: String, default: '' },      // 快照数据真实所属交易日（腾讯 trade_date 取最新）
+  poolEmpty: { type: Boolean, default: false }, // 关注池（持仓∪自选）为空：新用户正常态，与快照失败区分
   today: { type: String, default: '' },         // 北京时间今天（用于判定快照是否旧数据）
   pollSec: { type: Number, default: 15 },       // 当前时段的实际轮询间隔（表头如实标注）
   alerts: { type: Array, default: () => [] },   // 今日盘中提醒（risk_alerts it%，个人）

@@ -1068,12 +1068,15 @@ def _max_buy_qty(st: dict, existing: Optional[dict], price: float, stop: float) 
     return max(0, qty)
 
 
-def check(db, user_id: int | None = None, body: dict | None = None) -> dict:
+def check(db, user_id: int | None = None, body: dict | None = None,
+          persist: bool = True) -> dict:
     # 兼容旧调用 check(db, body)；生产 API 必须传 user_id
     if body is None and isinstance(user_id, dict):
         body, user_id = user_id, None
     body = body or {}
-    st = _call_user(_build_state, db, user_id, cash_override=body.get("cash"))
+    # persist=False：只读查看（买点检查弹窗/支持会话）不落交易计划——GET 不得产生写入
+    st = _call_user(_build_state, db, user_id, cash_override=body.get("cash"),
+                    persist=persist)
     code = str(body.get("stock_code") or "").strip().zfill(6)
     side = str(body.get("side") or "buy").lower()
     qty = _f(body.get("quantity"))

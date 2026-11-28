@@ -1197,14 +1197,16 @@ def get_intraday_radar(principal: Principal = Depends(get_principal)):
     finally:
         db.close()
     if not rows:
-        return {'asof': None, 'data_date': None, 'items': []}
+        # 关注池（持仓 ∪ 自选）为空是每个新用户都会看到的正常状态，与快照失败区分开，
+        # 前端空态文案据此给出「去加自选」的下一步，而不是让人以为系统坏了
+        return {'asof': None, 'data_date': None, 'pool_empty': True, 'items': []}
     metas = {r[0]: {'name': r[1], 'industry': r[2]} for r in rows}
     try:
         from crawler.adapters.tencent_adapter import realtime_quotes
         raw = realtime_quotes(list(metas.keys()), 'stock')
     except Exception as e:
         logger.warning(f"[radar] 快照失败: {str(e)[:120]}")
-        return {'asof': None, 'data_date': None, 'items': []}
+        return {'asof': None, 'data_date': None, 'pool_empty': False, 'items': []}
     items = []
     for q in raw.values():
         code = q.get('code')
@@ -1263,7 +1265,7 @@ def get_intraday_radar(principal: Principal = Depends(get_principal)):
             it['signal'] = None
     items.sort(key=lambda x: -x['score'])
     payload = {'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
-               'data_date': radar_data_date(raw),
+               'data_date': radar_data_date(raw), 'pool_empty': False,
                'items': items}
     _radar_cache[uid] = (now, payload)
     return payload

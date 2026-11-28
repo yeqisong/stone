@@ -200,7 +200,7 @@ class TestBjToday:
 
 class TestRiskGate:
     def test_no_capacity_hides_one_share_projection(self, monkeypatch):
-        monkeypatch.setattr(bc, "intraday_check", lambda db, body: {
+        monkeypatch.setattr(bc, "intraday_check", lambda db, body=None, user_id=None, persist=True: {
             "allow": False, "max_qty": 0, "violations": [], "advice": "仓位已满",
             "projected": {"position_ratio": 0.98, "single_weight": 0.24},
         })
@@ -209,7 +209,7 @@ class TestRiskGate:
         assert g["details"]["projected"] is None
 
     def test_risk_gate_checks_rr_and_size(self, monkeypatch):
-        monkeypatch.setattr(bc, "intraday_check", lambda db, body: {
+        monkeypatch.setattr(bc, "intraday_check", lambda db, body=None, user_id=None, persist=True: {
             "allow": True, "max_qty": 500, "violations": [], "advice": "可以买",
             "projected": {"position_ratio": 0.55, "single_weight": 0.12,
                           "risk_amount": 1700, "risk_pct": 0.01},
@@ -223,7 +223,7 @@ class TestRiskGate:
 
 class TestCandidatesGate:
     def test_disallowed_state_returns_no_items(self, monkeypatch):
-        monkeypatch.setattr(bc, "intraday_state", lambda db: {
+        monkeypatch.setattr(bc, "intraday_state", lambda db, user_id=None, persist=True: {
             "allow_new_buy": False, "advice": "仓位高于目标，先减仓",
         })
         monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
@@ -235,7 +235,7 @@ class TestCandidatesGate:
         assert "减仓" in r["reason"]
 
     def test_candidate_requires_market_sector_setup_risk(self, monkeypatch):
-        monkeypatch.setattr(bc, "intraday_state", lambda db: {
+        monkeypatch.setattr(bc, "intraday_state", lambda db, user_id=None, persist=True: {
             "allow_new_buy": True, "positions": [], "remaining_new_buys": 2,
             "daily_buy_budget": 100000, "position_ratio": 0.3, "cash_ratio": 0.7,
             "target_position_ratio": 0.7, "advice": "可开仓", "level": "ok",
@@ -273,7 +273,7 @@ class TestCandidatesGate:
             "today_actions": [], "rules": {"no_rebuy_days": 5},
         }
         st.update(st_over or {})
-        monkeypatch.setattr(bc, "intraday_state", lambda db: st)
+        monkeypatch.setattr(bc, "intraday_state", lambda db, user_id=None, persist=True: st)
         monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
         monkeypatch.setattr(bc, "_focus_pool", lambda db: [
             {"code": "600000", "name": "测试股份", "industry": "银行", "type": "stock"},
@@ -313,3 +313,65 @@ class TestCandidatesGate:
         assert r["items"] == []
         assert len(r["watch"]) == 1
         assert "仓位/现金不足" in r["reason"]
+
+
+class TestPersistThreading:
+    """GET 不得对被查看用户产生写入：支持模式的买点检查/候选扫描不落交易计划。
+
+    /api/buy/check、/api/buy/candidates 都是 GET；雷达端点早已按
+    persist=not principal.support_mode 传参，buy 端点此前漏了——每次查看
+    都会给 data_user 落一条 trade_plan。这里锁住 persist 的贯穿链路。"""
+
+    def test_candidates_passes_persist_down(self, monkeypatch):
+        seen = {}
+
+        def _fake_state(db, user_id=None, persist=True):
+            seen["user_id"], seen["persist"] = user_id, persist
+            return {"allow_new_buy": False, "advice": "仓位高于目标", "positions": []}
+
+        monkeypatch.setattr(bc, "intraday_state", _fake_state)
+        monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
+        monkeypatch.setattr(bc, "_focus_pool", lambda db, user_id=None: [])
+
+        bc.candidates(None, user_id=42, persist=False)
+        assert seen == {"user_id": 42, "persist": False}
+
+    def test_candidates_defaults_to_persist(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(bc, "intraday_state",
+                            lambda db, user_id=None, persist=True: seen.update(persist=persist) or {
+                                "allow_new_buy": False, "advice": "x", "positions": []})
+        monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
+        monkeypatch.setattr(bc, "_focus_pool", lambda db, user_id=None: [])
+        bc.candidates(None)
+        assert seen["persist"] is True
+
+    def test_check_passes_persist_to_risk_gate(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(bc, "intraday_check", lambda db, user_id=None, body=None, persist=True:
+                            seen.update(persist=persist, user_id=user_id) or {
+                                "allow": True, "max_qty": 100, "violations": [],
+                                "projected": {"position_ratio": 0.1, "single_weight": 0.05,
+                                              "risk_amount": 100, "risk_pct": 0.001}})
+        monkeypatch.setattr(bc, "market_gate", lambda db: {"pass": True, "reason": "ok"})
+        monkeypatch.setattr(bc, "sector_gate", lambda db, code: {"pass": True, "reason": "ok"})
+        monkeypatch.setattr(bc, "setup_gate", lambda db, code: {
+            "pass": True, "reason": "ok", "summary": "ok",
+            "details": {"price": 10.0, "entry": 10.0, "stop": 9.0, "target": 12.0,
+                        "name": "测试", "industry": "银行", "type": "stock",
+                        "label": "趋势回踩", "rr": 2.5, "type": "trend_pullback",
+                        "trigger_ok": True, "trigger_source": "daily", "notes": []}})
+        r = bc.check(None, "600000", user_id=7, persist=False)
+        assert seen["persist"] is False
+        assert seen["user_id"] == 7
+        assert r["allowed"] is True
+
+    def test_risk_gate_passes_persist_on_both_probes(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(bc, "intraday_check", lambda db, user_id=None, body=None, persist=True:
+                            seen.append(persist) or {
+                                "allow": True, "max_qty": 100, "violations": [], "advice": "ok",
+                                "projected": {"position_ratio": 0.1, "single_weight": 0.05,
+                                              "risk_amount": 100, "risk_pct": 0.001}})
+        bc._risk_gate(None, "600000", 10.0, 9.0, 12.0, qty=200, user_id=7, persist=False)
+        assert seen == [False, False]   # 1 股试探 + 目标仓位两次检查都不落库

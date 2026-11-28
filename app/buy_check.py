@@ -602,11 +602,11 @@ def _call_user(fn, db, user_id, *args, **kwargs):
 
 def _risk_gate(db, code: str, entry: float, stop: float, target: float,
                qty: Optional[float] = None,
-               user_id: int | None = None) -> dict:
+               user_id: int | None = None, persist: bool = True) -> dict:
     body = {"stock_code": code, "side": "buy", "quantity": 1,
             "price": entry, "stop_price": stop}
     try:
-        probe = _call_user(intraday_check, db, user_id, body)
+        probe = _call_user(intraday_check, db, user_id, body, persist=persist)
     except Exception as e:
         logger.warning(f"[buy-check] {code} 风险检查失败: {str(e)[:150]}")
         return {
@@ -621,7 +621,7 @@ def _risk_gate(db, code: str, entry: float, stop: float, target: float,
     if want_qty > 0 and want_qty != 1:
         try:
             risk = _call_user(intraday_check, db, user_id,
-                              {**body, "quantity": want_qty})
+                              {**body, "quantity": want_qty}, persist=persist)
         except Exception as e:
             logger.warning(f"[buy-check] {code} 目标仓位检查失败: {str(e)[:150]}")
             risk = dict(probe)
@@ -682,7 +682,10 @@ def _risk_gate(db, code: str, entry: float, stop: float, target: float,
 
 def check(db, code: str, entry: Optional[float] = None,
           stop: Optional[float] = None, target: Optional[float] = None,
-          qty: Optional[float] = None, user_id: int | None = None) -> dict:
+          qty: Optional[float] = None, user_id: int | None = None,
+          persist: bool = True) -> dict:
+    """单票四道闸门。persist=False 时风险闸门不落交易计划（支持模式 GET 只读承诺，
+    与 /api/stock/radar 同一口径：查看可以，写入不行）。"""
     code = str(code or "").strip().zfill(6)
     market = market_gate(db)
     sector = sector_gate(db, code)
@@ -694,7 +697,7 @@ def check(db, code: str, entry: Optional[float] = None,
     use_stop = _f(stop) or _f(det.get("stop"))
     use_target = _f(target) or _f(det.get("target"))
     risk = _risk_gate(db, code, use_entry, use_stop, use_target, qty,
-                      user_id=user_id)
+                      user_id=user_id, persist=persist)
 
     gates = [market, sector, setup, risk]
     allowed = all(g.get("pass") for g in gates)
@@ -797,8 +800,12 @@ def _recent_sold_codes(db, st: dict, days: int = 5,
     return codes
 
 
-def candidates(db, limit: int = 8, user_id: int | None = None) -> dict:
-    st = _call_user(intraday_state, db, user_id)
+def candidates(db, limit: int = 8, user_id: int | None = None,
+               persist: bool = True) -> dict:
+    """关注池四道闸门扫描。persist=False 时不落交易计划：本端点是 GET，支持模式
+    （support_session 借另一用户身份查看）不得对被查看用户产生 INSERT/UPDATE——
+    与 /api/stock/radar 的 persist=not principal.support_mode 同一口径。"""
+    st = _call_user(intraday_state, db, user_id, persist=persist)
     market = market_gate(db)
     digest = _state_digest(st)
     asof = datetime.now().strftime("%H:%M:%S")

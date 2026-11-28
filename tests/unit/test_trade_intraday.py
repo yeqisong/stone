@@ -191,7 +191,7 @@ def _buy_state():
 class TestTPlusOne:
     def test_buy_check_warns_t_plus_one(self, monkeypatch):
         st = _buy_state()
-        monkeypatch.setattr(ti, "_build_state", lambda db, cash_override=None: st)
+        monkeypatch.setattr(ti, "_build_state", lambda db, cash_override=None, persist=True: st)
         monkeypatch.setattr(ti, "_stock_name", lambda db, code: "测试股份")
         monkeypatch.setattr(ti, "_today", lambda: date(2026, 11, 17))
         monkeypatch.setattr(ti, "_recent_sell", lambda db, code, day, days: None)
@@ -229,7 +229,7 @@ class TestHardBlock:
 
     def test_buy_check_blocks_during_cooling_off(self, monkeypatch):
         st = _buy_state()
-        monkeypatch.setattr(ti, "_build_state", lambda db, cash_override=None: st)
+        monkeypatch.setattr(ti, "_build_state", lambda db, cash_override=None, persist=True: st)
         monkeypatch.setattr(ti, "_stock_name", lambda db, code: "测试股份")
         monkeypatch.setattr(ti, "_today", lambda: date(2026, 11, 17))
         monkeypatch.setattr(ti, "_recent_sell", lambda db, code, day, days: None)
@@ -395,3 +395,30 @@ class TestLivePositions:
         assert "603986" not in live["positions"]
         assert live["positions"]["002463"]["qty"] == 500
         assert abs(live["positions"]["002463"]["cost"] - 81.845) < 0.01
+
+
+class TestCheckPersist:
+    """trade_intraday.check 的 persist 贯穿：只读查看（买点检查/支持会话）不落交易计划。"""
+
+    def test_check_passes_persist_to_build_state(self, monkeypatch):
+        st = {"positions": [], "cash": 0.0, "equity": 0.0,
+              "market_value": 0.0, "position_ratio": 0.0, "cash_ratio": 0.0,
+              "remaining_new_buys": 2, "daily_buy_budget": 100000.0, "max_daily_buy": 300000.0, "max_new_buys_per_day": 2,
+              "consecutive_loss_days": 0, "today_actions": [],
+              "rules": {"risk_per_trade": 0.02, "max_single_weight": 0.2,
+                        "target_position_ratio": 0.7, "cash_floor": 0.3,
+                        "max_positions": 6, "max_position_ratio": 0.9,
+                        "max_daily_buy_pct": 0.3, "consecutive_loss_trigger": 2, "no_rebuy_days": 5,
+                        "stop_loss_pct": -0.08}}
+        seen = {}
+        monkeypatch.setattr(ti, "_build_state", lambda db, user_id=None, cash_override=None, persist=True:
+                            seen.update(persist=persist) or st)
+        monkeypatch.setattr(ti, "_stock_name", lambda db, code: "测试股份")
+        monkeypatch.setattr(ti, "_today", lambda: date(2026, 11, 17))
+        monkeypatch.setattr(ti, "_recent_sell", lambda db, code, day, days: None)
+        ti.check(None, {"stock_code": "600000", "side": "buy", "quantity": 100,
+                        "price": 10.0, "stop_price": 9.0}, persist=False)
+        assert seen["persist"] is False
+        ti.check(None, {"stock_code": "600000", "side": "buy", "quantity": 100,
+                        "price": 10.0, "stop_price": 9.0})
+        assert seen["persist"] is True
