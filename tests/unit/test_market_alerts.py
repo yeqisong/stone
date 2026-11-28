@@ -87,10 +87,13 @@ def _reset():
     mrt._cache_put('trends', {})
     mrt._cache_put('breadth', {})
     mrt._cache_put('zt', {})
-    with mrt._mstate_lock:
-        mrt._mstate.update(day=None, idx_side=None, breadth_zone=None,
-                           height_day=None, sent_level=None)
+    mrt._mstate_reset(None)
     bc._gate_cache.update(ts=0.0, data=None)
+
+
+def _kinds(db=None, now=NOW):
+    """评估一次，返回落库的 kind 列表（按落库顺序）。"""
+    return [x['kind'] for x in mrt.evaluate_market_alerts(db or FakeAlertDB(), now=now)]
 
 
 class TestMarketAlertEvaluate(unittest.TestCase):
@@ -146,15 +149,46 @@ class TestMarketAlertEvaluate(unittest.TestCase):
         self.assertEqual(out[0]['kind'], 'mk_idx_drop')
 
     def test_breadth_hysteresis(self):
-        """宽度上穿 0.65 触发；中位带不重复；下穿 0.35 触发反向。"""
-        mrt._cache_put('breadth', {'up_ratio': 0.70, 'up': 5200, 'down': 170})
-        out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_breadth_up' for x in out))
-        mrt._cache_put('breadth', {'up_ratio': 0.55, 'up': 4000, 'down': 1000})  # 中位带 → 复位
-        self._eval(FakeAlertDB())
-        mrt._cache_put('breadth', {'up_ratio': 0.30, 'up': 1500, 'down': 3800})
-        out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_breadth_dn' for x in out))
+        """宽度：中性起步 → 上穿 0.65 触发 → 回到中位带复位 → 再上穿再触发 → 下穿 0.35 触发反向。"""
+        def breadth(r):
+            mrt._cache_put('breadth', {'up_ratio': r, 'up': int(r * 5000), 'down': int((1 - r) * 5000)})
+        breadth(0.55)
+        self.assertEqual(_kinds(), [])                              # 基线：中性
+        breadth(0.70)
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
+        breadth(0.58)                                               # 0.60~0.65 滞回带：保持 high，不重复
+        self.assertEqual(_kinds(), [])
+        breadth(0.55)                                               # 回到中位带 → 复位
+        self.assertEqual(_kinds(), [])
+        breadth(0.70)
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
+        breadth(0.30)
+        self.assertEqual(_kinds(), ['mk_breadth_dn'])
+
+    def test_breadth_first_observation_is_baseline(self):
+        """重启后/开盘第一眼就在高位，不是「盘中转强」：首轮只建基线。"""
+        mrt._cache_put('breadth', {'up_ratio': 0.92, 'up': 5000, 'down': 400})
+        self.assertEqual(_kinds(), [])
+        with mrt._mstate_lock:
+            self.assertEqual(mrt._mstate['breadth_zone'], 'high')
+            self.assertTrue(mrt._mstate['breadth_seen'])
+        # 滞回带内继续高位：不报
+        mrt._cache_put('breadth', {'up_ratio': 0.64, 'up': 3500, 'down': 1900})
+        self.assertEqual(_kinds(), [])
+        # 回到中位带再上穿 → 这才是转折
+        mrt._cache_put('breadth', {'up_ratio': 0.50, 'up': 2700, 'down': 2700})
+        self.assertEqual(_kinds(), [])
+        mrt._cache_put('breadth', {'up_ratio': 0.72, 'up': 3900, 'down': 1500})
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
+
+    def test_breadth_low_first_then_cross_high(self):
+        """首轮在低位建基线后，中位带 → high 的上穿照常报（基线标记独立于 zone 值）。"""
+        mrt._cache_put('breadth', {'up_ratio': 0.20, 'up': 1100, 'down': 4300})
+        self.assertEqual(_kinds(), [])
+        mrt._cache_put('breadth', {'up_ratio': 0.50, 'up': 2700, 'down': 2700})
+        self.assertEqual(_kinds(), [])
+        mrt._cache_put('breadth', {'up_ratio': 0.70, 'up': 3800, 'down': 1600})
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
 
     def test_height_once_per_day(self):
         """缓存是 fetch_zt_pools 的原始形状（pool/broken_pool 列表）；当日只报一次。"""
@@ -262,6 +296,58 @@ class TestMarketAlertEvaluate(unittest.TestCase):
         self.senti['stale'] = False
         out = self._eval(FakeAlertDB())
         self.assertEqual([x['kind'] for x in out], ['mk_panic'])
+
+    # ── v3.27 审查项 3：被冷却/上限拦下的信号不丢 ────────────────────────
+
+    def test_suppressed_panic_is_retried(self):
+        """宽度转弱刚报过，3 分钟后情绪进 panic 被 family 冷却拦下 → 冷却过后必须补报。"""
+        mrt._cache_put('breadth', {'up_ratio': 0.55, 'up': 2700, 'down': 2700})
+        self.assertEqual(_kinds(), [])                          # 宽度基线 + 情绪基线
+        mrt._cache_put('breadth', {'up_ratio': 0.30, 'up': 1600, 'down': 4200})
+        self.senti.update(level='panic', score=18)
+        # family 冷却命中：宽度转弱、盘面恐慌都发不出去
+        self.assertEqual(_kinds(FakeAlertDB(family_hit=True)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['breadth_zone'])     # 状态没被前移
+            self.assertEqual(mrt._mstate['sent_level'], 'neutral')
+        # 冷却过后两条都补报（critical 的恐慌不能丢）
+        self.assertEqual(sorted(_kinds()), ['mk_breadth_dn', 'mk_panic'])
+        with mrt._mstate_lock:
+            self.assertEqual(mrt._mstate['breadth_zone'], 'low')
+            self.assertEqual(mrt._mstate['sent_level'], 'panic')
+
+    def test_suppressed_height_keeps_daily_slot(self):
+        """连板高度被拦下 → 不占「当日一次」的名额，下个周期补报；落库后才占。"""
+        _seed_pool()
+        self.assertEqual(_kinds(FakeAlertDB(family_hit=True)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['height_day'])
+        self.assertEqual(_kinds(), ['mk_height'])
+        self.assertEqual(_kinds(), [])
+
+    def test_suppressed_index_surge_is_retried(self):
+        _seed_index([100.0] * 5 + [101.5] * 11)
+        self.assertEqual(_kinds(FakeAlertDB(kind_cooldown_hit=True)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['idx_side'])
+        self.assertEqual(_kinds(), ['mk_idx_surge'])
+
+    def test_daily_cap_keeps_state_for_retry(self):
+        _seed_pool()
+        self.assertEqual(_kinds(FakeAlertDB(today_count=15)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['height_day'])
+        self.assertEqual(_kinds(FakeAlertDB(today_count=2)), ['mk_height'])
+
+    def test_sentiment_leaving_alertable_level_moves_on(self):
+        """恐慌还没补报盘面就转弱（不告警的档位）：状态照常前移，不补报过时的恐慌。"""
+        self.assertEqual(_kinds(), [])                          # 情绪基线 neutral
+        self.senti.update(level='panic', score=18)
+        self.assertEqual(_kinds(FakeAlertDB(family_hit=True)), [])
+        self.senti.update(level='weak', score=40)
+        self.assertEqual(_kinds(), [])
+        with mrt._mstate_lock:
+            self.assertEqual(mrt._mstate['sent_level'], 'weak')
 
 
 class FakeCalDB:

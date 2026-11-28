@@ -491,9 +491,16 @@ _MK_LABEL = {
 }
 
 # 评估状态（单进程内存；跨重启靠 DB 冷却兜底；_cycle 串行调用无并发）
+_MSTATE_KEYS = ("day", "idx_side", "breadth_zone", "breadth_seen",
+                "height_day", "sent_level")
 _mstate_lock = threading.Lock()
-_mstate: dict = {"day": None, "idx_side": None, "breadth_zone": None,
-                 "height_day": None, "sent_level": None}
+_mstate: dict = dict.fromkeys(_MSTATE_KEYS)
+
+
+def _mstate_reset(day=None) -> None:
+    """状态机复位到「当天尚未评估过」（跨日时由 evaluate 调用；测试用）。"""
+    with _mstate_lock:
+        _mstate.update(dict.fromkeys(_MSTATE_KEYS), day=day)
 
 
 def read_market_alerts(db) -> dict:
@@ -553,7 +560,12 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     """盘面异动评估（交易窗口内每周期调用）；返回本次落库的告警列表。
 
     状态机惯例照搬 intraday_watch：side 状态切换报一次 + 缓冲复位（指数），
-    one-shot + 滞回（宽度），当日一次（高度），状态始终更新（情绪）。
+    zone 切换 + 滞回（宽度），当日一次（高度），跨级（情绪）。
+    两条通用规则（v3.27 审查项 3）：
+    - 状态只在告警**落库后**前移。被冷却/当日上限拦下的信号不丢：状态留在原处，
+      下个周期条件仍满足就重试；
+    - 当天首轮观测只建基线、不报（宽度、情绪）：重启后或开盘第一分钟看到的
+      「已经在高位」不是盘中转折。
     """
     now = now or _now()
     day = now.date()
@@ -567,20 +579,21 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     ymd = now.strftime("%Y%m%d")
     with _mstate_lock:
         if _mstate.get("day") != day:   # 跨日重置状态机
-            _mstate.update(day=day, idx_side=None, breadth_zone=None,
-                           height_day=None, sent_level=None)
+            _mstate.update(dict.fromkeys(_MSTATE_KEYS), day=day)
 
     out: list[dict] = []
 
-    def fire(kind: str, level: str, title: str, body: str) -> None:
+    def fire(kind: str, level: str, title: str, body: str) -> bool:
+        """过冷却/上限后落库，返回是否落库（调用方据此决定是否前移状态）。"""
         if _mk_today_count(db, day) >= int(cfg.get("max_per_day", 15)):
-            return
+            return False
         cd = int((cfg.get("cooldown_min") or {}).get(kind, 60))
         if _mk_recent(db, kind, cd, day):
-            return
+            return False
         if _mk_recent(db, None, int(cfg.get("family_cooldown_min", 10)), day):
-            return
+            return False
         out.append(_mk_insert(db, now, kind, level, title, body))
+        return True
 
     # 1. 指数急涨/急跌（上证综指，trends 缓存分钟序列，side 切换 + 滞回）
     #    分时必须就是今天的：腾讯盘前/休市日返回的是上一交易日的整段分时
@@ -595,44 +608,55 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
         base = idx_points[-1 - win].get("price")
         if cur and base:
             chg = (cur / base - 1) * 100
-            side = "up" if chg >= move else ("down" if chg <= -move else
-                                             (None if abs(chg) <= buf else _mstate.get("idx_side")))
             with _mstate_lock:
                 prev = _mstate.get("idx_side")
-                _mstate["idx_side"] = side
+            # 阈值外进 up/down；回到 ±buffer 内复位；两者之间保持原状态
+            side = ("up" if chg >= move else "down" if chg <= -move else
+                    None if abs(chg) <= buf else prev)
             if side in ("up", "down") and side != prev:
                 kind = "mk_idx_surge" if side == "up" else "mk_idx_drop"
-                breadth = _cache_get("breadth") or {}
-                fire(kind, "warn",
-                     f"上证指数 {win}分钟{('急涨' if side == 'up' else '急跌')} {chg:+.2f}%",
-                     f"现价 {cur:.2f}，{win} 分钟 {chg:+.2f}%（阈值 ±{move}%）；"
-                     f"两市涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
+                bd = _cache_get("breadth") or {}
+                sent = fire(kind, "warn",
+                            f"上证指数 {win}分钟{('急涨' if side == 'up' else '急跌')} {chg:+.2f}%",
+                            f"现价 {cur:.2f}，{win} 分钟 {chg:+.2f}%（阈值 ±{move}%）；"
+                            f"两市涨 {bd.get('up', '—')} / 跌 {bd.get('down', '—')}")
+                if sent:
+                    with _mstate_lock:
+                        _mstate["idx_side"] = side
+            else:
+                with _mstate_lock:
+                    _mstate["idx_side"] = side
 
-    # 2. 宽度反转（涨占比 one-shot + 滞回）
+    # 2. 宽度反转（涨占比 zone 切换 + 滞回；当天首轮只建基线）
     breadth = _cache_get("breadth") or {}
     up_ratio = breadth.get("up_ratio")
     hi = float(cfg.get("breadth_high", 0.65))
     lo = float(cfg.get("breadth_low", 0.35))
     bbuf = float(cfg.get("breadth_buffer", 0.05))
     if up_ratio is not None:
-        zone = "high" if up_ratio >= hi else ("low" if up_ratio <= lo else
-                                              (None if (lo + bbuf) < up_ratio < (hi - bbuf)
-                                               else _mstate.get("breadth_zone")))
         with _mstate_lock:
             prev_zone = _mstate.get("breadth_zone")
-            _mstate["breadth_zone"] = zone
-        if zone and zone != prev_zone:
+            seen = bool(_mstate.get("breadth_seen"))
+        zone = ("high" if up_ratio >= hi else "low" if up_ratio <= lo else
+                None if (lo + bbuf) < up_ratio < (hi - bbuf) else prev_zone)
+        # 首轮只建基线；之后进入 high/low 且与之前不同 → 报一次
+        if seen and zone in ("high", "low") and zone != prev_zone:
             up, dn = breadth.get("up", "—"), breadth.get("down", "—")
             if zone == "high":
-                fire("mk_breadth_up", "warn",
-                     f"宽度转强：涨占比 {up_ratio * 100:.1f}%",
-                     f"全市场涨 {up} / 跌 {dn}，涨占比上穿 {hi * 100:.0f}%")
+                sent = fire("mk_breadth_up", "warn",
+                            f"宽度转强：涨占比 {up_ratio * 100:.1f}%",
+                            f"全市场涨 {up} / 跌 {dn}，涨占比上穿 {hi * 100:.0f}%")
             else:
-                fire("mk_breadth_dn", "warn",
-                     f"宽度转弱：涨占比 {up_ratio * 100:.1f}%",
-                     f"全市场涨 {up} / 跌 {dn}，涨占比下穿 {lo * 100:.0f}%")
+                sent = fire("mk_breadth_dn", "warn",
+                            f"宽度转弱：涨占比 {up_ratio * 100:.1f}%",
+                            f"全市场涨 {up} / 跌 {dn}，涨占比下穿 {lo * 100:.0f}%")
+            if not sent:
+                zone = prev_zone      # 没落库：状态不前移，下个周期重试
+        with _mstate_lock:
+            _mstate["breadth_zone"] = zone
+            _mstate["breadth_seen"] = True
 
-    # 3. 连板高度新高（当日首次）
+    # 3. 连板高度新高（当日首次；没落库则不占当日名额，下个周期重试）
     # zt 缓存存的是 em_quote.fetch_zt_pools 的原始形状 {date, pool, broken_pool}；
     # max_lbc/ladder/limit_up/broken 只存在于 zt_summary() 的输出里（v3.27 审查：
     # 曾直接读原始池导致本规则恒不触发）。
@@ -644,17 +668,17 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     if str((zt_raw or {}).get("date") or "") == ymd and max_lbc and max_lbc >= hmin:
         with _mstate_lock:
             already = _mstate.get("height_day") == day
-            if not already:
-                _mstate["height_day"] = day
         if not already:
             ladder = zs.get("ladder") or []
             top_names = next((x.get("names") for x in ladder if x.get("lbc") == max_lbc), [])
-            fire("mk_height", "warn",
-                 f"连板高度 {max_lbc} 板（情绪周期新高）",
-                 f"当日最高连板 {max_lbc} 板（阈值 ≥{hmin}）：{('、'.join(top_names[:4]) or '—')}；"
-                 f"涨停 {zs.get('limit_up', '—')} 家 / 炸板 {zs.get('broken', '—')} 家")
+            if fire("mk_height", "warn",
+                    f"连板高度 {max_lbc} 板（情绪周期新高）",
+                    f"当日最高连板 {max_lbc} 板（阈值 ≥{hmin}）：{('、'.join(top_names[:4]) or '—')}；"
+                    f"涨停 {zs.get('limit_up', '—')} 家 / 炸板 {zs.get('broken', '—')} 家"):
+                with _mstate_lock:
+                    _mstate["height_day"] = day
 
-    # 4. 情绪跨级（状态始终更新；进 panic=重要 / 进 strong 提示）
+    # 4. 情绪跨级（当天首轮只建基线；进 panic=重要 / 进 strong 提示；跨到其他档只更新状态）
     try:
         senti = market_sentiment.get(db)
     except Exception as e:
@@ -665,16 +689,20 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     if s_level and not senti.get("stale"):
         with _mstate_lock:
             prev_level = _mstate.get("sent_level")
-            _mstate["sent_level"] = s_level
-        if s_level != prev_level and prev_level is not None:
+        if s_level != prev_level:
             score = senti.get("score")
-            if s_level == "panic":
-                fire("mk_panic", "critical", f"盘面恐慌：情绪分 {score}",
-                     f"实时情绪进入恐慌（{score}/100）；{((senti.get('advice') or {}).get('entry') or '')}"
-                     f"；涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
-            elif s_level == "strong":
-                fire("mk_strong", "warn", f"盘面亢奋：情绪分 {score}",
-                     f"实时情绪进入强势（{score}/100）；可按买点检查，不追高")
+            advance = True
+            if prev_level is not None and s_level == "panic":
+                advance = fire(
+                    "mk_panic", "critical", f"盘面恐慌：情绪分 {score}",
+                    f"实时情绪进入恐慌（{score}/100）；{((senti.get('advice') or {}).get('entry') or '')}"
+                    f"；涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
+            elif prev_level is not None and s_level == "strong":
+                advance = fire("mk_strong", "warn", f"盘面亢奋：情绪分 {score}",
+                               f"实时情绪进入强势（{score}/100）；可按买点检查，不追高")
+            if advance:   # 没落库则不前移：盘面还在 panic 时下个周期重试
+                with _mstate_lock:
+                    _mstate["sent_level"] = s_level
 
     if out:
         db.commit()
