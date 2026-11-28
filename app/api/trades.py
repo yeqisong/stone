@@ -16,6 +16,7 @@ from app.db.connection import get_sync_db
 from app.trade_review import (
     build_review,
     get_discipline,
+    invalidate_gate_cache,
     save_discipline,
     today_gate,
 )
@@ -125,8 +126,10 @@ async def import_trades(
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "文件超过 20MB，请拆分后再导入")
     try:
-        return await run_in_threadpool(_do_import, data, filename,
-                                       apply_positions_now, principal.data_user_id)
+        result = await run_in_threadpool(_do_import, data, filename,
+                                         apply_positions_now, principal.data_user_id)
+        invalidate_gate_cache(principal.data_user_id)
+        return result
     except TradeParseError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -145,6 +148,7 @@ def sync_positions(principal: Principal = Depends(optional_auth)):
         if not preview.get("positions") and not preview.get("diff"):
             raise HTTPException(400, "尚无交割单数据")
         applied = apply_positions(db, uid, preview)
+        invalidate_gate_cache(uid)
         return {"ok": True, "applied": applied, "preview": build_positions(db, uid)}
     finally:
         db.close()
@@ -213,6 +217,7 @@ def intraday_guard_record(body: TradeCheckBody, principal: Principal = Depends(o
     try:
         result = intraday_record(db, principal.data_user_id, body.model_dump())
         _invalidate_watch()
+        invalidate_gate_cache(principal.data_user_id)
         return result
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -231,6 +236,7 @@ def intraday_guard_cash(body: CashBody, principal: Principal = Depends(optional_
     try:
         state = intraday_set_cash(db, principal.data_user_id, body.cash)
         _invalidate_watch()
+        invalidate_gate_cache(principal.data_user_id)
         return {"ok": True, "state": state}
     finally:
         db.close()
@@ -242,6 +248,7 @@ def intraday_guard_delete(action_id: int, principal: Principal = Depends(optiona
     try:
         state = intraday_delete(db, principal.data_user_id, action_id)
         _invalidate_watch()
+        invalidate_gate_cache(principal.data_user_id)
         return {"ok": True, "state": state}
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -366,6 +373,7 @@ def remove_batch(batch_id: int, principal: Principal = Depends(optional_auth)):
     db = get_sync_db()
     try:
         r = delete_batch(db, batch_id, principal.data_user_id)
+        invalidate_gate_cache(principal.data_user_id)
         return {"ok": True, **r, "hint": "成交已删除；如已同步过持仓，请重新导入或手动调整持仓"}
     finally:
         db.close()
@@ -386,16 +394,21 @@ def update_discipline_rules(body: DisciplineBody,
     db = get_sync_db()
     try:
         params = {k: v for k, v in body.model_dump().items() if v is not None}
-        return {"ok": True, "rules": save_discipline(db, principal.data_user_id, params)}
+        rules = save_discipline(db, principal.data_user_id, params)
+        invalidate_gate_cache(principal.data_user_id)
+        return {"ok": True, "rules": rules}
     finally:
         db.close()
 
 
 @router.get("/portfolio/trades/discipline/today")
 def discipline_today(principal: Principal = Depends(optional_auth)):
-    """当前用户今日纪律闸门：开仓数/当日回转/回补/连亏冷静期/集中度。"""
+    """当前用户今日纪律闸门：开仓数/当日回转/回补/连亏冷静期/集中度。
+
+    只读展示走 60s TTL 缓存；写路径（导入/撤销/盘中记录/改阈值）显式失效。
+    """
     db = get_sync_db()
     try:
-        return today_gate(db, principal.data_user_id)
+        return today_gate(db, principal.data_user_id, use_cache=True)
     finally:
         db.close()

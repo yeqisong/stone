@@ -616,13 +616,25 @@ async function saveRules(){
 }
 
 // ── 今日闸门 / 批次 ──
+// 只在「纪律规则」tab 使用；today_gate 后端单次 ~1s，挂载即拉是纯浪费
+// （此前 loadAll 无条件并行拉取，架空了 onTab 的懒加载）。
 const gate = ref(null)
+const gateLoaded = ref(false)
 async function loadGate(){
-  try{ gate.value = (await axios.get(API + '/api/portfolio/trades/discipline/today')).data }catch(e){ gate.value = null }
+  try{ gate.value = (await axios.get(API + '/api/portfolio/trades/discipline/today')).data }
+  catch(e){ gate.value = null }
+  finally{ gateLoaded.value = true }
 }
 const batches = ref([])
+const batchesLoaded = ref(false)
 async function loadBatches(){
-  try{ batches.value = (await axios.get(API + '/api/portfolio/trades/batches')).data.items || [] }catch(e){ batches.value = [] }
+  try{ batches.value = (await axios.get(API + '/api/portfolio/trades/batches')).data.items || [] }
+  catch(e){ batches.value = [] }
+  finally{ batchesLoaded.value = true }
+}
+function loadRulesData(){
+  if (!gateLoaded.value) loadGate()
+  if (!batchesLoaded.value) loadBatches()
 }
 async function removeBatch(id){
   try{
@@ -660,18 +672,23 @@ async function loadExecution(){
 }
 function onTab(v){
   if (v === 'review') nextTick(renderChart)
-  if (v === 'rules') { loadGate(); loadBatches() }
+  if (v === 'rules') loadRulesData()
   if (v === 'execution') loadExecution()
 }
 async function loadAll(){
-  await Promise.all([loadReview(), loadGate(), loadBatches()])
+  await loadReview()
   if (tab.value === 'trades' && !tradeRows.value.length) loadTrades()
   if (tab.value === 'execution') loadExecution()
+  if (tab.value === 'rules') loadRulesData()
 }
 function onImported(res){
   showImport.value = false
   emit('changed')
+  // 导入改变交割单与持仓：闸门/批次下次进入纪律 tab 重拉
+  gateLoaded.value = false
+  batchesLoaded.value = false
   loadAll()
+  if (tab.value === 'rules') loadRulesData()
   if (res?.synced) message.success('持仓已按交割单更新')
   else message.info('交割单已入库；持仓未改动')
 }
