@@ -14,6 +14,7 @@ from unittest import mock
 
 from crawler import em_quote
 from crawler.adapters.tencent_adapter import _parse_minute_payload
+from app import market_realtime as mrt
 from app.market_realtime import (
     aggregate_breadth,
     estimate_turnover,
@@ -251,6 +252,45 @@ class TestZtSummary(unittest.TestCase):
         self.assertEqual(s["limit_up"], 0)
         self.assertIsNone(s["max_lbc"])
         self.assertIsNone(s["broken_rate"])
+
+
+class TestSlotGapFill(unittest.TestCase):
+    """当日情绪轨迹：缺失的 slot 补成空点，前端类目轴才能把缺口画成断线。"""
+
+    @staticmethod
+    def _row(slot, score):
+        return {'slot': slot, 'score': score, 'level': 'neutral', 'up_ratio': 0.6,
+                'median': 1.0, 'limit_up': 10, 'limit_down': 1}
+
+    def test_full_axis_matches_treemap_slots(self):
+        slots = mrt._all_slots()
+        self.assertEqual(len(slots), 26)
+        self.assertEqual((slots[0], slots[12], slots[13], slots[-1]),
+                         ('09:30', '11:30', '13:00', '15:00'))
+        # 与树图采集器的 slot 生成口径逐分钟对齐（那才是库里真实出现的 slot）
+        from datetime import datetime, timedelta
+        from app import treemap_intraday as ti
+        day = datetime(2026, 11, 27)
+        gen = sorted({ti._slot_of(day + timedelta(minutes=m)) for m in range(24 * 60)}
+                     - {None})
+        self.assertEqual(gen, slots)
+
+    def test_gaps_become_null_points(self):
+        # 2026-11-27 的真实形状：09:30/09:40/09:50 之后直接跳到 11:10
+        out = mrt._fill_slot_gaps([self._row('09:50', 67.0), self._row('11:10', 82.0),
+                                   self._row('15:00', 88.5)])
+        self.assertEqual(len(out), 26)
+        self.assertEqual([r['slot'] for r in out if r['score'] is None][:5],
+                         ['09:30', '09:40', '10:00', '10:10', '10:20'])
+        self.assertEqual(out[10]['slot'], '11:10')          # 09:30 起第 11 个 slot
+        self.assertEqual(out[10]['score'], 82.0)
+        gap = out[3]
+        self.assertEqual((gap['slot'], gap['score'], gap['up_ratio']), ('10:00', None, None))
+
+    def test_empty_day(self):
+        out = mrt._fill_slot_gaps([])
+        self.assertEqual(len(out), 26)
+        self.assertTrue(all(r['score'] is None for r in out))
 
 
 class TestSession(unittest.TestCase):

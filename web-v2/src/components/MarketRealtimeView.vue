@@ -85,10 +85,12 @@
       </div>
       <div class="mr-panel">
         <div class="mr-h">
-          <span><AppIcon name="activity" :size="13" /> 当日情绪轨迹</span>
-          <span class="mr-meta">三成分口径（宽度/中位/涨跌停）· 与日频恐慌指数序列可比</span>
+          <span><AppIcon name="activity" :size="13" /> {{ trackTitle }}</span>
+          <span class="mr-meta">三成分口径（宽度/中位/涨跌停）· 与日频恐慌指数序列可比 · 采集缺口处断线</span>
         </div>
-        <div :id="'mr-track'" class="mr-chart" style="height: 268px"></div>
+        <!-- 无数据时不卸载节点（v-if 会让已建的 ECharts 实例漏掉 dispose），高度归零 -->
+        <div id="mr-track" class="mr-chart" :style="{ height: hasTrack ? '268px' : '0px' }"></div>
+        <div v-if="!hasTrack" class="mr-empty2">该日暂无 10 分钟快照</div>
         <div class="mr-meta" v-if="d.senti && d.senti.score != null">
           实时四成分分（含指数 VWAP）：<b>{{ d.senti.score }}</b> {{ d.senti.label }}
         </div>
@@ -256,6 +258,12 @@ const fflowDateText = computed(() => {
   const t = d.value?.fflow?.date
   return t && t !== d.value?.date ? `${t} 数据` : ''
 })
+// 情绪轨迹跟随数据所属交易日（休市日/盘前显示最近交易日的，和其它卡片一致）
+const trackTitle = computed(() => {
+  const t = d.value?.track_date
+  return t && t !== d.value?.date ? `${t} 情绪轨迹（最近交易日）` : '当日情绪轨迹'
+})
+const hasTrack = computed(() => (d.value?.senti_track || []).some(x => x.score != null))
 
 // ── ECharts 约定：实例缓存 DOM 节点，onBeforeUnmount（DOM 还在）时 dispose ──
 function make(id, opt) {
@@ -267,15 +275,24 @@ function make(id, opt) {
   return c
 }
 
+// y 轴紧凑刻度：深证成指上万后 ECharts 默认的 "10,900.00" 在 120px 高的迷你图里会叠成一团
+const axisCompact = v => Math.abs(v) >= 10000 ? (v / 10000).toFixed(2) + '万' : String(Math.round(v))
+// x 轴刻度按真实时间对齐（整点/半点）。类目轴用固定 interval（每 N 个点一个）会在
+// 午休后漂成 13:29 / 13:59——午休那 90 分钟在类目轴上不占位
+function timeAxisLabel(ts) {
+  const show = new Set(ts.filter(t => /:(00|30)$/.test(t)))
+  return { color: T.dim, fontSize: 10, hideOverlap: true, interval: (i, v) => i === 0 || show.has(v) }
+}
+
 function miniTrend(data, id) {
   if (!data || !data.trend || !data.trend.length) return
   const prices = data.trend.map(x => x.price)
   const ts = data.trend.map(x => x.t)
   make(id, {
     animation: false,
-    grid: { left: 46, right: 6, top: 6, bottom: 16 },
+    grid: { left: 50, right: 6, top: 6, bottom: 16 },
     xAxis: { type: 'category', data: ts, axisLabel: { show: false }, axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
-    yAxis: { type: 'value', scale: true, axisLabel: { color: T.dim, fontSize: 10 }, splitLine: { lineStyle: { color: T.line } }, axisLine: { show: false } },
+    yAxis: { type: 'value', scale: true, splitNumber: 3, axisLabel: { color: T.dim, fontSize: 10, hideOverlap: true, formatter: axisCompact }, splitLine: { lineStyle: { color: T.line } }, axisLine: { show: false } },
     tooltip: { trigger: 'axis', formatter: p => `${ts[p[0]?.dataIndex]} ${p[0]?.value}` },
     series: [
       { type: 'line', data: prices, symbol: 'none', lineStyle: { width: 1.2, color: prices[prices.length - 1] >= (data.preClose || prices[0]) ? T.up : T.down },
@@ -298,8 +315,8 @@ function drawBig() {
       const i = p[0]?.dataIndex
       return `<b>${ix.name}</b> ${ts[i]}<br/>价 ${prices[i]}<br/>较昨收 ${signed(ix.preClose ? (prices[i] / ix.preClose - 1) * 100 : null)}%`
     } },
-    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: { color: T.dim, fontSize: 10, interval: 29 }, axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
-    yAxis: { type: 'value', scale: true, axisLabel: { color: T.dim, fontSize: 10, formatter: v => v.toFixed(0) }, splitLine: { lineStyle: { color: T.line } } },
+    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: timeAxisLabel(ts), axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
+    yAxis: { type: 'value', scale: true, axisLabel: { color: T.dim, fontSize: 10, formatter: axisCompact }, splitLine: { lineStyle: { color: T.line } } },
     series: [
       { name: '价格', type: 'line', data: prices, symbol: 'none', lineStyle: { width: 1.6, color },
         areaStyle: { opacity: 0.06, color },
@@ -317,9 +334,9 @@ function drawTurnover() {
     animation: false,
     grid: { left: 52, right: 10, top: 26, bottom: 20 },
     legend: { top: 2, textStyle: { color: T.dim, fontSize: 10 }, itemWidth: 12, data: ['今日', '昨日', '近4日均'] },
-    tooltip: { trigger: 'axis', formatter: p => `${ts[p[0]?.dataIndex]}<br/>` + p.map(x => `${x.marker}${x.seriesName} ${Number(x.value).toFixed(1)}亿`).join('<br/>') },
-    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: { color: T.dim, fontSize: 10, interval: 29 }, axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
-    yAxis: { type: 'value', scale: true, axisLabel: { color: T.dim, fontSize: 10, formatter: v => v.toFixed(0) }, splitLine: { lineStyle: { color: T.line } }, name: '亿', nameTextStyle: { color: T.faint } },
+    tooltip: { trigger: 'axis', formatter: p => `${ts[p[0]?.dataIndex]}<br/>` + p.map(x => `${x.marker}${x.seriesName} ${x.value == null ? '—' : Number(x.value).toFixed(1) + '亿'}`).join('<br/>') },
+    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: timeAxisLabel(ts), axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
+    yAxis: { type: 'value', scale: true, axisLabel: { color: T.dim, fontSize: 10, formatter: axisCompact }, splitLine: { lineStyle: { color: T.line } }, name: '亿', nameTextStyle: { color: T.faint } },
     series: [
       { name: '今日', type: 'line', data: tv.series.map(x => y2v(x.today)), symbol: 'none', lineStyle: { width: 1.5, color: T.up } },
       { name: '昨日', type: 'line', data: tv.series.map(x => y2v(x.yday)), symbol: 'none', lineStyle: { width: 1, color: T.dim, type: 'dashed' } },
@@ -330,20 +347,23 @@ function drawTurnover() {
 
 function drawTrack() {
   const s = d.value?.senti_track || []
-  if (!s.length) return
+  // 后端把缺失的 slot 补成了空点（score=null）：没有空点时类目轴会把 09:50 直接连到 11:10
+  if (!s.some(x => x.score != null)) return
   const slots = s.map(x => x.slot)
   make('mr-track', {
     animation: false,
     grid: { left: 40, right: 14, top: 24, bottom: 22 },
     tooltip: { trigger: 'axis', formatter: p => {
-      const i = p[0]?.dataIndex
-      const x = s[i]
+      const x = s[p[0]?.dataIndex]
       if (!x) return ''
-      return `<b>${x.slot}</b> ${sentiLabel(x.level)} <b>${x.score}</b> 分<br/>涨占比 ${(x.up_ratio * 100).toFixed(1)}% · 中位 ${x.median == null ? '—' : x.median + '%'}<br/>涨停 ${x.limit_up} / 跌停 ${x.limit_down}`
+      if (x.score == null) return `<b>${x.slot}</b><br/>该时点无快照（采集缺口）`
+      return `<b>${x.slot}</b> ${sentiLabel(x.level)} <b>${x.score}</b> 分<br/>涨占比 ${x.up_ratio == null ? '—' : (x.up_ratio * 100).toFixed(1) + '%'} · 中位 ${x.median == null ? '—' : x.median + '%'}<br/>涨停 ${x.limit_up ?? '—'} / 跌停 ${x.limit_down ?? '—'}`
     } },
-    xAxis: { type: 'category', data: slots, axisLabel: { color: T.dim, fontSize: 10, interval: 3 }, axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
+    xAxis: { type: 'category', data: slots, axisLabel: timeAxisLabel(slots), axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
     yAxis: { min: 0, max: 100, axisLabel: { color: T.dim, fontSize: 10 }, splitLine: { lineStyle: { color: T.line } } },
-    visualMap: { show: false, dimension: 0, pieces: [
+    // 按分值分档着色。dimension 不能写 0——那是 x 轴序号（会沿横轴切段而不是跟数值走）；
+    // 不写即取最后一个维度（数值本身）
+    visualMap: { show: false, pieces: [
       { lt: 25, color: T.down }, { gte: 25, lt: 45, color: T.warn },
       { gte: 45, lt: 70, color: T.series[3] }, { gte: 70, color: T.up }] },
     series: [{ type: 'line', data: s.map(x => x.score), symbol: 'circle', symbolSize: 4, lineStyle: { width: 1.6 },
@@ -437,8 +457,8 @@ function drawFflow() {
     grid: { left: 60, right: 16, top: 30, bottom: 22 },
     legend: { top: 2, textStyle: { color: T.dim, fontSize: 10 }, itemWidth: 12, data: ['主力', '超大单', '大单'] },
     tooltip: { trigger: 'axis', formatter: p => `${ts[p[0]?.dataIndex]}<br/>` + p.map(x => `${x.marker}${x.seriesName} ${Number(x.value).toFixed(1)}亿`).join('<br/>') },
-    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: { color: T.dim, fontSize: 10, interval: 29 }, axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
-    yAxis: { type: 'value', axisLabel: { color: T.dim, fontSize: 10, formatter: v => v.toFixed(0) }, splitLine: { lineStyle: { color: T.line } }, name: '亿', nameTextStyle: { color: T.faint } },
+    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: timeAxisLabel(ts), axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false } },
+    yAxis: { type: 'value', axisLabel: { color: T.dim, fontSize: 10, formatter: axisCompact }, splitLine: { lineStyle: { color: T.line } }, name: '亿', nameTextStyle: { color: T.faint } },
     series: [
       { name: '主力', type: 'line', data: s.map(x => yiNum(x.main)), symbol: 'none', lineStyle: { width: 1.6, color: T.up },
         areaStyle: { opacity: 0.07, color: T.up }, markLine: { silent: true, symbol: 'none', data: [{ yAxis: 0, lineStyle: { color: T.line, width: 1 } }], label: { show: false } } },
@@ -545,7 +565,7 @@ watch(() => theme.isDark, () => nextTick(drawAll))
 .mr-stats b.up { color: var(--c-up); }
 .mr-stats b.down { color: var(--c-down); }
 .mr-stats b.warn { color: var(--c-warning, #8a5a00); }
-.mr-stats b.hl { color: var(--c-up); }
+.mr-stats b.hl { color: var(--c-text); }   /* 中性数字：上涨红只留给涨跌 */
 .mr-basis { font-style: normal; color: var(--c-text-faint); }
 
 .mr-table { width: 100%; border-collapse: collapse; font-size: var(--text-meta); }
@@ -569,8 +589,10 @@ watch(() => theme.isDark, () => nextTick(drawAll))
 .mr-gate.gate-open .mr-gate-state { color: var(--c-down); }
 .mr-gate.gate-caution { border-left-color: var(--c-warning, #8a5a00); }
 .mr-gate.gate-caution .mr-gate-state { color: var(--c-warning, #8a5a00); }
-.mr-gate.gate-closed { border-left-color: var(--c-up); }
-.mr-gate.gate-closed .mr-gate-state { color: var(--c-up); }
+/* 闸门三态配色与 TradeGuard 一致：正常=下跌绿、警戒=warning、关闸=error。
+   不用 --c-up（上涨红）：项目的红绿只表示涨跌，关闸是「停」不是「涨」 */
+.mr-gate.gate-closed { border-left-color: var(--c-error); }
+.mr-gate.gate-closed .mr-gate-state { color: var(--c-error); }
 .mr-mk { font-size: var(--text-meta); padding: 1px 6px; border-radius: 3px; border: 1px solid var(--c-border); color: var(--c-text-dim); }
 .mr-mk.crit { color: var(--c-up); border-color: var(--c-up); }
 </style>

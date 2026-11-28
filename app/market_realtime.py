@@ -818,11 +818,35 @@ def _session_of(now: datetime, trade_day: bool) -> str:
     return "post"
 
 
+def _all_slots() -> list[str]:
+    """当日完整的 10 分钟 slot 轴：09:30…11:30、13:00…15:00（与 treemap_intraday._slot_of 一致）。"""
+    out: list[str] = []
+    for hour, minute, n in ((9, 30, 13), (13, 0, 13)):
+        for k in range(n):
+            t = datetime(2000, 1, 1, hour, minute) + timedelta(minutes=10 * k)
+            out.append(t.strftime("%H:%M"))
+    return out
+
+
+_EMPTY_SLOT: dict = {"score": None, "level": None, "up_ratio": None, "median": None,
+                     "limit_up": None, "limit_down": None}
+
+
+def _fill_slot_gaps(rows: list[dict]) -> list[dict]:
+    """把当日缺失的 slot 补成空点（score=None）。
+
+    树图采集器在个别时段会漏 slot（2026-11-27 10:00–11:00 整段缺失，其余四天都是
+    26 个）。前端是类目轴，不补空点的话 09:50 会直接连到 11:10，70 分钟的缺口看不出来。
+    """
+    by = {r["slot"]: r for r in rows}
+    return [by.get(s, {**_EMPTY_SLOT, "slot": s}) for s in _all_slots()]
+
+
 def _slots_track(db, day: _date) -> list[dict]:
     now = time.time()
     if _SLOTS["date"] == day and now - _SLOTS["ts"] < 60:
         return _SLOTS["data"]
-    data = senti_track_from_slots(db, day)
+    data = _fill_slot_gaps(senti_track_from_slots(db, day))
     _SLOTS.update(date=day, ts=now, data=data)
     return data
 
@@ -879,6 +903,9 @@ def get_realtime(db) -> dict:
     fflow = _cache_get("fflow") or []
 
     data_date = _data_date(trends, zt, min5, fflow)
+    # 情绪轨迹跟随数据所属交易日：休市日/盘前其他卡片显示的是上一交易日，轨迹不能空白
+    track_day = (_date.fromisoformat(data_date)
+                 if data_date and data_date < day.isoformat() else day)
     # stale：① 核心源缺失；② 交易窗口内超 3 个周期未更新；③ 非休市时段但数据还是
     # 上一交易日的（盘前回退、刷新一直失败沿用旧缓存）
     core_ts = [t for t in (_cache_ts(k) for k in ("breadth", "trends", "zt")) if t]
@@ -929,7 +956,8 @@ def get_realtime(db) -> dict:
         "breadth": breadth,
         "senti": {k: senti[k] for k in ("score", "label", "level", "advice", "stale", "asof")
                   if k in senti},
-        "senti_track": _slots_track(db, day),
+        "senti_track": _slots_track(db, track_day),
+        "track_date": track_day.isoformat(),
         "indices_trend": indices_trend,
         "turnover": estimate_turnover(min5),
         "zt": zt_summary(zt) if zt else None,
