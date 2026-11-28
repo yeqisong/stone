@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import time
 from collections import defaultdict
 from datetime import date as _date, timedelta
 from typing import Any, Optional
@@ -30,6 +31,21 @@ from app.trade_slip import (
 )
 
 DISCIPLINE_KEY = "trade_discipline"
+
+# ── today_gate 展示缓存 ──
+# today_gate 内部是 3 次全量重放（load_slip_rows + replay_positions +
+# build_positions），复盘页挂载与持仓页每次都查，单次 ~1s。
+# 60s TTL + 写路径显式失效；交易路径不读缓存（见 today_gate docstring）。
+GATE_CACHE_TTL = 60.0
+_GATE_CACHE: dict[int, tuple[float, dict]] = {}
+
+
+def invalidate_gate_cache(user_id: Optional[int] = None) -> None:
+    """导入/撤销批次、盘中记录、改阈值后调用，让今日闸门下一查重算。"""
+    if user_id is None:
+        _GATE_CACHE.clear()
+    else:
+        _GATE_CACHE.pop(user_id, None)
 
 DEFAULT_DISCIPLINE: dict[str, Any] = {
     "max_new_buys_per_day": 2,     # 每日新开仓上限（笔）
@@ -1095,18 +1111,14 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
                     "adjusted": p["adjusted"], "flow": p["flow"],
                     "benchmark": p["benchmark"], "n_positions": p["n_positions"],
                     "max_weight": p["max_weight"], "cash": p["cash"]} for p in equity],
-        "flows": flows,
+        # episodes（closed 200 + open 100 条，约占响应一半）与逐笔 flows
+        # 前端从不渲染，不再随响应下发；回合计数在 summary.closed_episodes。
+        # 未来做「回合明细」tab 时按需单独开端点。
         "monthly": monthly,
         "behavior": beh,
         "findings": findings,
         "rules": rules,
         "score": score,
-        "episodes": {
-            "closed": [{k: (v.isoformat() if isinstance(v, _date) else v) for k, v in e.items()}
-                       for e in match["episodes"] if e.get("closed")][:200],
-            "open": [{k: (v.isoformat() if isinstance(v, _date) else v) for k, v in e.items()}
-                     for e in match["episodes"] if not e.get("closed")][:100],
-        },
         "stocks": stocks,
         "warnings": warnings,
         "notes": notes,
@@ -1170,8 +1182,18 @@ def _manual_today(db, user_id: int, day: _date) -> list[dict]:
     return out
 
 
-def today_gate(db, user_id: int, today: Optional[_date] = None) -> dict:
+def today_gate(db, user_id: int, today: Optional[_date] = None,
+               use_cache: bool = False) -> dict:
+    # 60s TTL 缓存只服务复盘页/持仓页的只读展示（挂载即查、成本 ~1s）。
+    # 交易路径（intraday_check 取连亏天数）默认不吃缓存；显式传 today 的
+    # 调用（单测/工具）也绕过，避免污染按 (user, 当天) 键的缓存。
+    global _GATE_CACHE
     today = today or _date.today()
+    if use_cache and today == _date.today():
+        now = time.monotonic()
+        cached = _GATE_CACHE.get(user_id)
+        if cached and now - cached[0] < GATE_CACHE_TTL:
+            return cached[1]
     cfg = get_discipline(db, user_id)
     rows = load_slip_rows(db, end=today, user_id=user_id)
     slip_end = max((r["trade_date"] for r in rows), default=None)
@@ -1288,7 +1310,7 @@ def today_gate(db, user_id: int, today: Optional[_date] = None) -> dict:
             "message": f"当前持仓 {len(positions)} 只，超过上限 {cfg['max_positions']} 只",
         })
     critical = [v for v in violations if v["level"] == "critical"]
-    return {
+    result = {
         "ok": True, "date": today.isoformat(), "checked": bool(today_rows),
         "today_buys": len(buys), "today_sells": len(sells),
         "today_buy_amount": round(sum(r["amount"] for r in buys), 2),
@@ -1299,3 +1321,6 @@ def today_gate(db, user_id: int, today: Optional[_date] = None) -> dict:
                     f"{len(violations)} 项纪律越界" if violations else
                     (f"今日 {len(buys)} 买 / {len(sells)} 卖，纪律正常" if today_rows else "今日暂无成交记录")),
     }
+    if use_cache and today == _date.today():
+        _GATE_CACHE[user_id] = (time.monotonic(), result)
+    return result
