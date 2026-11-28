@@ -73,3 +73,7 @@ data/agent_ws/
 
 # 全量复权特征重算断点
 .rebuild_adjusted_progress.json
+
+# 利润表逐票回补断点
+.backfill_income_progress.json
+.backfill_income_progress.tmp

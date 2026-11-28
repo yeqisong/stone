@@ -619,6 +619,70 @@ def batch_upsert_fina_indicator(db, records):
     return saved
 
 
+def batch_upsert_income(db, records):
+    """利润表 UPSERT（保留同一报告期的不同公告日修订版本）。
+
+    tushare income 会返回同一 (code,end_date,ann_date,report_type) 的重复行，
+    PostgreSQL 的 ON CONFLICT DO UPDATE 不允许同一批内二次命中同一行，
+    故先按主键去重（保留最后一条）。
+    """
+    from sqlalchemy import text
+    if not records:
+        return 0
+    dedup = {}
+    for r in records:
+        if not r.get('stock_code') or not r.get('end_date') or not r.get('ann_date'):
+            continue
+        key = (r['stock_code'], str(r['end_date'])[:10], str(r['ann_date'])[:10],
+               str(r.get('report_type') or '1')[:4])
+        dedup[key] = r
+    records = list(dedup.values())
+    if not records:
+        return 0
+    cols = ["stock_code", "end_date", "ann_date", "report_type", "total_revenue",
+            "revenue", "n_income_attr_p", "n_income", "basic_eps", "diluted_eps"]
+    col_str = ", ".join(cols)
+    ph = ", ".join(f":{c}" for c in cols)
+    updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in cols
+                        if c not in ("stock_code", "end_date", "ann_date", "report_type"))
+    sql = text(f"""
+        INSERT INTO stock_income ({col_str}) VALUES ({ph})
+        ON CONFLICT (stock_code, end_date, ann_date, report_type) DO UPDATE SET {updates}
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved
+
+
+def batch_upsert_consensus_daily(db, records):
+    """每日一致预期快照 UPSERT（整行覆盖，重算幂等）。"""
+    from sqlalchemy import text
+    if not records:
+        return 0
+    dedup = {(r['stock_code'], str(r['asof_date'])[:10]): r for r in records}
+    records = list(dedup.values())
+    cols = ["stock_code", "asof_date", "base_fy", "fy1", "fy2", "fy3",
+            "np_fy1", "np_fy2", "np_fy3", "eps_fy1", "eps_fy2", "eps_fy3",
+            "org_count", "report_count", "np_dispersion", "flags", "calc_ver"]
+    col_str = ", ".join(cols)
+    ph = ", ".join(f":{c}" for c in cols)
+    updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in cols
+                        if c not in ("stock_code", "asof_date"))
+    sql = text(f"""
+        INSERT INTO stock_consensus_daily ({col_str}) VALUES ({ph})
+        ON CONFLICT (stock_code, asof_date) DO UPDATE SET {updates}, updated_at=CURRENT_TIMESTAMP
+    """)
+    saved = 0
+    for i in range(0, len(records), 500):
+        db.execute(sql, records[i:i + 500])
+        db.commit()
+        saved += len(records[i:i + 500])
+    return saved
+
+
 def batch_upsert_index_weight(db, records):
     from sqlalchemy import text
     if not records:

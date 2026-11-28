@@ -21,6 +21,11 @@ from crawler.adapters.tushare_quota import TushareQuota, QuotaExhausted
 _LAST_CALL = 0.0
 _RATE_LIMIT = 1.3  # 秒（50/min = 1.2s一次，留余量）
 
+# report_rc 接口实测限 10 次/天（不是 1 次/分钟），必须单独设闸并识别频次错误；
+# 多次调用（分页/逐日回补）之间强制间隔 62s，避免触发分钟级限制。
+_LAST_RC_CALL = 0.0
+_RC_RATE_LIMIT = 62.0
+
 
 def _rl():
     global _LAST_CALL
@@ -28,6 +33,22 @@ def _rl():
     if elapsed < _RATE_LIMIT:
         time.sleep(_RATE_LIMIT - elapsed)
     _LAST_CALL = time.time()
+
+
+def _report_rc_gate():
+    """report_rc 专属闸门：调用间隔 ≥62s；日上限由接口侧 10 次/天约束。"""
+    global _LAST_RC_CALL
+    elapsed = time.time() - _LAST_RC_CALL
+    if elapsed < _RC_RATE_LIMIT:
+        time.sleep(_RC_RATE_LIMIT - elapsed)
+    _LAST_RC_CALL = time.time()
+
+
+def _is_rate_limited(e: Exception) -> bool:
+    """tushare 频次限制（如 report_rc 实测 10 次/天）——不能当成 0 行静默吞掉。"""
+    msg = str(e)
+    return ('频率超限' in msg or '频次' in msg or '每天' in msg
+            or '每分钟' in msg or '每小时' in msg)
 
 
 class TuShareAdapter(DataSourceAdapter):
@@ -875,6 +896,148 @@ class TuShareAdapter(DataSourceAdapter):
             raise
         except Exception as e:
             logger.warning(f"[tushare] income ann={td} 失败: {e}")
+            return []
+
+    # ── 一致预期数据底座：report_rc（券商预测）+ income（利润表）──
+
+    def fetch_report_rc(self, report_date: str, max_pages: int = 20) -> list:
+        """券商盈利预测明细（按报告日全市场，实测限 10 次/天）。
+
+        单位换算：tushare np/op_rt 为万元，本系统统一为元（×1e4）。
+        分页：单次最大 3000 条，每页之间间隔 62s（同样计入 10 次/天）。
+        """
+        td = report_date.replace('-', '')[:8]
+        out = []
+        try:
+            for page in range(max_pages):
+                _report_rc_gate()
+                self.quota.consume()
+                df = self._pro.report_rc(report_date=td, limit=3000, offset=page * 3000)
+                rows = self._rows(df, {
+                    "stock_code": "ts_code", "stock_name": "name",
+                    "report_date": "report_date", "report_title": "report_title",
+                    "report_type": "report_type", "classify": "classify",
+                    "org_name": "org_name", "author_name": "author_name",
+                    "quarter": "quarter", "op_rt": "op_rt", "np": "np",
+                    "eps": "eps", "pe": "pe", "roe": "roe",
+                    "rating": "rating", "target_price": "target_price"})
+                for r in rows:
+                    r["stock_code"] = (r.get("stock_code") or '').split('.')[0].zfill(6)
+                    r["report_date"] = self._norm_date(r.get("report_date")) or self._norm_date(td)
+                    # 万元 → 元
+                    for k in ("op_rt", "np"):
+                        if r.get(k) is not None:
+                            r[k] = r[k] * 1e4
+                    # fiscal_year 从 quarter（2026Q4）解析；缺失则 None
+                    q = str(r.get("quarter") or "")
+                    r["fiscal_year"] = int(q[:4]) if len(q) >= 4 and q[:4].isdigit() else None
+                    # 空字符串列统一落默认值，并截断到列宽，避免单行超长炸整批
+                    r["stock_name"] = (r.get("stock_name") or '')[:30] or None
+                    r["org_name"] = (r.get("org_name") or '')[:100]
+                    r["author_name"] = (r.get("author_name") or '')[:100]
+                    r["report_title"] = (r.get("report_title") or '')[:200]
+                    r["report_type"] = (r.get("report_type") or None)
+                    if r["report_type"]:
+                        r["report_type"] = str(r["report_type"])[:30]
+                    r["classify"] = (r.get("classify") or None)
+                    if r["classify"]:
+                        r["classify"] = str(r["classify"])[:30]
+                    r["rating"] = (r.get("rating") or None)
+                    if r["rating"]:
+                        r["rating"] = str(r["rating"])[:30]
+                    r["quarter"] = q[:10]
+                out.extend(rows)
+                if len(rows) < 3000:
+                    break
+            return out
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            if _is_rate_limited(e):
+                raise QuotaExhausted(f'report_rc 接口频次受限：{str(e)[:120]}')
+            logger.warning(f"[tushare] report_rc {td} 失败: {e}")
+            return out
+
+    def fetch_disclosure_codes(self, actual_date: str) -> list:
+        """当日实际披露财报的股票代码（disclosure_date 按 actual_date 查询）。
+
+        tushare income 不支持 ann_date 全市场直查（必填 ts_code），故用披露计划表
+        先拿代码清单，再逐票拉利润表——这是目前唯一可行的日频增量路径。
+        """
+        td = actual_date.replace('-', '')[:8]
+        try:
+            _rl()
+            self.quota.consume()
+            df = self._pro.disclosure_date(actual_date=td)
+            out = []
+            if df is not None and not df.empty:
+                seen = set()
+                for _, r in df.iterrows():
+                    code = str(r.get('ts_code', '')).split('.')[0].zfill(6)
+                    if code and code not in seen:
+                        seen.add(code)
+                        out.append(code)
+            return out
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            if _is_rate_limited(e):
+                raise QuotaExhausted(f'disclosure_date 接口频次受限：{str(e)[:120]}')
+            logger.warning(f"[tushare] disclosure_date {td} 失败: {e}")
+            return []
+
+    def fetch_income_ann_full(self, ann_date: str, max_codes: int = 0) -> list:
+        """按公告日全市场拉利润表（合并报表）。
+
+        实现：disclosure_date 拿当日披露代码 → 逐票 income(ts_code) 全历史，
+        幂等覆盖（顺带补齐该票此前缺失的报告期）。max_codes>0 时限制单次票数。
+        """
+        codes = self.fetch_disclosure_codes(ann_date)
+        if max_codes:
+            codes = codes[:max_codes]
+        out = []
+        for code in codes:
+            try:
+                out.extend(self.fetch_income_by_code(code))
+            except QuotaExhausted:
+                raise
+            except Exception as e:
+                logger.warning(f"[tushare] income {code} 失败: {e}")
+        return out
+
+    def fetch_income_by_code(self, ts_code: str, start_date: str = None,
+                             end_date: str = None) -> list:
+        """按股票代码拉利润表全历史（合并报表），回补脚本逐票轮换用。"""
+        try:
+            if '.' not in ts_code:
+                ts_code = self._ts_code(ts_code)
+            kwargs = {"ts_code": ts_code, "report_type": "1"}
+            if start_date:
+                kwargs["start_date"] = start_date.replace('-', '')[:8]
+            if end_date:
+                kwargs["end_date"] = end_date.replace('-', '')[:8]
+            _rl()
+            self.quota.consume()
+            df = self._pro.income(**kwargs)
+            rows = self._rows(df, {
+                "stock_code": "ts_code", "end_date": "end_date", "ann_date": "ann_date",
+                "report_type": "report_type", "total_revenue": "total_revenue",
+                "revenue": "revenue", "n_income_attr_p": "n_income_attr_p",
+                "n_income": "n_income", "basic_eps": "basic_eps",
+                "diluted_eps": "diluted_eps"})
+            for r in rows:
+                r["stock_code"] = ts_code.split('.')[0].zfill(6)
+                r["end_date"] = self._norm_date(r.get("end_date"))
+                r["ann_date"] = self._norm_date(r.get("ann_date"))
+                r["report_type"] = str(r.get("report_type") or '1')[:4]
+            # 公告日缺失的行无法做 PIT，直接丢弃（tushare 偶发空值）
+            return [r for r in rows if r.get("end_date") and r.get("ann_date")]
+        except QuotaExhausted:
+            raise
+        except Exception as e:
+            if _is_rate_limited(e):
+                raise QuotaExhausted(f'income 接口频次受限：{str(e)[:120]}')
+            logger.warning(f"[tushare] income {ts_code} 失败: {e}")
             return []
 
     def fetch_fina_indicator(self, ts_code: str, period: str = None) -> list:
