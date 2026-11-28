@@ -51,6 +51,15 @@ def _is_rate_limited(e: Exception) -> bool:
             or '每分钟' in msg or '每小时' in msg)
 
 
+class SourceFetchError(RuntimeError):
+    """数据源拉取失败（非配额/频次原因）。
+
+    与「拉到了、结果为空」是两回事：空列表是合法状态，调用方可以据此登记空结果；
+    拉取失败必须让调用方知道，否则回补水位线会把这天/这只股票永久跳过
+    （与 v3.10.0 记过的「空结果 vs 无结果」是同一类问题）。
+    """
+
+
 class TuShareAdapter(DataSourceAdapter):
     name = "tushare"
     priority = 5  # 主源
@@ -956,7 +965,9 @@ class TuShareAdapter(DataSourceAdapter):
             if _is_rate_limited(e):
                 raise QuotaExhausted(f'report_rc 接口频次受限：{str(e)[:120]}')
             logger.warning(f"[tushare] report_rc {td} 失败: {e}")
-            return out
+            # 「拉取失败」不等于「当日没有研报」：原先吞掉异常返回已拿到的行（多半是空），
+            # 调用方会把该抽样日登记成空结果、永久跳过。改为抛出，由调用方决定重试
+            raise SourceFetchError(f'report_rc {td} 拉取失败: {str(e)[:120]}') from e
 
     def fetch_disclosure_codes(self, actual_date: str) -> list:
         """当日实际披露财报的股票代码（disclosure_date 按 actual_date 查询）。
@@ -1038,7 +1049,8 @@ class TuShareAdapter(DataSourceAdapter):
             if _is_rate_limited(e):
                 raise QuotaExhausted(f'income 接口频次受限：{str(e)[:120]}')
             logger.warning(f"[tushare] income {ts_code} 失败: {e}")
-            return []
+            # 同 fetch_report_rc：失败抛出，回补脚本才不会把这只股票标成「已完成」
+            raise SourceFetchError(f'income {ts_code} 拉取失败: {str(e)[:120]}') from e
 
     def fetch_fina_indicator(self, ts_code: str, period: str = None) -> list:
         """财务指标精选字段（period=None 返回该票全部报告期历史——代码轮换回补用）。"""

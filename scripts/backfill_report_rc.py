@@ -30,7 +30,7 @@ import argparse
 import fcntl
 import sys
 import time
-from datetime import date
+from datetime import date, datetime as _dt, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from loguru import logger
 from sqlalchemy import text
 
+_CST = timezone(timedelta(hours=8))
 LOCK_FILE = '/tmp/stone_backfill_report_rc.lock'
 
 
@@ -68,10 +69,12 @@ def main():
     from app.db.connection import get_sync_db
     from crawler.adapters import get_data_source_manager
     from crawler.adapters.tushare_quota import TushareQuota, QuotaExhausted
-    from scripts.pipeline import _ext_report_rc
+    from scripts.pipeline import _ext_report_rc, RC_PUBLISH_HOUR
 
+    # 「今天」按北京时间算；当天要等盘后更新才有数据
+    now = _dt.now(_CST)
     start = date.fromisoformat(args.start)
-    end = date.fromisoformat(args.end) if args.end else date.today()
+    end = date.fromisoformat(args.end) if args.end else now.date()
     db = get_sync_db()
     quota = TushareQuota.get()
     source = get_data_source_manager().get_source()
@@ -82,6 +85,13 @@ def main():
         ORDER BY cal_date
     """), {'s': start, 'e': end}).fetchall()]
     dates = dates[::max(1, args.step)]
+    if now.hour < RC_PUBLISH_HOUR:
+        # 发布时点之前拉当天只会得到 0 行，还会把这个抽样日登记成空结果（永久跳过）
+        before = len(dates)
+        dates = [d for d in dates if d != now.date()]
+        if len(dates) != before:
+            logger.warning(f'当天（{now.date()}）尚未到 report_rc 发布时点'
+                           f'（{RC_PUBLISH_HOUR} 点后），本次跳过当天')
     if args.reverse:
         dates = list(reversed(dates))
     logger.info(f'report_rc 回补：{len(dates)} 个抽样日（step={args.step}，{start} → {end}），'
@@ -114,6 +124,10 @@ def main():
                 n = _ext_report_rc(source, db, ds)
             except QuotaExhausted as e:
                 logger.warning(f'{str(e)[:160]}；收工，次日续跑')
+                break
+            except Exception as e:
+                # 拉取失败 ≠ 这天没有研报：不登记（登记了就永远不会再试），收工下次续跑
+                logger.warning(f'{ds} 拉取失败（不登记为空日，下次重试）：{str(e)[:140]}')
                 break
             total += n
             saved_days += 1
