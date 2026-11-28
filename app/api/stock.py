@@ -1135,6 +1135,16 @@ _radar_cache: dict = {}
 _RADAR_TTL_S = 10
 
 
+def radar_data_date(quotes: dict) -> 'str | None':
+    """雷达快照数据真实所属的交易日（腾讯快照 trade_date 取最新；None=无法判定）。
+
+    盘前/休市日批量快照回退成上一交易日的整段数据，缓存生成时间（asof）不等于
+    数据时间——前端必须分开标（与 /api/market/realtime 的 data_date 同一口径，
+    v3.27.1 §10.1「缓存刷新时间 ≠ 数据时间」）。"""
+    dates = [q.get('trade_date') for q in (quotes or {}).values() if q.get('trade_date')]
+    return max(dates) if dates else None
+
+
 @router.get("/stock/radar")
 def get_intraday_radar(principal: Principal = Depends(get_principal)):
     """当前用户关注池盘中雷达：一次批量快照 + 规则打分，点进详情做进一步验证。"""
@@ -1187,14 +1197,14 @@ def get_intraday_radar(principal: Principal = Depends(get_principal)):
     finally:
         db.close()
     if not rows:
-        return {'asof': None, 'items': []}
+        return {'asof': None, 'data_date': None, 'items': []}
     metas = {r[0]: {'name': r[1], 'industry': r[2]} for r in rows}
     try:
         from crawler.adapters.tencent_adapter import realtime_quotes
         raw = realtime_quotes(list(metas.keys()), 'stock')
     except Exception as e:
         logger.warning(f"[radar] 快照失败: {str(e)[:120]}")
-        return {'asof': None, 'items': []}
+        return {'asof': None, 'data_date': None, 'items': []}
     items = []
     for q in raw.values():
         code = q.get('code')
@@ -1253,6 +1263,7 @@ def get_intraday_radar(principal: Principal = Depends(get_principal)):
             it['signal'] = None
     items.sort(key=lambda x: -x['score'])
     payload = {'asof': datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S'),
+               'data_date': radar_data_date(raw),
                'items': items}
     _radar_cache[uid] = (now, payload)
     return payload

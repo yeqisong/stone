@@ -42,9 +42,11 @@
               <i class="down" :style="{ width: pctW(d.breadth.down) }"></i>
             </div>
             <div class="rm-stat">
-              <span>涨停 <b class="up">{{ d.breadth.limit_up }}</b></span>
-              <span>跌停 <b class="down">{{ d.breadth.limit_down }}</b></span>
-              <span>炸板 <b class="warn">{{ d.zt ? d.zt.broken : '—' }}</b></span>
+              <!-- 涨跌停是新浪快照阈值近似（含盘中触板），炸板是东财涨停池口径（封住家数）：
+                   design/13 §5.4 两处天然不相等，混在一行必须各自标来源，否则数字对不上会被当 bug 报 -->
+              <span title="新浪全市场快照阈值近似（含盘中触板，非收盘封住口径）">涨停 <b class="up">{{ d.breadth.limit_up }}</b></span>
+              <span title="新浪全市场快照阈值近似">跌停 <b class="down">{{ d.breadth.limit_down }}</b></span>
+              <span title="东财涨停池口径（收盘封住家数），与左侧新浪口径的涨停家数天然不相等">炸板 <b class="warn">{{ d.zt ? d.zt.broken : '—' }}</b></span>
               <span>中位 <b :class="chgCls(d.breadth.median)">{{ signed(d.breadth.median) }}%</b></span>
             </div>
             <div v-if="d.turnover" class="rm-stat">

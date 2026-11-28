@@ -8,6 +8,9 @@ const port = Number(process.env.FRONTEND_PORT || 3000)
 
 export default defineConfig({
   plugins: [vue()],
+  // worktree 与主仓库共享 node_modules 软链时，依赖预构建缓存（.vite）不能共用，
+  // 否则两个 dev server 互相踩 _metadata.json（v3.28 教训④）；旁路实例用 VITE_CACHE_DIR 隔离
+  cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
   server: {
     port,
     // WSL/脚本整文件重写下 inotify 偶发漏事件 → dev server 一直吐旧编译结果。

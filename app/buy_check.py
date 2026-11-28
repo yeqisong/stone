@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from statistics import fmean
 from typing import Optional
 
@@ -34,6 +34,14 @@ RR_MIN = 2.0           # 盈亏比下限
 BREADTH_MIN = 0.40     # 市场宽度（上涨家数占比）下限
 MAX_CHASE = 0.03       # 现价高于参考买点 3% 以上视为追高
 FLOW_DAYS = 25         # 板块资金流回看交易日数
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _bj_today() -> date:
+    """北京时间的自然日（v3.27.1 §10.9：盘中价是否「今天」的判定不能依赖主机时区，
+    否则 UTC 主机在北京时间 00:00–08:00 会把今天的实时价当旧价、整段盘中触发失效）。"""
+    return datetime.now(_CST).date()
 
 
 def _f(v) -> float:
@@ -364,7 +372,7 @@ def sector_gate(db, code: str) -> dict:
 def _load_bars(db, codes: list[str], days: int = 180) -> dict[str, list[dict]]:
     if not codes:
         return {}
-    start = date.today() - timedelta(days=300)
+    start = _bj_today() - timedelta(days=300)
     rows = db.execute(text("""
         SELECT stock_code, trade_date, close, close_hfq, high, low, volume
         FROM daily_quote
@@ -450,7 +458,7 @@ def detect_setup(bars: list[dict], quote: Optional[dict] = None,
     q_vwap = _f((quote or {}).get("avg_price"))
     q_date = str((quote or {}).get("trade_date") or "")[:10]
     # 只有今天/未标注日期的实时价才允许触发盘中结构；收盘后/周末不拿旧价冒充盘中
-    q_today = bool(qprice > 0 and (not q_date or q_date == date.today().isoformat()))
+    q_today = bool(qprice > 0 and (not q_date or q_date == _bj_today().isoformat()))
     q_above_vwap = bool(q_today and q_vwap > 0 and qprice >= q_vwap)
     intraday_vol = q_vr if q_vr > 0 else vol_ratio
     candidates = []
@@ -773,7 +781,7 @@ def _recent_sold_codes(db, st: dict, days: int = 5,
              if a.get("side") == "sell" and a.get("stock_code")}
     if db is None:
         return codes
-    cutoff = date.today() - timedelta(days=max(1, int(days)) * 2)
+    cutoff = _bj_today() - timedelta(days=max(1, int(days)) * 2)
     try:
         rows = db.execute(text("""
             SELECT DISTINCT stock_code FROM trade_slip

@@ -159,6 +159,7 @@ export function pollDelay(kind, session) {
   if (kind === 'radar') return live ? 15000 : 60000
   if (kind === 'cand') return live ? 60000 : 300000
   if (kind === 'market') return live ? 15000 : 60000
+  if (kind === 'alerts') return live ? 30000 : 120000   // 今日盘中提醒（个人 it%）
   return 60000
 }
 
@@ -189,11 +190,38 @@ export function staleText(d) {
   return prevDataDate(d) ? `当前为 ${prevDataDate(d)} 的数据，开盘后自动更新` : '数据延迟，后台采集中'
 }
 
+/** 北京时间的「今天」（YYYY-MM-DD）：过滤今日告警、判断雷达数据是否属于今天。 */
+export function bjToday(d = new Date()) {
+  const t = bjWallClock(d)
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+}
+
 /** 最近的「工作日」日期串（YYYY-MM-DD）：周末回退到周五。不含节假日，只作盘面数据未到时的兜底。 */
 export function latestWeekday(d = new Date()) {
   const t = bjWallClock(d)
   while (t.getDay() === 0 || t.getDay() === 6) t.setDate(t.getDate() - 1)
   return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * 雷达/候选的数据所属交易日标注：快照不是今天的（盘前/休市日腾讯回退上一交易日）
+ * 必须标出来——「更新 22:16」是缓存生成时间，不等于数据时间（与盘面 data_date 同一口径）。
+ */
+export function radarDateNote(dataDate, today) {
+  return dataDate && today && dataDate !== today ? `显示 ${dataDate}（最近交易日）数据` : ''
+}
+
+/**
+ * 机会区顶部与实时闸门的口径提示：候选扫描（allowed）是日频口径，决策线的实时闸门
+ * 是盘中口径，两者可能矛盾——allowed 时若实时闸门关闭/警戒/不可用，要如实注明，
+ * 不能让同一屏上「警戒」和「可以找买点」各说各话（v3.26 决策：不改候选行为，只补展示）。
+ */
+export function opportunityGateNote(gate) {
+  const lv = gate && gate.level
+  if (lv === 'closed') return '实时闸门已关闭：候选仍按日频口径扫描，开仓前以决策线闸门结论为准'
+  if (lv === 'caution') return '实时闸门警戒：开仓前先看决策线闸门结论'
+  if (lv === 'unknown') return '实时闸门结论不完整（数据源缺失）：开仓前自行核对盘面'
+  return ''
 }
 
 // 分区各自的数据日期（梯队 YYYYMMDD / 资金流 / 情绪轨迹），与今天不同才标
