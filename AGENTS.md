@@ -187,7 +187,7 @@ cd web-v2 && npm run dev
 
 1. **主仓库永远停在 `main`**：`/home/bnbnyu/projects/stone` 只用于 3000/8000 验收，禁止在主仓库 checkout 功能分支。
 2. **一任务一分支一工作树**：从最新 `main` 建 `feat/<slug>` / `fix/<slug>`，工作树放 `/home/bnbnyu/projects/stone-worktrees/<slug>`；任务合并后立即删除，不复用旧分支/旧 worktree。
-3. **一任务一端口对**：主环境 `8000/3000`；任务从 `8100/3100`、`8101/3101` 顺延，禁止 kill 他人端口进程。
+3. **一任务一端口对（2026-11-28 用户拍板）**：主环境 `8000/3000` 是**本地正式端口**，始终跑 `main` 最新合并结果，任务合并后必须及时让 3000 生效（重启后端/前端）。其它分支开发一律用旁路端口对：前端从 `3001`、`3002` 顺延，后端从 `8101`、`8102` 顺延（前后端配对），禁止 kill 他人端口进程、禁止把开发实例留在 3000/8000。
 4. **测试库**：非 schema 任务用共享 `stone_test`；涉及 `app/db/schema.py` / `init_db` 迁移的任务从 `stone_test` 克隆 `stone_t_<slug>`，任务结束 drop。自动化测试禁止连生产库 `stock_monitor`；生产库只用于人工验收，迁移前先备份。
 5. **收尾必须回收**：测试/构建通过 → 合并 `main` → `git worktree remove` → 删除分支 → drop 任务库 → 停止进程。分支生命周期 ≤ 3 天。
 6. 开工先 `git fetch --prune && git switch main && git pull --ff-only && git status`，并查 `git worktree list`；新会话不复用旧分支。
