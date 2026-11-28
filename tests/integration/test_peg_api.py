@@ -80,6 +80,14 @@ async def test_peg_history_shape(client):
     assert body['code'] == '000001'
     assert isinstance(body['data'], list)
     assert body['meta']['years'] == 3
+    # 一致预期是抽样口径（每 20 个交易日抽样），机构数要如实带出来供前端披露
+    meta = body['meta']
+    assert {'org_median', 'org_min', 'consensus_points'} <= set(meta)
+    if meta['consensus_points']:
+        assert meta['org_median'] is not None and meta['org_min'] is not None
+        assert 0 < meta['org_min'] <= meta['org_median']
+    else:
+        assert meta['org_median'] is None and meta['org_min'] is None
     if body['data']:
         row = body['data'][-1]
         for key in ('date', 'pe_ttm', 'g', 'peg', 'band20', 'band50', 'band80',

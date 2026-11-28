@@ -279,11 +279,18 @@ def stock_peg_history(code: str,
             ORDER BY report_date
         """), {'c': code, 's': start, 'e': end}).fetchall()
         if not pe_rows:
+            display_start = end - timedelta(days=365 * years)
             return {'code': code, 'name': master[1] if master else None,
+                    'industry_l1': master[2] if master else None,
                     'data': [], 'latest': None,
                     'reason': '该股无 PE_TTM 历史（stock_fundamentals_history 未覆盖）',
+                    # meta 与正常分支同形状（计数为 0），前端不必区分两种结构
                     'meta': {'start': start.isoformat(), 'end': end.isoformat(),
-                             'years': years, 'lam': lam}}
+                             'display_start': display_start.isoformat(),
+                             'years': years, 'lam': lam, 'window': 1250, 'min_periods': 250,
+                             'points': 0, 'valid_peg': 0, 'consensus_points': 0,
+                             'hist_points': 0, 'fallback_points': 0, 'first_consensus': None,
+                             'org_median': None, 'org_min': None}}
         annuals = _rows_to_dicts(db.execute(text("""
             SELECT end_date, ann_date, n_income_attr_p
             FROM stock_income
@@ -323,6 +330,12 @@ def stock_peg_history(code: str,
                 'band80': _num(r['band80'], 2),
                 'peg_pct': _num(r['peg_pct'], 1)}
 
+    # 一致预期口径各点的机构数：历史快照是每 20 个交易日抽样回补出来的（report_rc
+    # 每天 10 次配额），180 天窗口里只有 6~7 个发布日，org_count 系统性偏低——
+    # 前端要把它说出来，否则「一致预期」三个字会让人以为是完整券商覆盖
+    org_counts = sorted(int(r['org_count']) for r in data
+                        if r.get('g_cons') is not None and r.get('org_count') is not None)
+
     return {
         'code': code,
         'name': master[1] if master else None,
@@ -340,5 +353,7 @@ def stock_peg_history(code: str,
             'fallback_points': sum(1 for r in data if r.get('mode') == 'hist'),
             'first_consensus': next((r['date'] for r in data
                                      if r.get('mode') == 'consensus'), None),
+            'org_median': org_counts[len(org_counts) // 2] if org_counts else None,
+            'org_min': org_counts[0] if org_counts else None,
         },
     }
