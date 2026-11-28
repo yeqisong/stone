@@ -200,8 +200,16 @@ async def test_market_realtime_shape(client):
     response = await client.get("/api/market/realtime", headers=AUTH)
     assert response.status_code == 200
     body = response.json()
-    assert {"ok", "date", "session", "session_label", "asof", "stale"} <= set(body.keys())
+    assert {"ok", "date", "data_date", "session", "session_label", "asof", "stale"} <= set(body.keys())
     assert body["session"] in ("pre", "open", "lunch", "post", "closed")
+    # data_date=数据真实所属交易日（None=尚无带日期的数据源）；梯队/资金流各自带日期
+    if body.get("data_date") is not None:
+        assert body["data_date"] <= body["date"]      # 数据不可能来自未来
+        assert body["data_date"] >= "2000-01-01"
+    if body.get("zt"):
+        assert body["zt"]["date"] <= body["date"].replace("-", "")
+    if body.get("fflow", {}).get("date"):
+        assert body["fflow"]["date"] <= body["date"]
     assert isinstance(body["indices_trend"], list)
     assert isinstance(body["senti_track"], list)
     assert isinstance(body["boards"], list)

@@ -4,13 +4,21 @@
 不出网、不连库；缓存指标用 market_realtime._cache_put 预置。
 """
 import unittest
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
+from unittest import mock
 
 from app import market_realtime as mrt
 from app import buy_check as bc
 from app.api.status import _alert_visible
+from crawler import em_quote
 
 NOW = datetime(2026, 11, 30, 10, 0, 0)   # 周一盘中
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+def _read_fixture(name: str) -> str:
+    return (FIXTURES / name).read_text()
 
 
 class _Row:
@@ -55,23 +63,37 @@ class FakeAlertDB:
         pass
 
 
-def _seed_index(prices):
+def _seed_index(prices, day='20261130'):
+    """预置指数分时缓存。date 用腾讯真实返回的 YYYYMMDD 格式。"""
     mrt._cache_put('trends', {'000001': {
-        'symbol': 'sh000001', 'name': '上证指数', 'date': '2026-11-30',
+        'symbol': 'sh000001', 'name': '上证指数', 'date': day,
         'preClose': prices[0], 'last': prices[-1],
         'points': [{'t': f'{9 + i // 60:02d}:{i % 60:02d}', 'price': p,
                     'cum_vol': 1.0, 'cum_amount': 1.0} for i, p in enumerate(prices)],
     }})
 
 
+def _seed_pool(day='20261130', max_lbc=6):
+    """预置涨停池缓存（fetch_zt_pools 的原始形状）。"""
+    mrt._cache_put('zt', {
+        'date': day,
+        'pool': [{'code': '603960', 'name': '克来机电', 'lbc': max_lbc, 'fund': 4.7e7},
+                 {'code': '000001', 'name': '某首板', 'lbc': 1, 'fund': 1e7}],
+        'broken_pool': [],
+    }, day)
+
+
 def _reset():
     mrt._cache_put('trends', {})
     mrt._cache_put('breadth', {})
     mrt._cache_put('zt', {})
-    with mrt._mstate_lock:
-        mrt._mstate.update(day=None, idx_side=None, breadth_zone=None,
-                           height_day=None, sent_level=None)
+    mrt._mstate_reset(None)
     bc._gate_cache.update(ts=0.0, data=None)
+
+
+def _kinds(db=None, now=NOW):
+    """评估一次，返回落库的 kind 列表（按落库顺序）。"""
+    return [x['kind'] for x in mrt.evaluate_market_alerts(db or FakeAlertDB(), now=now)]
 
 
 class TestMarketAlertEvaluate(unittest.TestCase):
@@ -79,6 +101,12 @@ class TestMarketAlertEvaluate(unittest.TestCase):
 
     def setUp(self):
         _reset()
+        # 情绪源打桩：规则 4 读 market_sentiment.get，不打桩会真的去请求腾讯快照
+        self.senti = {'level': 'neutral', 'score': 55}
+        patcher = mock.patch.object(mrt.market_sentiment, 'get',
+                                    lambda db, use_cache=True: dict(self.senti))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _eval(self, db=None, now=NOW):
         return mrt.evaluate_market_alerts(db or FakeAlertDB(), now=now)
@@ -121,25 +149,90 @@ class TestMarketAlertEvaluate(unittest.TestCase):
         self.assertEqual(out[0]['kind'], 'mk_idx_drop')
 
     def test_breadth_hysteresis(self):
-        """宽度上穿 0.65 触发；中位带不重复；下穿 0.35 触发反向。"""
-        mrt._cache_put('breadth', {'up_ratio': 0.70, 'up': 5200, 'down': 170})
-        out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_breadth_up' for x in out))
-        mrt._cache_put('breadth', {'up_ratio': 0.55, 'up': 4000, 'down': 1000})  # 中位带 → 复位
-        self._eval(FakeAlertDB())
-        mrt._cache_put('breadth', {'up_ratio': 0.30, 'up': 1500, 'down': 3800})
-        out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_breadth_dn' for x in out))
+        """宽度：中性起步 → 上穿 0.65 触发 → 回到中位带复位 → 再上穿再触发 → 下穿 0.35 触发反向。"""
+        def breadth(r):
+            mrt._cache_put('breadth', {'up_ratio': r, 'up': int(r * 5000), 'down': int((1 - r) * 5000)})
+        breadth(0.55)
+        self.assertEqual(_kinds(), [])                              # 基线：中性
+        breadth(0.70)
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
+        breadth(0.58)                                               # 0.60~0.65 滞回带：保持 high，不重复
+        self.assertEqual(_kinds(), [])
+        breadth(0.55)                                               # 回到中位带 → 复位
+        self.assertEqual(_kinds(), [])
+        breadth(0.70)
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
+        breadth(0.30)
+        self.assertEqual(_kinds(), ['mk_breadth_dn'])
+
+    def test_breadth_first_observation_is_baseline(self):
+        """重启后/开盘第一眼就在高位，不是「盘中转强」：首轮只建基线。"""
+        mrt._cache_put('breadth', {'up_ratio': 0.92, 'up': 5000, 'down': 400})
+        self.assertEqual(_kinds(), [])
+        with mrt._mstate_lock:
+            self.assertEqual(mrt._mstate['breadth_zone'], 'high')
+            self.assertTrue(mrt._mstate['breadth_seen'])
+        # 滞回带内继续高位：不报
+        mrt._cache_put('breadth', {'up_ratio': 0.64, 'up': 3500, 'down': 1900})
+        self.assertEqual(_kinds(), [])
+        # 回到中位带再上穿 → 这才是转折
+        mrt._cache_put('breadth', {'up_ratio': 0.50, 'up': 2700, 'down': 2700})
+        self.assertEqual(_kinds(), [])
+        mrt._cache_put('breadth', {'up_ratio': 0.72, 'up': 3900, 'down': 1500})
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
+
+    def test_breadth_low_first_then_cross_high(self):
+        """首轮在低位建基线后，中位带 → high 的上穿照常报（基线标记独立于 zone 值）。"""
+        mrt._cache_put('breadth', {'up_ratio': 0.20, 'up': 1100, 'down': 4300})
+        self.assertEqual(_kinds(), [])
+        mrt._cache_put('breadth', {'up_ratio': 0.50, 'up': 2700, 'down': 2700})
+        self.assertEqual(_kinds(), [])
+        mrt._cache_put('breadth', {'up_ratio': 0.70, 'up': 3800, 'down': 1600})
+        self.assertEqual(_kinds(), ['mk_breadth_up'])
 
     def test_height_once_per_day(self):
-        mrt._cache_put('zt', {'max_lbc': 6, 'limit_up': 417, 'broken': 42,
-                              'ladder': [{'lbc': 6, 'n': 1, 'names': ['克来机电'], 'codes': ['603960']}]})
-        out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_height' for x in out))
+        """缓存是 fetch_zt_pools 的原始形状（pool/broken_pool 列表）；当日只报一次。"""
+        raw = {'date': '20261130',
+               'pool': [{'code': '603960', 'name': '克来机电', 'lbc': 6, 'fund': 4.7e7},
+                        {'code': '000001', 'name': '某首板', 'lbc': 1, 'fund': 1e7}],
+               'broken_pool': [{'code': '000002', 'name': '某炸板', 'lbc': 1}]}
+        mrt._cache_put('zt', raw, '20261130')
+        db = FakeAlertDB()
+        out = self._eval(db)
+        self.assertEqual([x['kind'] for x in out], ['mk_height'])
+        self.assertEqual(db.inserted[0]['k'], 'mk_height')
+        self.assertIn('克来机电', out[0]['body'])
+        self.assertIn('涨停 2 家 / 炸板 1 家', out[0]['body'])
         # 再评：当日已报 → 不重复
-        self._eval(FakeAlertDB())
+        self.assertEqual(self._eval(FakeAlertDB()), [])
         with mrt._mstate_lock:
             self.assertEqual(mrt._mstate['height_day'], NOW.date())
+
+    def test_height_from_real_adapter_shape(self):
+        """形状回归：真实 fetch_zt_pools 解析（em_get 换成 fixture 文本）→ 缓存 → 触发。
+
+        v3.27 审查项：评估曾直接读原始池的 max_lbc（恒 None，规则永不触发），而旧单测
+        往缓存塞的是 zt_summary 的形状所以一直是绿的。这里把「缓存里到底存什么」
+        用真实 adapter 固定住——缓存形状一变，本用例先红。
+        """
+        zt_text, zb_text = _read_fixture('em_ztpool.json'), _read_fixture('em_zbpool.json')
+
+        class _Resp:
+            def __init__(self, t):
+                self.text = t
+
+        def fake_em_get(url, **kw):
+            return _Resp(zb_text if 'ZBPool' in url else zt_text)
+
+        with mock.patch.object(em_quote, 'em_get', fake_em_get):
+            raw = em_quote.fetch_zt_pools('20261127')      # fixture 是 2026-11-27 实测样本
+        self.assertEqual(set(raw), {'date', 'pool', 'broken_pool'})
+        mrt._cache_put('zt', raw, '20261127')
+        db = FakeAlertDB()
+        out = mrt.evaluate_market_alerts(db, now=datetime(2026, 11, 27, 10, 0))
+        self.assertEqual([x['kind'] for x in out], ['mk_height'])
+        self.assertIn('连板高度 6 板', out[0]['title'])
+        self.assertEqual(db.inserted[0]['k'], 'mk_height')
 
     def test_sentiment_baseline_then_panic(self):
         """首轮只建基线；跨入 panic 报 critical。"""
@@ -167,6 +260,204 @@ class TestMarketAlertEvaluate(unittest.TestCase):
         db = FakeAlertDB(today_count=15)
         self.assertEqual(self._eval(db), [])
         self.assertEqual(db.inserted, [])
+
+    # ── v3.27 审查项 2：数据日期 / 时段门控 ───────────────────────────────
+
+    def test_no_eval_outside_continuous_session(self):
+        """盘前/午休/收盘后不评估：采集窗口 09:25 就开始，但那不是盘中异动。"""
+        _seed_pool()
+        for t in ((9, 27), (12, 0), (15, 1)):
+            db = FakeAlertDB()
+            self.assertEqual(self._eval(db, now=datetime(2026, 11, 30, *t)), [], t)
+            self.assertEqual(db.inserted, [], t)
+        # 连续竞价内才评估（09:30:00 起 session 即为 open；09:30 那一分钟池子尚未
+        # 切到今天，由 test_prev_day_data_never_alerts 的日期门控兜住）
+        out = self._eval(FakeAlertDB(), now=datetime(2026, 11, 30, 9, 31))
+        self.assertEqual([x['kind'] for x in out], ['mk_height'])
+
+    def test_prev_day_data_never_alerts(self):
+        """周一开盘后缓存里还是周五的数据（东财/腾讯盘前回退）→ 对应规则不评估。"""
+        _seed_index([100.0] * 5 + [101.5] * 11, day='20261127')   # 周五尾盘急涨
+        _seed_pool(day='20261127')                                  # 周五的 6 板
+        db = FakeAlertDB()
+        self.assertEqual(self._eval(db), [])
+        self.assertEqual(db.inserted, [])
+        # 状态机不能被旧数据污染：换成今天的数据后照常触发
+        _seed_index([100.0] * 5 + [101.5] * 11)
+        _seed_pool()
+        out = self._eval(FakeAlertDB())
+        self.assertEqual(sorted(x['kind'] for x in out), ['mk_height', 'mk_idx_surge'])
+
+    def test_stale_sentiment_not_alerted(self):
+        """情绪源的宽度快照还是上一交易日（stale，开盘后首个 slot 落库前）→ 不报跨级。"""
+        self._eval(FakeAlertDB())                       # 建基线 neutral
+        self.senti.update(level='panic', score=18, stale=True)
+        self.assertEqual(self._eval(FakeAlertDB()), [])
+        self.senti['stale'] = False
+        out = self._eval(FakeAlertDB())
+        self.assertEqual([x['kind'] for x in out], ['mk_panic'])
+
+    # ── v3.27 审查项 3：被冷却/上限拦下的信号不丢 ────────────────────────
+
+    def test_suppressed_panic_is_retried(self):
+        """宽度转弱刚报过，3 分钟后情绪进 panic 被 family 冷却拦下 → 冷却过后必须补报。"""
+        mrt._cache_put('breadth', {'up_ratio': 0.55, 'up': 2700, 'down': 2700})
+        self.assertEqual(_kinds(), [])                          # 宽度基线 + 情绪基线
+        mrt._cache_put('breadth', {'up_ratio': 0.30, 'up': 1600, 'down': 4200})
+        self.senti.update(level='panic', score=18)
+        # family 冷却命中：宽度转弱、盘面恐慌都发不出去
+        self.assertEqual(_kinds(FakeAlertDB(family_hit=True)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['breadth_zone'])     # 状态没被前移
+            self.assertEqual(mrt._mstate['sent_level'], 'neutral')
+        # 冷却过后两条都补报（critical 的恐慌不能丢）
+        self.assertEqual(sorted(_kinds()), ['mk_breadth_dn', 'mk_panic'])
+        with mrt._mstate_lock:
+            self.assertEqual(mrt._mstate['breadth_zone'], 'low')
+            self.assertEqual(mrt._mstate['sent_level'], 'panic')
+
+    def test_suppressed_height_keeps_daily_slot(self):
+        """连板高度被拦下 → 不占「当日一次」的名额，下个周期补报；落库后才占。"""
+        _seed_pool()
+        self.assertEqual(_kinds(FakeAlertDB(family_hit=True)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['height_day'])
+        self.assertEqual(_kinds(), ['mk_height'])
+        self.assertEqual(_kinds(), [])
+
+    def test_suppressed_index_surge_is_retried(self):
+        _seed_index([100.0] * 5 + [101.5] * 11)
+        self.assertEqual(_kinds(FakeAlertDB(kind_cooldown_hit=True)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['idx_side'])
+        self.assertEqual(_kinds(), ['mk_idx_surge'])
+
+    def test_daily_cap_keeps_state_for_retry(self):
+        _seed_pool()
+        self.assertEqual(_kinds(FakeAlertDB(today_count=15)), [])
+        with mrt._mstate_lock:
+            self.assertIsNone(mrt._mstate['height_day'])
+        self.assertEqual(_kinds(FakeAlertDB(today_count=2)), ['mk_height'])
+
+    def test_sentiment_leaving_alertable_level_moves_on(self):
+        """恐慌还没补报盘面就转弱（不告警的档位）：状态照常前移，不补报过时的恐慌。"""
+        self.assertEqual(_kinds(), [])                          # 情绪基线 neutral
+        self.senti.update(level='panic', score=18)
+        self.assertEqual(_kinds(FakeAlertDB(family_hit=True)), [])
+        self.senti.update(level='weak', score=40)
+        self.assertEqual(_kinds(), [])
+        with mrt._mstate_lock:
+            self.assertEqual(mrt._mstate['sent_level'], 'weak')
+
+
+class FakeCalDB:
+    """只回答交易日历查询（treemap_intraday._is_trade_day 的 SQL）。"""
+
+    def __init__(self, holidays=()):
+        self.holidays = {date.fromisoformat(d) for d in holidays}
+
+    def execute(self, sql, params=None):
+        assert 'FROM trade_calendar' in str(sql), str(sql)[:80]
+        d = params['d']
+        return _Row((d.weekday() < 5 and d not in self.holidays,))
+
+
+class TestPoolTradeDate(unittest.TestCase):
+    """涨停池请求日期：只请求确定已有数据的交易日（东财对无数据日期静默回退）。"""
+
+    def test_weekend_falls_back_to_friday(self):
+        self.assertEqual(mrt._pool_trade_date(FakeCalDB(), datetime(2026, 11, 28, 10, 0)),
+                         date(2026, 11, 27))            # 周六
+        self.assertEqual(mrt._pool_trade_date(FakeCalDB(), datetime(2026, 11, 29, 20, 0)),
+                         date(2026, 11, 27))            # 周日
+
+    def test_preopen_falls_back_until_0931(self):
+        db = FakeCalDB()
+        self.assertEqual(mrt._pool_trade_date(db, datetime(2026, 11, 30, 9, 26)),
+                         date(2026, 11, 27))            # 周一集合竞价
+        self.assertEqual(mrt._pool_trade_date(db, datetime(2026, 11, 30, 9, 30)),
+                         date(2026, 11, 27))
+        self.assertEqual(mrt._pool_trade_date(db, datetime(2026, 11, 30, 9, 31)),
+                         date(2026, 11, 30))            # 连续竞价开始
+
+    def test_after_close_same_day(self):
+        # 15:05 日终归档时请求的必须是当天，否则「缓存不是当日」的判断没有意义
+        self.assertEqual(mrt._pool_trade_date(FakeCalDB(), datetime(2026, 11, 30, 15, 6)),
+                         date(2026, 11, 30))
+        self.assertEqual(mrt._pool_trade_date(FakeCalDB(), datetime(2026, 11, 30, 23, 59)),
+                         date(2026, 11, 30))
+
+    def test_holidays_walk_back(self):
+        db = FakeCalDB(holidays=['2026-10-01', '2026-10-02', '2026-10-05',
+                                 '2026-10-06', '2026-10-07', '2026-10-08'])
+        self.assertEqual(mrt._pool_trade_date(db, datetime(2026, 10, 1, 10, 0)),
+                         date(2026, 9, 30))             # 国庆当天 → 9-30
+        self.assertEqual(mrt._pool_trade_date(db, datetime(2026, 10, 9, 9, 20)),
+                         date(2026, 9, 30))             # 节后首个交易日盘前
+
+
+class TestDataDateAndStale(unittest.TestCase):
+    """响应的 data_date / stale：数据真实属于哪天，能不能当成当前盘面。"""
+
+    def test_data_date_takes_latest_dated_source(self):
+        trends = {'000001': {'date': '20261127'}, '399001': {'date': '20261127'}}
+        zt = {'date': '20261127'}
+        self.assertEqual(mrt._data_date(trends, zt, {'2026-11-26': [], '2026-11-27': []},
+                                        [{'date': '2026-11-27'}]), '2026-11-27')
+        # 某一源落后不拖累整体（取最新）
+        self.assertEqual(mrt._data_date({'000001': {'date': '20261127'}}, zt, {},
+                                        [{'date': '2026-11-30'}]), '2026-11-30')
+        # 全部无法判定
+        self.assertIsNone(mrt._data_date({}, None, {}, []))
+        self.assertIsNone(mrt._data_date({'000001': {'date': 'n/a'}}, None, {}, []))
+
+    def test_stale_flag(self):
+        T = 1_000_000.0
+        # 休市：显示上一交易日数据是预期行为，不算 stale
+        self.assertFalse(mrt._stale_flag('closed', False, [T], False, T + 3600))
+        # 交易日盘前/盘中/收盘后，数据还是上一交易日 → stale
+        for sess in ('pre', 'open', 'lunch', 'post'):
+            self.assertTrue(mrt._stale_flag(sess, False, [T], False, T + 60), sess)
+        # 采集窗口内超过 3 个周期未更新
+        self.assertTrue(mrt._stale_flag('open', True, [T], True, T + 181))
+        self.assertFalse(mrt._stale_flag('open', True, [T], True, T + 100))
+        # 缺源
+        self.assertTrue(mrt._stale_flag('post', False, [], True, T))
+
+
+class TestRefreshPoolDate(unittest.TestCase):
+    """refresh_all 向东财请求的涨停池日期（外部源全部打桩，只看接线）。"""
+
+    def _refresh(self, now):
+        requested = []
+
+        def fake_pools(ymd):
+            requested.append(ymd)
+            return {'date': ymd, 'pool': [], 'broken_pool': []}
+
+        with mock.patch.object(mrt.em_quote, 'fetch_zt_pools', fake_pools), \
+                mock.patch.object(mrt, 'fetch_all_quotes', lambda: {}), \
+                mock.patch.object(mrt, 'minute_trend', lambda *a, **k: {'points': []}), \
+                mock.patch.object(mrt, 'fetch_sina_min5', lambda *a, **k: []), \
+                mock.patch.object(mrt.em_quote, 'fetch_board_list', lambda: []), \
+                mock.patch.object(mrt.em_quote, 'fetch_market_fflow', lambda: []):
+            mrt.refresh_all(FakeCalDB(), now=now)
+        try:
+            return requested[0], mrt._cache_get('zt')['date']
+        finally:
+            mrt._cache_put('zt', {})
+
+    def test_requests_only_dates_that_have_data(self):
+        # (时刻, 期望请求的交易日) —— 周一 2026-11-30 开盘前只能拿到周五的池
+        cases = [
+            (datetime(2026, 11, 28, 10, 0), '20261127'),   # 周六
+            (datetime(2026, 11, 30, 9, 26), '20261127'),   # 周一集合竞价（采集窗口内）
+            (datetime(2026, 11, 30, 9, 31), '20261130'),   # 连续竞价开始
+            (datetime(2026, 11, 30, 15, 6), '20261130'),   # 日终归档依赖此时缓存=当天
+        ]
+        for now, want in cases:
+            with self.subTest(now=now):
+                self.assertEqual(self._refresh(now), (want, want))
 
 
 class TestLiveGate(unittest.TestCase):

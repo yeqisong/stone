@@ -103,10 +103,13 @@ def ensure_refresh_async() -> bool:
         _LAST_REFRESH_TRY[0] = time.time()
 
     def _run():
+        db = get_sync_db()
         try:
-            refresh_all()
+            refresh_all(db)
         except Exception as e:
             logger.warning(f"[market-rt] 按需刷新失败: {str(e)[:140]}")
+        finally:
+            db.close()
 
     threading.Thread(target=_run, daemon=True, name="mrt-ondemand").start()
     return True
@@ -375,8 +378,42 @@ def archive_zt_daily(db, now: Optional[datetime] = None) -> bool:
 
 # ── 后台刷新 ───────────────────────────────────────────────────────────────
 
-def refresh_all() -> list[str]:
-    """串行刷新全部数据源到内存缓存；单源失败不影响其他。返回成功 key 列表。"""
+# 东财当日涨停池从连续竞价开始后才算「今天的数据」；此前请求今天只会拿到上一交易日
+_POOL_TODAY_FROM = _time(9, 31)
+
+
+def _pool_trade_date(db, now: datetime) -> _date:
+    """涨停池应当请求的交易日：今天已进入连续竞价用今天，否则回退到上一个交易日。
+
+    东财 push2ex 对「尚无数据的日期」（盘前、休市日、未来日）静默返回最近一个
+    交易日的池，返回体里的 qdate 恒为最新交易日、无法据此识别（2026-11-28 实测：
+    请求 20261128 / 20261130 均返回 11-27 的 417 家）。所以只能请求确定已经有
+    数据的日期，缓存里的 date 才是数据真实所属的交易日。
+    """
+    d = now.date()
+    if not (_is_trade_day(db, d) and now.time() >= _POOL_TODAY_FROM):
+        d -= timedelta(days=1)
+    for _ in range(10):
+        if _is_trade_day(db, d):
+            return d
+        d -= timedelta(days=1)
+    return d
+
+
+def refresh_all(db=None, now: Optional[datetime] = None) -> list[str]:
+    """串行刷新全部数据源到内存缓存；单源失败不影响其他。返回成功 key 列表。
+
+    db 缺省时自开一个短会话（按需刷新线程用），只用来查交易日历。
+    """
+    now = now or _now()
+    if db is None:
+        db = get_sync_db()
+        try:
+            pool_day = _pool_trade_date(db, now)
+        finally:
+            db.close()
+    else:
+        pool_day = _pool_trade_date(db, now)
     ok: list[str] = []
     t0 = time.time()
     # 1. 新浪全市场 → 宽度
@@ -399,8 +436,8 @@ def refresh_all() -> list[str]:
         ok.append("min5")
     except Exception as e:
         logger.warning(f"[market-rt] 量能 5 分钟线失败: {str(e)[:140]}")
-    # 4. 涨停/炸板池（东财 push2ex）
-    ymd = _now().strftime("%Y%m%d")
+    # 4. 涨停/炸板池（东财 push2ex）——请求「确定已有数据」的交易日，见 _pool_trade_date
+    ymd = pool_day.strftime("%Y%m%d")
     try:
         _cache_put("zt", em_quote.fetch_zt_pools(ymd), ymd)
         ok.append("zt")
@@ -454,9 +491,16 @@ _MK_LABEL = {
 }
 
 # 评估状态（单进程内存；跨重启靠 DB 冷却兜底；_cycle 串行调用无并发）
+_MSTATE_KEYS = ("day", "idx_side", "breadth_zone", "breadth_seen",
+                "height_day", "sent_level")
 _mstate_lock = threading.Lock()
-_mstate: dict = {"day": None, "idx_side": None, "breadth_zone": None,
-                 "height_day": None, "sent_level": None}
+_mstate: dict = dict.fromkeys(_MSTATE_KEYS)
+
+
+def _mstate_reset(day=None) -> None:
+    """状态机复位到「当天尚未评估过」（跨日时由 evaluate 调用；测试用）。"""
+    with _mstate_lock:
+        _mstate.update(dict.fromkeys(_MSTATE_KEYS), day=day)
 
 
 def read_market_alerts(db) -> dict:
@@ -516,115 +560,149 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     """盘面异动评估（交易窗口内每周期调用）；返回本次落库的告警列表。
 
     状态机惯例照搬 intraday_watch：side 状态切换报一次 + 缓冲复位（指数），
-    one-shot + 滞回（宽度），当日一次（高度），状态始终更新（情绪）。
+    zone 切换 + 滞回（宽度），当日一次（高度），跨级（情绪）。
+    两条通用规则（v3.27 审查项 3）：
+    - 状态只在告警**落库后**前移。被冷却/当日上限拦下的信号不丢：状态留在原处，
+      下个周期条件仍满足就重试；
+    - 当天首轮观测只建基线、不报（宽度、情绪）：重启后或开盘第一分钟看到的
+      「已经在高位」不是盘中转折。
     """
     now = now or _now()
     day = now.date()
     cfg = read_market_alerts(db)
     if not cfg.get("enabled", True):
         return []
+    # 只在连续竞价时段评估：采集窗口从 09:25 起，但 09:25–09:30 拿到的是集合竞价
+    # 或上一交易日的回退值，不是盘中异动（_cycle 已保证 day 是交易日）
+    if _session_of(now, trade_day=True) != "open":
+        return []
+    ymd = now.strftime("%Y%m%d")
     with _mstate_lock:
         if _mstate.get("day") != day:   # 跨日重置状态机
-            _mstate.update(day=day, idx_side=None, breadth_zone=None,
-                           height_day=None, sent_level=None)
+            _mstate.update(dict.fromkeys(_MSTATE_KEYS), day=day)
 
     out: list[dict] = []
 
-    def fire(kind: str, level: str, title: str, body: str) -> None:
+    def fire(kind: str, level: str, title: str, body: str) -> bool:
+        """过冷却/上限后落库，返回是否落库（调用方据此决定是否前移状态）。"""
         if _mk_today_count(db, day) >= int(cfg.get("max_per_day", 15)):
-            return
+            return False
         cd = int((cfg.get("cooldown_min") or {}).get(kind, 60))
         if _mk_recent(db, kind, cd, day):
-            return
+            return False
         if _mk_recent(db, None, int(cfg.get("family_cooldown_min", 10)), day):
-            return
+            return False
         out.append(_mk_insert(db, now, kind, level, title, body))
+        return True
 
     # 1. 指数急涨/急跌（上证综指，trends 缓存分钟序列，side 切换 + 滞回）
+    #    分时必须就是今天的：腾讯盘前/休市日返回的是上一交易日的整段分时
     trends = _cache_get("trends") or {}
-    idx_points = ((trends.get("000001") or {}).get("points")) or []
+    idx_tr = trends.get("000001") or {}
+    idx_points = idx_tr.get("points") or []
     win = int(cfg.get("index_window_min", 15))
     move = float(cfg.get("index_move_pct", 1.2))
     buf = float(cfg.get("index_buffer_pct", 0.4))
-    if len(idx_points) > win:
+    if str(idx_tr.get("date") or "") == ymd and len(idx_points) > win:
         cur = idx_points[-1].get("price")
         base = idx_points[-1 - win].get("price")
         if cur and base:
             chg = (cur / base - 1) * 100
-            side = "up" if chg >= move else ("down" if chg <= -move else
-                                             (None if abs(chg) <= buf else _mstate.get("idx_side")))
             with _mstate_lock:
                 prev = _mstate.get("idx_side")
-                _mstate["idx_side"] = side
+            # 阈值外进 up/down；回到 ±buffer 内复位；两者之间保持原状态
+            side = ("up" if chg >= move else "down" if chg <= -move else
+                    None if abs(chg) <= buf else prev)
             if side in ("up", "down") and side != prev:
                 kind = "mk_idx_surge" if side == "up" else "mk_idx_drop"
-                breadth = _cache_get("breadth") or {}
-                fire(kind, "warn",
-                     f"上证指数 {win}分钟{('急涨' if side == 'up' else '急跌')} {chg:+.2f}%",
-                     f"现价 {cur:.2f}，{win} 分钟 {chg:+.2f}%（阈值 ±{move}%）；"
-                     f"两市涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
+                bd = _cache_get("breadth") or {}
+                sent = fire(kind, "warn",
+                            f"上证指数 {win}分钟{('急涨' if side == 'up' else '急跌')} {chg:+.2f}%",
+                            f"现价 {cur:.2f}，{win} 分钟 {chg:+.2f}%（阈值 ±{move}%）；"
+                            f"两市涨 {bd.get('up', '—')} / 跌 {bd.get('down', '—')}")
+                if sent:
+                    with _mstate_lock:
+                        _mstate["idx_side"] = side
+            else:
+                with _mstate_lock:
+                    _mstate["idx_side"] = side
 
-    # 2. 宽度反转（涨占比 one-shot + 滞回）
+    # 2. 宽度反转（涨占比 zone 切换 + 滞回；当天首轮只建基线）
     breadth = _cache_get("breadth") or {}
     up_ratio = breadth.get("up_ratio")
     hi = float(cfg.get("breadth_high", 0.65))
     lo = float(cfg.get("breadth_low", 0.35))
     bbuf = float(cfg.get("breadth_buffer", 0.05))
     if up_ratio is not None:
-        zone = "high" if up_ratio >= hi else ("low" if up_ratio <= lo else
-                                              (None if (lo + bbuf) < up_ratio < (hi - bbuf)
-                                               else _mstate.get("breadth_zone")))
         with _mstate_lock:
             prev_zone = _mstate.get("breadth_zone")
-            _mstate["breadth_zone"] = zone
-        if zone and zone != prev_zone:
+            seen = bool(_mstate.get("breadth_seen"))
+        zone = ("high" if up_ratio >= hi else "low" if up_ratio <= lo else
+                None if (lo + bbuf) < up_ratio < (hi - bbuf) else prev_zone)
+        # 首轮只建基线；之后进入 high/low 且与之前不同 → 报一次
+        if seen and zone in ("high", "low") and zone != prev_zone:
             up, dn = breadth.get("up", "—"), breadth.get("down", "—")
             if zone == "high":
-                fire("mk_breadth_up", "warn",
-                     f"宽度转强：涨占比 {up_ratio * 100:.1f}%",
-                     f"全市场涨 {up} / 跌 {dn}，涨占比上穿 {hi * 100:.0f}%")
+                sent = fire("mk_breadth_up", "warn",
+                            f"宽度转强：涨占比 {up_ratio * 100:.1f}%",
+                            f"全市场涨 {up} / 跌 {dn}，涨占比上穿 {hi * 100:.0f}%")
             else:
-                fire("mk_breadth_dn", "warn",
-                     f"宽度转弱：涨占比 {up_ratio * 100:.1f}%",
-                     f"全市场涨 {up} / 跌 {dn}，涨占比下穿 {lo * 100:.0f}%")
+                sent = fire("mk_breadth_dn", "warn",
+                            f"宽度转弱：涨占比 {up_ratio * 100:.1f}%",
+                            f"全市场涨 {up} / 跌 {dn}，涨占比下穿 {lo * 100:.0f}%")
+            if not sent:
+                zone = prev_zone      # 没落库：状态不前移，下个周期重试
+        with _mstate_lock:
+            _mstate["breadth_zone"] = zone
+            _mstate["breadth_seen"] = True
 
-    # 3. 连板高度新高（当日首次）
-    zt = _cache_get("zt") or {}
-    max_lbc = zt.get("max_lbc")
+    # 3. 连板高度新高（当日首次；没落库则不占当日名额，下个周期重试）
+    # zt 缓存存的是 em_quote.fetch_zt_pools 的原始形状 {date, pool, broken_pool}；
+    # max_lbc/ladder/limit_up/broken 只存在于 zt_summary() 的输出里（v3.27 审查：
+    # 曾直接读原始池导致本规则恒不触发）。
+    zt_raw = _cache_get("zt")
+    zs = zt_summary(zt_raw) if zt_raw else {}
+    max_lbc = zs.get("max_lbc")
     hmin = int(cfg.get("height_min", 5))
-    if max_lbc and max_lbc >= hmin:
+    # 池必须就是今天的（_pool_trade_date 保证缓存 date 是数据真实所属日）
+    if str((zt_raw or {}).get("date") or "") == ymd and max_lbc and max_lbc >= hmin:
         with _mstate_lock:
             already = _mstate.get("height_day") == day
-            if not already:
-                _mstate["height_day"] = day
         if not already:
-            ladder = zt.get("ladder") or []
+            ladder = zs.get("ladder") or []
             top_names = next((x.get("names") for x in ladder if x.get("lbc") == max_lbc), [])
-            fire("mk_height", "warn",
-                 f"连板高度 {max_lbc} 板（情绪周期新高）",
-                 f"当日最高连板 {max_lbc} 板（阈值 ≥{hmin}）：{('、'.join(top_names[:4]) or '—')}；"
-                 f"涨停 {zt.get('limit_up', '—')} 家 / 炸板 {zt.get('broken', '—')} 家")
+            if fire("mk_height", "warn",
+                    f"连板高度 {max_lbc} 板（情绪周期新高）",
+                    f"当日最高连板 {max_lbc} 板（阈值 ≥{hmin}）：{('、'.join(top_names[:4]) or '—')}；"
+                    f"涨停 {zs.get('limit_up', '—')} 家 / 炸板 {zs.get('broken', '—')} 家"):
+                with _mstate_lock:
+                    _mstate["height_day"] = day
 
-    # 4. 情绪跨级（状态始终更新；进 panic=重要 / 进 strong 提示）
+    # 4. 情绪跨级（当天首轮只建基线；进 panic=重要 / 进 strong 提示；跨到其他档只更新状态）
     try:
         senti = market_sentiment.get(db)
     except Exception as e:
         logger.warning(f"[market-rt] 告警情绪源失败: {str(e)[:120]}")
         senti = {}
     s_level = senti.get("level")
-    if s_level:
+    # stale=宽度快照还是上一交易日的（开盘后首个 slot 落库前），不是今天的盘面
+    if s_level and not senti.get("stale"):
         with _mstate_lock:
             prev_level = _mstate.get("sent_level")
-            _mstate["sent_level"] = s_level
-        if s_level != prev_level and prev_level is not None:
+        if s_level != prev_level:
             score = senti.get("score")
-            if s_level == "panic":
-                fire("mk_panic", "critical", f"盘面恐慌：情绪分 {score}",
-                     f"实时情绪进入恐慌（{score}/100）；{((senti.get('advice') or {}).get('entry') or '')}"
-                     f"；涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
-            elif s_level == "strong":
-                fire("mk_strong", "warn", f"盘面亢奋：情绪分 {score}",
-                     f"实时情绪进入强势（{score}/100）；可按买点检查，不追高")
+            advance = True
+            if prev_level is not None and s_level == "panic":
+                advance = fire(
+                    "mk_panic", "critical", f"盘面恐慌：情绪分 {score}",
+                    f"实时情绪进入恐慌（{score}/100）；{((senti.get('advice') or {}).get('entry') or '')}"
+                    f"；涨 {breadth.get('up', '—')} / 跌 {breadth.get('down', '—')}")
+            elif prev_level is not None and s_level == "strong":
+                advance = fire("mk_strong", "warn", f"盘面亢奋：情绪分 {score}",
+                               f"实时情绪进入强势（{score}/100）；可按买点检查，不追高")
+            if advance:   # 没落库则不前移：盘面还在 panic 时下个周期重试
+                with _mstate_lock:
+                    _mstate["sent_level"] = s_level
 
     if out:
         db.commit()
@@ -712,6 +790,39 @@ def _slots_track(db, day: _date) -> list[dict]:
     return data
 
 
+def _iso8(v) -> Optional[str]:
+    """'20261127' → '2026-11-27'；其他形态返回 None。"""
+    s = str(v or "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else None
+
+
+def _data_date(trends: dict, zt, min5: dict, fflow: list) -> Optional[str]:
+    """缓存数据真实所属的交易日（各源取最新；None=无法判定）。
+
+    盘前和休市日，腾讯分时、东财涨停池/资金流都会回退成上一交易日的整段数据，
+    不带这个字段前端就只能把缓存刷新时间当成数据时间。
+    """
+    cands = [_iso8(tr.get("date")) for tr in (trends or {}).values()]
+    cands.append(_iso8((zt or {}).get("date")))
+    if min5:
+        cands.append(sorted(min5.keys())[-1])
+    if fflow:
+        cands.append(fflow[-1].get("date"))
+    cands = [c for c in cands if c]
+    return max(cands) if cands else None
+
+
+def _stale_flag(session: str, in_window: bool, core_ts: list, data_is_today: bool,
+                now_ts: float) -> bool:
+    """数据能否当成「当前盘面」：缺源 / 窗口内超 3 个周期未更新 / 非休市时段但数据
+    不是今天的。休市时显示上一交易日数据是预期行为，不算 stale。"""
+    if not core_ts:
+        return True
+    if in_window and now_ts - max(core_ts) > 180:
+        return True
+    return (not data_is_today) and session != "closed"
+
+
 def get_realtime(db) -> dict:
     """装配端点响应；全部读内存缓存 + 库内 slot 重放，不阻塞等待外部请求。
 
@@ -730,13 +841,13 @@ def get_realtime(db) -> dict:
     boards = _cache_get("boards") or []
     fflow = _cache_get("fflow") or []
 
-    # stale：交易窗口内核心源缺失或超 3 个周期未更新
+    data_date = _data_date(trends, zt, min5, fflow)
+    # stale：① 核心源缺失；② 交易窗口内超 3 个周期未更新；③ 非休市时段但数据还是
+    # 上一交易日的（盘前回退、刷新一直失败沿用旧缓存）
     core_ts = [t for t in (_cache_ts(k) for k in ("breadth", "trends", "zt")) if t]
     in_window = _in_collect_window(now) and db_trade_day
-    if in_window:
-        stale = (not core_ts) or (time.time() - max(core_ts) > 180)
-    else:
-        stale = (not core_ts)
+    stale = _stale_flag(session, in_window, core_ts, data_date == day.isoformat(),
+                        time.time())
     refreshing = False
     if not (_cache_get("breadth") and _cache_get("trends") and _cache_get("zt")
             and _cache_get("boards") and _cache_get("fflow") and _cache_get("min5")):
@@ -771,6 +882,8 @@ def get_realtime(db) -> dict:
     return {
         "ok": True,
         "date": day.isoformat(),
+        # 数据真实所属交易日（≠ date 即「显示的是上一交易日」，前端必须标出来）
+        "data_date": data_date,
         "session": session,
         "session_label": _SESSION_LABEL[session],
         "asof": asof,
@@ -787,6 +900,7 @@ def get_realtime(db) -> dict:
         "fflow": {
             "series": [{"t": r.get("t"), "main": r.get("main"),
                         "big": r.get("big"), "huge": r.get("huge")} for r in fflow],
+            "date": (fflow[-1].get("date") if fflow else None),
             "latest": (fflow[-1].get("main") if fflow else None),
         },
         # 实时空仓闸门（三源组合，design/13 批次三；buy_check.live_gate 自带 60s 缓存）

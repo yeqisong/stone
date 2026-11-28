@@ -179,9 +179,10 @@ def fetch_board_list() -> list[dict]:
 # ── 大盘主力资金分时（push2 域 fflow/kline，secid2 聚合沪深两市）────────────────
 
 def fetch_market_fflow() -> list[dict]:
-    """沪深两市主力资金分钟累计：[{t, main, small, mid, big, huge}]（元，当日累计）。
+    """沪深两市主力资金分钟累计：[{date, t, main, small, mid, big, huge}]（元，当日累计）。
 
     注意域名是 push2（push2his 对该接口返回空 klines）；klt=1 lmt=0 取当日全量。
+    盘前/休市日返回的是上一交易日的整段，date 字段如实带出供调用方判断新旧。
     """
     url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
     params = {
@@ -197,8 +198,10 @@ def fetch_market_fflow() -> list[dict]:
         parts = str(raw).split(",")
         if len(parts) < 6:
             continue
+        day, _, hm = parts[0].partition(" ")
         out.append({
-            "t": parts[0].split(" ")[-1],
+            "date": day,
+            "t": hm,
             "main": _num(parts[1]),   # 主力 = 大单 + 超大单
             "small": _num(parts[2]),
             "mid": _num(parts[3]),
