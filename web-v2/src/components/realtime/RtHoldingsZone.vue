@@ -163,7 +163,8 @@ function rowProps(row) {
   font-size: var(--text-meta); color: var(--c-text-dim); cursor: pointer; border-top: 1px dashed var(--c-border);
 }
 .rh-sub + .rh-row { border-top: 0; }
-.rh-row:hover, .rh-row:focus-visible { background: var(--c-card-bg-hover); outline: none; }
+.rh-row:hover { background: var(--c-card-bg-hover); }
+.rh-row:focus-visible { background: var(--c-card-bg-hover); outline: 2px solid var(--c-accent); outline-offset: -2px; }
 .rh-row.rh-critical { box-shadow: inset 2px 0 0 var(--c-error); padding-left: 8px; }
 .rh-row.rh-warn { box-shadow: inset 2px 0 0 var(--c-warning); padding-left: 8px; }
 .rh-tag {

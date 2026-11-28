@@ -115,7 +115,8 @@ const next = computed(() => blockedNextStep(props.cand))
   border: 1px solid var(--c-border); border-left: 3px solid var(--c-info); border-radius: var(--radius-sm);
   background: transparent; cursor: pointer;
 }
-.ro-row:hover, .ro-row:focus-visible { background: var(--c-card-bg-hover); border-color: var(--c-text-faint); border-left-color: var(--c-info); outline: none; }
+.ro-row:hover { background: var(--c-card-bg-hover); border-color: var(--c-text-faint); border-left-color: var(--c-info); }
+.ro-row:focus-visible { background: var(--c-card-bg-hover); border-color: var(--c-accent); border-left-color: var(--c-info); }
 .ro-row.is-watch { border-left-color: var(--c-warning); }
 .ro-row.is-watch .ro-setup { color: var(--c-warning); }
 .ro-row.is-watch:hover { border-left-color: var(--c-warning); }

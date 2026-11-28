@@ -33,7 +33,7 @@
         <div class="rm-sec">
           <div class="rm-sh">
             <span>盘面宽度</span>
-            <button type="button" class="rm-link" @click="emit('open-tab', 'turn')">量能对比 →</button>
+            <button type="button" class="rm-link" @click="emit('open-tab', 'turn')">量能对比<AppIcon name="chevron-right" :size="12" /></button>
           </div>
           <template v-if="d.breadth">
             <div class="rm-bar" :title="`涨 ${d.breadth.up} / 平 ${d.breadth.flat} / 跌 ${d.breadth.down}`">
@@ -60,7 +60,7 @@
         <div class="rm-sec rm-sec-grow">
           <div class="rm-sh">
             <span>今日盘面异动</span>
-            <button type="button" class="rm-link" @click="emit('open-tab', 'boards')">板块 · 梯队 →</button>
+            <button type="button" class="rm-link" @click="emit('open-tab', 'boards')">板块与梯队<AppIcon name="chevron-right" :size="12" /></button>
           </div>
           <ul v-if="alerts.length" class="rm-alerts" ref="alertsEl">
             <li v-for="a in alerts" :key="a.id" class="rm-alert" :class="{ crit: a.level === 'critical' }">
@@ -79,6 +79,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import AppIcon from '../AppIcon.vue'
 import RtChart from './RtChart.vue'
 import { useChartOption } from '../../utils/realtimePage'
 import { miniTrendOption } from '../../utils/realtimeCharts'
@@ -113,6 +114,7 @@ defineExpose({ revealAlerts })
 .rm-sh { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: var(--text-body); font-weight: 600; color: var(--c-text); }
 .rm-meta { font-size: var(--text-micro); font-weight: 400; color: var(--c-text-faint); }
 .rm-link {
+  display: inline-flex; align-items: center; gap: 2px;
   padding: 0; border: 0; background: transparent; cursor: pointer;
   font-size: var(--text-meta); font-weight: 400; color: var(--c-accent);
 }

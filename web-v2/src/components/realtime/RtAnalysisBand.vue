@@ -231,8 +231,9 @@ function onPick(p) {
 .rb-table td { padding: 4px 8px; border-bottom: 1px solid var(--c-border); color: var(--c-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rb-table td b { color: var(--c-text); }
 .rb-row-link { cursor: pointer; }
-.rb-row-link:hover td, .rb-row-link:focus-visible td { background: var(--c-bg); }
-.rb-row-link:focus-visible { outline: none; }
+.rb-row-link:hover td { background: var(--c-bg); }
+.rb-row-link:focus-visible td { background: var(--c-bg); }
+.rb-row-link:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--c-accent); }
 .rb-code { color: var(--c-text-faint); font-size: var(--text-micro); }
 
 /* 图表无数据时的占位（图表容器保留，不卸载） */
