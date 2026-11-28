@@ -14,6 +14,7 @@ from unittest import mock
 
 from crawler import em_quote
 from crawler.adapters.tencent_adapter import _parse_minute_payload
+from app import market_realtime as mrt
 from app.market_realtime import (
     aggregate_breadth,
     estimate_turnover,
@@ -67,16 +68,50 @@ class TestEmQuoteParsers(unittest.TestCase):
         self.assertTrue(rows)
         self.assertIn("f62", rows[0])
 
-    def test_zt_pool_fixture_shape(self):
-        """涨停池字段映射口径（p×1000、fbt HHMMSS、lbc/zbc int）。"""
-        raw = json.loads(_fixture("em_ztpool.json"))
-        pool = (raw.get("data") or {}).get("pool") or []
-        self.assertTrue(pool)
-        it = pool[0]
-        self.assertAlmostEqual(em_quote._num(it["p"]) / 1000, it["p"] / 1000)
-        self.assertTrue(em_quote._hhmmss(it["fbt"]).startswith(("0", "1")))
-        self.assertIsNone(em_quote._hhmmss(0))
-        self.assertIsNone(em_quote._hhmmss(None))
+    def test_zt_pool_rows_parse(self):
+        """涨停池行解析——真实 _parse_pool_rows 吃 fixture：价格×1000 还原、HHMMSS、zttj、连板数。"""
+        src = (json.loads(_fixture("em_ztpool.json")).get("data") or {}).get("pool") or []
+        rows = em_quote._parse_pool_rows(src)
+        self.assertEqual(len(rows), len(src))
+        first, got = src[0], rows[0]
+        self.assertEqual(got["code"], str(first["c"]).zfill(6))
+        self.assertAlmostEqual(got["price"], first["p"] / 1000, places=6)      # p 是价格×1000
+        self.assertNotIn("ztp", first)                                       # 涨停池行不带涨停价
+        self.assertIsNone(got["zt_price"])
+        self.assertRegex(got["fbt"], r"^\d{2}:\d{2}:\d{2}$")                 # 92500 → 09:25:00
+        self.assertEqual(int(got["fbt"].replace(":", "")), first["fbt"])
+        self.assertEqual(got["lbc"], first["lbc"])
+        self.assertEqual(got["zbc"], first["zbc"])
+        self.assertEqual(got["zttj"], f"{first['zttj']['days']}天{first['zttj']['ct']}板")
+        # 整表口径一致
+        self.assertTrue(all(r["price"] and r["lbc"] >= 1 for r in rows))
+        self.assertEqual(max(r["lbc"] for r in rows), 6)                     # 当日空间板
+
+    def test_zb_pool_rows_parse(self):
+        """炸板池没有 lbc/fund：lbc 记 1（冲击首板未封），fund 为 None，炸板次数 ≥1。"""
+        src = (json.loads(_fixture("em_zbpool.json")).get("data") or {}).get("pool") or []
+        rows = em_quote._parse_pool_rows(src)
+        self.assertEqual(len(rows), len(src))
+        self.assertEqual({r["lbc"] for r in rows}, {1})
+        self.assertTrue(all(r["fund"] is None for r in rows))
+        self.assertTrue(all(r["zbc"] >= 1 for r in rows))
+        self.assertTrue(all(r["fbt"] for r in rows))
+        # 炸板池带涨停价 ztp（×1000）：现价低于它才叫炸板
+        self.assertTrue(all(r["zt_price"] is not None for r in rows))
+        self.assertAlmostEqual(rows[0]["zt_price"], src[0]["ztp"] / 1000, places=6)
+        self.assertLess(rows[0]["price"], rows[0]["zt_price"])
+
+    def test_pool_cap_is_logged(self):
+        """返回行数达到分页上限时留痕（接口不能翻页，否则截断无人知晓）。"""
+        src = [{"c": "000001", "p": 10000}] * 1000
+
+        class _Resp:
+            text = json.dumps({"data": {"pool": src}})
+
+        with mock.patch.object(em_quote, 'em_get', lambda *a, **k: _Resp()), \
+                mock.patch.object(em_quote, 'logger') as log:
+            self.assertEqual(len(em_quote._fetch_pool("ZTPool", "20261127")), 1000)
+        log.warning.assert_called_once()
 
 
 class TestTencentMinuteParse(unittest.TestCase):
@@ -219,6 +254,45 @@ class TestZtSummary(unittest.TestCase):
         self.assertIsNone(s["broken_rate"])
 
 
+class TestSlotGapFill(unittest.TestCase):
+    """当日情绪轨迹：缺失的 slot 补成空点，前端类目轴才能把缺口画成断线。"""
+
+    @staticmethod
+    def _row(slot, score):
+        return {'slot': slot, 'score': score, 'level': 'neutral', 'up_ratio': 0.6,
+                'median': 1.0, 'limit_up': 10, 'limit_down': 1}
+
+    def test_full_axis_matches_treemap_slots(self):
+        slots = mrt._all_slots()
+        self.assertEqual(len(slots), 26)
+        self.assertEqual((slots[0], slots[12], slots[13], slots[-1]),
+                         ('09:30', '11:30', '13:00', '15:00'))
+        # 与树图采集器的 slot 生成口径逐分钟对齐（那才是库里真实出现的 slot）
+        from datetime import datetime, timedelta
+        from app import treemap_intraday as ti
+        day = datetime(2026, 11, 27)
+        gen = sorted({ti._slot_of(day + timedelta(minutes=m)) for m in range(24 * 60)}
+                     - {None})
+        self.assertEqual(gen, slots)
+
+    def test_gaps_become_null_points(self):
+        # 2026-11-27 的真实形状：09:30/09:40/09:50 之后直接跳到 11:10
+        out = mrt._fill_slot_gaps([self._row('09:50', 67.0), self._row('11:10', 82.0),
+                                   self._row('15:00', 88.5)])
+        self.assertEqual(len(out), 26)
+        self.assertEqual([r['slot'] for r in out if r['score'] is None][:5],
+                         ['09:30', '09:40', '10:00', '10:10', '10:20'])
+        self.assertEqual(out[10]['slot'], '11:10')          # 09:30 起第 11 个 slot
+        self.assertEqual(out[10]['score'], 82.0)
+        gap = out[3]
+        self.assertEqual((gap['slot'], gap['score'], gap['up_ratio']), ('10:00', None, None))
+
+    def test_empty_day(self):
+        out = mrt._fill_slot_gaps([])
+        self.assertEqual(len(out), 26)
+        self.assertTrue(all(r['score'] is None for r in out))
+
+
 class TestSession(unittest.TestCase):
     """交易时段判定。"""
 
@@ -236,16 +310,15 @@ class TestSession(unittest.TestCase):
 
 
 class TestThreeComponentVerdict(unittest.TestCase):
-    """slot 轨迹的三成分口径：index_count=0 时 VWAP 项缺省 10 分（与日频序列可比）。"""
+    """slot 轨迹的三成分口径：缺 VWAP 时该项固定 10 分（与日频序列同一公式）。"""
 
-    def test_three_component_score(self):
+    def test_missing_vwap_component_is_worth_10(self):
         from app.market_sentiment import _verdict
-        # 全平局场景：up_ratio=0.5, median=0, 无涨跌停 → 40×0.5 + 20×0.5 + 20×0.5 + 10 = 50
-        level, score, _ = _verdict(0.5, 0.0, 0, 0, 0, 0)
-        self.assertAlmostEqual(score, 50.0)
-        # 与日频口径同一函数，缺失 VWAP 固定贡献 10 分
-        _, score2, _ = _verdict(0.5, 0.0, 0, 0, 0, 0)
-        self.assertEqual(score, score2)
+        # 同一组三成分（up_ratio=0.5, median=0, 无涨跌停 → 40×0.5+20×0.5+20×0.5=40），
+        # 只改 VWAP 项：缺省 10 / 两指数都在下方 0 / 都在上方 20
+        self.assertAlmostEqual(_verdict(0.5, 0.0, 0, 0, 0, 0)[1], 50.0)
+        self.assertAlmostEqual(_verdict(0.5, 0.0, 0, 0, 0, 2)[1], 40.0)
+        self.assertAlmostEqual(_verdict(0.5, 0.0, 0, 0, 2, 2)[1], 60.0)
 
 
 if __name__ == "__main__":

@@ -97,7 +97,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 }
 .ms-gate { padding:1px 8px; border-radius:4px; border:1px solid var(--c-border); color:var(--c-text-dim); }
 .ms-gate b { color:inherit; }
+/* 闸门三态与 TradeGuard 一致：正常=下跌绿、警戒=warning、关闸=error（不用上涨红：关闸是「停」不是「涨」）；
+   unknown/不可用 走上面 .ms-gate 的默认灰 */
 .ms-gate.gate-open { color:var(--c-down); border-color:var(--c-down); }
 .ms-gate.gate-caution { color:var(--c-warning, #8a5a00); border-color:var(--c-warning, #8a5a00); }
-.ms-gate.gate-closed { color:var(--c-up); border-color:var(--c-up); }
+.ms-gate.gate-closed { color:var(--c-error); border-color:var(--c-error); }
 </style>

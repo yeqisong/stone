@@ -65,8 +65,15 @@ _CACHE: dict[str, dict] = {}   # key -> {"data":…, "ts": float, "date": str|No
 _LOCK = threading.Lock()
 _SLOTS = {"date": None, "ts": 0.0, "data": None}   # slot 轨迹 60s 小缓存
 _SLEEP_S = 60.0                                     # loop 周期（strategy_config 可调）
+
+# 刷新互斥与节拍（采集 loop 与页面按需刷新共用一把锁）：
+# running=此刻有 refresh_all 在跑；last_start/last_done=最近一次刷新的起止时刻
 _REFRESH_LOCK = threading.Lock()
-_LAST_REFRESH_TRY = [0.0]
+_REFRESH: dict = {"running": False, "last_start": 0.0, "last_done": 0.0}
+# 按需刷新的最小间隔：采集窗口内 loop 每 60s 刷，超过它还没动静说明 loop 没在工作；
+# 窗口外 loop 不刷，页面触发的整刷（55 页新浪 + 9 次东财）至多 10 分钟一次
+_ONDEMAND_GAP_IN_WINDOW_S = 180.0
+_ONDEMAND_GAP_OUT_WINDOW_S = 600.0
 
 
 def _cache_put(key: str, data, day: Optional[str] = None) -> None:
@@ -86,21 +93,38 @@ def _cache_ts(key: str) -> Optional[float]:
         return item["ts"] if item else None
 
 
-def _cache_empty() -> bool:
-    with _LOCK:
-        return not _CACHE
-
-
-def ensure_refresh_async() -> bool:
-    """缓存为空（后端刚启动/收盘重启）时后台触发一次刷新；90s 内只试一次。
-
-    treemap_intraday._ensure_async 同款页面按需模式：端点不阻塞，刷新完成后
-    下次轮询自然拿到数据。返回是否真正触发了刷新。
-    """
+def _refresh_try_begin() -> bool:
+    """抢占刷新权：同一时刻最多一个 refresh_all 在跑（返回 False=已有刷新在跑）。"""
     with _REFRESH_LOCK:
-        if time.time() - _LAST_REFRESH_TRY[0] < 90:
+        if _REFRESH["running"]:
             return False
-        _LAST_REFRESH_TRY[0] = time.time()
+        _REFRESH["running"] = True
+        _REFRESH["last_start"] = time.time()
+        return True
+
+
+def _refresh_end() -> None:
+    with _REFRESH_LOCK:
+        _REFRESH["running"] = False
+        _REFRESH["last_done"] = time.time()
+
+
+def ensure_refresh_async(now: Optional[datetime] = None) -> bool:
+    """采集 loop 覆盖不到的时候，由页面访问在后台补刷一次（不阻塞请求）。
+
+    - 采集窗口内（交易日 09:25–15:05）由 market_realtime_loop 周期刷新，这里只在
+      loop 超过 3 分钟没启动过刷新时才补（刚重启 / loop 卡死）；
+    - 窗口外 loop 不刷新，这里补，但两次按需刷新至少间隔 10 分钟：某个源持续失败
+      时，不会因为页面开着就反复整刷；
+    - 已有刷新在跑时不重复触发。
+    返回是否真正触发了刷新。
+    """
+    now = now or _now()
+    min_gap = (_ONDEMAND_GAP_IN_WINDOW_S if _in_collect_window(now)
+               else _ONDEMAND_GAP_OUT_WINDOW_S)
+    with _REFRESH_LOCK:
+        if _REFRESH["running"] or time.time() - _REFRESH["last_start"] < min_gap:
+            return False
 
     def _run():
         db = get_sync_db()
@@ -332,7 +356,9 @@ def senti_track_from_slots(db, trade_date) -> list[dict]:
 def archive_zt_daily(db, now: Optional[datetime] = None) -> bool:
     """交易日 15:05 后把当日涨停梯队写 zt_pool_daily（已有当日行则跳过）。
 
-    优先用内存缓存；缓存不是当日（如 16:00 重启）则一次性补拉 push2ex 历史接口。
+    归档的是**收盘终值**：15:06 起的周期不再刷新，缓存里是约 15:04 的盘中快照，
+    和收盘终值（尾盘封板/炸板）会有出入，所以这里重拉一次（一天就 2 个请求）。
+    重拉失败才退回缓存；缓存也不是当天的就放弃，下个周期再试。
     """
     now = now or _now()
     day = now.date()
@@ -346,14 +372,17 @@ def archive_zt_daily(db, now: Optional[datetime] = None) -> bool:
     ), {"d": day}).scalar()
     if exists:
         return False
-    zt = _cache_get("zt")
-    if not zt or zt.get("date") != ymd:
-        try:
-            zt = em_quote.fetch_zt_pools(ymd)
-            _cache_put("zt", zt, ymd)
-        except Exception as e:
-            logger.warning(f"[market-rt] 日终涨停池补拉失败: {str(e)[:140]}")
-            return False
+    zt = None
+    try:
+        zt = em_quote.fetch_zt_pools(ymd)       # 当天已有数据，返回的就是当天的池
+        _cache_put("zt", zt, ymd)
+    except Exception as e:
+        logger.warning(f"[market-rt] 日终涨停池重拉失败，退回盘中缓存: {str(e)[:140]}")
+        cached = _cache_get("zt")
+        if cached and cached.get("date") == ymd:
+            zt = cached
+    if zt is None:
+        return False
     pool = zt.get("pool") or []
     broken = zt.get("broken_pool") or []
     lu, brk = len(pool), len(broken)
@@ -404,6 +433,8 @@ def refresh_all(db=None, now: Optional[datetime] = None) -> list[str]:
     """串行刷新全部数据源到内存缓存；单源失败不影响其他。返回成功 key 列表。
 
     db 缺省时自开一个短会话（按需刷新线程用），只用来查交易日历。
+    采集 loop 与页面按需刷新都会调到这里：同一时刻只允许一个在跑，撞上的那个
+    直接返回 []（不排队——下一拍 loop 自己会再刷）。
     """
     now = now or _now()
     if db is None:
@@ -414,6 +445,17 @@ def refresh_all(db=None, now: Optional[datetime] = None) -> list[str]:
             db.close()
     else:
         pool_day = _pool_trade_date(db, now)
+    if not _refresh_try_begin():
+        logger.info("[market-rt] 已有刷新在跑，跳过本次")
+        return []
+    try:
+        return _refresh_sources(pool_day)
+    finally:
+        _refresh_end()
+
+
+def _refresh_sources(pool_day: _date) -> list[str]:
+    """真正去拉六个源（调用方已持有刷新权）。"""
     ok: list[str] = []
     t0 = time.time()
     # 1. 新浪全市场 → 宽度
@@ -481,13 +523,6 @@ DEFAULT_MARKET_ALERTS = {
     },
     "family_cooldown_min": 10, # 任意 mk% 之间的最小间隔（防风暴）
     "max_per_day": 15,
-}
-ALERT_CONFIG_KEY = "market_alerts"
-
-_MK_LABEL = {
-    "mk_idx_surge": "指数急涨", "mk_idx_drop": "指数急跌",
-    "mk_breadth_up": "宽度转强", "mk_breadth_dn": "宽度转弱",
-    "mk_height": "连板高度新高", "mk_panic": "盘面恐慌", "mk_strong": "盘面亢奋",
 }
 
 # 评估状态（单进程内存；跨重启靠 DB 冷却兜底；_cycle 串行调用无并发）
@@ -781,11 +816,35 @@ def _session_of(now: datetime, trade_day: bool) -> str:
     return "post"
 
 
+def _all_slots() -> list[str]:
+    """当日完整的 10 分钟 slot 轴：09:30…11:30、13:00…15:00（与 treemap_intraday._slot_of 一致）。"""
+    out: list[str] = []
+    for hour, minute, n in ((9, 30, 13), (13, 0, 13)):
+        for k in range(n):
+            t = datetime(2000, 1, 1, hour, minute) + timedelta(minutes=10 * k)
+            out.append(t.strftime("%H:%M"))
+    return out
+
+
+_EMPTY_SLOT: dict = {"score": None, "level": None, "up_ratio": None, "median": None,
+                     "limit_up": None, "limit_down": None}
+
+
+def _fill_slot_gaps(rows: list[dict]) -> list[dict]:
+    """把当日缺失的 slot 补成空点（score=None）。
+
+    树图采集器在个别时段会漏 slot（2026-11-27 10:00–11:00 整段缺失，其余四天都是
+    26 个）。前端是类目轴，不补空点的话 09:50 会直接连到 11:10，70 分钟的缺口看不出来。
+    """
+    by = {r["slot"]: r for r in rows}
+    return [by.get(s, {**_EMPTY_SLOT, "slot": s}) for s in _all_slots()]
+
+
 def _slots_track(db, day: _date) -> list[dict]:
     now = time.time()
     if _SLOTS["date"] == day and now - _SLOTS["ts"] < 60:
         return _SLOTS["data"]
-    data = senti_track_from_slots(db, day)
+    data = _fill_slot_gaps(senti_track_from_slots(db, day))
     _SLOTS.update(date=day, ts=now, data=data)
     return data
 
@@ -842,6 +901,9 @@ def get_realtime(db) -> dict:
     fflow = _cache_get("fflow") or []
 
     data_date = _data_date(trends, zt, min5, fflow)
+    # 情绪轨迹跟随数据所属交易日：休市日/盘前其他卡片显示的是上一交易日，轨迹不能空白
+    track_day = (_date.fromisoformat(data_date)
+                 if data_date and data_date < day.isoformat() else day)
     # stale：① 核心源缺失；② 交易窗口内超 3 个周期未更新；③ 非休市时段但数据还是
     # 上一交易日的（盘前回退、刷新一直失败沿用旧缓存）
     core_ts = [t for t in (_cache_ts(k) for k in ("breadth", "trends", "zt")) if t]
@@ -852,8 +914,8 @@ def get_realtime(db) -> dict:
     if not (_cache_get("breadth") and _cache_get("trends") and _cache_get("zt")
             and _cache_get("boards") and _cache_get("fflow") and _cache_get("min5")):
         # 任一核心源缺失（后端刚启动/收盘重启只补了单源）→ 后台整刷一次；
-        # ensure_refresh_async 自带 90s 节流，不会随轮询连发
-        refreshing = ensure_refresh_async()
+        # ensure_refresh_async 自带互斥与节流（窗口内让位给采集 loop，窗口外 10 分钟一次）
+        refreshing = ensure_refresh_async(now)
 
     # 指数分时（腾讯当日数据；昨收取 minute_trend.preClose）
     indices_trend = []
@@ -892,7 +954,8 @@ def get_realtime(db) -> dict:
         "breadth": breadth,
         "senti": {k: senti[k] for k in ("score", "label", "level", "advice", "stale", "asof")
                   if k in senti},
-        "senti_track": _slots_track(db, day),
+        "senti_track": _slots_track(db, track_day),
+        "track_date": track_day.isoformat(),
         "indices_trend": indices_trend,
         "turnover": estimate_turnover(min5),
         "zt": zt_summary(zt) if zt else None,
@@ -910,13 +973,18 @@ def get_realtime(db) -> dict:
 
 
 def _safe_live_gate(db) -> dict:
+    """live_gate 的兜底：算不出来就是「不知道」，绝不能兜成「放行」。
+
+    现在只影响展示；design/13 记的升级路径是把它接到买入候选——到那时 fail-open
+    就是实盘风险，所以现在就返回独立的 unknown（pass=None），不给出 bool。
+    """
     try:
         from app.buy_check import live_gate
         return live_gate(db)
     except Exception as e:
         logger.warning(f"[market-rt] live_gate 失败: {str(e)[:120]}")
-        return {"level": "open", "pass": True, "label": "放行",
-                "reasons": [f"闸门不可用: {str(e)[:80]}"], "advice_entry": None,
+        return {"level": "unknown", "pass": None, "label": "不可用",
+                "reasons": [f"闸门计算失败，结论未知: {str(e)[:80]}"], "advice_entry": None,
                 "sources": {}}
 
 

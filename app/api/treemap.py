@@ -17,15 +17,14 @@ def get_market_sentiment():
     buy_check.live_gate 组合，60s 缓存）——前端情绪条在盘面分之外展示开仓闸门。
     """
     from app.market_sentiment import get as market_sentiment
+    from app.market_realtime import _safe_live_gate
     db = get_sync_db()
     try:
         data = market_sentiment(db)
-        try:
-            from app.buy_check import live_gate
-            data["gate"] = live_gate(db)
-        except Exception:
-            data["gate"] = None
-        return data
+        # get() 返回的是模块缓存里的同一个 dict（/api/market/overview、intraday_watch
+        # 的上下文也在读）：不能往里写，否则 gate 会泄漏给其他消费者。拷贝后再附带；
+        # 闸门算不出来时 _safe_live_gate 给 unknown（而不是静默 None）
+        return {**data, "gate": _safe_live_gate(db)}
     finally:
         db.close()
 

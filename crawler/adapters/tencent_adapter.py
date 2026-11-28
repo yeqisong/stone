@@ -269,8 +269,6 @@ def realtime_quote(code: str, security_type: str = 'stock') -> dict:
 # 注意：无「均价线」列（成分股聚合口径，腾讯网页版黄线另有私有接口）。
 # ══════════════════════════════════════════
 
-_MINUTE_URL = 'https://web.ifzq.gtimg.cn/appstock/app/minute/query'
-
 
 def _parse_minute_payload(payload: dict, symbol: str) -> dict:
     """minute/query 响应 → {symbol, name, date, preClose, last, points}（纯函数，单测用）。"""

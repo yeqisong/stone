@@ -734,7 +734,8 @@ function drawMarketCharts() {
       })),
     })
   }
-  // 恐慌指数趋势：情绪分折线按档位着色（visualMap 按值分段，单值数据 dimension=0）
+  // 恐慌指数趋势：情绪分折线按档位着色（visualMap 按值分段）。dimension 不写＝取最后一个
+  // 维度（数值）；写 0 是 x 轴序号——会沿横轴切成 0-24/25-44/45-69/70+ 四段而不是跟分值走
   if (sentiData.value.length) {
     const s = sentiData.value
     const dates = s.map(x => x.date)
@@ -752,7 +753,7 @@ function drawMarketCharts() {
       xAxis: xOpt(dates),
       yAxis: { min: 0, max: 100, splitLine: gl2 },
       dataZoom: [{ type: 'inside' }, { type: 'slider', ...dzSlider() }],
-      visualMap: { show: false, dimension: 0, pieces: [
+      visualMap: { show: false, pieces: [
         { lt: 25, color: T.down }, { gte: 25, lt: 45, color: T.warn },
         { gte: 45, lt: 70, color: T.series[3] }, { gte: 70, color: T.up } ] },
       series: [{ name: '情绪分', type: 'line', data: scores, symbol: 'none', lineStyle: { width: 1.4 },

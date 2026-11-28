@@ -20,7 +20,7 @@
 import argparse
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime as _dtm, time as _time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -31,6 +31,8 @@ from sqlalchemy import text
 from crawler import em_quote
 from app.db.connection import get_sync_db
 from app.market_realtime import zt_summary
+
+_CST = timezone(timedelta(hours=8))
 
 UPSERT = text("""
 INSERT INTO zt_pool_daily
@@ -50,12 +52,18 @@ def main():
     args = ap.parse_args()
 
     start = date.fromisoformat(args.start)
-    end = date.fromisoformat(args.end) if args.end else date.today()
+    # 「今天」按北京时间算（主机时区不保证）；东财对尚未有数据的日期会静默回退成
+    # 最近一个交易日的池，所以当天收盘前不能回补当天
+    now = _dtm.now(_CST)
+    end = date.fromisoformat(args.end) if args.end else now.date()
     db = get_sync_db()
     ok = skip = 0
     try:
         day = start
         while day <= end:
+            if day == now.date() and now.time() < _time(15, 5):
+                logger.warning(f"[backfill-zt] {day} 尚未收盘，涨停池不是终值，跳过当天")
+                break
             # 只处理交易日（trade_calendar 优先，缺失回退工作日）
             row = db.execute(text(
                 "SELECT is_trade_day FROM trade_calendar WHERE cal_date=:d LIMIT 1"

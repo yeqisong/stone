@@ -229,43 +229,65 @@ async def test_market_zt_history(client):
 
 
 @pytest.mark.asyncio
-async def test_archive_zt_daily_idempotent(client):
-    """日终梯队落库：写入一次 + 二次幂等跳过 + 清理（离线，预置缓存）。"""
+async def test_archive_zt_daily_final_then_fallback(client):
+    """日终梯队落库（离线，东财打桩）：
+
+    1. 缓存是盘中快照，归档时重拉的收盘终值才是入库的（尾盘封板/炸板有出入）；
+    2. 已有当日行 → 幂等跳过；
+    3. 重拉失败 → 退回当日缓存；
+    4. 重拉失败且缓存也不是当天的 → 不写，下个周期再试。
+    """
     from datetime import datetime
+    from unittest import mock
     from app.db.connection import get_sync_db
     from sqlalchemy import text
     from app import market_realtime as mrt
 
     db = get_sync_db()
-    try:
-        day = datetime(2026, 11, 27, 15, 10)
-        db.execute(text("DELETE FROM zt_pool_daily WHERE trade_date=:d"), {"d": day.date()})
+    day = datetime(2026, 11, 27, 15, 10)
+    d = day.date()
+    intraday = {"date": "20261127",                     # 盘中快照：1 家涨停 / 1 家炸板
+                "pool": [{"code": "300001", "name": "盘中", "lbc": 3, "fund": 1e8}],
+                "broken_pool": [{"code": "000001", "name": "X"}]}
+    final = {"date": "20261127",                        # 收盘终值：2 家涨停 / 1 家炸板
+             "pool": [{"code": "300001", "name": "A", "lbc": 3, "fund": 1e8},
+                      {"code": "600000", "name": "B", "lbc": 1, "fund": 2e8}],
+             "broken_pool": [{"code": "000002", "name": "Y"}]}
+
+    def cleanup():
+        db.execute(text("DELETE FROM zt_pool_daily WHERE trade_date=:d"), {"d": d})
         db.commit()
-        mrt._cache_put("zt", {
-            "date": "20261127",
-            "pool": [{"code": "300001", "name": "A", "lbc": 3, "fund": 1e8},
-                     {"code": "600000", "name": "B", "lbc": 1, "fund": 2e8}],
-            "broken_pool": [{"code": "000001", "name": "X"}],
-        })
-        mrt._cache_put("breadth", {"limit_down": 2})
-        orig = mrt._is_trade_day
-        mrt._is_trade_day = lambda db_, d: True
-        try:
-            first = mrt.archive_zt_daily(db, now=day)
-            second = mrt.archive_zt_daily(db, now=day)
-        finally:
-            mrt._is_trade_day = orig
-        assert first is True and second is False
-        row = db.execute(text(
+
+    def counts():
+        return db.execute(text(
             "SELECT limit_up, limit_down, broken, broken_rate, max_lbc "
-            "FROM zt_pool_daily WHERE trade_date=:d"), {"d": day.date()}).fetchone()
-        assert row is not None
-        assert row[0] == 2 and row[1] == 2 and row[2] == 1
-        assert abs(float(row[3]) - 1 / 3) < 1e-3
-        assert row[4] == 3
-        db.execute(text("DELETE FROM zt_pool_daily WHERE trade_date=:d"), {"d": day.date()})
-        db.commit()
+            "FROM zt_pool_daily WHERE trade_date=:d"), {"d": d}).fetchone()
+
+    try:
+        cleanup()
+        mrt._cache_put("breadth", {"limit_down": 2})
+        with mock.patch.object(mrt, '_is_trade_day', lambda db_, x: True):
+            mrt._cache_put("zt", dict(intraday))
+            with mock.patch.object(mrt.em_quote, 'fetch_zt_pools', return_value=final) as fetch:
+                assert mrt.archive_zt_daily(db, now=day) is True
+                fetch.assert_called_once_with("20261127")
+            row = counts()
+            assert (row[0], row[1], row[2], row[4]) == (2, 2, 1, 3)   # 终值，不是盘中快照
+            assert abs(float(row[3]) - 1 / 3) < 1e-3
+            assert mrt.archive_zt_daily(db, now=day) is False          # 幂等
+            cleanup()
+
+            mrt._cache_put("zt", dict(intraday))
+            with mock.patch.object(mrt.em_quote, 'fetch_zt_pools', side_effect=RuntimeError('em down')):
+                assert mrt.archive_zt_daily(db, now=day) is True       # 退回当日缓存
+            row = counts()
+            assert (row[0], row[2]) == (1, 1)
+
+            mrt._cache_put("zt", {**intraday, "date": "20261126"})
+            with mock.patch.object(mrt.em_quote, 'fetch_zt_pools', side_effect=RuntimeError('em down')):
+                assert mrt.archive_zt_daily(db, now=day) is False      # 缓存不是当天：放弃
     finally:
+        cleanup()
         db.close()
 
 

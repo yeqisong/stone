@@ -10,7 +10,7 @@ max_skip_days 天不开新仓，「不能连续空仓 3 天」——禁、禁、
 """
 from __future__ import annotations
 
-from datetime import date as _date, datetime as _dtm, timedelta as _tdm
+from datetime import date as _date, datetime as _dtm, timedelta as _tdm, timezone
 from typing import Optional
 
 from sqlalchemy import text
@@ -88,9 +88,18 @@ def get_active_regime_cfg(db) -> dict:
     return dict(reg) if isinstance(reg, dict) else {}
 
 
+_CST = timezone(_tdm(hours=8))
+
+
+def bj_today() -> _date:
+    """北京时间的自然日。「今天是否禁买」不能依赖主机时区（UTC 主机在北京时间
+    00:00–08:00 会把今天算成昨天）。"""
+    return _dtm.now(_CST).date()
+
+
 def regime_gated_today(db, today=None) -> tuple[bool, dict]:
     """今天是否处于 regime 禁买日。返回 (gated, cfg)；未启用 → (False, {})。"""
-    today = today or _date.today()
+    today = today or bj_today()
     cfg = get_active_regime_cfg(db)
     if not cfg.get('enabled'):
         return False, cfg

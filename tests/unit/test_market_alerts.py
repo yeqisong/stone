@@ -3,6 +3,8 @@
 模式照搬 tests/unit/test_intraday_watch.py：_FakeDB 按 SQL 片段匹配 + 显式 now，
 不出网、不连库；缓存指标用 market_realtime._cache_put 预置。
 """
+import threading
+import time
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -113,13 +115,10 @@ class TestMarketAlertEvaluate(unittest.TestCase):
 
     def test_disabled(self):
         db = FakeAlertDB()
-        orig = mrt.read_market_alerts
-        mrt.read_market_alerts = lambda d: {**mrt.DEFAULT_MARKET_ALERTS, 'enabled': False}
-        try:
+        with mock.patch.object(mrt, 'read_market_alerts',
+                               lambda d: {**mrt.DEFAULT_MARKET_ALERTS, 'enabled': False}):
             self.assertEqual(self._eval(db), [])
-            self.assertEqual(db.inserted, [])
-        finally:
-            mrt.read_market_alerts = orig
+        self.assertEqual(db.inserted, [])
 
     def test_index_surge_then_no_repeat(self):
         """急涨触发一次；同向持续不重复（状态机）。"""
@@ -236,12 +235,11 @@ class TestMarketAlertEvaluate(unittest.TestCase):
 
     def test_sentiment_baseline_then_panic(self):
         """首轮只建基线；跨入 panic 报 critical。"""
-        mrt.market_sentiment.get = lambda db, use_cache=True: {'level': 'neutral', 'score': 55}
-        self._eval(FakeAlertDB())                      # 建基线 sent_level='neutral'
-        mrt.market_sentiment.get = lambda db, use_cache=True: {'level': 'panic', 'score': 18}
+        self.assertEqual(_kinds(), [])                              # 建基线 neutral
+        self.senti.update(level='panic', score=18)
         out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_panic' for x in out))
-        self.assertEqual([x for x in out if x['kind'] == 'mk_panic'][0]['level'], 'critical')
+        self.assertEqual([x['kind'] for x in out], ['mk_panic'])
+        self.assertEqual(out[0]['level'], 'critical')
 
     def test_kind_cooldown_suppresses(self):
         """per-kind 冷却命中 → 不落库。"""
@@ -460,23 +458,103 @@ class TestRefreshPoolDate(unittest.TestCase):
                 self.assertEqual(self._refresh(now), (want, want))
 
 
+class TestRefreshMutexAndOndemand(unittest.TestCase):
+    """v3.27 审查项 7：同一时刻只允许一个刷新；按需刷新让位给采集 loop 且有节流。"""
+
+    def setUp(self):
+        mrt._REFRESH.update(running=False, last_start=0.0, last_done=0.0)
+
+    def tearDown(self):
+        mrt._REFRESH.update(running=False, last_start=0.0, last_done=0.0)
+
+    def test_reentrant_call_is_skipped(self):
+        calls = []
+
+        def fake(pool_day):
+            calls.append(pool_day)
+            # 刷新进行中又来一次（模拟采集 loop 与按需线程撞车）：必须被挡住
+            return mrt.refresh_all(FakeCalDB(), now=NOW)
+
+        with mock.patch.object(mrt, '_refresh_sources', fake):
+            self.assertEqual(mrt.refresh_all(FakeCalDB(), now=NOW), [])
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(mrt._REFRESH['running'])
+
+    def test_concurrent_refresh_runs_once(self):
+        started, release = threading.Event(), threading.Event()
+        runs, outer = [], []
+
+        def fake(pool_day):
+            runs.append(1)
+            started.set()
+            release.wait(5)
+            return ['breadth']
+
+        with mock.patch.object(mrt, '_refresh_sources', fake):
+            t1 = threading.Thread(target=lambda: mrt.refresh_all(FakeCalDB(), now=NOW))
+            t1.start()
+            try:
+                self.assertTrue(started.wait(5))
+                outer.append(mrt.refresh_all(FakeCalDB(), now=NOW))    # 撞上正在跑的刷新
+            finally:
+                release.set()
+                t1.join(5)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(outer, [[]])
+        self.assertFalse(mrt._REFRESH['running'])
+
+    def test_flag_released_when_sources_raise(self):
+        with mock.patch.object(mrt, '_refresh_sources', side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                mrt.refresh_all(FakeCalDB(), now=NOW)
+        self.assertFalse(mrt._REFRESH['running'])    # 否则一次异常之后永远不再刷新
+
+    @staticmethod
+    def _ondemand(now, last_start_age, running=False):
+        """last_start_age=距上次刷新启动过了多久（10**9 模拟进程启动后从未刷新）。"""
+        mrt._REFRESH.update(running=running, last_start=time.time() - last_start_age)
+        with mock.patch.object(mrt.threading, 'Thread') as thread:
+            fired = mrt.ensure_refresh_async(now)
+        return fired, thread.called
+
+    def test_ondemand_yields_to_loop_in_window(self):
+        mon = datetime(2026, 11, 30, 10, 0)        # 周一盘中：采集 loop 每 60s 刷
+        self.assertEqual(self._ondemand(mon, 100), (False, False))        # loop 健康 → 不补
+        self.assertEqual(self._ondemand(mon, 10 ** 9), (True, True))       # 刚重启 → 补
+        self.assertEqual(self._ondemand(mon, 400), (True, True))          # loop 卡死 → 补
+
+    def test_ondemand_throttled_out_of_window(self):
+        sat = datetime(2026, 11, 28, 10, 0)        # 周六：loop 不刷，只能靠按需
+        self.assertEqual(self._ondemand(sat, 10 ** 9), (True, True))      # 重启后第一次
+        self.assertEqual(self._ondemand(sat, 120), (False, False))        # 某源一直失败也不连发
+        self.assertEqual(self._ondemand(sat, 700), (True, True))          # 10 分钟后允许再试
+        self.assertEqual(self._ondemand(sat, 700, running=True), (False, False))
+
+
 class TestLiveGate(unittest.TestCase):
-    """三源组合取最严级别（mock 三源，use_cache=False 绕过缓存）。"""
+    """三源组合取最严级别（三源全部打桩，use_cache=False 绕过缓存）。"""
 
     def setUp(self):
         bc._gate_cache.update(ts=0.0, data=None)
-        self._orig = (bc.market_gate, bc.regime_gated_today, bc.market_sentiment.get)
+        self.addCleanup(bc._gate_cache.update, ts=0.0, data=None)
+        self._patch()
 
-    def tearDown(self):
-        bc.market_gate, bc.regime_gated_today, bc.market_sentiment.get = self._orig
-        bc._gate_cache.update(ts=0.0, data=None)
-
-    def _patch(self, mg_level='open', gated=False, s_level='neutral', s_score=55):
-        bc.market_gate = lambda db: {'level': mg_level, 'pass': mg_level != 'closed', 'reason': 'mock 市场闸门'}
-        bc.regime_gated_today = lambda db, today=None: (gated, {'enabled': gated, 'ma_window': 20, 'max_skip_days': 2})
-        bc.market_sentiment.get = lambda db, use_cache=True: {
-            'level': s_level, 'score': s_score, 'stale': False,
-            'advice': {'entry': '按买点检查', 'stop': '止损正常执行'}}
+    def _patch(self, mg_level='open', gated=False, s_level='neutral', s_score=55, s_stale=False):
+        self.senti = {'level': s_level, 'score': s_score, 'stale': s_stale,
+                      'advice': {'entry': '按买点检查', 'stop': '止损正常执行'}}
+        # patch.object + addCleanup：用例中途失败也一定还原，不污染同进程后续测试
+        # （bc.market_sentiment 就是 app.market_sentiment 模块本身，裸赋值会泄漏出去）
+        stubs = (
+            (bc, 'market_gate',
+             lambda db: {'level': mg_level, 'pass': mg_level != 'closed', 'reason': 'mock 市场闸门'}),
+            (bc, 'regime_gated_today',
+             lambda db, today=None: (gated, {'enabled': gated, 'ma_window': 20, 'max_skip_days': 2})),
+            (bc.market_sentiment, 'get', lambda db, use_cache=True: dict(self.senti)),
+        )
+        for obj, name, val in stubs:
+            patcher = mock.patch.object(obj, name, val)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_all_open(self):
         self._patch()
@@ -509,18 +587,132 @@ class TestLiveGate(unittest.TestCase):
         g = bc.live_gate(None, use_cache=False)
         self.assertEqual(g['level'], 'closed')
 
+    # ── v3.27 审查项 5：缺一路数据不能说成完整的「放行」 ───────────────────
+
+    def test_stale_sentiment_does_not_close_gate(self):
+        """上一交易日收盘的恐慌不是今天的盘面：不参与定级，理由里说明，建议不照搬。"""
+        self._patch(mg_level='open', s_level='panic', s_score=15)
+        self.senti['stale'] = True
+        g = bc.live_gate(None, use_cache=False)
+        self.assertEqual(g['level'], 'open')
+        self.assertIsNone(g['advice_entry'])          # 「禁止新开仓」是昨天的建议
+        self.assertTrue(any('上一交易日收盘口径' in r for r in g['reasons']))
+        self.assertTrue(g['sources']['sentiment']['stale'])
+        # 同一盘面，快照切到今天后才关闸
+        self.senti['stale'] = False
+        self.assertEqual(bc.live_gate(None, use_cache=False)['level'], 'closed')
+
+    def test_sentiment_source_down_is_disclosed(self):
+        """情绪源挂了：结论照常给出，但必须写明不含实时盘面。"""
+        self._patch(mg_level='open')
+
+        def boom(db, use_cache=True):
+            raise RuntimeError('tencent down')
+
+        with mock.patch.object(bc.market_sentiment, 'get', boom):
+            g = bc.live_gate(None, use_cache=False)
+        self.assertEqual(g['level'], 'open')
+        self.assertTrue(any('情绪源不可用' in r for r in g['reasons']))
+        self.assertIsNone(g['sources']['sentiment']['level'])
+
+
+class TestSafeLiveGate(unittest.TestCase):
+    """端点兜底：闸门算不出来必须是「不知道」，不能兜成「放行」。"""
+
+    def test_failure_is_unknown_not_open(self):
+        with mock.patch.object(bc, 'live_gate', side_effect=RuntimeError('db down')):
+            g = mrt._safe_live_gate(None)
+        self.assertEqual(g['level'], 'unknown')
+        self.assertIsNone(g['pass'])                  # 不给出 bool：以后接到买入候选时不能被当成 True
+        self.assertEqual(g['label'], '不可用')
+        self.assertIn('db down', g['reasons'][0])
+
+    def test_pass_through(self):
+        ok = {'level': 'open', 'pass': True, 'label': '放行', 'reasons': ['x'],
+              'advice_entry': None, 'sources': {}}
+        with mock.patch.object(bc, 'live_gate', return_value=ok):
+            self.assertIs(mrt._safe_live_gate(None), ok)
+
+
+class TestSentimentEndpointDoesNotMutateCache(unittest.TestCase):
+    """v3.27 审查项 8：/api/market_sentiment 不能往 market_sentiment 的缓存 dict 里写。
+
+    get() 返回的是模块缓存里的同一个对象，/api/market/overview 和 intraday_watch 的
+    上下文也在读它；原地加 gate 等于把本端点的附加字段塞给所有消费者。
+    """
+
+    def _call(self, senti, gate):
+        import app.api.treemap as api
+        shared = dict(senti)                           # 模拟模块缓存里的那个对象
+        fake_db = mock.Mock()
+        gate_stub = ({'side_effect': gate} if isinstance(gate, Exception)
+                     else {'return_value': gate})
+        with mock.patch.object(api, 'get_sync_db', return_value=fake_db), \
+                mock.patch.object(mrt.market_sentiment, 'get', lambda db, use_cache=True: shared), \
+                mock.patch.object(bc, 'live_gate', **gate_stub):
+            resp = api.get_market_sentiment()
+        return shared, resp, fake_db
+
+    def test_gate_is_attached_to_a_copy(self):
+        senti = {'ok': True, 'level': 'neutral', 'score': 55, 'advice': {'entry': 'x'}}
+        gate = {'level': 'caution', 'pass': True, 'label': '警戒', 'reasons': ['r'],
+                'advice_entry': None, 'sources': {}}
+        shared, resp, fake_db = self._call(senti, gate)
+        self.assertEqual(resp, {**senti, 'gate': gate})
+        self.assertIsNot(resp, shared)                 # 不是同一个对象
+        self.assertEqual(shared, senti)                # 缓存对象原样
+        fake_db.close.assert_called_once()
+
+    def test_gate_failure_is_unknown_not_silent_none(self):
+        shared, resp, _ = self._call({'ok': True}, RuntimeError('db down'))
+        self.assertEqual(resp['gate']['level'], 'unknown')
+        self.assertEqual(shared, {'ok': True})
+
+
+class TestBeijingToday(unittest.TestCase):
+    """v3.27 审查项 10：「今天是否禁买」不能依赖主机时区的自然日。"""
+
+    def test_bj_today_crosses_midnight_in_beijing_not_on_host(self):
+        from datetime import timezone, timedelta
+        from app import regime_gate as rg
+        utc = timezone.utc
+        instant = datetime(2026, 11, 29, 17, 30, tzinfo=utc)     # 北京时间已是 11-30 01:30
+
+        class FrozenDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+        self.assertEqual(instant.date(), date(2026, 11, 29))    # UTC 主机的「今天」
+        with mock.patch.object(rg, '_dtm', FrozenDT):
+            self.assertEqual(rg.bj_today(), date(2026, 11, 30))  # 北京口径的「今天」
+
+    def test_regime_gated_today_defaults_to_beijing_day(self):
+        from app import regime_gate as rg
+        seen = {}
+
+        def fake_cfg(db):
+            return {'enabled': True, 'ma_window': 20, 'max_skip_days': 2}
+
+        def fake_gates(db, dates, cfg):
+            seen['dates'] = list(dates)
+            return set(dates)
+
+        with mock.patch.object(rg, 'get_active_regime_cfg', fake_cfg), \
+                mock.patch.object(rg, 'compute_regime_gates', fake_gates), \
+                mock.patch.object(rg, 'bj_today', lambda: date(2026, 11, 30)):
+            gated, cfg = rg.regime_gated_today(None)
+        self.assertTrue(gated)
+        self.assertEqual(seen['dates'], ['2026-11-30'])
+
 
 class TestAlertVisible(unittest.TestCase):
-    """WS 谓词：mk% 无归属行广播全员；其余无归属行需 model.alerts.view。"""
+    """WS 谓词：mk% 无归属行需 research.market.view；其余无归属行需 model.alerts.view。"""
 
-    class _WS:
-        def __init__(self, perms=(), roles=()):
-            self._perms, self._roles = set(perms), set(roles)
-
-    def _meta_ws(self, perms=(), roles=()):
+    def _meta_ws(self, user_id=7, perms=(), roles=()):
         import app.api.status as st
         ws = object()
-        st._ws_meta[ws] = {'user_id': 7, 'permissions': set(perms), 'roles': set(roles)}
+        st._ws_meta[ws] = {'user_id': user_id, 'permissions': set(perms), 'roles': set(roles)}
         return ws
 
     def tearDown(self):
@@ -528,21 +720,36 @@ class TestAlertVisible(unittest.TestCase):
         st._ws_meta.clear()
 
     def test_owned_row_only_owner(self):
-        import app.api.status as st
         ws = self._meta_ws()
-        other = self._meta_ws()
+        other = self._meta_ws(user_id=8)
         self.assertTrue(_alert_visible(7, 'it_stop', 7, ws))
         self.assertFalse(_alert_visible(7, 'it_stop', 8, other))
 
-    def test_market_row_broadcast_all(self):
-        ws = self._meta_ws()                # 无任何权限
-        self.assertTrue(_alert_visible(None, 'mk_idx_surge', 7, ws))
-        self.assertTrue(_alert_visible(None, 'mk_panic', 9, ws))
+    def test_market_row_needs_market_view(self):
+        """双角色：有 research.market.view 的连接收得到 mk%；没有的收不到。
+
+        实现必须和权限表登记一致——#/kr 子页、/api/market/* 都归 research.market.view，
+        没这个权限的角色/支持会话不该收到一条点进去会被重定向的通知。
+        """
+        from app.auth.route_permissions import resolve_rule
+        no_market = self._meta_ws(perms=('research.stock.view', 'risk.alerts.view'))
+        has_market = self._meta_ws(perms=('research.market.view',))
+        admin = self._meta_ws(roles=('admin',))
+        for ws, want in ((no_market, False), (has_market, True), (admin, True)):
+            self.assertEqual(_alert_visible(None, 'mk_idx_surge', 7, ws), want)
+            self.assertEqual(_alert_visible(None, 'mk_panic', 9, ws), want)
+        # 权限表登记：页面与接口同属一个节点，所以广播门槛用它才自洽
+        self.assertEqual(resolve_rule('GET', '/api/market/realtime').permission,
+                         'research.market.view')
+        self.assertEqual(resolve_rule('GET', '/api/market_sentiment').permission,
+                         'research.treemap.view')
 
     def test_model_row_needs_perm(self):
         ws_plain = self._meta_ws()
         ws_model = self._meta_ws(perms=('model.alerts.view',))
+        ws_market_only = self._meta_ws(perms=('research.market.view',))
         self.assertFalse(_alert_visible(None, 'model_stale', 7, ws_plain))
+        self.assertFalse(_alert_visible(None, 'model_stale', 7, ws_market_only))
         self.assertTrue(_alert_visible(None, 'model_stale', 7, ws_model))
 
 
