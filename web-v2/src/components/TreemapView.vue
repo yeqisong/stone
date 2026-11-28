@@ -1,10 +1,9 @@
 <template>
-<div>
+<div :class="{ 'tm-embedded': embedded }">
   <n-space align="center" style="margin-bottom:8px" wrap>
-    <n-button-group size="tiny">
-      <n-button size="tiny" :type="!intraday?'primary':'default'" @click="switchMode(false)">日线</n-button>
-      <n-button size="tiny" :type="intraday?'primary':'default'" @click="switchMode(true)">分时市值</n-button>
-    </n-button-group>
+    <!-- 分时市值模式已迁「实时」页的资金地图（embedded）；本页只留日线树图 + 一个入口 -->
+    <span v-if="embedded" class="tm-mode"><AppIcon name="rt" :size="13" />  分时市值</span>
+    <n-button v-else size="tiny" title="盘中分时市值树图在「实时」页的资金地图" @click="navStore.switchTab('rt')"><AppIcon name="rt" :size="13" />  实时市值</n-button>
     <n-button-group v-if="!intraday" size="tiny">
   <n-button size="tiny" :type="metric==='mcap'?'primary':'default'" @click="switchMetric('mcap')"><AppIcon name="bar-chart-2" :size="13" />  市值</n-button>
   <n-button size="tiny" :type="metric==='volume'?'primary':'default'" @click="switchMetric('volume')"><AppIcon name="bar-chart-2" :size="13" />  成交量</n-button>
@@ -57,7 +56,7 @@
   </div>
   <div v-else class="tm-intraday-flex">
     <div class="tm-chart-col">
-      <div :id="'treemap-chart'" :class="{ 'tm-chart-intraday': intraday }" style="width:100%;height:calc(100vh - 190px - var(--h5-tabbar-h, 0px));min-height:400px"></div>
+      <div :id="'treemap-chart'" :class="{ 'tm-chart-intraday': intraday }" :style="embedded ? { width: '100%' } : { width: '100%', height: 'calc(100vh - 190px - var(--h5-tabbar-h, 0px))', minHeight: '400px' }"></div>
     </div>
     <!-- 行业资金流：与树图并排，按日累计/近10分钟切换 -->
     <div v-if="intraday && sectorFlows" class="tm-flow-panel">
@@ -185,7 +184,10 @@ const store = useMarketStore()
 const navStore = useNavStore()
 const auth = useAuthStore()
 const theme = useThemeStore()
-const emit = defineEmits(['show-detail'])
+// embedded：作为「实时」页资金地图嵌入——固定分时市值模式、不读写 URL（地址栏归实时页路由）、
+// 高度交给分析带；叶子点击改发 pick（页面在点击处弹「买点检查 / 个股详情」）
+const props = defineProps({ embedded: { type: Boolean, default: false } })
+const emit = defineEmits(['show-detail', 'pick'])
 const API = window.location.origin
 const metric = ref('mcap')
 const selDate = ref(store.selDate)
@@ -193,8 +195,8 @@ const loading = ref(true)
 const showGenModal = ref(false)
 const genLoading = ref(false)
 
-// ── 分时市值模式 ──
-const intraday = ref(false)
+// ── 分时市值模式（仅 embedded；日线树图页不再切换模式）──
+const intraday = computed(() => props.embedded)
 const intradaySlot = ref('latest')
 const intradaySlots = ref([])
 const slotGapMin = ref(null)
@@ -354,14 +356,12 @@ const METRICS = ['mcap', 'volume', 'amount', 'pe']
 const COLORS = ['chg1d', 'chg20d', 'volr', 'chg10m']
 
 function syncQuery() {
-  // metric/color/mode/slot 体现在 URL（分享/刷新可恢复）
+  // embedded 时地址栏归实时页路由（#/rt），这里不写
+  if (props.embedded) return
+  // metric/color 体现在 URL（分享/刷新可恢复）
   const q = []
-  if (!intraday.value && metric.value !== 'mcap') q.push('metric=' + metric.value)
+  if (metric.value !== 'mcap') q.push('metric=' + metric.value)
   if (colorMode.value !== 'chg1d') q.push('color=' + colorMode.value)
-  if (intraday.value) {
-    q.push('mode=intraday')
-    if (intradaySlot.value !== 'latest') q.push('slot=' + intradaySlot.value)
-  }
   const qs = q.length ? '?' + q.join('&') : ''
   const target = '/market/' + selDate.value + qs
   if (location.hash.slice(1) !== target) history.replaceState(null, '', '#' + target)
@@ -373,39 +373,9 @@ function applyQuery() {
   if (!q) return false
   let changed = false
   const m = q.get('metric'), c = q.get('color')
-  const mode = q.get('mode'), slot = q.get('slot')
   if (METRICS.includes(m) && m !== metric.value) { metric.value = m; changed = true }
   if (COLORS.includes(c) && c !== colorMode.value) { colorMode.value = c; changed = true }
-  if (mode === 'intraday' && !intraday.value) { intraday.value = true; changed = true }
-  if (slot && slot !== intradaySlot.value) { intradaySlot.value = slot; changed = true }
   return changed
-}
-
-function switchMode(on) {
-  if (intraday.value === on) return
-  intraday.value = on
-  drillStack.value = []
-  store.drillStack = []
-  colorMode.value = 'chg1d'
-  flowModePinned = false
-  if (on) {
-    metric.value = 'mcap'
-    intradaySlot.value = 'latest'
-    // 分时市值是“当日盘中”视图：从日线/历史日期切过来时自动回到今天
-    const today = bjDateStr()
-    if (selDate.value !== today) {
-      selDate.value = today
-      store.setDate(today)
-    }
-  } else {
-    slotGapMin.value = null
-    breadth.value = null
-    sectorFlows.value = null
-    refreshing.value = false
-    clearTimeout(intradayTimer)
-  }
-  syncQuery()
-  loadTree()
 }
 
 function onSlotChange(v) {
@@ -709,7 +679,22 @@ function renderChart() {
   chart.on('click', p => {
     const d = p.data
     if (d._type === 'stock') {
-      if (d._id) emit('show-detail', d._id)
+      if (!d._id) return
+      if (props.embedded) {
+        // 分析带里不跳走（否则丢失实时页状态）：带上点击坐标，由页面原地弹快捷菜单
+        const rect = el.getBoundingClientRect()
+        const native = p.event && p.event.event
+        emit('pick', {
+          code: d._id,
+          name: String(d.name || '').replace(/^[◆◇]/, ''),
+          price: (d._detail || {}).price,
+          chg_pct: d.chg_pct,
+          x: native && native.clientX != null ? native.clientX : rect.left + ((p.event && p.event.offsetX) || rect.width / 2),
+          y: native && native.clientY != null ? native.clientY : rect.top + ((p.event && p.event.offsetY) || rect.height / 2),
+        })
+        return
+      }
+      emit('show-detail', d._id)
     } else if (d._type === 'l1') {
       drillStack.value.push({ name: d.name, id: d._id })
       loadTree()
@@ -766,7 +751,7 @@ const _tm_resize = () => {
   trendChart?.resize()
 }
 const _tm_popstate = () => {
-  if (navStore.tab !== 'm') return   // 组件已卸载时守卫
+  if (props.embedded || navStore.tab !== 'm') return   // 组件已卸载 / 实时页内嵌时不守卫
   if (applyQuery()) { drillStack.value = []; loadTree() }
 }
 window.addEventListener('popstate', _tm_popstate)
@@ -792,10 +777,9 @@ onMounted(async () => {
   const urlDate = hashDate()
   const today = bjDateStr()
   if (intraday.value) {
-    // 分时模式：直达链接的日期优先（可看历史分时）；没有日期则用今天
-    const d = urlDate || today
-    selDate.value = d
-    store.setDate(d)
+    // 分时模式（实时页资金地图）：默认看今天；历史分时用日期选择器回看（保留最近 5 个交易日）
+    selDate.value = today
+    store.setDate(today)
   } else if (!urlDate || urlDate >= today) {
     // 日线模式：没有日期、或 URL 被路由补成“今天”但今日树图尚未生成 → 回落到最新日线日期
     await loadLatestDate()
@@ -833,6 +817,19 @@ watch(() => theme.isDark, () => {
 .tm-b-hint { color: var(--c-text-faint); }
 /* 分时模式多一条宽度条：图表高度相应收一点 */
 .tm-chart-intraday { height: calc(100vh - 238px - var(--h5-tabbar-h, 0px)) !important; }
+/* embedded（实时页资金地图）：高度交给分析带，树图与资金流面板撑满剩余空间 */
+.tm-embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.tm-mode {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px;
+  border-radius: var(--radius-sm); background: var(--c-accent-weak);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-accent) 26%, transparent);
+  color: var(--c-accent); font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+.tm-embedded > .n-space { margin-bottom: 6px !important; flex-shrink: 0; }
+.tm-embedded .tm-breadth { flex-shrink: 0; }
+.tm-embedded .tm-intraday-flex { flex: 1; min-height: 0; }
+.tm-embedded .tm-chart-intraday { height: 100% !important; }
+.tm-embedded .tm-flow-panel { height: 100%; max-height: none; }
 /* 分时模式：树图 + 行业资金流并排 */
 .tm-intraday-flex { display: flex; gap: 8px; align-items: stretch; }
 .tm-chart-col { flex: 1; min-width: 0; }

@@ -20,6 +20,17 @@ export const useNavStore = defineStore('nav', () => {
   const tradeReviewTab = ref('review')  // 交易复盘二级页的初始 tab
   const bondCode = ref('')               // 可转债详情码（/bond/:code）
   const midx = ref('000001.SH')          // 大盘页选中指数（ts_code 带后缀，/k?idx=）
+  const rtTab = ref('map')               // 实时页分析带 tab（map/idx/boards/zt/turn，/rt?tab=）
+
+  // 实时页分析带的合法 tab（design/14）；URL 带非法值回落到资金地图
+  const RT_TABS = ['map', 'idx', 'boards', 'zt', 'turn']
+
+  /** 进实时页：功能从旧入口迁来后，旧链接/通知点击都走这里，不失效。 */
+  function enterRealtime(tabKey = 'map') {
+    rtTab.value = RT_TABS.includes(tabKey) ? tabKey : 'map'
+    if (tab.value === 'rt') { syncHash(); return }   // 已在实时页（popstate 回到旧地址）：只把地址栏改正
+    tab.value = 'rt'                                  // watch(tab) 负责推 /rt
+  }
 
   // URL hash 路由
   function parseHash() {
@@ -38,9 +49,12 @@ export const useNavStore = defineStore('nav', () => {
     }
     if (hash.startsWith('/dag-logs/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'q'; return }
     if (hash.startsWith('/dag-flow-view/')) { flowId.value = parseInt(hash.split('/')[2]) || null; tab.value = 'r'; return }
+    // 旧入口重定向（三者都已迁实时页，design/14）：树图分时市值 / 实时盘子页 / 个股页雷达
+    if (hash.startsWith('/market/') && q('mode') === 'intraday') { enterRealtime('map'); return }
     if (hash.startsWith('/market/')) { marketDate.value = hash.split('/')[2] || ''; tab.value = 'm'; return }
     if (path === '/k') { midx.value = q('idx') || '000001.SH'; tab.value = 'k'; return }
-    if (path === '/kr') { tab.value = 'kr'; return }  // 实时大盘（design/13，大盘子页面）
+    if (path === '/kr') { enterRealtime('idx'); return }
+    if (path === '/rt') { enterRealtime(q('tab')); return }
     if (hash.startsWith('/stock-fund/')) { stockFundType.value = hash.split('/')[2] || 'stock'; tab.value = 'u'; return }
     if (path === '/trade-review') { tradeReviewTab.value = q('tab') || 'review'; tab.value = 't'; return }
     if (path === '/admin/users') { tab.value = 'y'; return }
@@ -62,6 +76,8 @@ export const useNavStore = defineStore('nav', () => {
       tab.value = 'x'
       return
     }
+    // 个股页旧雷达视图（tab=radar）→ 实时页持仓区
+    if (path === '/stocks' && q('tab') === 'radar') { enterRealtime('map'); return }
     const map = {'':'p','/':'p','/market':'m','/signals':'s','/stocks':'l','/status':'x','/models':'a','/functions':'f','/features':'e','/dag-flows':'g','/portfolio':'p','/dbx':'w','/news':'n','/agent':'i','/bonds':'b','/k':'k','/admin/users':'y','/admin/roles':'z','/admin/audit':'h','/admin/settings':'o','/support':'j'}
     tab.value = map[path] || 'p'
     if (path === '/dag-flows') flowId.value = null
@@ -92,7 +108,7 @@ export const useNavStore = defineStore('nav', () => {
         target = '/k' + (midx.value && midx.value !== '000001.SH' ? '?idx=' + midx.value : '')
         break
       }
-      case 'kr': target = '/kr'; break  // 实时大盘
+      case 'rt': target = '/rt' + (rtTab.value !== 'map' ? '?tab=' + rtTab.value : ''); break  // 实时页分析带 tab 进 URL
       case 'l': {
         // 保留列表页 URL 上已有的查询参数（cat/kw/page/sf/sd，StocksView 维护）——
         // history.back() 回到列表时 popstate 已把地址还原成带参 URL，此时 syncHash
@@ -226,6 +242,7 @@ export const useNavStore = defineStore('nav', () => {
   watch(fid, () => { if (tab.value === 'v') syncHash() })
   watch(bondCode, () => { if (tab.value === 'c') syncHash() })
   watch(midx, () => { if (tab.value === 'k') syncHash() })
+  watch(rtTab, () => { if (tab.value === 'rt') syncHash() })
 
   watch(flowId, () => { if (tab.value === 'g' || tab.value === 'q' || tab.value === 'r') syncHash() })
 
@@ -233,5 +250,5 @@ export const useNavStore = defineStore('nav', () => {
   parseHash()
   window.addEventListener('popstate', parseHash)
 
-  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, bondCode, midx, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showBondDetail, backFromBondDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
+  return { tab, dcode, fid, flowId, prevTab, pendingEditFeatureId, stockFundType, marketDate, modelEntity, modelVersion, modelTab, statusMonth, bfLogPage, agentSeed, tradeReviewTab, bondCode, midx, rtTab, switchTab, askAgent, takeAgentSeed, showDetail, backFromDetail, showFeatureDetail, backFromFeatureDetail, showBondDetail, backFromBondDetail, showFlowEditor, backFromFlowEditor, openTradeReview, backFromTradeReview, parseHash, syncHash }
 })
