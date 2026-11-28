@@ -16,7 +16,7 @@ Python + FastAPI 后端 + Vue 3 前端 + PostgreSQL 的全栈 A 股量化监测�
 |------|------|
 | 启动后端 | `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
 | 后端开发(热重载) | `uvicorn app.main:app --reload --port 8000` |
-| 前端开发 | `cd web-v2 && npm run dev` (port 3000, proxy → 8000) |
+| 前端开发 | `cd web-v2 && npm run dev` (port 3000, proxy → 8000；旁路端口用环境变量 `FRONTEND_PORT=3001 BACKEND_ORIGIN=http://localhost:8101`) |
 | 前端构建 | `cd web-v2 && npm run build` |
 | 运行测试 | `pytest` |
 | 仅单元测试 | `pytest tests/unit/ -v` |
@@ -66,6 +66,10 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `app/kepl/` — KEPL 表达式解析器（Lark LALR(1) + AST + 时间序列/截面函数）
   - `app/signal.py` — DAG ↔ WebSocket 解耦桥梁（asyncio Event + 线程安全唤醒）
   - `app/lineage.py` — 数据血缘台账（旁路观测：factor_heal/零价修复/特征重算/复评/训练/滚动重训事件落 `data_lineage` 表，MB 级元数据；`log_event` 失败绝不影响主链路）；`model_data_drift` 回答「模型训练后数据又被改过吗」；API 在 `app/api/lineage.py`（GET /api/lineage、/api/lineage/model/{ver}）
+  - `app/market_realtime.py` — 实时大盘聚合（`#/kr`，design/13）：后台 loop 周期刷新模块级缓存（新浪全市场宽度 / 腾讯分时 / 新浪 5 分钟量能 / 东财涨停池·板块·资金流），`/api/market/realtime` 只读缓存 + slot 重放、不触发外部请求；盘面异动告警（`mk%` → risk_alerts → WS，按 `research.market.view` 过滤）；日终涨停梯队归档 `zt_pool_daily`。**数据所属交易日必须校验**（东财/腾讯对无数据日期静默回退，design/13 §10.1）
+  - `crawler/em_quote.py` — 东财 push2/push2ex 行情抓取（只许这两个域；push2his 有 TLS 指纹墙），统一走 `crawler.news.sources.em_get` 串行闸门
+  - `app/regime_gate.py` — regime 空仓闸门单一事实源（pipeline / eval_version / scan_gate 经别名引用）；`app/buy_check.live_gate` 三源组合实时闸门（市场闸门 × regime × 盘面情绪，目前仅展示，缺数据返回 `unknown` 不兜成放行）
+  - `app/peg.py` / `app/api/peg.py` — PEG 纯函数与端点（`/api/market/peg` 指数成分截面、`/api/stock/{code}/peg_history` 个股历史带）：G = G_hist（5 年归母净利 CAGR）打底、一致预期单边向上收缩 50%；**一致预期机构 ≥3 才算完整口径，截面与历史序列同一判定**（`MIN_CONSENSUS_ORGS`）
 
 - **`crawler/`** — 数据采集层
   - `adapters/` — `tushare_adapter.py`（主源，按交易日全市场）+ `baostock_adapter.py`（补充器）+ `tushare_quota.py`（配额计数）+ `manager.py`（主源直取 + 补充器健康缓存）+ `base.py`（标准化 dataclass）
@@ -85,6 +89,8 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `news_summary.py` — 资讯逐条总结（`PROMPT_VER='n1'`：一次调用出摘要/重要度 1-3/主题/情绪；只取未总结的 → 幂等自愈）；`summarize_pending()` 为 CLI 与 DAG 节点共用入口
   - `xueqiu_sentiment.py` — 雪球帖 LLM 情绪打分（`heat≥5` 取热帖；评分逻辑已改为引用 `llm_batch`）
   - `scan_gate.py` — 闸门前沿重扫（熔断档位 × regime 空仓闸门 × trailing × 持有期），完全复用 eval_version 载入路径与 pipeline 四件套；跑前先复现现行档锚点数字，锚不中说明 harness 有 bug 网格作废；结果 CSV 落 data/，不改生产配置
+  - `backfill_zt_pool.py` — 涨停梯队历史回补（东财 push2ex 历史日期；深度约 15 个交易日，更早返回空池、跳过不写）
+  - 一致预期数据链（PEG 底座）：`crawler/consensus.py`（`compute_consensus_daily`，纯库内聚合：近 180 天 Q4 预测按 (股票, 机构, 分析师, 财年) 取最新一份 → 中位数）+ DAG 节点 `report_rc`（券商预测；tushare 2000 积分档仅 **10 次/天**，配额重置实测在凌晨 02:00 前后）→ `income_daily`（利润表，按披露计划逐票拉全历史）→ `consensus_daily`；流程「一致预期」23:30、「一致预期回补」22:30/00:30/01:30/02:30（命中配额重置的那次用满 10 次）。回补脚本 `backfill_report_rc.py`（历史每 20 交易日抽样一天）/ `backfill_income.py`（逐票，断点 `.backfill_income_progress.json`）/ `backfill_consensus.py`。**拉取失败抛 `SourceFetchError`，不得当成空结果登记**
   - `cron_scheduler.py` — cron 定时触发（last_run_at 幂等，60s 扫描）
   - `daily_crawl.sh` — 触发 dag_flows 已发布流程（不再直接调用采集）
 
@@ -93,9 +99,9 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
 
 - **`web-v2/`** — 前端 V2
   - Vue 3 + Vite + Naive UI + ECharts + Pinia + Vue Flow (DAG 流程图) + Monaco Editor (代码编辑)
-  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, StockFundView, DagNode, NewsView
+  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, StockFundView, DagNode, NewsView, MarketRealtimeView(实时盘), MarketPeg(大盘页 PEG 面板), MarketSentiment(情绪条+闸门 chip)
   - 5 个 Pinia Store: `auth`, `nav`, `model`, `market`, `theme`
-  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, n=资讯, x=状态, a=模型, f=函数, e=特征, g=DAG, u=证券主档, d=详情, v=特征详情, q=日志, r=流程查看
+  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, n=资讯, x=状态, a=模型, f=函数, e=特征, g=DAG, u=证券主档, d=详情, v=特征详情, q=日志, r=流程查看, kr=实时盘(大盘子页面, 入口在 #/k 工具栏)
   - 自研 hash 路由（stores/nav.js），无 vue-router；WS 监听 `addWsListener` 返回取消函数（onUnmounted 必清理）
 
 - **`nginx/`** — Nginx 配置（default.conf 容器内 / host-nginx.conf 宿主机）
@@ -133,6 +139,7 @@ TuShare 按交易日全市场 → crawler/adapters（配额计数）→ PostgreS
 - **资讯**: `news_item`（原文：四源六源幂等键 `(source, source_id)`，**不分区**）、`news_stock`（资讯↔个股，`rel=src|match`）、`news_summary`（LLM 派生：摘要/重要度/主题/情绪，**未总结=NULL 不是 0**）、`news_crawl_state`（各源游标与健康）、`news_poll_state`（关注池轮转 + 巨潮 orgId 缓存）；视图 `v_focus_pool`（持仓∪自选）与 `v_news_feed`（原文 LEFT JOIN 总结）。第 3 层（资讯×雪球交叉）只预留字段未实现，见 `design/07`
 - **宏观/估值**: `macro_indicator`（CPI/PPI/GDP/M0M1M2/SHIBOR，value=同比/增速）、`index_valuation`（7 大指数 PE/PB/市值/换手）——`macro_daily` DAG 节点每日 23:05 采集（tushare 2000 积分实测接口）
 - **拓展**: `stock_moneyflow`（已接入：每日 DAG 节点 + KEPL 字段 + 2010 起历史回补完成）、`stock_top_list` / `stock_margin_detail` / `stock_holder_number`（表就绪，采集链路未接入）、`stock_hk_hold`（北向个股披露 2024-08 停止，数据源失效，保留表结构）
+- **实时盘 / PEG**: `zt_pool_daily`（涨停梯队日终收盘终值，JSONB 全量明细）、`stock_treemap_intraday`（10 分钟全市场 slot 快照，保留 5 日；当日情绪轨迹重放用，个别时段会漏 slot）、`stock_report_rc`（券商盈利预测明细，np 单位元）、`stock_income`（利润表，保留同一报告期的修订版本）、`stock_consensus_daily`（每日一致预期快照，PK 股票+日期）。**一致预期是稀疏样本口径**：历史靠每 20 交易日抽样，180 天窗口内只有 6~7 个发布日，`org_count` 系统性偏低（完整口径覆盖很低），详见 `scripts/backfill_report_rc.py` 文档
 
 ## Conventions
 
@@ -188,7 +195,7 @@ cd web-v2 && npm run dev
 1. **主仓库永远停在 `main`**：`/home/bnbnyu/projects/stone` 只用于 3000/8000 验收，禁止在主仓库 checkout 功能分支。
 2. **一任务一分支一工作树**：从最新 `main` 建 `feat/<slug>` / `fix/<slug>`，工作树放 `/home/bnbnyu/projects/stone-worktrees/<slug>`；任务合并后立即删除，不复用旧分支/旧 worktree。
 3. **一任务一端口对（2026-11-28 用户拍板）**：主环境 `8000/3000` 是**本地正式端口**，始终跑 `main` 最新合并结果，任务合并后必须及时让 3000 生效（重启后端/前端）。其它分支开发一律用旁路端口对：前端从 `3001`、`3002` 顺延，后端从 `8101`、`8102` 顺延（前后端配对），禁止 kill 他人端口进程、禁止把开发实例留在 3000/8000。
-4. **测试库**：非 schema 任务用共享 `stone_test`；涉及 `app/db/schema.py` / `init_db` 迁移的任务从 `stone_test` 克隆 `stone_t_<slug>`，任务结束 drop。自动化测试禁止连生产库 `stock_monitor`；生产库只用于人工验收，迁移前先备份。
+4. **测试库**：非 schema 任务用共享 `stone_test`；涉及 `app/db/schema.py` / `init_db` 迁移的任务从 `stone_test` 克隆 `stone_t_<slug>`，任务结束 drop。自动化测试禁止连生产库 `stock_monitor`；生产库只用于人工验收，迁移前先备份。 **旁路后端注意**：lifespan 会启动 cron 调度器与盘中采集 loop（无开关），连生产库的旁路后端等于多一个调度器——短时人工验收要避开 cron 时隙启停（资讯流程每 20 分钟、`*/N` 类），长跑与自动化一律连 `stone_test`。
 5. **收尾必须回收**：测试/构建通过 → 合并 `main` → `git worktree remove` → 删除分支 → drop 任务库 → 停止进程。分支生命周期 ≤ 3 天。
 6. 开工先 `git fetch --prune && git switch main && git pull --ff-only && git status`，并查 `git worktree list`；新会话不复用旧分支。
 7. **只 `git add` 自己改的文件**，禁止 `git add -A` / `git commit -a`；高冲突文件改动前先看 `git status`，发现他人改动不回滚、不提交，在回复中说明。
@@ -239,6 +246,7 @@ ssh myhuawei "docker logs stock-app --tail 20"
 
 ## Notes
 
+- **v3.27.1（2026-11-28）**：v3.27 代码审查修复 15 项（逐项修复 + 修复前后对照验证，口径见 design/13 §10）。**必须修的三项（都在批次三的告警里）**：①`mk_height`（连板高度告警）读的是 zt 缓存的原始池、恒不触发——`max_lbc` 只在 `zt_summary()` 输出里，旧单测往缓存塞的是 summary 形状所以一直是绿的；②**数据所属交易日必须校验**：东财 push2ex 对尚无数据的日期（盘前/休市日/未来日）静默返回最近一个交易日的涨停池，返回体 `qdate` 恒为最新交易日、不能用来校验（实测请求 20261128/20261130 均返回 11-27 的 417 家）→ `_pool_trade_date` 只请求确定已有数据的日期（今天 09:31 后才请求今天）、评估只在 `session=open` 且逐规则校验数据是今天的、响应带 `data_date` 并重定义 `stale`、前端标「显示 X（最近交易日）数据」；③告警状态只在**落库后**前移（被 family 冷却/当日上限拦下的信号原先永久丢失，含 critical 的恐慌）+ 宽度首轮只建基线（独立标记 `breadth_seen`，不能用 zone 值代替，否则「开盘中性→盘中转强」会漏）。**应该修的七项**：`mk%` WS 推送按 `research.market.view` 过滤（真实双角色链路：admin/trader 收到、support 收不到）；闸门算不出来返回 `unknown/pass=None`（不兜成放行——升级路径是接到买入候选）、stale 情绪不参与定级；测试不再裸赋值替换 `market_sentiment.get`（同进程 A/B：原始测试跑完后它被永久换成返回 panic 的 lambda，泄漏给后续所有测试）；`refresh_all` 互斥 + 按需刷新让位给采集 loop（窗口内 loop 3 分钟没动静才补、窗口外 10 分钟一次）；`/api/market_sentiment` 拷贝后再附带 gate（`get()` 返回的是共享缓存对象）；前端迷你图紧凑刻度 / x 轴按真实时间对齐（固定 interval 会跳过午休漂成 13:29）/ 闸门关闸用 `--c-error` / 情绪轨迹补空点断线并跟随数据日期；日终归档重拉收盘终值、「今天」按北京时间算。**peg-chart 五项**：一致预期抽样口径如实披露（页面 + 回补脚本文档；**不改算法，见下**）、历史序列与截面同用「机构 ≥3」、`as_of` 的成分股快照也 PIT、两个端点登记权限节点（此前只靠前缀规则兜底）、拉取失败抛 `SourceFetchError` 不再被登记成空结果 + report_rc 当天发布时点前不请求（省 1/10 配额）+ 整条链路补测试（此前没有）。**审查外发现**：ECharts `visualMap.dimension: 0` 是 x 轴序号——大盘页「恐慌指数趋势」自 v3.22 起的分档着色实际是沿横轴切四段（x=100 的 17 分与 x=2999 的 88.5 分同色），实时页轨迹图照搬了同一配置，一并去掉 dimension（默认取最后一个维度即数值）。**PEG 口径现状（决策待用户拍板）**：一致预期是稀疏样本——report_rc 每天 10 次配额、历史只能每 20 交易日抽样一天，180 天窗口内实际只有 6~7 个发布日，`org_count` 系统性偏低（2026-09-11 复算 518 只里有预测、机构 ≥3 的仅 55 只；沪深300 截面 204 个有效 PEG 里完整口径 31 个，其余是「实际增长口径」占位）。是否因此改算法（如历史带只用 G_hist）未定。**教训**：①给缓存写测试，种子必须是 adapter 的真实输出形状——fixture 直接喂真实解析函数；②外部源「实测可用」还要实测**静默回退**：对无数据日期返回最近交易日的数据，比报错危险得多；③`pytest … | grep … && git commit` 会吞掉测试失败（grep 匹配到 "failed" 也返回 0），提交必须以 pytest 退出码为准；④旁路后端连生产库会多出一个 cron 调度器（lifespan 无开关）——本次已核对 dag_run_log 无重复触发，启停要避开 cron 时隙，已写入分支策略 §4；⑤同进程验证测试泄漏：跑完测试后比对被替换过的函数是否还是原对象；⑥`cd <dir> && nohup cmd &` 整段是一个后台子任务，cd 不会留给后面的命令——旁路前端曾因此跑成了主仓库的旧代码（截图里没有新行为），验收前先确认服务进程的 cwd（`readlink /proc/<pid>/cwd`）或直接抓 dev server 编译出的组件源码比对。
 - **v3.27.0（2026-11-28）**：多会话分支收口 + 端口约定——①合并 `feat/peg-chart`（大盘页 PEG 面板与一致预期链路，7 commits：PEG≤1 完整口径默认选中、行业筛选计数、rolling.rank 向量化、回补中/无覆盖提示区分、report_rc 限流不阻断、一致预期历史抽样水位线自动化 10 次/天；合并回 main 后 test_peg/test_peg_api 等 73 测试 + build 全绿）；②删除 30+ 已合并本地分支与 5 个已合并远端分支、清理 stone-multiuser/main-accept 旧 worktree，本地与远端收敛到只剩 `main`；③**端口约定（用户拍板）**：3000/8000 为本地正式端口始终跑 main 最新（合并后及时重启生效），其它分支开发一律前端 3001/3002… + 后端 8101/8102… 旁路顺延，已写入「分支与环境策略」§3；④主仓库切回 main（旧基线 AGENTS.md 未提交噪音确认与 main 重复后丢弃），8000/3000 重启并全功能验收（PEG 面板 / #/kr 实时盘 / gate 横幅 / 异动卡）。
 - **v3.26.0（2026-11-27）**：实时大盘批次三——盘面异动告警 + 空仓闸门联动（design/13 §9）。①**盘面异动告警**：`evaluate_market_alerts`（挂 market_realtime._cycle 交易窗口内，指标全读内存缓存零新增请求）七类 kind（指数 15min 急涨急跌 side 状态切换+滞回、宽度上穿 0.65/下穿 0.35 one-shot、连板高度 ≥5 当日一次、情绪进 panic(critical)/strong）→ `risk_alerts`（user_id NULL + `mk%` 前缀）→ WS **广播全员**（`_alert_visible` 谓词给 mk% 开分支——原 NULL 行只发 model.alerts.view）→ Chrome 通知点击跳 #/kr + #/kr「今日盘面异动」卡；冷却 DB-backed（重启不重发）+ family 10min + 当日 cap 15，配置 `strategy_config.market_alerts`（缺行默认全开）。②**实时空仓闸门（仅展示）**：调研确认三道闸门互不相通（regime 只在信号 DAG、buy_check 日频 EOD、实时情绪仅展示、盘中买入判定不看盘面）——`compute_regime_gates` 下沉 `app/regime_gate.py`（pipeline 别名保 test_regime_gate）、`buy_check.live_gate(db)` 组合三源取最严（closed>caution>open，60s 缓存）→ `/api/market/realtime.gate` + `/api/market_sentiment.gate` → #/kr 闸门横幅 + 情绪条 chip（大盘/持仓页）。**买入候选行为不变**（actionable 仍日频口径；升级一行接线已记录）。③权限零新码（无新端点，definitions 注记）。测试：17 单测（FakeDB 状态机/滞回/冷却/cap/WS 谓词/live_gate 组合）+ 集成 shape；WS 广播链路实测 PASS；gate 三源与真实行情核对（market_gate caution + regime enabled 未禁买 + strong → 组合 caution）。教训：①FakeDB 模拟 `strategy_config` 行要把 enabled 造对（返回 (None,None) 被解释为"行存在但禁用"，与"缺行默认启用"语义相反，曾让 8 个用例假失败）；②共享 stone_test 需跟进上任务的建表（zt_pool_daily 幂等补建一次）。
 - **v3.25.0（2026-11-27）**：实时大盘分析页（design/13）——大盘页子页面 `#/kr`（无新导航项，入口在 `#/k` 工具栏「⚡ 实时盘」），聚合盘面实时视角：①指数分时组（腾讯 minute/query 当日逐分钟，4 mini+1 大图）②盘面宽度卡（新浪全市场快照聚合：涨跌/涨跌停/炸板/中位数/两市成交额+全天预估）③当日情绪轨迹（stock_treemap_intraday slot 重放，`_verdict` 三成分口径与日频恐慌指数序列可比）④量能对比（新浪 5 分钟 K 沪综指+深证综指，今日/昨日/近4日同期累计+预估）⑤涨停梯队（东财 push2ex 涨停池/炸板池：天梯/炸板率/连板高度，**日终 15:05 幂等落库 zt_pool_daily**+收盘重启补档+`scripts/backfill_zt_pool.py` 历史回补——东财历史深度约 1 个月，空池日跳过不写）⑥板块雷达（东财行业板块 496 个含细分，涨幅/主力净流入双维度）⑦大盘主力资金分时（push2 fflow/kline secid2 聚合沪深两市）。后端 `app/market_realtime.py`：后台线程 60s 刷新模块级缓存（`strategy_config.market_realtime` 可调），端点只读缓存+slot 重放、缺源时 90s 节流按需整刷（treemap `_ensure_async` 模式）；新表 `zt_pool_daily`（JSONB 全量明细）；API `/api/market/realtime`+`/realtime/zt-history`，权限归属既有 `research.market.view` 前缀兜底无新码。**教训：①push2his 域有指纹墙**——trends2 首测全通后当晚开始对非命令行-curl 的 TLS 指纹差别对待（requests/curl_cffi 全超时、压缩流中断，Accept-Encoding: identity/强制 IPv4 均无效），已弃用改走腾讯+新浪，「实测可用」有时效性，单源失败不得拖垮整页（refresh_all 每 key 独立 try/except）；②东财 clist pz 锁 100 行/页，全市场 56 页走 em 闸门不可行，宽度类聚合用新浪直连；③fflow 分钟资金必须走 push2 域（push2his 返回空 klines）；④外部接口解析层做形态兼容（东财 SSE `data:` 前缀流取首个非空 data 行）。

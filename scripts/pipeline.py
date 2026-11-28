@@ -5847,6 +5847,28 @@ def _rc_has_date(db, d):
         {"d": d}).fetchone())
 
 
+# report_rc 盘后更新（实测约 21:15）；在此之前请求当天只会得到 0 行
+RC_PUBLISH_HOUR = 21
+
+
+def _rc_recent_days(base, td, now, is_trade_day):
+    """日增量候选日：最近 3 个自然日里的交易日（跳过周末/节假日，不把配额花在空日）。
+
+    当天要等盘后更新才有数据，发布时点之前不进候选：回补流程在 00:30/01:30/02:30
+    各触发一次，工作日命中配额重置的那次会先在「当天」这张空单上白花 1 次
+    （每天只有 10 次）。原先只在「历史抽样已齐」的空转分支里判断了时点。
+    """
+    days = []
+    from datetime import timedelta
+    for i in range(3):
+        d = (base - timedelta(days=i)).isoformat()
+        if d == td and now.hour < RC_PUBLISH_HOUR:
+            continue
+        if is_trade_day(d):
+            days.append(d)
+    return days
+
+
 def dag_task_report_rc(trade_date=None, **kw):
     """DAG 节点：券商盈利预测明细（独立流程 23:30，report_rc 盘后 21:15 更新）。
 
@@ -5887,10 +5909,10 @@ def dag_task_report_rc(trade_date=None, **kw):
                     return {'rows': 0, 'days': 0, 'calls': 0,
                             'history_pending': 0, 'stop': '',
                             'note': '无待补：历史抽样已齐，当日 21:15 后更新'}
-            # 最近 3 个交易日优先（跳过周末/节假日，别把 10 次配额浪费在空日），
-            # 其后是历史抽样（从近到远）；去重保持顺序
-            recent = [d for d in ((base - _td(days=i)).isoformat() for i in range(3))
-                      if _is_trade_day(db, d)]
+            # 日增量候选日优先：最近 3 个自然日里的交易日（注意是自然日——周一往前数
+            # 只有周一自己，周末缺口靠周六/周日的回补流程覆盖；当天发布时点之前不请求，
+            # 别把 10 次配额浪费在空单上），其后是历史抽样（从近到远）；去重保持顺序
+            recent = _rc_recent_days(base, td, now, lambda d: _is_trade_day(db, d))
             history = [d for d in reversed(pending) if d not in recent]
             candidates = list(dict.fromkeys(recent + history))
             saved = done = calls = 0
@@ -5917,6 +5939,12 @@ def dag_task_report_rc(trade_date=None, **kw):
                     # income_daily / consensus_daily 仍应基于历史研报继续跑。
                     stop = f'接口频次受限：{str(e)[:80]}'
                     logger.warning(f'[report_rc] {stop}；跳过当日增量，下游继续')
+                    break
+                except Exception as e:
+                    # 拉取失败 ≠ 当日没有研报：不登记空结果（否则这个抽样日会从
+                    # 水位线上永久消失），下游照常跑，下个周期重试
+                    stop = f'拉取失败：{str(e)[:80]}'
+                    logger.warning(f'[report_rc] {d} {stop}；不登记空结果，下次重试')
                     break
                 saved += n
                 done += 1

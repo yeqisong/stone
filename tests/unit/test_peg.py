@@ -4,8 +4,8 @@ from datetime import date, timedelta
 import pytest
 
 from app.peg import (annual_cagr, annual_np_for_fy, compute_g_cons,
-                     compute_g_hist, compute_peg_series, peg, pick_hist_base,
-                     shrink, valid_peg)
+                     compute_g_hist, compute_peg_series, enough_orgs, peg,
+                     pick_hist_base, shrink, valid_peg)
 
 
 def _annual(fy, np, ann=None):
@@ -116,6 +116,83 @@ def test_peg_series_pit_and_rolling_band():
     assert last['band20'] == pytest.approx(last['peg'])
     assert last['band80'] == pytest.approx(last['peg'])
     assert last['peg_pct'] == pytest.approx(100.0)
+
+
+def test_peg_routes_registered_under_existing_nodes():
+    """PEG 两个端点的权限登记（v3.27 审查项 14：原先只靠前缀规则兜底、权限表里没有记录）。
+
+    归属既有节点、不新增权限码：指数成分 PEG 截面归大盘节点，个股 PEG 历史带归个股
+    研究。双角色：5 个默认角色都有这两个节点（有权通过）；没有这两个节点的自定义
+    角色/支持会话则既看不到页面、调接口也是 403（由同一条规则保证）。
+    """
+    from app.auth.definitions import ROLE_PERMISSIONS, permission_by_code
+    from app.auth.route_permissions import resolve_rule
+
+    assert resolve_rule('GET', '/api/market/peg').permission == 'research.market.view'
+    assert resolve_rule('GET', '/api/stock/600519/peg_history').permission == 'research.stock.view'
+    for role in ('admin', 'operator', 'trader', 'analyst', 'viewer'):
+        grants = {code for code, _scope, _support in ROLE_PERMISSIONS[role]}
+        assert {'research.market.view', 'research.stock.view'} <= grants, role
+    # 登记与实现一致：节点的 api 描述里必须写得下这两个端点
+    assert '/market/peg' in permission_by_code('research.market.view')['api']
+    assert '/peg_history' in permission_by_code('research.stock.view')['api']
+
+
+def test_cross_section_membership_is_point_in_time():
+    """as_of（PIT 截止日）必须约束成分股快照：否则历史截面混进未来的调入调出。
+
+    PE / 一致预期 / 利润表都按 `<= asof` 取，成分股却取最新一期——as_of 就名不副实。
+    这里只看查询本身（不连库）：成分股快照查询必须带 asof 上界。
+    """
+    import app.api.peg as api
+    from datetime import datetime as _dt
+
+    class Recorder:
+        def __init__(self): self.sql = []
+        def execute(self, stmt, params=None):
+            self.sql.append((str(stmt), params))
+            class _R:
+                def scalar(self): return None
+                def fetchall(self): return []
+            return _R()
+        def close(self): pass
+
+    rec = Recorder()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(api, 'get_sync_db', lambda: rec)
+        asof = _dt(2026, 9, 15).date()
+        out = api._build_cross_section('000300.SH', asof, 0.5)
+    first_sql, first_params = rec.sql[0]
+    assert 'FROM index_weight' in first_sql
+    assert 'trade_date <= :asof' in first_sql                      # 成分股按 asof 取
+    assert first_params == {'idx': '000300.SH', 'asof': asof}
+    assert out['items'] == [] and '快照' in out['note']            # asof 前没有快照 → 明说
+    assert 'with_peg_full' in out['coverage']                      # 覆盖信息同形状
+
+
+def test_peg_series_drops_thin_consensus_like_cross_section():
+    """同一只股票：机构数 <3 的一致预期在截面是「占位口径」，历史序列也必须退回仅 G_hist。"""
+    start = date(2026, 6, 1)                       # 2025 年报已于 04-30 公告
+    pe_rows = [(start + timedelta(days=i), 20.0) for i in range(10)]
+    annuals = [_annual(2020, 100), _annual(2025, 200)]
+    thin = {'asof_date': '2026-01-01', 'base_fy': 2025,
+            'fy1': 2026, 'fy2': 2027, 'fy3': 2028,
+            'np_fy1': 220.0, 'np_fy2': 242.0, 'np_fy3': 266.2, 'org_count': 1}
+    thick = {**thin, 'org_count': 5}
+    g_cons = (266.2 / 200) ** (1 / 3) - 1
+    g_hist = 2 ** 0.2 - 1
+
+    last = compute_peg_series(pe_rows, annuals, [thin])[-1]
+    assert last['g_cons'] is None and last['mode'] == 'hist'      # 历史与截面同口径
+    assert last['g'] == pytest.approx(g_hist) and last['peg'] == pytest.approx(peg(20.0, g_hist))
+    assert not valid_peg(20.0, g_cons, 1.0, 1)                    # 截面同样不认
+
+    ok = compute_peg_series(pe_rows, annuals, [thick])[-1]
+    assert ok['mode'] == 'consensus' and ok['g_cons'] == pytest.approx(g_cons)
+    assert valid_peg(20.0, g_cons, 1.0, 5)
+
+    assert not enough_orgs('x') and not enough_orgs(2)
+    assert enough_orgs(3) and enough_orgs(None)
 
 
 def test_peg_series_winsorizes_extreme_peg_for_band():

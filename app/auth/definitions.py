@@ -171,7 +171,7 @@ PERMISSION_NODES = [
         'type': 'data',
         'parent': 'research.treemap.view',
         'route': '',
-        'api': 'GET /api/market/*（含 realtime 实时大盘聚合、realtime/zt-history）+ GET /api/market_sentiment 附 gate 闸门',
+        'api': 'GET /api/market/*（含 realtime 实时大盘聚合、realtime/zt-history、/market/peg 指数成分 PEG 截面）+ GET /api/market_sentiment 附 gate 闸门',
         'note': '全市场共享；实时大盘聚合在实时页 #/rt 盘面区与分析带展示，受本码二次控制；盘面异动告警（risk_alerts kind=mk%，无独立权限码）经 WS 只推给拥有本节点的连接（design/13 §10.4）',
     },
     {
@@ -180,7 +180,7 @@ PERMISSION_NODES = [
         'type': 'menu',
         'parent': None,
         'route': 'l',
-        'api': 'GET /api/stocks、/stocks/suggest、/stock/{code}/detail、/history、/kline、/pe_history、/moneyflow、/signals、/margin、/top_list、/chip、/xueqiu、/quote、/ai-intraday*、/tape、/sector-rs、/minkline',
+        'api': 'GET /api/stocks、/stocks/suggest、/stock/{code}/detail、/history、/kline、/pe_history、/moneyflow、/signals、/margin、/top_list、/chip、/xueqiu、/quote、/ai-intraday*、/tape、/sector-rs、/minkline、/peg_history',
         'note': '/quote 的个人成本字段由 portfolio.position.view 二次控制；详情页 K 线卖出标记/策略信号卡里的个人卖出由 signal.personal.view 二次控制',
     },
     {

@@ -4,8 +4,16 @@
 实测限制（2026-11，本账号）：report_rc 不是“1 次/分钟”，而是 **10 次/天**
 （错误原文：频率超限(10次/天)）。因此逐日回补 5 年需要 125 天，不可行；
 默认改为按 --step 抽样（20 个交易日 ≈ 月度），5 年约 63 次调用、7 天配额完成。
-抽样日的 report_rc 仍返回当日全市场研报，180 天回看窗口足以形成有代表性的
-一致预期快照；PEG 历史带在回补完成前用 G_hist 占位（见 app/peg.py）。
+PEG 历史带在回补完成前用 G_hist 占位（见 app/peg.py）。
+
+抽样口径的代价（2026-11-28 复核，改口径前先读）：consensus_daily 的回看窗口是 180 天，
+但库里只有抽样日的研报——纯抽样区间每个快照窗口内实际只有 6~7 个发布日，而不是
+完整的约 120 个交易日。后果是 org_count 数的是「这 6~7 天里发过研报的机构」，
+系统性低于真实券商覆盖：按 2026-09-11 复算，窗口内 7 个发布日、518 只有预测，
+其中机构 ≥3 的仅 55 只（含日增量的 2026-11-27 是 744 只 / 91 只）。
+所以历史快照是稀疏样本口径，「完整口径」（机构 ≥3）覆盖很低，个股 PEG 历史会在
+「一致预期」与「仅历史」两种模式间跳。抽样日确实返回当日全市场研报，但那不等于
+窗口有代表性。
 
 用法：
     venv/bin/python scripts/backfill_report_rc.py                  # 2021 起，每 20 交易日
@@ -22,7 +30,7 @@ import argparse
 import fcntl
 import sys
 import time
-from datetime import date
+from datetime import date, datetime as _dt, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -30,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from loguru import logger
 from sqlalchemy import text
 
+_CST = timezone(timedelta(hours=8))
 LOCK_FILE = '/tmp/stone_backfill_report_rc.lock'
 
 
@@ -60,10 +69,12 @@ def main():
     from app.db.connection import get_sync_db
     from crawler.adapters import get_data_source_manager
     from crawler.adapters.tushare_quota import TushareQuota, QuotaExhausted
-    from scripts.pipeline import _ext_report_rc
+    from scripts.pipeline import _ext_report_rc, RC_PUBLISH_HOUR
 
+    # 「今天」按北京时间算；当天要等盘后更新才有数据
+    now = _dt.now(_CST)
     start = date.fromisoformat(args.start)
-    end = date.fromisoformat(args.end) if args.end else date.today()
+    end = date.fromisoformat(args.end) if args.end else now.date()
     db = get_sync_db()
     quota = TushareQuota.get()
     source = get_data_source_manager().get_source()
@@ -74,6 +85,13 @@ def main():
         ORDER BY cal_date
     """), {'s': start, 'e': end}).fetchall()]
     dates = dates[::max(1, args.step)]
+    if now.hour < RC_PUBLISH_HOUR:
+        # 发布时点之前拉当天只会得到 0 行，还会把这个抽样日登记成空结果（永久跳过）
+        before = len(dates)
+        dates = [d for d in dates if d != now.date()]
+        if len(dates) != before:
+            logger.warning(f'当天（{now.date()}）尚未到 report_rc 发布时点'
+                           f'（{RC_PUBLISH_HOUR} 点后），本次跳过当天')
     if args.reverse:
         dates = list(reversed(dates))
     logger.info(f'report_rc 回补：{len(dates)} 个抽样日（step={args.step}，{start} → {end}），'
@@ -106,6 +124,10 @@ def main():
                 n = _ext_report_rc(source, db, ds)
             except QuotaExhausted as e:
                 logger.warning(f'{str(e)[:160]}；收工，次日续跑')
+                break
+            except Exception as e:
+                # 拉取失败 ≠ 这天没有研报：不登记（登记了就永远不会再试），收工下次续跑
+                logger.warning(f'{ds} 拉取失败（不登记为空日，下次重试）：{str(e)[:140]}')
                 break
             total += n
             saved_days += 1
