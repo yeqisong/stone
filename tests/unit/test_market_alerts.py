@@ -3,6 +3,8 @@
 模式照搬 tests/unit/test_intraday_watch.py：_FakeDB 按 SQL 片段匹配 + 显式 now，
 不出网、不连库；缓存指标用 market_realtime._cache_put 预置。
 """
+import threading
+import time
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -454,6 +456,79 @@ class TestRefreshPoolDate(unittest.TestCase):
         for now, want in cases:
             with self.subTest(now=now):
                 self.assertEqual(self._refresh(now), (want, want))
+
+
+class TestRefreshMutexAndOndemand(unittest.TestCase):
+    """v3.27 审查项 7：同一时刻只允许一个刷新；按需刷新让位给采集 loop 且有节流。"""
+
+    def setUp(self):
+        mrt._REFRESH.update(running=False, last_start=0.0, last_done=0.0)
+
+    def tearDown(self):
+        mrt._REFRESH.update(running=False, last_start=0.0, last_done=0.0)
+
+    def test_reentrant_call_is_skipped(self):
+        calls = []
+
+        def fake(pool_day):
+            calls.append(pool_day)
+            # 刷新进行中又来一次（模拟采集 loop 与按需线程撞车）：必须被挡住
+            return mrt.refresh_all(FakeCalDB(), now=NOW)
+
+        with mock.patch.object(mrt, '_refresh_sources', fake):
+            self.assertEqual(mrt.refresh_all(FakeCalDB(), now=NOW), [])
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(mrt._REFRESH['running'])
+
+    def test_concurrent_refresh_runs_once(self):
+        started, release = threading.Event(), threading.Event()
+        runs, outer = [], []
+
+        def fake(pool_day):
+            runs.append(1)
+            started.set()
+            release.wait(5)
+            return ['breadth']
+
+        with mock.patch.object(mrt, '_refresh_sources', fake):
+            t1 = threading.Thread(target=lambda: mrt.refresh_all(FakeCalDB(), now=NOW))
+            t1.start()
+            try:
+                self.assertTrue(started.wait(5))
+                outer.append(mrt.refresh_all(FakeCalDB(), now=NOW))    # 撞上正在跑的刷新
+            finally:
+                release.set()
+                t1.join(5)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(outer, [[]])
+        self.assertFalse(mrt._REFRESH['running'])
+
+    def test_flag_released_when_sources_raise(self):
+        with mock.patch.object(mrt, '_refresh_sources', side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                mrt.refresh_all(FakeCalDB(), now=NOW)
+        self.assertFalse(mrt._REFRESH['running'])    # 否则一次异常之后永远不再刷新
+
+    @staticmethod
+    def _ondemand(now, last_start_age, running=False):
+        """last_start_age=距上次刷新启动过了多久（10**9 模拟进程启动后从未刷新）。"""
+        mrt._REFRESH.update(running=running, last_start=time.time() - last_start_age)
+        with mock.patch.object(mrt.threading, 'Thread') as thread:
+            fired = mrt.ensure_refresh_async(now)
+        return fired, thread.called
+
+    def test_ondemand_yields_to_loop_in_window(self):
+        mon = datetime(2026, 11, 30, 10, 0)        # 周一盘中：采集 loop 每 60s 刷
+        self.assertEqual(self._ondemand(mon, 100), (False, False))        # loop 健康 → 不补
+        self.assertEqual(self._ondemand(mon, 10 ** 9), (True, True))       # 刚重启 → 补
+        self.assertEqual(self._ondemand(mon, 400), (True, True))          # loop 卡死 → 补
+
+    def test_ondemand_throttled_out_of_window(self):
+        sat = datetime(2026, 11, 28, 10, 0)        # 周六：loop 不刷，只能靠按需
+        self.assertEqual(self._ondemand(sat, 10 ** 9), (True, True))      # 重启后第一次
+        self.assertEqual(self._ondemand(sat, 120), (False, False))        # 某源一直失败也不连发
+        self.assertEqual(self._ondemand(sat, 700), (True, True))          # 10 分钟后允许再试
+        self.assertEqual(self._ondemand(sat, 700, running=True), (False, False))
 
 
 class TestLiveGate(unittest.TestCase):

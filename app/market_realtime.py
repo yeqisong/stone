@@ -65,8 +65,15 @@ _CACHE: dict[str, dict] = {}   # key -> {"data":…, "ts": float, "date": str|No
 _LOCK = threading.Lock()
 _SLOTS = {"date": None, "ts": 0.0, "data": None}   # slot 轨迹 60s 小缓存
 _SLEEP_S = 60.0                                     # loop 周期（strategy_config 可调）
+
+# 刷新互斥与节拍（采集 loop 与页面按需刷新共用一把锁）：
+# running=此刻有 refresh_all 在跑；last_start/last_done=最近一次刷新的起止时刻
 _REFRESH_LOCK = threading.Lock()
-_LAST_REFRESH_TRY = [0.0]
+_REFRESH: dict = {"running": False, "last_start": 0.0, "last_done": 0.0}
+# 按需刷新的最小间隔：采集窗口内 loop 每 60s 刷，超过它还没动静说明 loop 没在工作；
+# 窗口外 loop 不刷，页面触发的整刷（55 页新浪 + 9 次东财）至多 10 分钟一次
+_ONDEMAND_GAP_IN_WINDOW_S = 180.0
+_ONDEMAND_GAP_OUT_WINDOW_S = 600.0
 
 
 def _cache_put(key: str, data, day: Optional[str] = None) -> None:
@@ -86,21 +93,38 @@ def _cache_ts(key: str) -> Optional[float]:
         return item["ts"] if item else None
 
 
-def _cache_empty() -> bool:
-    with _LOCK:
-        return not _CACHE
-
-
-def ensure_refresh_async() -> bool:
-    """缓存为空（后端刚启动/收盘重启）时后台触发一次刷新；90s 内只试一次。
-
-    treemap_intraday._ensure_async 同款页面按需模式：端点不阻塞，刷新完成后
-    下次轮询自然拿到数据。返回是否真正触发了刷新。
-    """
+def _refresh_try_begin() -> bool:
+    """抢占刷新权：同一时刻最多一个 refresh_all 在跑（返回 False=已有刷新在跑）。"""
     with _REFRESH_LOCK:
-        if time.time() - _LAST_REFRESH_TRY[0] < 90:
+        if _REFRESH["running"]:
             return False
-        _LAST_REFRESH_TRY[0] = time.time()
+        _REFRESH["running"] = True
+        _REFRESH["last_start"] = time.time()
+        return True
+
+
+def _refresh_end() -> None:
+    with _REFRESH_LOCK:
+        _REFRESH["running"] = False
+        _REFRESH["last_done"] = time.time()
+
+
+def ensure_refresh_async(now: Optional[datetime] = None) -> bool:
+    """采集 loop 覆盖不到的时候，由页面访问在后台补刷一次（不阻塞请求）。
+
+    - 采集窗口内（交易日 09:25–15:05）由 market_realtime_loop 周期刷新，这里只在
+      loop 超过 3 分钟没启动过刷新时才补（刚重启 / loop 卡死）；
+    - 窗口外 loop 不刷新，这里补，但两次按需刷新至少间隔 10 分钟：某个源持续失败
+      时，不会因为页面开着就反复整刷；
+    - 已有刷新在跑时不重复触发。
+    返回是否真正触发了刷新。
+    """
+    now = now or _now()
+    min_gap = (_ONDEMAND_GAP_IN_WINDOW_S if _in_collect_window(now)
+               else _ONDEMAND_GAP_OUT_WINDOW_S)
+    with _REFRESH_LOCK:
+        if _REFRESH["running"] or time.time() - _REFRESH["last_start"] < min_gap:
+            return False
 
     def _run():
         db = get_sync_db()
@@ -404,6 +428,8 @@ def refresh_all(db=None, now: Optional[datetime] = None) -> list[str]:
     """串行刷新全部数据源到内存缓存；单源失败不影响其他。返回成功 key 列表。
 
     db 缺省时自开一个短会话（按需刷新线程用），只用来查交易日历。
+    采集 loop 与页面按需刷新都会调到这里：同一时刻只允许一个在跑，撞上的那个
+    直接返回 []（不排队——下一拍 loop 自己会再刷）。
     """
     now = now or _now()
     if db is None:
@@ -414,6 +440,17 @@ def refresh_all(db=None, now: Optional[datetime] = None) -> list[str]:
             db.close()
     else:
         pool_day = _pool_trade_date(db, now)
+    if not _refresh_try_begin():
+        logger.info("[market-rt] 已有刷新在跑，跳过本次")
+        return []
+    try:
+        return _refresh_sources(pool_day)
+    finally:
+        _refresh_end()
+
+
+def _refresh_sources(pool_day: _date) -> list[str]:
+    """真正去拉六个源（调用方已持有刷新权）。"""
     ok: list[str] = []
     t0 = time.time()
     # 1. 新浪全市场 → 宽度
@@ -852,8 +889,8 @@ def get_realtime(db) -> dict:
     if not (_cache_get("breadth") and _cache_get("trends") and _cache_get("zt")
             and _cache_get("boards") and _cache_get("fflow") and _cache_get("min5")):
         # 任一核心源缺失（后端刚启动/收盘重启只补了单源）→ 后台整刷一次；
-        # ensure_refresh_async 自带 90s 节流，不会随轮询连发
-        refreshing = ensure_refresh_async()
+        # ensure_refresh_async 自带互斥与节流（窗口内让位给采集 loop，窗口外 10 分钟一次）
+        refreshing = ensure_refresh_async(now)
 
     # 指数分时（腾讯当日数据；昨收取 minute_trend.preClose）
     indices_trend = []
