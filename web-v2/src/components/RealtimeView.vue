@@ -43,8 +43,7 @@ import { useAuthStore } from '../stores/auth'
 import { useNavStore } from '../stores/nav'
 import { rememberDetailNavList } from '../utils/detailNav'
 import { addWsListener } from '../utils/ws'
-import { bjDateStr } from '../utils/date'
-import { buyPresetOf, localSession, pollDelay } from '../utils/realtime'
+import { buyPresetOf, latestWeekday, localSession, pollDelay } from '../utils/realtime'
 import { useMarketRealtime, useRealtimeLayout } from '../utils/realtimePage'
 
 const emit = defineEmits(['show-detail'])
@@ -78,8 +77,9 @@ const bandTab = computed({
 const bigIdx = ref('')     // 指数分时大图：盘面区点小图带入
 const zoomed = ref(false)  // 分析带放大（收起三区）
 // 资金地图日期 = 盘面数据的真实所属交易日：休市日/盘前各源都回退成最近交易日，地图要跟着落在同一天，
-// 否则周六打开是一片「今日暂无快照」。拿不到盘面（无权限/未到）时先用今天。
-const mapDate = computed(() => (canMarket.value ? (marketD.value?.data_date || marketD.value?.date || '') : bjDateStr()))
+// 否则周六打开是一片「今日暂无快照」。盘面未到（后端刚重启、缓存为空）或无权限时兜底「最近工作日」
+// （周末回退到周五，不含节假日）——比直接用「今天」好，缓存变热后 watch 会自动切准。
+const mapDate = computed(() => marketD.value?.data_date || latestWeekday())
 
 const workCols = computed(() => {
   if (!multiCol.value) return { gridTemplateColumns: 'minmax(0, 1fr)' }

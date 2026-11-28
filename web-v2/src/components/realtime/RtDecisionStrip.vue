@@ -7,6 +7,7 @@
         {{ d ? asofText(d) : (failed ? '盘面拉取失败，自动重试中' : '等待盘面数据') }}
       </span>
       <span v-if="d && failed" class="rds-stale">刷新失败，显示的是上次数据</span>
+      <span v-else-if="d && !d.asof" class="rds-stale">后端刚重启，首次采集约需 1–2 分钟</span>
       <span v-else-if="d && d.stale && d.session !== 'closed'" class="rds-stale">{{ staleText(d) }}</span>
     </div>
 

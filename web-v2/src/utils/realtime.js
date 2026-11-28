@@ -173,17 +173,27 @@ export function prevDataDate(d) {
   return dd && dd !== d?.date ? dd : ''
 }
 
-/** 决策线数据时点：「显示 <最近交易日>（最近交易日）数据 · 更新 HH:MM:SS」，同一天则只给时间。 */
+/**
+ * 决策线数据时点：「显示 <最近交易日>（最近交易日）数据 · 更新 HH:MM:SS」，同一天则只给时间。
+ * 后端刚重启时缓存是空的（asof 为空）：要明说「后台采集中」，不能只丢一个日期让人以为数据就是今天的。
+ */
 export function asofText(d) {
   if (!d) return ''
   const parts = []
   if (prevDataDate(d)) parts.push(`显示 ${prevDataDate(d)}（最近交易日）数据`)
-  if (d.asof) parts.push('更新 ' + d.asof)
-  return parts.join(' · ') || d.date
+  parts.push(d.asof ? '更新 ' + d.asof : '后台采集中…')
+  return parts.join(' · ')
 }
 
 export function staleText(d) {
   return prevDataDate(d) ? `当前为 ${prevDataDate(d)} 的数据，开盘后自动更新` : '数据延迟，后台采集中'
+}
+
+/** 最近的「工作日」日期串（YYYY-MM-DD）：周末回退到周五。不含节假日，只作盘面数据未到时的兜底。 */
+export function latestWeekday(d = new Date()) {
+  const t = bjWallClock(d)
+  while (t.getDay() === 0 || t.getDay() === 6) t.setDate(t.getDate() - 1)
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
 }
 
 // 分区各自的数据日期（梯队 YYYYMMDD / 资金流 / 情绪轨迹），与今天不同才标
