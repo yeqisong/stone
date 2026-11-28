@@ -87,7 +87,8 @@
         <span v-if="histMeta?.consensus_points" class="peg-warn">
           一致预期为抽样口径：历史快照每 20 个交易日抽样一次（report_rc 每天仅 10 次配额，
           180 天窗口里只有 6~7 个发布日），机构数中位 {{ histMeta.org_median ?? '—' }}、
-          最低 {{ histMeta.org_min ?? '—' }}，低于真实券商覆盖；回补完成后这段口径也不会变。
+          最低 {{ histMeta.org_min ?? '—' }}，低于真实券商覆盖；上面说的回补完成后，补上的
+          历史段用的也是这种抽样快照，机构数同样偏低。
         </span>
       </div>
     </template>
