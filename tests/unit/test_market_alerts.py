@@ -5,12 +5,20 @@
 """
 import unittest
 from datetime import datetime
+from pathlib import Path
+from unittest import mock
 
 from app import market_realtime as mrt
 from app import buy_check as bc
 from app.api.status import _alert_visible
+from crawler import em_quote
 
 NOW = datetime(2026, 11, 30, 10, 0, 0)   # 周一盘中
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+def _read_fixture(name: str) -> str:
+    return (FIXTURES / name).read_text()
 
 
 class _Row:
@@ -79,6 +87,12 @@ class TestMarketAlertEvaluate(unittest.TestCase):
 
     def setUp(self):
         _reset()
+        # 情绪源打桩：规则 4 读 market_sentiment.get，不打桩会真的去请求腾讯快照
+        self.senti = {'level': 'neutral', 'score': 55}
+        patcher = mock.patch.object(mrt.market_sentiment, 'get',
+                                    lambda db, use_cache=True: dict(self.senti))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _eval(self, db=None, now=NOW):
         return mrt.evaluate_market_alerts(db or FakeAlertDB(), now=now)
@@ -132,14 +146,48 @@ class TestMarketAlertEvaluate(unittest.TestCase):
         self.assertTrue(any(x['kind'] == 'mk_breadth_dn' for x in out))
 
     def test_height_once_per_day(self):
-        mrt._cache_put('zt', {'max_lbc': 6, 'limit_up': 417, 'broken': 42,
-                              'ladder': [{'lbc': 6, 'n': 1, 'names': ['克来机电'], 'codes': ['603960']}]})
-        out = self._eval(FakeAlertDB())
-        self.assertTrue(any(x['kind'] == 'mk_height' for x in out))
+        """缓存是 fetch_zt_pools 的原始形状（pool/broken_pool 列表）；当日只报一次。"""
+        raw = {'date': '20261130',
+               'pool': [{'code': '603960', 'name': '克来机电', 'lbc': 6, 'fund': 4.7e7},
+                        {'code': '000001', 'name': '某首板', 'lbc': 1, 'fund': 1e7}],
+               'broken_pool': [{'code': '000002', 'name': '某炸板', 'lbc': 1}]}
+        mrt._cache_put('zt', raw, '20261130')
+        db = FakeAlertDB()
+        out = self._eval(db)
+        self.assertEqual([x['kind'] for x in out], ['mk_height'])
+        self.assertEqual(db.inserted[0]['k'], 'mk_height')
+        self.assertIn('克来机电', out[0]['body'])
+        self.assertIn('涨停 2 家 / 炸板 1 家', out[0]['body'])
         # 再评：当日已报 → 不重复
-        self._eval(FakeAlertDB())
+        self.assertEqual(self._eval(FakeAlertDB()), [])
         with mrt._mstate_lock:
             self.assertEqual(mrt._mstate['height_day'], NOW.date())
+
+    def test_height_from_real_adapter_shape(self):
+        """形状回归：真实 fetch_zt_pools 解析（em_get 换成 fixture 文本）→ 缓存 → 触发。
+
+        v3.27 审查项：评估曾直接读原始池的 max_lbc（恒 None，规则永不触发），而旧单测
+        往缓存塞的是 zt_summary 的形状所以一直是绿的。这里把「缓存里到底存什么」
+        用真实 adapter 固定住——缓存形状一变，本用例先红。
+        """
+        zt_text, zb_text = _read_fixture('em_ztpool.json'), _read_fixture('em_zbpool.json')
+
+        class _Resp:
+            def __init__(self, t):
+                self.text = t
+
+        def fake_em_get(url, **kw):
+            return _Resp(zb_text if 'ZBPool' in url else zt_text)
+
+        with mock.patch.object(em_quote, 'em_get', fake_em_get):
+            raw = em_quote.fetch_zt_pools('20261127')      # fixture 是 2026-11-27 实测样本
+        self.assertEqual(set(raw), {'date', 'pool', 'broken_pool'})
+        mrt._cache_put('zt', raw, '20261127')
+        db = FakeAlertDB()
+        out = mrt.evaluate_market_alerts(db, now=datetime(2026, 11, 27, 10, 0))
+        self.assertEqual([x['kind'] for x in out], ['mk_height'])
+        self.assertIn('连板高度 6 板', out[0]['title'])
+        self.assertEqual(db.inserted[0]['k'], 'mk_height')
 
     def test_sentiment_baseline_then_panic(self):
         """首轮只建基线；跨入 panic 报 critical。"""

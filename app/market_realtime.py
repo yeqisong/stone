@@ -589,8 +589,12 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
                      f"全市场涨 {up} / 跌 {dn}，涨占比下穿 {lo * 100:.0f}%")
 
     # 3. 连板高度新高（当日首次）
-    zt = _cache_get("zt") or {}
-    max_lbc = zt.get("max_lbc")
+    # zt 缓存存的是 em_quote.fetch_zt_pools 的原始形状 {date, pool, broken_pool}；
+    # max_lbc/ladder/limit_up/broken 只存在于 zt_summary() 的输出里（v3.27 审查：
+    # 曾直接读原始池导致本规则恒不触发）。
+    zt_raw = _cache_get("zt")
+    zs = zt_summary(zt_raw) if zt_raw else {}
+    max_lbc = zs.get("max_lbc")
     hmin = int(cfg.get("height_min", 5))
     if max_lbc and max_lbc >= hmin:
         with _mstate_lock:
@@ -598,12 +602,12 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
             if not already:
                 _mstate["height_day"] = day
         if not already:
-            ladder = zt.get("ladder") or []
+            ladder = zs.get("ladder") or []
             top_names = next((x.get("names") for x in ladder if x.get("lbc") == max_lbc), [])
             fire("mk_height", "warn",
                  f"连板高度 {max_lbc} 板（情绪周期新高）",
                  f"当日最高连板 {max_lbc} 板（阈值 ≥{hmin}）：{('、'.join(top_names[:4]) or '—')}；"
-                 f"涨停 {zt.get('limit_up', '—')} 家 / 炸板 {zt.get('broken', '—')} 家")
+                 f"涨停 {zs.get('limit_up', '—')} 家 / 炸板 {zs.get('broken', '—')} 家")
 
     # 4. 情绪跨级（状态始终更新；进 panic=重要 / 进 strong 提示）
     try:
