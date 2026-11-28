@@ -517,7 +517,8 @@ function tradeParams(page){
   return {
     start: tFilters.range?.[0] || undefined,
     end: tFilters.range?.[1] || undefined,
-    code: tFilters.code?.trim() || undefined,
+    // q = 代码/名称模糊检索（后端 LIKE）；此前传 code 是精确匹配，输入名称/部分代码永远 0 条
+    q: tFilters.code?.trim() || undefined,
     side: tFilters.side || undefined,
     page: page || tPage.value,
     page_size: tPageSize,
