@@ -4,8 +4,8 @@ from datetime import date, timedelta
 import pytest
 
 from app.peg import (annual_cagr, annual_np_for_fy, compute_g_cons,
-                     compute_g_hist, compute_peg_series, peg, pick_hist_base,
-                     shrink, valid_peg)
+                     compute_g_hist, compute_peg_series, enough_orgs, peg,
+                     pick_hist_base, shrink, valid_peg)
 
 
 def _annual(fy, np, ann=None):
@@ -116,6 +116,31 @@ def test_peg_series_pit_and_rolling_band():
     assert last['band20'] == pytest.approx(last['peg'])
     assert last['band80'] == pytest.approx(last['peg'])
     assert last['peg_pct'] == pytest.approx(100.0)
+
+
+def test_peg_series_drops_thin_consensus_like_cross_section():
+    """同一只股票：机构数 <3 的一致预期在截面是「占位口径」，历史序列也必须退回仅 G_hist。"""
+    start = date(2026, 6, 1)                       # 2025 年报已于 04-30 公告
+    pe_rows = [(start + timedelta(days=i), 20.0) for i in range(10)]
+    annuals = [_annual(2020, 100), _annual(2025, 200)]
+    thin = {'asof_date': '2026-01-01', 'base_fy': 2025,
+            'fy1': 2026, 'fy2': 2027, 'fy3': 2028,
+            'np_fy1': 220.0, 'np_fy2': 242.0, 'np_fy3': 266.2, 'org_count': 1}
+    thick = {**thin, 'org_count': 5}
+    g_cons = (266.2 / 200) ** (1 / 3) - 1
+    g_hist = 2 ** 0.2 - 1
+
+    last = compute_peg_series(pe_rows, annuals, [thin])[-1]
+    assert last['g_cons'] is None and last['mode'] == 'hist'      # 历史与截面同口径
+    assert last['g'] == pytest.approx(g_hist) and last['peg'] == pytest.approx(peg(20.0, g_hist))
+    assert not valid_peg(20.0, g_cons, 1.0, 1)                    # 截面同样不认
+
+    ok = compute_peg_series(pe_rows, annuals, [thick])[-1]
+    assert ok['mode'] == 'consensus' and ok['g_cons'] == pytest.approx(g_cons)
+    assert valid_peg(20.0, g_cons, 1.0, 5)
+
+    assert not enough_orgs('x') and not enough_orgs(2)
+    assert enough_orgs(3) and enough_orgs(None)
 
 
 def test_peg_series_winsorizes_extreme_peg_for_band():

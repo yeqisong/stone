@@ -174,16 +174,28 @@ def peg(pe_ttm: Optional[float], g: Optional[float]) -> Optional[float]:
     return pe / (gv * 100.0)
 
 
+# 一致预期「够格」的最低机构数：截面（valid_peg）与历史序列（compute_peg_series）共用。
+# 两边必须同口径——否则同一只股票在散点里是「占位口径（仅 G_hist）」，在历史图里
+# 却按一致预期画（2026-11-28 实测工商银行：历史最新点 mode=consensus 但 org_count=1）。
+MIN_CONSENSUS_ORGS = 3
+
+
+def enough_orgs(org_count) -> bool:
+    """机构数是否达到一致预期口径门槛。None（未知）不拦——生产快照都带 org_count。"""
+    if org_count is None:
+        return True
+    try:
+        return int(org_count) >= MIN_CONSENSUS_ORGS
+    except (TypeError, ValueError):
+        return False
+
+
 def valid_peg(pe_ttm: Optional[float], g: Optional[float],
               peg_value: Optional[float], org_count: Optional[int]) -> bool:
     """散点是否进入“有效 PEG”集合（默认选中/分位统计同用此口径）。"""
     pe, gv, pv = _fv(pe_ttm), _fv(g), _fv(peg_value)
-    try:
-        orgs = int(org_count or 0)
-    except (TypeError, ValueError):
-        orgs = 0
     return (pe is not None and pe > 0 and gv is not None and gv > 0
-            and pv is not None and 0 < pv <= 10 and orgs >= 3)
+            and pv is not None and 0 < pv <= 10 and enough_orgs(org_count))
 
 
 # 历史带/分位的 winsorize 上限：G 接近 0 时 PEG → ∞（实测中证300 内最极端
@@ -268,6 +280,9 @@ def compute_peg_series(pe_rows: Iterable[tuple], annual_rows: Iterable[dict],
             if s_fy is not None and int(s_fy) in by_fy:
                 s_base_np = by_fy[int(s_fy)]['np']
             g_cons, ng_cons = compute_g_cons(snap, s_base_np)
+            # 与截面 valid_peg 同一口径：机构数不足的一致预期不参与，该点退回仅 G_hist
+            if g_cons is not None and not enough_orgs(snap.get('org_count')):
+                g_cons = ng_cons = None
             if g_cons is None:
                 ng_cons = None
         g = shrink(g_cons, g_hist, lam)
