@@ -356,7 +356,9 @@ def senti_track_from_slots(db, trade_date) -> list[dict]:
 def archive_zt_daily(db, now: Optional[datetime] = None) -> bool:
     """交易日 15:05 后把当日涨停梯队写 zt_pool_daily（已有当日行则跳过）。
 
-    优先用内存缓存；缓存不是当日（如 16:00 重启）则一次性补拉 push2ex 历史接口。
+    归档的是**收盘终值**：15:06 起的周期不再刷新，缓存里是约 15:04 的盘中快照，
+    和收盘终值（尾盘封板/炸板）会有出入，所以这里重拉一次（一天就 2 个请求）。
+    重拉失败才退回缓存；缓存也不是当天的就放弃，下个周期再试。
     """
     now = now or _now()
     day = now.date()
@@ -370,14 +372,17 @@ def archive_zt_daily(db, now: Optional[datetime] = None) -> bool:
     ), {"d": day}).scalar()
     if exists:
         return False
-    zt = _cache_get("zt")
-    if not zt or zt.get("date") != ymd:
-        try:
-            zt = em_quote.fetch_zt_pools(ymd)
-            _cache_put("zt", zt, ymd)
-        except Exception as e:
-            logger.warning(f"[market-rt] 日终涨停池补拉失败: {str(e)[:140]}")
-            return False
+    zt = None
+    try:
+        zt = em_quote.fetch_zt_pools(ymd)       # 当天已有数据，返回的就是当天的池
+        _cache_put("zt", zt, ymd)
+    except Exception as e:
+        logger.warning(f"[market-rt] 日终涨停池重拉失败，退回盘中缓存: {str(e)[:140]}")
+        cached = _cache_get("zt")
+        if cached and cached.get("date") == ymd:
+            zt = cached
+    if zt is None:
+        return False
     pool = zt.get("pool") or []
     broken = zt.get("broken_pool") or []
     lu, brk = len(pool), len(broken)
@@ -518,13 +523,6 @@ DEFAULT_MARKET_ALERTS = {
     },
     "family_cooldown_min": 10, # 任意 mk% 之间的最小间隔（防风暴）
     "max_per_day": 15,
-}
-ALERT_CONFIG_KEY = "market_alerts"
-
-_MK_LABEL = {
-    "mk_idx_surge": "指数急涨", "mk_idx_drop": "指数急跌",
-    "mk_breadth_up": "宽度转强", "mk_breadth_dn": "宽度转弱",
-    "mk_height": "连板高度新高", "mk_panic": "盘面恐慌", "mk_strong": "盘面亢奋",
 }
 
 # 评估状态（单进程内存；跨重启靠 DB 冷却兜底；_cycle 串行调用无并发）

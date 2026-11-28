@@ -669,6 +669,43 @@ class TestSentimentEndpointDoesNotMutateCache(unittest.TestCase):
         self.assertEqual(shared, {'ok': True})
 
 
+class TestBeijingToday(unittest.TestCase):
+    """v3.27 审查项 10：「今天是否禁买」不能依赖主机时区的自然日。"""
+
+    def test_bj_today_crosses_midnight_in_beijing_not_on_host(self):
+        from datetime import timezone, timedelta
+        from app import regime_gate as rg
+        utc = timezone.utc
+        instant = datetime(2026, 11, 29, 17, 30, tzinfo=utc)     # 北京时间已是 11-30 01:30
+
+        class FrozenDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+        self.assertEqual(instant.date(), date(2026, 11, 29))    # UTC 主机的「今天」
+        with mock.patch.object(rg, '_dtm', FrozenDT):
+            self.assertEqual(rg.bj_today(), date(2026, 11, 30))  # 北京口径的「今天」
+
+    def test_regime_gated_today_defaults_to_beijing_day(self):
+        from app import regime_gate as rg
+        seen = {}
+
+        def fake_cfg(db):
+            return {'enabled': True, 'ma_window': 20, 'max_skip_days': 2}
+
+        def fake_gates(db, dates, cfg):
+            seen['dates'] = list(dates)
+            return set(dates)
+
+        with mock.patch.object(rg, 'get_active_regime_cfg', fake_cfg), \
+                mock.patch.object(rg, 'compute_regime_gates', fake_gates), \
+                mock.patch.object(rg, 'bj_today', lambda: date(2026, 11, 30)):
+            gated, cfg = rg.regime_gated_today(None)
+        self.assertTrue(gated)
+        self.assertEqual(seen['dates'], ['2026-11-30'])
+
+
 class TestAlertVisible(unittest.TestCase):
     """WS 谓词：mk% 无归属行需 research.market.view；其余无归属行需 model.alerts.view。"""
 
