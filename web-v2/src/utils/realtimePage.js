@@ -1,7 +1,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { useThemeStore } from '../stores/theme'
-import { pollDelay } from './realtime'
+import { localSession, pollDelay } from './realtime'
 
 const API = window.location.origin
 
@@ -53,7 +53,8 @@ export function useMarketRealtime(enabled) {
     } finally {
       loading.value = false
     }
-    timer = setTimeout(load, pollDelay('market', d.value?.session))
+    // 首拉失败（d 还没到）按客户端时钟粗判时段：交易时段 15s 重试，别一失败就睡 60s
+    timer = setTimeout(load, pollDelay('market', d.value?.session || localSession()))
   }
 
   async function loadHist() {

@@ -10,7 +10,7 @@
 status.py 的 WS 广播循环轮询新告警推给前端，前端以 Chrome 通知呈现。
 """
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
 from sqlalchemy import text
@@ -18,6 +18,14 @@ from sqlalchemy import text
 from app.api.pricing import raw_price
 
 RULES_CONFIG_KEY = 'risk_rules'
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _bj_today() -> date:
+    """北京时间的自然日（v3.27.1 §10.9）：告警归属的 trade_date 不能依赖主机时区，
+    否则 UTC 主机在北京 00:00–08:00 会把告警记到昨天，当日上限/去重全部错位。"""
+    return datetime.now(_CST).date()
 
 DEFAULT_RULES = {
     'enabled': False,
@@ -110,7 +118,7 @@ def _insert_alert(db, trade_date, kind, level, title, body, user_id: int | None 
 
 def evaluate_risk_rules(db, trade_date=None) -> list:
     """评估全部启用的风控规则，新告警落库并返回（供 WS 推送/调用方展示）。"""
-    td = str(trade_date or date.today())[:10]
+    td = str(trade_date or _bj_today())[:10]
     rules = get_risk_rules(db)
     if not rules.get('enabled'):
         return []
@@ -227,7 +235,7 @@ def evaluate_user_risk_rules(db, user_id: int, trade_date=None) -> list:
     - 个人没有纸面净值序列，组合回撤规则不在此评估（由纸面模型规则负责）。
     告警写入 risk_alerts(user_id=该用户)，WS 按 owner 推送。
     """
-    td = str(trade_date or date.today())[:10]
+    td = str(trade_date or _bj_today())[:10]
     uid = int(user_id)
     rules = get_user_risk_rules(db, uid)
     if not rules.get('enabled'):

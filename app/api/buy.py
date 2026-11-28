@@ -24,8 +24,10 @@ def get_buy_check(
 ):
     db = get_sync_db()
     try:
+        # 支持模式（借另一用户身份查看）不落交易计划：GET 不得对被查看用户产生写入
         return buy_check(db, code, entry, stop, target, qty,
-                         user_id=principal.data_user_id)
+                         user_id=principal.data_user_id,
+                         persist=not principal.support_mode)
     finally:
         db.close()
 
@@ -35,6 +37,8 @@ def get_buy_candidates(limit: int = Query(8, ge=1, le=20),
                        principal: Principal = Depends(get_principal)):
     db = get_sync_db()
     try:
-        return buy_candidates(db, limit, user_id=principal.data_user_id)
+        # 同上：支持模式 GET 只读（与 /api/stock/radar 的 persist 口径一致）
+        return buy_candidates(db, limit, user_id=principal.data_user_id,
+                              persist=not principal.support_mode)
     finally:
         db.close()

@@ -208,7 +208,11 @@ addWsListener(data => {
         { body: a.body || '', tag: 'risk-' + a.id })
       n.onclick = () => {
         window.focus()
-        if (isMarket) nav.switchTab('rt')
+        if (isMarket) {
+          // 进实时页并直接滚到「今日盘面异动」（决策线的今日异动卡）；已在实时页也能再次触发
+          nav.rtFocus = 'market'
+          nav.switchTab('rt')
+        }
         else if (isIntraday && a.stock_code) nav.showDetail(a.stock_code)
         else nav.switchTab('x')
         n.close()

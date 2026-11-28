@@ -16,17 +16,32 @@
              :title="s.signal.reason" @click="openDetail(s.code)" @keydown.enter.prevent="openDetail(s.code)">
           <span class="rh-tag" :style="{ background: signalMeta(s.signal.action).color }">{{ signalMeta(s.signal.action).label }}</span>
           <span class="rh-name">{{ s.name }}</span>
-          <span class="rh-chg" :class="(s.change_pct || 0) >= 0 ? 'up' : 'down'">{{ radarPct(s.change_pct) }}</span>
-          <span class="rh-cost" :title="`成本 ${fmtPrice(s.cost)} · 浮盈 ${radarPct((s.vs_cost_pct || 0) * 100)}`">
-            成本 {{ fmtPrice(s.cost) }} · <b :class="(s.vs_cost_pct || 0) >= 0 ? 'up' : 'down'">{{ radarPct((s.vs_cost_pct || 0) * 100) }}</b></span>
+          <span class="rh-chg" :class="chgCls(s.change_pct)">{{ radarPct(s.change_pct) }}</span>
+          <span class="rh-cost" :title="`成本 ${fmtPrice(s.cost)} · 浮盈 ${s.vs_cost_pct == null ? '—' : radarPct(s.vs_cost_pct * 100)}`">
+            成本 {{ fmtPrice(s.cost) }} · <b :class="chgCls(s.vs_cost_pct)">{{ s.vs_cost_pct == null ? '—' : radarPct(s.vs_cost_pct * 100) }}</b></span>
           <span class="rh-weight" title="单票市值 / 账户权益">{{ ((s.weight || 0) * 100).toFixed(1) }}%</span>
           <span class="rh-reason">{{ s.signal.reason }}</span>
         </div>
       </div>
 
+      <!-- 今日盘中提醒（个人 it%）：Chrome 通知是瞬时的，这里按权限回看当天全部提醒 -->
+      <div v-if="alertsOn" class="rh-signals rh-itblock" :class="{ 'rh-itblock-empty': !alerts.length }">
+        <div class="rh-sub">今日盘中提醒<span class="rz-note">watcher 盘中实时推送；错过通知也能回看，点行进详情</span></div>
+        <div v-for="a in alerts" :key="a.id" class="rh-row rh-it" :class="{ 'rh-critical': a.level === 'critical' }"
+             role="button" tabindex="0" :title="a.body"
+             @click="a.stock_code && openDetail(a.stock_code)" @keydown.enter.prevent="a.stock_code && openDetail(a.stock_code)">
+          <span class="rh-it-t">{{ (a.created_at || '').slice(11, 16) || '—' }}</span>
+          <span class="rh-it-b"><b>{{ a.title }}</b> {{ a.body }}</span>
+        </div>
+        <div v-if="!alerts.length" class="rh-none">今日暂无盘中提醒（盘中 watcher 每 10s 评估一轮）</div>
+      </div>
+
       <div class="rh-sub">
         <span>关注池实时排序</span>
-        <span class="rz-note">{{ asof || '—' }} · 15s 刷新 · 持仓置顶</span>
+        <span class="rz-note">
+          {{ asof || '—' }} · {{ pollSec || 15 }}s 刷新 · 持仓置顶
+          <b v-if="dateNote" class="rh-datetag" :title="'盘前/休市日行情源回退成上一交易日的整段数据，缓存生成时间不等于数据时间'">{{ dateNote }}</b>
+        </span>
         <button type="button" class="rz-toggle" :class="{ on: onlyHoldings }" :title="onlyHoldings ? '显示全部关注池' : '只看持仓'"
                 @click="onlyHoldings = !onlyHoldings">{{ onlyHoldings ? '看全池' : '只看持仓' }}</button>
       </div>
@@ -34,7 +49,9 @@
                     :max-height="stacked ? 520 : undefined"
                     :columns="columns" :data="tableRows" size="small" :row-props="rowProps" :loading="loading"
                     :bordered="false" :scroll-x="scrollX" />
-      <n-empty v-if="!loading && !rows.length" description="关注池暂无实时快照" style="padding:20px" />
+      <!-- 空态区分两种情况：关注池为空是新用户的正常状态（给下一步），快照失败才说稍后重试 -->
+      <n-empty v-if="!loading && !rows.length && poolEmpty" description="自选与持仓都是空——先去个股页加自选或导入持仓，这里才会扫描" style="padding:20px" />
+      <n-empty v-else-if="!loading && !rows.length" description="关注池暂无实时快照（稍后自动重试）" style="padding:20px" />
     </div>
   </section>
 </template>
@@ -43,18 +60,26 @@
 import { computed, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NDataTable, NEmpty } from 'naive-ui'
 import {
-  fmtPrice, holdingCounts, holdingsBySeverity, radarColumnsFor, radarPct, radarRowsRiskFirst, radarScoreLabel, signalMeta,
+  chgCls, fmtPrice, holdingCounts, holdingsBySeverity, radarColumnsFor, radarDateNote, radarPct,
+  radarRowsRiskFirst, radarScoreLabel, signalMeta,
 } from '../../utils/realtime'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },     // /api/stock/radar items
   asof: { type: String, default: '' },
+  dataDate: { type: String, default: '' },      // 快照数据真实所属交易日（腾讯 trade_date 取最新）
+  poolEmpty: { type: Boolean, default: false }, // 关注池（持仓∪自选）为空：新用户正常态，与快照失败区分
+  today: { type: String, default: '' },         // 北京时间今天（用于判定快照是否旧数据）
+  pollSec: { type: Number, default: 15 },       // 当前时段的实际轮询间隔（表头如实标注）
+  alerts: { type: Array, default: () => [] },   // 今日盘中提醒（risk_alerts it%，个人）
+  alertsOn: { type: Boolean, default: false },  // 有 risk.alerts.view 权限才渲染提醒块
   loading: { type: Boolean, default: false },
   stacked: { type: Boolean, default: false },   // 堆叠布局：表格定高内滚，不参与分区 flex
   error: { type: Boolean, default: false },     // 最近一次快照失败（保留上一帧时标出）
 })
 const emit = defineEmits(['show-detail'])
 
+const dateNote = computed(() => radarDateNote(props.dataDate, props.today))
 const onlyHoldings = ref(false)
 const holdings = computed(() => holdingsBySeverity(props.rows))
 const counts = computed(() => holdingCounts(props.rows))
@@ -91,7 +116,8 @@ const ell = (txt, extra = {}) => {
   return h('span', { style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: maxWidth || '100%', ...extraStyle }, title: title ?? s, onClick, ...rest }, s || '—')
 }
 const numCell = (txt, color) => h('span', { style: { fontVariantNumeric: 'tabular-nums', color } }, txt)
-const pctCell = v => numCell(radarPct(v), v >= 0 ? 'var(--c-up)' : 'var(--c-down)')
+// 缺值不上色（null >= 0 为 true 会把「—」染成涨色，与 utils/realtime.chgCls 同一条规矩）
+const pctCell = v => numCell(radarPct(v), v == null ? '' : (v >= 0 ? 'var(--c-up)' : 'var(--c-down)'))
 
 // 指标列：盯盘必需 → 结构指标 → 次要，顺序与 utils/realtime.js 的 RADAR_COL_LEVELS 一致
 const METRIC_COLS = {
@@ -178,6 +204,18 @@ function rowProps(row) {
 .rh-cost b { font-weight: 600; }
 .rh-weight { text-align: right; color: var(--c-text-faint); }
 .rh-reason { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-faint); }
+
+/* 今日盘中提醒块：时间 + 标题正文两格；与持仓信号块分摊高度（各自 30%），表格仍占大头 */
+.rh-itblock { max-height: 30%; }
+.rh-itblock.rh-itblock-empty { flex: 0 0 auto; }
+.rh-it { grid-template-columns: 40px minmax(0, 1fr); }
+.rh-it-t { color: var(--c-text-faint); font-variant-numeric: tabular-nums; }
+.rh-it-b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-dim); }
+.rh-it-b b { color: var(--c-text); font-weight: 600; }
+.rh-it.rh-critical .rh-it-b b { color: var(--c-error); }
+.rh-none { padding: 8px 2px; font-size: var(--text-meta); color: var(--c-text-faint); }
+/* 数据所属交易日标注：盘前/休市日快照不是今天的，必须标出来（「更新 22:16」只是缓存时间） */
+.rh-datetag { margin-left: 6px; color: var(--c-warning); font-weight: 600; }
 
 .rh-table { flex-shrink: 0; }
 .rh-table-fill { flex: 1; min-height: 0; }

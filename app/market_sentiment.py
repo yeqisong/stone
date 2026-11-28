@@ -23,6 +23,12 @@ _CST = timezone(timedelta(hours=8))
 _CACHE = {"ts": 0.0, "data": None}
 _TTL = 60
 
+
+def _bj_today() -> date:
+    """北京时间的自然日。「今天」判定不能依赖主机时区（v3.27.1 §10.9：UTC 主机在
+    北京时间 00:00–08:00 会把今天算成昨天，stale/asof 全部标错）。"""
+    return datetime.now(_CST).date()
+
 LEVEL_LABEL = {"panic": "恐慌", "weak": "偏弱", "neutral": "中性", "strong": "偏强"}
 ADVICE = {
     "panic": {"entry": "禁止新开仓", "stop": "止损先卖50%，剩余挂VWAP/14:50，不裸等"},
@@ -147,7 +153,7 @@ def get(db, use_cache: bool = True) -> dict:
         breadth.get("limit_down", 0) if breadth else 0,
         above, len(indices),
     )
-    today = date.today().isoformat()
+    today = _bj_today().isoformat()
     stale = bool(breadth and breadth.get("date") and breadth["date"] != today)
     asof = ((f"{breadth['date']} {breadth['slot']}" if stale else breadth.get("slot"))
             if breadth else datetime.now(_CST).strftime("%H:%M"))
