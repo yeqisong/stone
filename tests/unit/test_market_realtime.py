@@ -10,6 +10,7 @@ import json
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from crawler import em_quote
 from crawler.adapters.tencent_adapter import _parse_minute_payload
@@ -40,6 +41,18 @@ class TestEmQuoteParsers(unittest.TestCase):
         self.assertEqual(len(parts), 6)
         # 收盘累计主力净流入为有限数值
         self.assertIsInstance(float(parts[1]), float)
+
+    def test_fflow_rows_carry_data_date(self):
+        """资金流行带 date：盘前/休市日东财返回的是上一交易日整段，要能识别新旧。"""
+        class _Resp:
+            def __init__(self, t):
+                self.text = t
+
+        with mock.patch.object(em_quote, 'em_get', lambda *a, **k: _Resp(_fixture('em_fflow.json'))):
+            rows = em_quote.fetch_market_fflow()
+        self.assertEqual({r['date'] for r in rows}, {'2026-11-27'})
+        self.assertEqual((rows[0]['t'], rows[-1]['t']), ('09:31', '15:00'))
+        self.assertTrue(all(r['main'] is not None for r in rows))
 
     def test_sse_skips_null_heartbeat_lines(self):
         """SSE 流中的 data:null 心跳行应被跳过，取首个 data 非空行。"""
@@ -76,6 +89,8 @@ class TestTencentMinuteParse(unittest.TestCase):
         out = _parse_minute_payload(self.payload, "sh000001")
         self.assertEqual(out["symbol"], "sh000001")
         self.assertTrue(out["name"])            # 指数名称（上证指数）
+        # 数据所属交易日（YYYYMMDD）：盘前/休市日腾讯返回上一交易日整段，靠它识别
+        self.assertEqual(out["date"], "20261127")
         self.assertIsNotNone(out["preClose"])   # 昨收
         self.assertTrue(out["points"])
         first = out["points"][0]

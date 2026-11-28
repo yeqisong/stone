@@ -6,7 +6,7 @@
     <span class="mr-title">实时盘</span>
     <span v-if="d" class="mr-session" :class="'ms-' + d.session">{{ d.session_label }}</span>
     <span class="mr-asof">{{ asofText }}</span>
-    <span v-if="d && d.stale && d.session !== 'closed'" class="mr-stale">数据延迟，后台采集中</span>
+    <span v-if="d && d.stale && d.session !== 'closed'" class="mr-stale">{{ staleText }}</span>
     <div style="flex:1" />
     <button class="mr-chip" @click="load">手动刷新</button>
     <button class="mr-chip" @click="nav.switchTab('k')">← 日K大盘</button>
@@ -101,7 +101,7 @@
         <span><AppIcon name="candlestick" :size="13" /> 涨停梯队</span>
         <span class="mr-meta" v-if="d.zt">
           涨停 <b class="up">{{ d.zt.limit_up }}</b> · 炸板 <b class="warn">{{ d.zt.broken }}</b>
-          · 连板高度 <b>{{ d.zt.max_lbc || '—' }} 板</b> · 东财 push2ex 口径
+          · 连板高度 <b>{{ d.zt.max_lbc || '—' }} 板</b> · 东财 push2ex 口径<template v-if="ztDateText"> · {{ ztDateText }}</template>
         </span>
         <span class="mr-meta" v-else>涨停池待采集</span>
       </div>
@@ -151,7 +151,7 @@
       <div class="mr-panel">
         <div class="mr-h">
           <span><AppIcon name="list" :size="13" /> 大盘主力资金</span>
-          <span class="mr-meta">沪深两市当日累计净流入（东财）</span>
+          <span class="mr-meta">沪深两市当日累计净流入（东财）<template v-if="fflowDateText"> · {{ fflowDateText }}</template></span>
         </div>
         <div :id="'mr-fflow'" class="mr-chart" style="height: 380px"></div>
         <div class="mr-meta" v-if="d.fflow && d.fflow.latest != null">
@@ -232,8 +232,29 @@ const ztBroken = computed(() => d.value?.zt?.broken ?? '—')
 const asofText = computed(() => {
   if (!d.value) return ''
   const parts = [d.value.date]
-  if (d.value.asof) parts.push('数据 ' + d.value.asof)
+  // data_date=数据真实所属交易日。盘前/休市日腾讯、东财都回退成上一交易日的整段数据，
+  // 缓存刷新时间（asof）不等于数据时间，必须分开标
+  if (prevDataDate.value) parts.push(`显示 ${prevDataDate.value}（最近交易日）数据`)
+  if (d.value.asof) parts.push('更新 ' + d.value.asof)
   return parts.join(' · ')
+})
+// 数据不是今天的（仅当能判定出数据日期时）
+const prevDataDate = computed(() => {
+  const dd = d.value?.data_date
+  return dd && dd !== d.value?.date ? dd : ''
+})
+const staleText = computed(() => prevDataDate.value
+  ? `当前为 ${prevDataDate.value} 的数据，开盘后自动更新`
+  : '数据延迟，后台采集中')
+// 梯队/资金流各自的数据日期（与今天不同才标）
+const iso8 = s => /^\d{8}$/.test(String(s || '')) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}` : ''
+const ztDateText = computed(() => {
+  const t = iso8(d.value?.zt?.date)
+  return t && t !== d.value?.date ? `${t} 数据` : ''
+})
+const fflowDateText = computed(() => {
+  const t = d.value?.fflow?.date
+  return t && t !== d.value?.date ? `${t} 数据` : ''
 })
 
 // ── ECharts 约定：实例缓存 DOM 节点，onBeforeUnmount（DOM 还在）时 dispose ──

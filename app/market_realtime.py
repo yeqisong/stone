@@ -103,10 +103,13 @@ def ensure_refresh_async() -> bool:
         _LAST_REFRESH_TRY[0] = time.time()
 
     def _run():
+        db = get_sync_db()
         try:
-            refresh_all()
+            refresh_all(db)
         except Exception as e:
             logger.warning(f"[market-rt] 按需刷新失败: {str(e)[:140]}")
+        finally:
+            db.close()
 
     threading.Thread(target=_run, daemon=True, name="mrt-ondemand").start()
     return True
@@ -375,8 +378,42 @@ def archive_zt_daily(db, now: Optional[datetime] = None) -> bool:
 
 # ── 后台刷新 ───────────────────────────────────────────────────────────────
 
-def refresh_all() -> list[str]:
-    """串行刷新全部数据源到内存缓存；单源失败不影响其他。返回成功 key 列表。"""
+# 东财当日涨停池从连续竞价开始后才算「今天的数据」；此前请求今天只会拿到上一交易日
+_POOL_TODAY_FROM = _time(9, 31)
+
+
+def _pool_trade_date(db, now: datetime) -> _date:
+    """涨停池应当请求的交易日：今天已进入连续竞价用今天，否则回退到上一个交易日。
+
+    东财 push2ex 对「尚无数据的日期」（盘前、休市日、未来日）静默返回最近一个
+    交易日的池，返回体里的 qdate 恒为最新交易日、无法据此识别（2026-11-28 实测：
+    请求 20261128 / 20261130 均返回 11-27 的 417 家）。所以只能请求确定已经有
+    数据的日期，缓存里的 date 才是数据真实所属的交易日。
+    """
+    d = now.date()
+    if not (_is_trade_day(db, d) and now.time() >= _POOL_TODAY_FROM):
+        d -= timedelta(days=1)
+    for _ in range(10):
+        if _is_trade_day(db, d):
+            return d
+        d -= timedelta(days=1)
+    return d
+
+
+def refresh_all(db=None, now: Optional[datetime] = None) -> list[str]:
+    """串行刷新全部数据源到内存缓存；单源失败不影响其他。返回成功 key 列表。
+
+    db 缺省时自开一个短会话（按需刷新线程用），只用来查交易日历。
+    """
+    now = now or _now()
+    if db is None:
+        db = get_sync_db()
+        try:
+            pool_day = _pool_trade_date(db, now)
+        finally:
+            db.close()
+    else:
+        pool_day = _pool_trade_date(db, now)
     ok: list[str] = []
     t0 = time.time()
     # 1. 新浪全市场 → 宽度
@@ -399,8 +436,8 @@ def refresh_all() -> list[str]:
         ok.append("min5")
     except Exception as e:
         logger.warning(f"[market-rt] 量能 5 分钟线失败: {str(e)[:140]}")
-    # 4. 涨停/炸板池（东财 push2ex）
-    ymd = _now().strftime("%Y%m%d")
+    # 4. 涨停/炸板池（东财 push2ex）——请求「确定已有数据」的交易日，见 _pool_trade_date
+    ymd = pool_day.strftime("%Y%m%d")
     try:
         _cache_put("zt", em_quote.fetch_zt_pools(ymd), ymd)
         ok.append("zt")
@@ -523,6 +560,11 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     cfg = read_market_alerts(db)
     if not cfg.get("enabled", True):
         return []
+    # 只在连续竞价时段评估：采集窗口从 09:25 起，但 09:25–09:30 拿到的是集合竞价
+    # 或上一交易日的回退值，不是盘中异动（_cycle 已保证 day 是交易日）
+    if _session_of(now, trade_day=True) != "open":
+        return []
+    ymd = now.strftime("%Y%m%d")
     with _mstate_lock:
         if _mstate.get("day") != day:   # 跨日重置状态机
             _mstate.update(day=day, idx_side=None, breadth_zone=None,
@@ -541,12 +583,14 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
         out.append(_mk_insert(db, now, kind, level, title, body))
 
     # 1. 指数急涨/急跌（上证综指，trends 缓存分钟序列，side 切换 + 滞回）
+    #    分时必须就是今天的：腾讯盘前/休市日返回的是上一交易日的整段分时
     trends = _cache_get("trends") or {}
-    idx_points = ((trends.get("000001") or {}).get("points")) or []
+    idx_tr = trends.get("000001") or {}
+    idx_points = idx_tr.get("points") or []
     win = int(cfg.get("index_window_min", 15))
     move = float(cfg.get("index_move_pct", 1.2))
     buf = float(cfg.get("index_buffer_pct", 0.4))
-    if len(idx_points) > win:
+    if str(idx_tr.get("date") or "") == ymd and len(idx_points) > win:
         cur = idx_points[-1].get("price")
         base = idx_points[-1 - win].get("price")
         if cur and base:
@@ -596,7 +640,8 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
     zs = zt_summary(zt_raw) if zt_raw else {}
     max_lbc = zs.get("max_lbc")
     hmin = int(cfg.get("height_min", 5))
-    if max_lbc and max_lbc >= hmin:
+    # 池必须就是今天的（_pool_trade_date 保证缓存 date 是数据真实所属日）
+    if str((zt_raw or {}).get("date") or "") == ymd and max_lbc and max_lbc >= hmin:
         with _mstate_lock:
             already = _mstate.get("height_day") == day
             if not already:
@@ -616,7 +661,8 @@ def evaluate_market_alerts(db, now: Optional[datetime] = None) -> list[dict]:
         logger.warning(f"[market-rt] 告警情绪源失败: {str(e)[:120]}")
         senti = {}
     s_level = senti.get("level")
-    if s_level:
+    # stale=宽度快照还是上一交易日的（开盘后首个 slot 落库前），不是今天的盘面
+    if s_level and not senti.get("stale"):
         with _mstate_lock:
             prev_level = _mstate.get("sent_level")
             _mstate["sent_level"] = s_level
@@ -716,6 +762,39 @@ def _slots_track(db, day: _date) -> list[dict]:
     return data
 
 
+def _iso8(v) -> Optional[str]:
+    """'20261127' → '2026-11-27'；其他形态返回 None。"""
+    s = str(v or "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else None
+
+
+def _data_date(trends: dict, zt, min5: dict, fflow: list) -> Optional[str]:
+    """缓存数据真实所属的交易日（各源取最新；None=无法判定）。
+
+    盘前和休市日，腾讯分时、东财涨停池/资金流都会回退成上一交易日的整段数据，
+    不带这个字段前端就只能把缓存刷新时间当成数据时间。
+    """
+    cands = [_iso8(tr.get("date")) for tr in (trends or {}).values()]
+    cands.append(_iso8((zt or {}).get("date")))
+    if min5:
+        cands.append(sorted(min5.keys())[-1])
+    if fflow:
+        cands.append(fflow[-1].get("date"))
+    cands = [c for c in cands if c]
+    return max(cands) if cands else None
+
+
+def _stale_flag(session: str, in_window: bool, core_ts: list, data_is_today: bool,
+                now_ts: float) -> bool:
+    """数据能否当成「当前盘面」：缺源 / 窗口内超 3 个周期未更新 / 非休市时段但数据
+    不是今天的。休市时显示上一交易日数据是预期行为，不算 stale。"""
+    if not core_ts:
+        return True
+    if in_window and now_ts - max(core_ts) > 180:
+        return True
+    return (not data_is_today) and session != "closed"
+
+
 def get_realtime(db) -> dict:
     """装配端点响应；全部读内存缓存 + 库内 slot 重放，不阻塞等待外部请求。
 
@@ -734,13 +813,13 @@ def get_realtime(db) -> dict:
     boards = _cache_get("boards") or []
     fflow = _cache_get("fflow") or []
 
-    # stale：交易窗口内核心源缺失或超 3 个周期未更新
+    data_date = _data_date(trends, zt, min5, fflow)
+    # stale：① 核心源缺失；② 交易窗口内超 3 个周期未更新；③ 非休市时段但数据还是
+    # 上一交易日的（盘前回退、刷新一直失败沿用旧缓存）
     core_ts = [t for t in (_cache_ts(k) for k in ("breadth", "trends", "zt")) if t]
     in_window = _in_collect_window(now) and db_trade_day
-    if in_window:
-        stale = (not core_ts) or (time.time() - max(core_ts) > 180)
-    else:
-        stale = (not core_ts)
+    stale = _stale_flag(session, in_window, core_ts, data_date == day.isoformat(),
+                        time.time())
     refreshing = False
     if not (_cache_get("breadth") and _cache_get("trends") and _cache_get("zt")
             and _cache_get("boards") and _cache_get("fflow") and _cache_get("min5")):
@@ -775,6 +854,8 @@ def get_realtime(db) -> dict:
     return {
         "ok": True,
         "date": day.isoformat(),
+        # 数据真实所属交易日（≠ date 即「显示的是上一交易日」，前端必须标出来）
+        "data_date": data_date,
         "session": session,
         "session_label": _SESSION_LABEL[session],
         "asof": asof,
@@ -791,6 +872,7 @@ def get_realtime(db) -> dict:
         "fflow": {
             "series": [{"t": r.get("t"), "main": r.get("main"),
                         "big": r.get("big"), "huge": r.get("huge")} for r in fflow],
+            "date": (fflow[-1].get("date") if fflow else None),
             "latest": (fflow[-1].get("main") if fflow else None),
         },
         # 实时空仓闸门（三源组合，design/13 批次三；buy_check.live_gate 自带 60s 缓存）
