@@ -411,7 +411,7 @@ const metricGroups = computed(() => {
       { label:'亏损单持有', value: `${b.hold_days_loss ?? '—'} 天` },
       { label:'盈利/亏损比', value: b.disposition_ratio ?? '—' },
       { label:'同日又买又卖', value:`${b.same_day_roundtrips ?? '—'} 天` },
-      { label:'卖出后7日回补', value:`${b.rebuy_within_7d ?? '—'} 次` },
+      { label:`卖出后${b.rebuy_window_days ?? 7}日回补`, value:`${b.rebuy_within_window ?? '—'} 次` },
     ]},
     { title:'亏损后行为', items:[
       { label:'亏损日次日', value:`${b.post_loss_next_day?.avg_trades ?? '—'} 笔 / ${money(b.post_loss_next_day?.avg_buy_amount)}` },

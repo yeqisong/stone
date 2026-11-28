@@ -252,10 +252,12 @@ def _profile_from_review(r: dict) -> dict:
             f"盈利日次日 {pw.get('avg_trades')} 笔 / {_money(pw.get('avg_buy_amount'))}",
             "连续 2 个亏损日 → 次日只减不加；单日 -3% 停手")
     if (_f(b.get("trades_per_day")) > 3 or int(b.get("same_day_roundtrips") or 0) >= 10
-            or int(b.get("rebuy_within_7d") or 0) >= 20):
+            or int(b.get("rebuy_within_window") or b.get("rebuy_within_7d") or 0) >= 20):
         add("overtrade", "高频交易型", 92,
             f"{b.get('trades')} 笔 / {b.get('active_days')} 天，日均 {b.get('trades_per_day')} 笔；"
-            f"同日回转 {b.get('same_day_roundtrips')} 天；7 日回补 {b.get('rebuy_within_7d')} 次",
+            f"同日回转 {b.get('same_day_roundtrips')} 天；"
+            f"{b.get('rebuy_window_days') or 7} 日内回补 "
+            f"{b.get('rebuy_within_window') or b.get('rebuy_within_7d') or 0} 次",
             "每日新开仓 ≤2；同日不回转；卖出后 5 个交易日内不回补")
     if _f(b.get("max_single_weight")) > 0.35:
         add("concentration", "单票集中型", 90,

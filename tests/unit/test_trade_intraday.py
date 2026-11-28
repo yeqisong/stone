@@ -95,7 +95,7 @@ class TestCoach:
                 "post_loss_next_day": {"avg_buy_amount": 40000},
                 "post_win_next_day": {"avg_buy_amount": 30000},
                 "trades_per_day": 5, "same_day_roundtrips": 20,
-                "rebuy_within_7d": 30, "trades": 500, "active_days": 100,
+                "rebuy_within_window": 30, "rebuy_window_days": 5, "trades": 500, "active_days": 100,
                 "max_single_weight": 0.5, "max_weight_date": "2026-01-01",
                 "disposition_ratio": 1.5, "hold_days_win": 5, "hold_days_loss": 8,
             },

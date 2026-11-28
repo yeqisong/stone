@@ -437,7 +437,8 @@ def _match_rows(rows: list[dict], state0: dict, closes) -> dict:
 
 # ── 行为指标 ──
 
-def _behavior(rows: list[dict], match: dict, closes, bars, equity: list[dict]) -> dict:
+def _behavior(rows: list[dict], match: dict, closes, bars, equity: list[dict],
+             rebuy_days: int = 7) -> dict:
     buys = [r for r in rows if r["side"] == "buy"]
     sells = [r for r in rows if r["side"] == "sell"]
     active_days = sorted({r["trade_date"] for r in rows})
@@ -471,7 +472,8 @@ def _behavior(rows: list[dict], match: dict, closes, bars, equity: list[dict]) -
     for r in buys:
         for sd in sell_dates.get(r["stock_code"], []):
             gap = (r["trade_date"] - sd).days
-            if 0 < gap <= 7:
+            # 回补冷却窗口跟随用户配置 no_rebuy_days，与 today_gate / 纪律规则同一口径
+            if 0 < gap <= rebuy_days:
                 rebuys.append({"date": r["trade_date"], "sell_date": sd, "code": r["stock_code"],
                                "name": r["stock_name"], "gap_days": gap, "amount": r["amount"]})
                 break
@@ -568,7 +570,8 @@ def _behavior(rows: list[dict], match: dict, closes, bars, equity: list[dict]) -
         "turnover_ratio": round(total_amount / avg_equity, 2) if avg_equity else None,
         "same_day_roundtrips": len(same_day),
         "same_day_samples": same_day[:8],
-        "rebuy_within_7d": len(rebuys),
+        "rebuy_window_days": rebuy_days,
+        "rebuy_within_window": len(rebuys),
         "rebuy_samples": sorted(rebuys, key=lambda x: x["date"], reverse=True)[:8],
         "add_win_count": len(match["add_win"]),
         "add_win_amount": round(sum(match["add_win"]), 2),
@@ -704,7 +707,8 @@ def _findings(summary: dict, beh: dict, cfg: dict, counterfactual: dict | None) 
         add("warn", "overtrading",
             f"过度交易：日均 {tpd:.1f} 笔、一年 {beh['distinct_stocks']} 只标的",
             f"{beh['trades']} 笔 / {beh['active_days']} 个交易日；"
-            f"同日又买又卖 {beh['same_day_roundtrips']} 天；卖出后 7 天内回补 {beh['rebuy_within_7d']} 次；"
+            f"同日又买又卖 {beh['same_day_roundtrips']} 天；"
+            f"卖出后 {beh['rebuy_window_days']} 个自然日内回补 {beh['rebuy_within_window']} 次；"
             f"单日最多 {beh['max_day_trades']} 笔成交、{beh.get('max_day_buys')} 笔开仓（{beh.get('max_day_date')}）。",
             "每天最多 2 笔新开仓；同时持仓不超过 6 只；卖出后 5 个交易日内不碰同一只。")
 
@@ -791,7 +795,7 @@ def _rules(beh: dict, summary: dict, cfg: dict) -> list[dict]:
         rule("no_same_day_roundtrip", "禁止当日回转", beh.get("same_day_roundtrips") or 0,
              0, "天", lambda v: f"{v:g}",
              "同一标的当天又买又卖，通常是手痒而非计划"),
-        rule("no_rebuy_days", "卖出后回补冷却", beh.get("rebuy_within_7d") or 0,
+        rule("no_rebuy_days", "卖出后回补冷却", beh.get("rebuy_within_window") or 0,
              0, "次", lambda v: f"{v:g}",
              f"卖出后 {cfg['no_rebuy_days']} 个自然日内回补的次数"),
         rule("max_daily_loss_pct", "单日亏损上限", beh.get("worst_daily_return") or 0,
@@ -825,7 +829,7 @@ def _score(summary: dict, beh: dict, cfg: dict) -> dict:
 
     impulse = 0.0
     impulse += min(6.0, (beh.get("same_day_roundtrips") or 0) / 10.0)
-    impulse += min(5.0, (beh.get("rebuy_within_7d") or 0) / 20.0)
+    impulse += min(5.0, (beh.get("rebuy_within_window") or 0) / 20.0)
     pl, pw = beh.get("post_loss_next_day") or {}, beh.get("post_win_next_day") or {}
     if pl.get("avg_buy_amount") and pw.get("avg_buy_amount") and pw["avg_buy_amount"] > 0:
         ratio = pl["avg_buy_amount"] / pw["avg_buy_amount"]
@@ -946,7 +950,9 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
         summary_base["benchmark_return"] = None
         summary_base["excess_return"] = None
 
-    beh = _behavior(win_rows, match, closes, bars, equity)
+    # cfg 提前加载：行为统计的回补冷却窗口跟随用户配置（与 today_gate 同口径）
+    cfg = get_discipline(db, user_id)
+    beh = _behavior(win_rows, match, closes, bars, equity, rebuy_days=cfg["no_rebuy_days"])
 
     # “什么都不做”的反事实：区间初持仓原样持有到期末
     hold_pnl = 0.0
@@ -995,7 +1001,6 @@ def build_review(db, user_id: int, start: Optional[_date] = None, end: Optional[
         })
         idx = j
 
-    cfg = get_discipline(db, user_id)
     findings = _findings(summary_base, beh, cfg, counterfactual)
     rules = _rules(beh, summary_base, cfg)
     score = _score(summary_base, beh, cfg)

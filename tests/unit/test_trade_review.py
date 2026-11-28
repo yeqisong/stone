@@ -171,3 +171,38 @@ class TestBehavior:
         # 只有 1 个未来交易日，5 日/10 日/20 日卖飞检验样本不足
         assert b["post_sell_5d"] is None
         assert b["chase_position"] == 0.5
+
+
+class TestRebuyWindow:
+    """回补冷却窗口必须跟随 cfg no_rebuy_days（与 today_gate/纪律规则同一口径）。"""
+
+    def _rebuy_rows(self, gap_days):
+        sell_d = dt.date(2026, 1, 5)
+        buy_d = sell_d + dt.timedelta(days=gap_days)
+        rows = [
+            _row("600000", "sell", 100, 12, sell_d, fee=0, balance=0),
+            _row("600000", "buy", 100, 10, buy_d, fee=0, balance=100),
+        ]
+        return rows
+
+    def _beh(self, gap_days, rebuy_days):
+        rows = self._rebuy_rows(gap_days)
+        m = _match_rows(rows, {}, {})
+        equity = [{"date": dt.date(2026, 1, 5), "equity": 1200, "adjusted": 1200,
+                   "n_positions": 0, "max_weight": 0.0}]
+        return _behavior(rows, m, {}, {}, equity, rebuy_days=rebuy_days)
+
+    def test_gap6_counts_with_window7(self):
+        b = self._beh(6, 7)
+        assert b["rebuy_within_window"] == 1
+        assert b["rebuy_window_days"] == 7
+
+    def test_gap6_not_counted_with_window5(self):
+        # 用户配置 5 日冷却：第 6 天回补不计入（旧硬编码 7 天会误计）
+        b = self._beh(6, 5)
+        assert b["rebuy_within_window"] == 0
+        assert b["rebuy_window_days"] == 5
+
+    def test_gap4_counted_with_window5(self):
+        b = self._beh(4, 5)
+        assert b["rebuy_within_window"] == 1
