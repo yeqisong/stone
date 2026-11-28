@@ -72,8 +72,8 @@
             <span>{{ pageMeta.sub }}</span>
           </div>
           <div v-if="nav.tab==='p'" style="flex:1;min-height:0;display:flex;flex-direction:column"><PortfolioView @show-detail="nav.showDetail" /></div>
+          <div v-if="nav.tab==='rt'" style="flex:1;min-height:0;display:flex;flex-direction:column"><RealtimeView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='k'" style="flex:1;min-height:0;display:flex;flex-direction:column"><MarketView /></div>
-          <div v-if="nav.tab==='kr'" style="flex:1;min-height:0;display:flex;flex-direction:column"><MarketRealtimeView /></div>
           <div v-if="nav.tab==='t'" style="flex:1;min-height:0;display:flex;flex-direction:column"><TradeReview :page="true" :initial-tab="nav.tradeReviewTab" @back="nav.backFromTradeReview()" /></div>
           <div v-if="nav.tab==='m'"><TreemapView @show-detail="nav.showDetail" /></div>
           <div v-if="nav.tab==='s'" style="flex:1;min-height:0;display:flex;flex-direction:column"><SignalsView @show-detail="nav.showDetail" /></div>
@@ -208,7 +208,7 @@ addWsListener(data => {
         { body: a.body || '', tag: 'risk-' + a.id })
       n.onclick = () => {
         window.focus()
-        if (isMarket) nav.switchTab('kr')
+        if (isMarket) nav.switchTab('rt')
         else if (isIntraday && a.stock_code) nav.showDetail(a.stock_code)
         else nav.switchTab('x')
         n.close()
@@ -265,7 +265,7 @@ import NewsView from './components/NewsView.vue'
 import AgentView from './components/AgentView.vue'
 import BondView from './components/BondView.vue'
 import MarketView from './components/MarketView.vue'
-import MarketRealtimeView from './components/MarketRealtimeView.vue'
+import RealtimeView from './components/RealtimeView.vue'
 import BondDetailView from './components/BondDetailView.vue'
 import DetailView from './components/DetailView.vue'
 import StatusView from './components/StatusView.vue'
@@ -308,6 +308,8 @@ const marketStatus = computed(() => {
 
 const allPrimaryTabs = [
   { key: 'p', label: '持仓', perm: 'portfolio.position.view' },
+  // 实时（盘中作战台，design/14）：盘中按「环境 → 持仓 → 机会」用的页面，紧跟持仓
+  { key: 'rt', label: '实时', icon: 'rt', perm: 'research.realtime.view' },
   { key: 'k', label: '大盘', icon: 'activity', perm: 'research.market.view' },
   { key: 'm', label: '选股', perm: 'research.treemap.view' },
   { key: 's', label: '信号', perm: 'research.signal.view' },
@@ -339,7 +341,6 @@ const subTabPerms = {
   q: 'dag.view',              // DAG 运行日志
   r: 'dag.view',              // DAG 流程查看
   t: 'portfolio.trades.view', // 交易复盘
-  kr: 'research.market.view', // 实时大盘（design/13，归属大盘节点）
 }
 const primaryTabs = computed(() => allPrimaryTabs.filter(t => auth.can(t.perm)))
 const adminTabs = computed(() => allAdminTabs.filter(t => auth.can(t.perm)))
@@ -485,8 +486,8 @@ watch(showLogin, (v) => {
 
 const pageMeta = computed(() => ({
   p: { title: '持仓', sub: '账户与持仓' },
+  rt: { title: '实时', sub: '盘中作战台：先看盘面，再管持仓，后找机会' },
   k: { title: '大盘', sub: '指数走势、估值与全市场资金' },
-  kr: { title: '实时盘', sub: '盘面宽度、涨停梯队与资金分时' },
   t: { title: '交易复盘', sub: '交割单、行为画像与纪律闸门' },
   m: { title: '选股', sub: '全市场市值分布' },
   s: { title: '信号', sub: '模型信号与模拟交易' },
@@ -510,8 +511,8 @@ const pageMeta = computed(() => ({
 
 const titleMap = {
   p: '持仓 - K道',
+  rt: '实时 - K道',
   k: '大盘 - K道',
-  kr: '实时盘 - K道',
   t: '交易复盘 - K道',
   m: '选股 - 市值 - K道',
   s: '买点信号 - K道',
@@ -644,9 +645,10 @@ if (!showLogin.value) {
   .app-nav .nav-label { display: none; }
 }
 
-/* H5 底部 TabBar */
-.h5-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; height: 58px; padding-bottom: env(safe-area-inset-bottom); background: var(--c-bg-header); border-top: 1px solid var(--c-border); }
-.h5-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--c-text-dim); min-width: 0; }
+/* H5 底部 TabBar：核心 tab 增至 10 个（含实时）后窄屏放不下，改为可横滑（不换行、不挤压标签） */
+.h5-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; height: 58px; padding-bottom: env(safe-area-inset-bottom); background: var(--c-bg-header); border-top: 1px solid var(--c-border); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.h5-tabbar::-webkit-scrollbar { display: none; }
+.h5-tab { flex: 1 0 60px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--c-text-dim); min-width: 0; white-space: nowrap; }
 .h5-tab-icon { font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .h5-tab-label { font-size: var(--text-meta); line-height: 1.2; }
 .h5-tab.active { color: var(--c-accent); }
