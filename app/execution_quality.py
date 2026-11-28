@@ -246,6 +246,10 @@ def alert_execution(db, user_id: int, start: date, limit: int = 100) -> dict:
                     if s.get("_dt") and alert_dt and s["_dt"] >= alert_dt - timedelta(minutes=1)), None)
         if hit is None and candidates and not any(s.get("_dt") for s in candidates):
             hit = candidates[0]
+        # 一笔卖出只能核销一条提醒：否则同天同票 N 条提醒 + 1 笔卖出
+        # 会被全部标成「已卖」，执行率虚高（曾把 1 次执行算成 3 次）
+        if hit is not None:
+            candidates.remove(hit)
         key = (code, day)
         if key not in cache:
             cache[key] = _bars(db, code, day)
