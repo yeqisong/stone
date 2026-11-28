@@ -66,7 +66,7 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
   - `app/kepl/` — KEPL 表达式解析器（Lark LALR(1) + AST + 时间序列/截面函数）
   - `app/signal.py` — DAG ↔ WebSocket 解耦桥梁（asyncio Event + 线程安全唤醒）
   - `app/lineage.py` — 数据血缘台账（旁路观测：factor_heal/零价修复/特征重算/复评/训练/滚动重训事件落 `data_lineage` 表，MB 级元数据；`log_event` 失败绝不影响主链路）；`model_data_drift` 回答「模型训练后数据又被改过吗」；API 在 `app/api/lineage.py`（GET /api/lineage、/api/lineage/model/{ver}）
-  - `app/market_realtime.py` — 实时大盘聚合（`#/kr`，design/13）：后台 loop 周期刷新模块级缓存（新浪全市场宽度 / 腾讯分时 / 新浪 5 分钟量能 / 东财涨停池·板块·资金流），`/api/market/realtime` 只读缓存 + slot 重放、不触发外部请求；盘面异动告警（`mk%` → risk_alerts → WS，按 `research.market.view` 过滤）；日终涨停梯队归档 `zt_pool_daily`。**数据所属交易日必须校验**（东财/腾讯对无数据日期静默回退，design/13 §10.1）
+  - `app/market_realtime.py` — 实时大盘聚合（展示在实时页 `#/rt` 的盘面区与分析带，design/13·14）：后台 loop 周期刷新模块级缓存（新浪全市场宽度 / 腾讯分时 / 新浪 5 分钟量能 / 东财涨停池·板块·资金流），`/api/market/realtime` 只读缓存 + slot 重放、不触发外部请求；盘面异动告警（`mk%` → risk_alerts → WS，按 `research.market.view` 过滤）；日终涨停梯队归档 `zt_pool_daily`。**数据所属交易日必须校验**（东财/腾讯对无数据日期静默回退，design/13 §10.1）
   - `crawler/em_quote.py` — 东财 push2/push2ex 行情抓取（只许这两个域；push2his 有 TLS 指纹墙），统一走 `crawler.news.sources.em_get` 串行闸门
   - `app/regime_gate.py` — regime 空仓闸门单一事实源（pipeline / eval_version / scan_gate 经别名引用）；`app/buy_check.live_gate` 三源组合实时闸门（市场闸门 × regime × 盘面情绪，目前仅展示，缺数据返回 `unknown` 不兜成放行）
   - `app/peg.py` / `app/api/peg.py` — PEG 纯函数与端点（`/api/market/peg` 指数成分截面、`/api/stock/{code}/peg_history` 个股历史带）：G = G_hist（5 年归母净利 CAGR）打底、一致预期单边向上收缩 50%；**一致预期机构 ≥3 才算完整口径，截面与历史序列同一判定**（`MIN_CONSENSUS_ORGS`）
@@ -99,9 +99,9 @@ Baostock（字段补充器 + 交易日历唯一源；不可用时主字段照常
 
 - **`web-v2/`** — 前端 V2
   - Vue 3 + Vite + Naive UI + ECharts + Pinia + Vue Flow (DAG 流程图) + Monaco Editor (代码编辑)
-  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, StockFundView, DagNode, NewsView, MarketRealtimeView(实时盘), MarketPeg(大盘页 PEG 面板), MarketSentiment(情绪条+闸门 chip)
+  - 页面组件：Login, Portfolio, Treemap, Signals, Stocks, Detail, Status, ModelView, FunctionView, FeatureView/FeatureDetail, DagFlowEdit, FlowRunView, FlowLogView, StockFundView, DagNode, NewsView, RealtimeView(实时页) + `realtime/Rt*`(决策线/盘面区/持仓区/机会区/分析带/图表容器；原 MarketRealtimeView 已拆入), MarketPeg(大盘页 PEG 面板), MarketSentiment(情绪条+闸门 chip)
   - 5 个 Pinia Store: `auth`, `nav`, `model`, `market`, `theme`
-  - Tab 路由: p=持仓, m=树图, s=信号, l=个股列表, n=资讯, x=状态, a=模型, f=函数, e=特征, g=DAG, u=证券主档, d=详情, v=特征详情, q=日志, r=流程查看, kr=实时盘(大盘子页面, 入口在 #/k 工具栏)
+  - Tab 路由: p=持仓, rt=实时(盘中作战台 design/14; `#/kr`、`#/stocks?tab=radar`、树图 `mode=intraday` 三种旧链接重定向到此), m=树图, s=信号, l=个股列表, n=资讯, x=状态, a=模型, f=函数, e=特征, g=DAG, u=证券主档, d=详情, v=特征详情, q=日志, r=流程查看
   - 自研 hash 路由（stores/nav.js），无 vue-router；WS 监听 `addWsListener` 返回取消函数（onUnmounted 必清理）
 
 - **`nginx/`** — Nginx 配置（default.conf 容器内 / host-nginx.conf 宿主机）
