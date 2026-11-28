@@ -1218,10 +1218,12 @@ def today_gate(db, user_id: int, today: Optional[_date] = None) -> dict:
         if p:
             p["quantity"] = max(0.0, float(p["quantity"]) + delta)
         elif delta > 0:
-            buys = [r for r in manual_today if r["stock_code"] == code and r["side"] == "buy"]
-            qty = sum(r["quantity"] for r in buys)
-            amt = sum(r["amount"] for r in buys)
-            p = {"stock_code": code, "stock_name": buys[0]["stock_name"] if buys else code,
+            # 注意：这里不能复用外层的 buys（今日全部买入行），否则返回的
+            # today_buys/today_buy_amount/summary 会被覆盖成「最后一票」的统计
+            m_buys = [r for r in manual_today if r["stock_code"] == code and r["side"] == "buy"]
+            qty = sum(r["quantity"] for r in m_buys)
+            amt = sum(r["amount"] for r in m_buys)
+            p = {"stock_code": code, "stock_name": m_buys[0]["stock_name"] if m_buys else code,
                  "quantity": qty, "cost_price": (amt / qty) if qty else 0}
             positions.append(p)
             by_code[code] = p
